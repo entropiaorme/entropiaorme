@@ -9,6 +9,7 @@ use crate::skill_panel::BgrImage;
 
 use super::geometry::Rect;
 use super::profile::UiProfile;
+use super::validate::{expected_width, NumeralMetrics};
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -90,6 +91,69 @@ pub(crate) fn draw_window(image: &mut BgrImage, rect: Rect) {
         Rect::new(rect.x0 + 25, rect.y0 + 18, rect.x0 + 29, rect.y0 + 37),
         MARKER,
     );
+}
+
+/// Lettering drawn as blocks of ink, each piece of text in a colour no
+/// other piece has, with a stand-in recogniser that reads a crop as the
+/// text whose colour covers most of it. A reader's geometry is exercised
+/// this way without a real recogniser, and a test decides exactly what
+/// each piece of ink reads as.
+pub(crate) struct Lettering {
+    pub(crate) image: BgrImage,
+    palette: Vec<([u8; 3], String)>,
+}
+
+impl Lettering {
+    pub(crate) fn new(image: BgrImage) -> Self {
+        Self {
+            image,
+            palette: Vec::new(),
+        }
+    }
+
+    /// Draw a block of ink filling `rect` that reads as `text`.
+    pub(crate) fn text(&mut self, rect: Rect, text: &str) {
+        let i = self.palette.len() as u8;
+        let rgb = [250 - i * 3, 120 + (i % 7) * 15, 130 + (i % 5) * 20];
+        fill(&mut self.image, rect, rgb);
+        self.palette.push((rgb, text.to_string()));
+    }
+
+    /// Draw a figure `h` tall with its top-left at `at`, its ink as wide
+    /// as the client's numerals make `drawn`, that reads as `reads`.
+    /// Returns where its ink is.
+    pub(crate) fn figure(
+        &mut self,
+        at: (i32, i32),
+        h: i32,
+        drawn: &str,
+        reads: &str,
+        numerals: &NumeralMetrics,
+    ) -> Rect {
+        let units = expected_width(drawn, numerals).expect("a figure the metrics cover");
+        let w = (units * h as f32).round() as i32;
+        let rect = Rect::new(at.0, at.1, at.0 + w - 1, at.1 + h - 1);
+        self.text(rect, reads);
+        rect
+    }
+
+    pub(crate) fn recogniser(&self) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
+        let palette = self.palette.clone();
+        move |crop: &BgrImage| {
+            let mut counts: Vec<usize> = vec![0; palette.len()];
+            for px in crop.data.chunks(3) {
+                let rgb = [px[2], px[1], px[0]];
+                if let Some(i) = palette.iter().position(|(c, _)| *c == rgb) {
+                    counts[i] += 1;
+                }
+            }
+            let best = (0..palette.len()).max_by_key(|i| counts[*i]);
+            let text = best
+                .filter(|i| counts[*i] > 0)
+                .map_or(String::new(), |i| palette[i].1.clone());
+            Some((text, 0.99))
+        }
+    }
 }
 
 /// A small deterministic generator, so randomised layouts replay.

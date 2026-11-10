@@ -19,7 +19,6 @@ export type {
 	ProtectionRecordingCandidates,
 	ProtectionRepairInput,
 	ProtectionRepairOutcome,
-	ProtectionScanResult,
 	ProtectionSessionStatus,
 	ProtectionSet,
 	ProtectionSetInput,
@@ -27,6 +26,8 @@ export type {
 	ProtectionSetUpdateInput,
 	ProtectionStream,
 	ProtectionUndoTarget,
+	TerminalReadRefusal,
+	TerminalReadResult,
 	UnrecordedProtection,
 } from './commands.gen';
 
@@ -53,4 +54,5 @@ export const getProtectionSessionStatus = commands.protectionSessionStatus;
 export const getProtectionRecordingCandidates = commands.protectionRecordingCandidates;
 export const confirmProtectionObservation = commands.protectionObservationConfirm;
 export const confirmProtectionRepair = commands.protectionRepairConfirm;
+/** Read the Trade Terminal's total off the game window, or why it could not be. */
 export const scanTradeTerminalValue = commands.protectionTradeTerminalScan;

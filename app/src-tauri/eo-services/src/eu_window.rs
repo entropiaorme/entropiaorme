@@ -2,14 +2,18 @@
 //!
 //! Helpers used by the manual scan flow to derive capture regions from
 //! the live game window rather than a fixed-resolution preset table,
-//! and the focus check the hotbar listener consults before a slot key
+//! the capture of the whole game window for the readers that find what
+//! they want in it themselves, and the focus check the hotbar listener consults before a slot key
 //! may move the tracked tool.
 //! On non-Windows platforms the helpers return None and callers handle
 //! the missing-window case, exactly as the original does. The capture
 //! regions compose these lookups with the pure geometry in
 //! `scan_presets`.
 
+use crate::game_ui::seams::FrameUnavailable;
 use crate::scan_presets::{compute_region, ScanPresets};
+use crate::screen_capture::{capturable_area, capture_region_bgr};
+use crate::skill_panel::BgrImage;
 
 pub const GAME_TITLE_PREFIX: &str = "Entropia Universe Client";
 
@@ -27,6 +31,41 @@ pub fn find_game_window() -> Option<WindowHandle> {
 /// coordinates, or None for a degenerate or unmeasurable window.
 pub fn get_window_geometry(handle: WindowHandle) -> Option<(i64, i64, i64, i64)> {
     platform::get_window_geometry(handle)
+}
+
+/// The game window's client area captured as one BGR frame, the
+/// production [`GameWindowFrame`].
+///
+/// Only the part of the client area the capturer can see is captured:
+/// a window hanging off the screen, at a negative origin, or across the
+/// edge of the monitor shared for capture is still read from what is
+/// visible of it. A window that cannot be measured (it vanished between
+/// the lookup and the measurement, or has no area) counts as not found.
+///
+/// [`GameWindowFrame`]: crate::game_ui::seams::GameWindowFrame
+pub fn capture_game_window() -> Result<BgrImage, FrameUnavailable> {
+    let handle = find_game_window().ok_or(FrameUnavailable::WindowNotFound)?;
+    let client = get_window_geometry(handle).ok_or(FrameUnavailable::WindowNotFound)?;
+    let (x, y, w, h) = match capturable_area() {
+        Some(area) => {
+            capturable_part(client, area).ok_or(FrameUnavailable::OutsideCapturableArea)?
+        }
+        None => client,
+    };
+    capture_region_bgr(x, y, w, h).ok_or(FrameUnavailable::CaptureFailed)
+}
+
+/// The part of `window` that lies inside `area`, both given as
+/// `(x, y, width, height)`; `None` when they do not overlap.
+pub fn capturable_part(
+    window: (i64, i64, i64, i64),
+    area: (i64, i64, i64, i64),
+) -> Option<(i64, i64, i64, i64)> {
+    let x0 = window.0.max(area.0);
+    let y0 = window.1.max(area.1);
+    let x1 = (window.0 + window.2).min(area.0 + area.2);
+    let y1 = (window.1 + window.3).min(area.1 + area.3);
+    (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
 }
 
 /// Whether the game client window is currently locatable.
@@ -81,18 +120,6 @@ pub fn skill_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
 /// absent.
 pub fn profession_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
     live_region(&presets.profession)
-}
-
-/// The repair-cost number capture rect, or None when the game window
-/// is absent.
-pub fn repair_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
-    live_region(&presets.repair)
-}
-
-/// The Trade Terminal total-value rectangle. Until the first live
-/// calibration this resolves the explicit provisional fallback.
-pub fn trade_terminal_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
-    live_region(&presets.trade_terminal)
 }
 
 /// The auction sale window's capture rect, or None when the game
@@ -449,6 +476,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_capturable_part_of_a_window_is_its_overlap_with_the_area() {
+        let screen = (0, 0, 1920, 1080);
+        // Wholly inside: the whole window.
+        assert_eq!(
+            capturable_part((100, 50, 800, 600), screen),
+            Some((100, 50, 800, 600))
+        );
+        // A negative origin: the part from the screen's corner.
+        assert_eq!(
+            capturable_part((-200, -30, 800, 600), screen),
+            Some((0, 0, 600, 570))
+        );
+        // Overhanging each side in turn.
+        assert_eq!(
+            capturable_part((1500, 100, 800, 600), screen),
+            Some((1500, 100, 420, 600))
+        );
+        assert_eq!(
+            capturable_part((100, 700, 800, 600), screen),
+            Some((100, 700, 800, 380))
+        );
+        assert_eq!(
+            capturable_part((-50, 100, 800, 600), screen),
+            Some((0, 100, 750, 600))
+        );
+        assert_eq!(
+            capturable_part((100, -100, 800, 600), screen),
+            Some((100, 0, 800, 500))
+        );
+        // A monitor that does not start at the origin.
+        let right_monitor = (1920, 0, 2560, 1440);
+        assert_eq!(
+            capturable_part((1800, 100, 800, 600), right_monitor),
+            Some((1920, 100, 680, 600))
+        );
+        // No overlap, or only an edge: nothing to capture.
+        assert_eq!(capturable_part((100, 100, 800, 600), right_monitor), None);
+        assert_eq!(capturable_part((1120, 0, 800, 600), right_monitor), None);
+        assert_eq!(capturable_part((0, 1080, 800, 600), screen), None);
+    }
+
+    #[test]
     fn absent_windows_yield_none_regions() {
         #[cfg(not(any(windows, target_os = "linux")))]
         {
@@ -459,7 +528,6 @@ mod tests {
             let presets = ScanPresets::new(std::path::Path::new("/nonexistent.json"));
             assert!(skill_region(&presets).is_none());
             assert!(profession_region(&presets).is_none());
-            assert!(repair_region(&presets).is_none());
             assert!(sale_window_region(&presets).is_none());
         }
         #[cfg(target_os = "linux")]

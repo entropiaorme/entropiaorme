@@ -131,7 +131,6 @@
 					aria-label={limited ? 'Total TT value in PED' : 'Repair cost in PED'}
 					disabled={recording.saving}
 				/>
-				{#if recording.rawText}<span class="max-w-[100px] truncate text-[10px] text-white/30" title={recording.rawText}>OCR: {recording.rawText}</span>{/if}
 				{#if canScan}<Button variant="ghost" size="sm" onclick={recording.scan} disabled={recording.saving}>Re-scan</Button>{/if}
 				{#if limited && recording.costPed !== null && !recording.isBaseline}
 					<span class="ml-auto text-[10px] tabular-nums text-white/45" title="TT lost since the baseline, at this set's markup">
@@ -139,9 +138,6 @@
 					</span>
 				{/if}
 			</div>
-			{#if limited && !recording.calibrated}
-				<p class="border-l-2 border-amber-400/70 pl-2 text-[10px] text-amber-200/80">Provisional coordinates were used. Check the value or enter it manually.</p>
-			{/if}
 			{#if recording.isBaseline}
 				<p class="text-[10px] text-white/40">This is {recording.set?.name}'s first reading: it sets the starting point and records no cost.</p>
 			{/if}

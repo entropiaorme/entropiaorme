@@ -85,7 +85,8 @@ use eo_services::eu_window;
 use eo_services::event_bus::{EventBus, Topic};
 use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::game_data_store::GameDataStore;
-use eo_services::game_ui::seams::RegionLookup;
+use eo_services::game_ui::profile::UiProfile;
+use eo_services::game_ui::seams::{FrameReader, GameWindowFrame, RegionLookup};
 use eo_services::hotbar_listener::{
     GameFocusProbe, HotbarListener, HotbarResolver, ItemResolver, ResolvedHotbarItem,
     HOTBAR_SLOT_KEYS,
@@ -760,11 +761,20 @@ async fn compose_with(
     // `db`/`game_data`/`clock`/`data_dir`. The calibration artefact sits
     // beside the snapshot dir in both the dev and installed layouts, so it
     // resolves as the snapshot's sibling.
-    let geometry_path = snapshot
-        .parent()
-        .map(|parent| parent.join("panel_geometry.json"))
-        .unwrap_or_else(|| snapshot.join("panel_geometry.json"));
-    let (skill_scan, repair_ocr, sale_window_ocr, spacebar_listener) = compose_scan_services(
+    let resources = resource_root(&snapshot);
+    let geometry_path = resources.join("panel_geometry.json");
+
+    // The readers that find what they want in the game window themselves
+    // are composed over one capture seam for the whole window and one
+    // interface profile (bundled beside the snapshot, like the calibration
+    // artefact). A profile that will not load is logged and leaves those
+    // readers unavailable; composition goes on without them.
+    let game_ui = GameUi {
+        frame: Arc::new(eu_window::capture_game_window),
+        profile: load_ui_profile(&resources.join(UI_PROFILE_FILE)),
+    };
+
+    let (skill_scan, sale_window_ocr, spacebar_listener) = compose_scan_services(
         producers.bus_handle(),
         ocr_engine.clone(),
         game_data.clone(),
@@ -778,10 +788,23 @@ async fn compose_with(
     )
     .await;
 
+    // The terminal reads (the Repair Terminal's cost, the Trade Terminal's
+    // total): the whole game window, the interface profile, and the shared
+    // engine. When the engine did not load they are told so here, and
+    // refuse as unavailable without capturing anything.
+    let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders {
+        frame: game_ui.frame.clone(),
+        profile: game_ui.profile.clone(),
+        read_text: ocr_engine.clone().map(|engine| -> FrameReader {
+            Arc::new(move |frame: &BgrImage| {
+                engine.recognize_bgr(&frame.data, frame.h, frame.w).ok()
+            })
+        }),
+    }));
+
     // Coordinate capture: the maps feature's two-point calibration flow
-    // plus the one-shot coordinate scan, composed over the same seams the
-    // repair scan rides (screen capture, the shared recogniser) plus the
-    // cursor-position lookup and the config-owned capture rectangle. The
+    // plus the one-shot coordinate scan, composed over a screen-rectangle
+    // capture and the shared recogniser, plus the cursor-position lookup and the config-owned capture rectangle. The
     // region provider and the frame reader are each one narrow closure on
     // purpose: an automatic UI locator or a specialised digit recogniser
     // replaces its closure without touching the scan path.
@@ -1078,9 +1101,42 @@ struct ScanPaths {
     debug: PathBuf,
 }
 
-/// Compose the manual skill scan, the repair-cost OCR and the sale-window
-/// read over the OCR engine, the live game-window region lookups, and the
-/// on-demand screen capturer. The scan publishes `scan.status.changed` on
+/// What the readers of the game's interface are composed over: the
+/// whole game window, captured on demand, and the interface profile.
+struct GameUi {
+    frame: GameWindowFrame,
+    profile: Option<Arc<UiProfile>>,
+}
+
+/// The interface profile's file name, bundled beside the snapshot dir
+/// (`tauri.conf.json` maps `resources/ui_profile.json` there).
+const UI_PROFILE_FILE: &str = "ui_profile.json";
+
+/// The directory the bundled data files sit in: the snapshot dir's parent,
+/// in the dev and installed layouts alike.
+fn resource_root(snapshot: &std::path::Path) -> PathBuf {
+    snapshot.parent().unwrap_or(snapshot).to_path_buf()
+}
+
+/// The bundled interface profile, or None (logged) when it cannot be
+/// used, which leaves the readers that need it unavailable.
+fn load_ui_profile(path: &std::path::Path) -> Option<Arc<UiProfile>> {
+    match UiProfile::load(path) {
+        Ok(profile) => Some(Arc::new(profile)),
+        Err(err) => {
+            tracing::warn!(
+                target: "eo::composition",
+                "interface profile at {} unusable ({err}); the terminal reads stand down",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Compose the manual skill scan and the sale-window read over the OCR
+/// engine, the live game-window region lookups, and the on-demand screen
+/// capturer. The scan publishes `scan.status.changed` on
 /// the spine `bus` (so its frames reach the shell's event bridge), persists
 /// accepted calibrations through the shared `pool`, and hydrates its resting
 /// status from the same. When the OCR runtime is absent the providers stand
@@ -1097,7 +1153,6 @@ async fn compose_scan_services(
     keystroke_source: Arc<dyn KeystrokeSource>,
 ) -> (
     Arc<SkillScanManual>,
-    Arc<RepairOcrService>,
     Arc<SaleWindowOcrService>,
     Arc<SpacebarCaptureListener>,
 ) {
@@ -1179,33 +1234,11 @@ async fn compose_scan_services(
         .map_err(Into::into)
     }));
 
-    // The repair-OCR provider seams: the same calibrated region lookup and
-    // capturer (BGR pixels here), recognised by the shared engine.
-    let repair_presets = presets.clone();
-    let trade_terminal_presets = presets.clone();
-    let trade_terminal_calibrated = presets.trade_terminal_calibrated;
-    let repair_engine_for_sale = ocr_engine.clone();
-    let repair_engine = ocr_engine;
-    let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders {
-        repair_region: Arc::new(move || eu_window::repair_region(&repair_presets)),
-        trade_terminal_region: Arc::new(move || {
-            eu_window::trade_terminal_region(&trade_terminal_presets)
-        }),
-        trade_terminal_calibrated,
-        capture_region: Arc::new(capture_region_bgr),
-        read_text: Arc::new(move |frame: &BgrImage| {
-            repair_engine
-                .as_ref()?
-                .recognize_bgr(&frame.data, frame.h, frame.w)
-                .ok()
-        }),
-    }));
-
     // The sale-window read: the same seams again, over the same warm
     // engine and capturer. It takes the anchor as well as the region,
     // because it crops each field out of the one captured panel.
     let sale_presets = presets;
-    let sale_engine = repair_engine_for_sale;
+    let sale_engine = ocr_engine;
     let anchor_presets = sale_presets.clone();
     let sale_window_ocr = Arc::new(SaleWindowOcrService::new(SaleWindowProviders {
         sale_window_region: Arc::new(move || eu_window::sale_window_region(&sale_presets)),
@@ -1241,7 +1274,7 @@ async fn compose_scan_services(
     // toggle enables it through the spacebar-capture command.
     let spacebar = SpacebarCaptureListener::new(skill_scan.clone(), Some(keystroke_source));
 
-    (skill_scan, repair_ocr, sale_window_ocr, spacebar)
+    (skill_scan, sale_window_ocr, spacebar)
 }
 
 /// Extract `{canonical_name: level}` rows from one captured skill-panel
@@ -2390,9 +2423,9 @@ mod tests {
     /// providers, not the inert defaults: the manual scan reports a resting
     /// idle status whose `configured` flag mirrors whether the OCR engine
     /// loaded (the inert default's `engine_available` is always false, so a
-    /// host where the engine loads proves the real provider), and the repair
-    /// reader runs its provider chain to the window-not-found leg. The scan
-    /// also publishes onto the spine bus: a status-moving verb dispatches one
+    /// host where the engine loads proves the real provider), and the
+    /// terminal reader is composed with its profile. The scan also
+    /// publishes onto the spine bus: a status-moving verb dispatches one
     /// `scan.status.changed` frame through the domain bridge composed
     /// alongside.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2435,11 +2468,50 @@ mod tests {
         );
         // The scan composed on the spine bus (its status frames reach the
         // domain bridge); the forwarding is covered by
-        // `the_domain_bridge_forwards_typed_envelopes_to_a_subscriber`. The
-        // repair reader's no-window leg is covered by the facade test
-        // `tracking_facade::repair_scan_soft_error_rides_the_body`.
+        // `the_domain_bridge_forwards_typed_envelopes_to_a_subscriber`.
+
+        // With an engine and the bundled profile, the terminal reader is
+        // available: whatever it answers, it is not that the reader is
+        // unavailable. (A profile at the wrong path would leave it so.)
+        if composed.ocr_engine.is_some() {
+            let read = composed.api.protection_trade_terminal_scan().unwrap();
+            assert_ne!(
+                read,
+                eo_api::protection::TerminalReadResult::Refused {
+                    reason: eo_api::protection::TerminalReadRefusal::ReaderUnavailable,
+                },
+                "the composed terminal reader has no profile"
+            );
+        }
 
         composed.producers.stop();
+    }
+
+    /// The interface profile is where composition looks for it, in the
+    /// dev layout (beside the repository snapshot) and the installed one
+    /// (the bundle map puts it beside the bundled snapshot dir).
+    #[test]
+    fn the_interface_profile_loads_from_where_composition_looks() {
+        let dev = resource_root(&repo_snapshot()).join(UI_PROFILE_FILE);
+        assert!(load_ui_profile(&dev).is_some(), "{}", dev.display());
+
+        // Installed, the snapshot dir is `<resources>/snapshot`.
+        assert_eq!(
+            resource_root(&PathBuf::from("/installed/resources/snapshot")),
+            PathBuf::from("/installed/resources")
+        );
+        let conf: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            conf["bundle"]["resources"][format!("resources/{UI_PROFILE_FILE}")],
+            serde_json::json!(UI_PROFILE_FILE),
+            "the installed build bundles the profile beside the snapshot dir"
+        );
     }
 
     use std::io::Write as _;

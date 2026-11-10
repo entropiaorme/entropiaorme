@@ -415,6 +415,23 @@ pub fn capture_bgra(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The monitor shared for capture, as `(x, y, width, height)` in global
+/// screen coordinates; `None` until the stream has produced a frame.
+pub fn monitor_area() -> Option<(i64, i64, i64, i64)> {
+    let engine = engine()?;
+    if !engine.healthy.load(Ordering::Acquire) {
+        return None;
+    }
+    let frame_slot = guard(&engine.latest);
+    let frame = frame_slot.as_ref()?;
+    Some((
+        frame.origin_x,
+        frame.origin_y,
+        i64::try_from(frame.width).ok()?,
+        i64::try_from(frame.height).ok()?,
+    ))
+}
+
 pub fn frame_generation() -> Option<u64> {
     let engine = engine()?;
     let generation = engine

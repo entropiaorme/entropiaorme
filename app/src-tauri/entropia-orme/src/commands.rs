@@ -56,8 +56,8 @@ use eo_api::market::{
 use eo_api::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
-    ProtectionScanResult, ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput,
-    ProtectionStream, ProtectionUndoTarget,
+    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput, ProtectionStream,
+    ProtectionUndoTarget, TerminalReadResult,
 };
 use eo_api::quests::{
     Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
@@ -72,9 +72,9 @@ use eo_api::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPat
 use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use eo_api::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
-    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult,
-    SessionConfigResult, SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage,
-    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
+    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
+    StartResult, StopResult, TrackingSnapshot,
 };
 use eo_api::weapons::{
     WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
@@ -240,11 +240,17 @@ pub async fn protection_repair_confirm(
     facade(&app)?.protection_repair_confirm(&input).await
 }
 
+// The Trade Terminal read captures the game window and recognises what it
+// needs to find the terminal; offload it so it never ties up an async
+// runtime worker.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn protection_trade_terminal_scan(
     app: tauri::AppHandle,
-) -> Result<ProtectionScanResult, ApiError> {
-    facade(&app)?.protection_trade_terminal_scan()
+) -> Result<TerminalReadResult, ApiError> {
+    let api = facade(&app)?;
+    tokio::task::spawn_blocking(move || api.protection_trade_terminal_scan())
+        .await
+        .map_err(|_| ApiError::invalid_state("trade terminal scan task failed"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1501,13 +1507,13 @@ pub async fn tracking_armour_cost(
     facade(&app)?.tracking_armour_cost(session_id, cost).await
 }
 
-// The repair scan runs a synchronous screen grab + one-shot OCR read;
-// offload it so a slow grab never ties up an async runtime worker.
+// The repair scan captures the game window and reads the terminal off it
+// synchronously; offload it so a slow grab never ties up an async runtime worker.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn tracking_repair_scan(
     app: tauri::AppHandle,
     session_id: String,
-) -> Result<RepairScanResult, ApiError> {
+) -> Result<TerminalReadResult, ApiError> {
     let api = facade(&app)?;
     tokio::task::spawn_blocking(move || api.tracking_repair_scan(session_id))
         .await

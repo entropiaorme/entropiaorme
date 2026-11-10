@@ -134,17 +134,6 @@ fn profession_fallback() -> PanelAnchor {
     PanelAnchor::fallback(474, 293, 31, 161)
 }
 
-fn repair_fallback() -> PanelAnchor {
-    PanelAnchor::fallback(50, 17, 48, 86)
-}
-
-/// Provisional rectangle for the Trade Terminal total. It is
-/// deliberately replaced by a full bottom-right-docked calibration before
-/// the read is treated as calibrated.
-fn trade_terminal_fallback() -> PanelAnchor {
-    PanelAnchor::fallback(80, 18, 48, 110)
-}
-
 /// The auction sale window carries no shipped constants: its rect is
 /// whatever calibration recorded, and a degenerate fallback is the
 /// honest stand-in until then. `compute_region` refuses a zero-sized
@@ -210,13 +199,10 @@ fn build_anchor(entry: Option<&Value>, fallback: PanelAnchor) -> PanelAnchor {
 }
 
 /// The panel anchors, built once from the geometry file beside the
-/// snapshot data (the repair anchor takes no grid geometry).
+/// snapshot data.
 pub struct ScanPresets {
     pub skill: PanelAnchor,
     pub profession: PanelAnchor,
-    pub repair: PanelAnchor,
-    pub trade_terminal: PanelAnchor,
-    pub trade_terminal_calibrated: bool,
     pub sale_window: PanelAnchor,
 }
 
@@ -225,19 +211,9 @@ impl ScanPresets {
     /// exist; the fallbacks then govern).
     pub fn new(geometry_path: &Path) -> Self {
         let geometry = load_geometry(geometry_path);
-        let trade_terminal_calibrated = geometry
-            .get(TRADE_TERMINAL_KEY)
-            .and_then(Value::as_object)
-            .is_some_and(|entry| !entry.is_empty());
         Self {
             skill: build_anchor(geometry.get("skill"), skill_fallback()),
             profession: build_anchor(geometry.get("profession"), profession_fallback()),
-            repair: repair_fallback(),
-            trade_terminal: build_anchor(
-                geometry.get(TRADE_TERMINAL_KEY),
-                trade_terminal_fallback(),
-            ),
-            trade_terminal_calibrated,
             sale_window: build_anchor(geometry.get(SALE_WINDOW_KEY), sale_window_fallback()),
         }
     }
@@ -246,7 +222,6 @@ impl ScanPresets {
 /// The sale window's key in the geometry file, shared by the loader and
 /// the calibration tool that writes the entry.
 pub const SALE_WINDOW_KEY: &str = "sale_window";
-pub const TRADE_TERMINAL_KEY: &str = "trade_terminal";
 
 /// The capture rect for a panel anchored to the window's bottom-right
 /// corner, or None for a degenerate rect. `window` is the game
@@ -299,12 +274,8 @@ mod tests {
         let presets = ScanPresets::new(Path::new("/nonexistent/panel_geometry.json"));
         assert_eq!(presets.skill, skill_fallback());
         assert_eq!(presets.profession, profession_fallback());
-        assert_eq!(presets.repair, repair_fallback());
-        assert_eq!(presets.trade_terminal, trade_terminal_fallback());
-        assert!(!presets.trade_terminal_calibrated);
         assert_eq!(presets.skill.width, 635);
         assert_eq!(presets.profession.bottom_offset, 161);
-        assert_eq!(presets.repair.height, 17);
         // An uncalibrated sale window has no rect, so it yields no
         // region rather than an arbitrary one.
         assert_eq!(presets.sale_window, sale_window_fallback());
@@ -429,9 +400,6 @@ mod tests {
         // offsets -> br (1990, 960), tl (1355, 629).
         let region = compute_region(&presets.skill, (100, 50, 1920, 1080)).unwrap();
         assert_eq!(region, ([1355, 629], [1990, 960]));
-
-        let region = compute_region(&presets.repair, (0, 0, 800, 600)).unwrap();
-        assert_eq!(region, ([702, 497], [752, 514]));
 
         // A window smaller than the panel still yields a rect (negative
         // coordinates and all): the guard fires only for non-positive

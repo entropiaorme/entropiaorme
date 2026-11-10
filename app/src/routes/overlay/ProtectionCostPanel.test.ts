@@ -7,6 +7,7 @@ import type {
 	ProtectionCostWindow,
 	ProtectionRecordingCandidates,
 	ProtectionSet,
+	TerminalReadResult,
 } from '$lib/api';
 
 const api = vi.hoisted(() => ({
@@ -14,8 +15,8 @@ const api = vi.hoisted(() => ({
 	confirmProtectionRepair: vi.fn(),
 	getProtectionOverview: vi.fn(),
 	getProtectionRecordingCandidates: vi.fn(),
-	scanRepairCost: vi.fn(),
-	scanTradeTerminalValue: vi.fn(),
+	scanRepairCost: vi.fn<(sessionId: string) => Promise<TerminalReadResult>>(),
+	scanTradeTerminalValue: vi.fn<() => Promise<TerminalReadResult>>(),
 }));
 
 vi.mock('$lib/api', () => api);
@@ -100,9 +101,13 @@ const hyperion: ProtectionSet = {
 
 const EMPTY_BACKLOG = { lastRecordedAt: null, sessions: 0, hits: 0 };
 
-function renderPanel(onClose = vi.fn()) {
-	render(ProtectionCostPanel, { props: { repairOcrEnabled: false, onClose } });
+function renderPanel(onClose = vi.fn(), repairOcrEnabled = false) {
+	render(ProtectionCostPanel, { props: { repairOcrEnabled, onClose } });
 	return onClose;
+}
+
+function input(): HTMLInputElement {
+	return screen.getByPlaceholderText('0.00 PED') as HTMLInputElement;
 }
 
 async function enterAmount(value: string) {
@@ -342,5 +347,239 @@ describe('recording a limited set', () => {
 			target: { value: 'Replaced the helmet' },
 		});
 		expect((screen.getByText('Reset baseline') as HTMLButtonElement).disabled).toBe(false);
+	});
+});
+
+/** A read of `text` as the terminal prints it, `2.20` or `1,234.56789`. */
+function read(text: string, rawText = `${text} PED`): TerminalReadResult {
+	return { kind: 'read', valuePed: Number(text.replaceAll(',', '')), text, rawText };
+}
+
+function refused(
+	reason: Extract<TerminalReadResult, { kind: 'refused' }>['reason'],
+): TerminalReadResult {
+	return { kind: 'refused', reason };
+}
+
+/** A promise the test settles when it chooses, for a read still out. */
+function pending<T>() {
+	let settle!: (value: T) => void;
+	const promise = new Promise<T>((resolve) => {
+		settle = resolve;
+	});
+	return { promise, settle };
+}
+
+function withHyperion() {
+	api.getProtectionOverview.mockResolvedValue({
+		sets: [hyperion],
+		unlimited: EMPTY_BACKLOG,
+		recentCostWindows: [],
+		unrecorded: { sessions: 0, hits: 0 },
+	});
+	api.getProtectionRecordingCandidates.mockImplementation(async (stream: { kind: string }) =>
+		stream.kind === 'limited'
+			? candidates([], { stream: { kind: 'limited', setId: 9 } })
+			: candidates([session('s1', 1_700_000_000, 80, ARIS)]),
+	);
+}
+
+describe('reading the figure off a terminal', () => {
+	beforeEach(() => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 80, ARIS)]),
+		);
+	});
+
+	it('puts the repair cost in the field as printed and records it', async () => {
+		api.scanRepairCost.mockResolvedValue(read('2.20'));
+		renderPanel(vi.fn(), true);
+
+		await fireEvent.click(await screen.findByText('Scan Repair Terminal'));
+		await waitFor(() => expect(input().value).toBe('2.20'));
+		// What the recogniser saw is evidence, not something to show.
+		expect(screen.queryByText(/OCR/)).toBeNull();
+		expect(screen.queryByText(/2\.20 PED/)).toBeNull();
+		await fireEvent.click(screen.getByText('Record'));
+
+		await waitFor(() =>
+			expect(lastRepairInput()).toMatchObject({ costPed: 2.2, sessionIds: ['s1'] }),
+		);
+	});
+
+	it('keeps every printed digit of a grouped figure', async () => {
+		api.scanRepairCost.mockResolvedValue(read('1,234.56789'));
+		renderPanel(vi.fn(), true);
+
+		await fireEvent.click(await screen.findByText('Scan Repair Terminal'));
+		await waitFor(() => expect(input().value).toBe('1234.56789'));
+		await fireEvent.click(screen.getByText('Record'));
+		await waitFor(() => expect(lastRepairInput()).toMatchObject({ costPed: 1234.56789 }));
+	});
+
+	it('says why there is no figure, leaves the field empty, and takes a typed one', async () => {
+		api.scanRepairCost.mockResolvedValue(refused('figureNotVisible'));
+		renderPanel(vi.fn(), true);
+
+		await fireEvent.click(await screen.findByText('Scan Repair Terminal'));
+		expect(
+			await screen.findByText('The repair cost is covered by another window or off the screen'),
+		).toBeTruthy();
+		expect(input().value).toBe('');
+		expect((screen.getByText('Record') as HTMLButtonElement).disabled).toBe(true);
+
+		await fireEvent.input(input(), { target: { value: '3' } });
+		await fireEvent.click(screen.getByText('Record'));
+		await waitFor(() => expect(lastRepairInput()).toMatchObject({ costPed: 3 }));
+	});
+
+	it('drops an earlier read when a re-scan gives no figure', async () => {
+		api.scanRepairCost
+			.mockResolvedValueOnce(read('2.20'))
+			.mockResolvedValueOnce(refused('terminalNotOpen'));
+		renderPanel(vi.fn(), true);
+
+		await fireEvent.click(await screen.findByText('Scan Repair Terminal'));
+		await waitFor(() => expect(input().value).toBe('2.20'));
+		await fireEvent.click(screen.getByText('Re-scan'));
+
+		expect(
+			await screen.findByText('Open the Repair Terminal in the game, with its title in view'),
+		).toBeTruthy();
+		expect(input().value).toBe('');
+		expect((screen.getByText('Record') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('drops an earlier read when a re-scan fails outright', async () => {
+		api.scanRepairCost
+			.mockResolvedValueOnce(read('2.20'))
+			.mockRejectedValueOnce(new Error('ipc down'));
+		renderPanel(vi.fn(), true);
+
+		await fireEvent.click(await screen.findByText('Scan Repair Terminal'));
+		await waitFor(() => expect(input().value).toBe('2.20'));
+		await fireEvent.click(screen.getByText('Re-scan'));
+
+		expect(await screen.findByText('Repair Terminal scan failed')).toBeTruthy();
+		expect(input().value).toBe('');
+	});
+
+	it('keeps a typed figure when a re-scan gives none', async () => {
+		api.scanRepairCost.mockResolvedValue(refused('gameWindowNotFound'));
+		renderPanel(vi.fn(), true);
+
+		await enterAmount('5');
+		await fireEvent.click(screen.getByText('Re-scan'));
+
+		expect(await screen.findByText('The Entropia Universe window was not found')).toBeTruthy();
+		expect(input().value).toBe('5');
+	});
+
+	it('keeps a figure typed over a read when a re-scan gives none', async () => {
+		api.scanRepairCost
+			.mockResolvedValueOnce(read('2.20'))
+			.mockResolvedValueOnce(refused('figureNotRead'));
+		renderPanel(vi.fn(), true);
+
+		await fireEvent.click(await screen.findByText('Scan Repair Terminal'));
+		await waitFor(() => expect(input().value).toBe('2.20'));
+		await fireEvent.input(input(), { target: { value: '2.25' } });
+		await fireEvent.click(screen.getByText('Re-scan'));
+
+		expect(
+			await screen.findByText('The repair cost did not read clearly; enter it by hand'),
+		).toBeTruthy();
+		expect(input().value).toBe('2.25');
+	});
+
+	it('drops a read that resolves after the player switched stream', async () => {
+		withHyperion();
+		const trade = pending<TerminalReadResult>();
+		api.scanTradeTerminalValue.mockReturnValueOnce(trade.promise);
+		renderPanel(vi.fn(), true);
+
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await fireEvent.click(await screen.findByText('Scan Trade Terminal'));
+		await fireEvent.click(screen.getByText('Unlimited repair'));
+		trade.settle(read('1,234.56'));
+
+		// The Trade Terminal total never becomes the repair cost.
+		expect(await screen.findByText('Scan Repair Terminal')).toBeTruthy();
+		await fireEvent.click(screen.getByText('Enter manually'));
+		expect(input().value).toBe('');
+	});
+});
+
+describe('reading a limited set off the Trade Terminal', () => {
+	beforeEach(withHyperion);
+
+	it('records the read figure as read, with what the recogniser saw', async () => {
+		api.scanTradeTerminalValue.mockResolvedValue(read('28.50', '28.50PED'));
+		api.confirmProtectionObservation.mockResolvedValue({ observation: null, costWindow: null });
+		renderPanel();
+
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await fireEvent.click(await screen.findByText('Scan Trade Terminal'));
+		await waitFor(() => expect(input().value).toBe('28.50'));
+		await fireEvent.click(screen.getByText('Set baseline'));
+
+		await waitFor(() =>
+			expect(api.confirmProtectionObservation).toHaveBeenCalledWith(
+				expect.objectContaining({ ttValuePed: 28.5, source: 'ocr', rawText: '28.50PED' }),
+			),
+		);
+	});
+
+	it('records a figure typed over a read as typed, without the read evidence', async () => {
+		api.scanTradeTerminalValue.mockResolvedValue(read('28.50', '28.50PED'));
+		api.confirmProtectionObservation.mockResolvedValue({ observation: null, costWindow: null });
+		renderPanel();
+
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await fireEvent.click(await screen.findByText('Scan Trade Terminal'));
+		await waitFor(() => expect(input().value).toBe('28.50'));
+		await fireEvent.input(input(), { target: { value: '28.40' } });
+		await fireEvent.click(screen.getByText('Set baseline'));
+
+		await waitFor(() =>
+			expect(api.confirmProtectionObservation).toHaveBeenCalledWith(
+				expect.objectContaining({ ttValuePed: 28.4, source: 'manual', rawText: null }),
+			),
+		);
+	});
+
+	it('says when the terminal is closed and reads it once open', async () => {
+		api.scanTradeTerminalValue
+			.mockResolvedValueOnce(refused('terminalNotOpen'))
+			.mockResolvedValueOnce(read('1,234.56789'));
+		renderPanel();
+
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await fireEvent.click(await screen.findByText('Scan Trade Terminal'));
+		expect(
+			await screen.findByText('Open the Trade Terminal in the game, with its title in view'),
+		).toBeTruthy();
+		expect(input().value).toBe('');
+
+		await fireEvent.click(screen.getByText('Re-scan'));
+		await waitFor(() => expect(input().value).toBe('1234.56789'));
+		expect(api.scanRepairCost).not.toHaveBeenCalled();
+	});
+
+	it('drops a read when a re-scan of the Trade Terminal gives no figure', async () => {
+		api.scanTradeTerminalValue
+			.mockResolvedValueOnce(read('30.00'))
+			.mockResolvedValueOnce(refused('figureNotVisible'));
+		renderPanel();
+
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await fireEvent.click(await screen.findByText('Scan Trade Terminal'));
+		await waitFor(() => expect(input().value).toBe('30.00'));
+		await fireEvent.click(screen.getByText('Re-scan'));
+
+		expect(
+			await screen.findByText('The total is covered by another window or off the screen'),
+		).toBeTruthy();
+		expect(input().value).toBe('');
 	});
 });

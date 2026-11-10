@@ -29,6 +29,7 @@ use eo_services::game_ui::skills::{
 };
 use eo_services::ocr_engine::{load_bgr_png, OcrEngine};
 use eo_services::planet_maps::PlanetMapStore;
+use eo_services::repair_ocr::{RepairOcrService, RepairProviders, Terminal, TerminalRefusal};
 use eo_services::skill_panel::BgrImage;
 use serde_json::Value;
 
@@ -252,6 +253,78 @@ fn a_closed_terminal_is_a_refusal() {
         checked += 1;
     }
     println!("closed terminal: {checked} frames with other windows open, all refused");
+}
+
+/// Replay one terminal's figure through the service the app reads it
+/// with: the whole frame handed over as the game window, the bundled
+/// profile, the bundled recogniser. The amount it answers must be the
+/// labelled figure's own number, not merely a well-formed one.
+fn replay_terminal(terminal: Terminal, surface: &str, label_key: &str) -> Option<Tally> {
+    let corpus = Corpus::open()?;
+    let engine = recogniser()?;
+    let profile = Arc::new(profile());
+    let mut tally = Tally::default();
+    for (name, labels) in corpus.frames() {
+        let Some(want) = labels
+            .get(surface)
+            .and_then(|s| s.get(label_key))
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let image = corpus.frame(&name);
+        let read = reader(engine.clone());
+        let service = RepairOcrService::new(RepairProviders {
+            frame: Arc::new(move || Ok(image.clone())),
+            profile: Some(profile.clone()),
+            read_text: Some(Arc::new(read)),
+        });
+        let printed = want
+            .strip_suffix(" PED")
+            .unwrap_or_else(|| panic!("{name}: the label {want:?} is not an amount of PED"));
+        let number: f64 = printed
+            .replace(',', "")
+            .parse()
+            .unwrap_or_else(|e| panic!("{name}: the label {want:?} is not an amount: {e}"));
+        match service.read(terminal) {
+            Ok(got) if got.text == printed && got.value_ped == number => tally.exact += 1,
+            Ok(got) => tally.wrong.push(format!(
+                "{name}: read {:?} as {}, the screen shows {want:?}",
+                got.text, got.value_ped
+            )),
+            Err(TerminalRefusal::ReaderUnavailable) => {
+                panic!("the terminal reader is unavailable")
+            }
+            Err(refusal) => tally.refused.push(format!("{name} ({want}): {refusal}")),
+        }
+    }
+    Some(tally)
+}
+
+#[test]
+fn the_repair_terminal_read_answers_the_amount_on_screen() {
+    let Some(tally) = replay_terminal(Terminal::Repair, "repair", "repair_cost") else {
+        return;
+    };
+    tally.report("repair terminal read");
+    assert!(tally.exact > 0, "the corpus has repair frames to read");
+    assert!(
+        tally.refused.is_empty(),
+        "every repair frame shows its cost in full"
+    );
+}
+
+#[test]
+fn the_trade_terminal_read_answers_the_amount_on_screen() {
+    let Some(tally) = replay_terminal(Terminal::Trade, "trade", "total") else {
+        return;
+    };
+    tally.report("trade terminal read");
+    assert!(tally.exact > 0, "the corpus has trade frames to read");
+    assert!(
+        tally.refused.is_empty(),
+        "every trade frame shows its total in full"
+    );
 }
 
 /// The skill names and categories the application ships.

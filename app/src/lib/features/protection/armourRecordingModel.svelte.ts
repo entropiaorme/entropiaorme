@@ -19,6 +19,7 @@ import {
 	type ProtectionStream,
 	scanRepairCost,
 	scanTradeTerminalValue,
+	type TerminalReadResult,
 } from '$lib/api';
 import { describeError } from '$lib/view/errorState';
 import {
@@ -31,6 +32,7 @@ import {
 	recordingToken,
 	type SessionGroup,
 	startAt,
+	terminalRefusalLine,
 	toggleEarlier,
 	toggleGroup,
 	toggleSession,
@@ -67,7 +69,9 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 	let value = $state('');
 	let source = $state<'ocr' | 'manual'>('manual');
 	let rawText = $state<string | null>(null);
-	let calibrated = $state(true);
+	// The figure the last terminal read put in the field, so a figure the
+	// player has since typed over is never taken for a read.
+	let readFigure: string | null = null;
 	let resetReason = $state('');
 	let notice = $state<string | null>(null);
 	let saving = $state(false);
@@ -77,6 +81,9 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 	let earlierOpen = $state(false);
 	let result = $state<RecordingResult | null>(null);
 	let token = recordingToken();
+	// A terminal read answers for the stream and the press it was started
+	// for: one that resolves after the player moved on is dropped.
+	let scanRequest = 0;
 	// Each stream change starts a fresh candidate read; a slower read for a
 	// stream the player has already left must not land over the current one.
 	let candidatesRequest = 0;
@@ -124,11 +131,12 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 	);
 
 	function resetEntry(): void {
+		scanRequest++;
 		phase = 'ready';
 		value = '';
 		source = 'manual';
 		rawText = null;
-		calibrated = true;
+		readFigure = null;
 		resetReason = '';
 		notice = null;
 		result = null;
@@ -180,37 +188,47 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 		await loadCandidates();
 	}
 
+	/** Drop a figure an earlier read put in the field, so a read that fails
+	 * never leaves a stale figure standing as if it were this one; a figure
+	 * the player typed stays. */
+	function forgetRead(): void {
+		if (source === 'ocr' && value === readFigure) value = '';
+		source = 'manual';
+		rawText = null;
+		readFigure = null;
+	}
+
 	async function scan(): Promise<void> {
+		const request = ++scanRequest;
+		const startedFor = stream;
+		const terminal = stream.kind === 'limited' ? 'trade' : 'repair';
 		phase = 'scanning';
 		notice = null;
+		let read: TerminalReadResult | null;
 		try {
-			if (stream.kind === 'limited') {
-				const read = await scanTradeTerminalValue();
-				calibrated = read.calibrated;
-				rawText = read.rawText;
-				if (read.error || read.valuePed === null) {
-					notice = read.error ?? 'No number was recognised';
-					source = 'manual';
-				} else {
-					value = read.valuePed.toFixed(2);
-					source = 'ocr';
-				}
-			} else {
-				// The repair reader reads the terminal, not a session; the id it
-				// takes is unused, so none is named here.
-				const read = await scanRepairCost('');
-				rawText = read.raw_text ?? null;
-				if (read.error || read.cost_ped == null) {
-					notice = read.error ?? 'No number was recognised';
-					source = 'manual';
-				} else {
-					value = read.cost_ped.toFixed(2);
-					source = 'ocr';
-				}
-			}
+			// The repair reader reads the terminal, not a session; the id it
+			// takes is unused, so none is named here.
+			read = terminal === 'trade' ? await scanTradeTerminalValue() : await scanRepairCost('');
 		} catch {
-			notice = `${stream.kind === 'limited' ? 'Trade Terminal' : 'Repair Terminal'} scan failed`;
-			source = 'manual';
+			read = null;
+		}
+		// The player switched stream, or pressed scan again, while this read
+		// was out: it answers for something no longer on screen.
+		if (request !== scanRequest || !sameStream(stream, startedFor)) return;
+		if (read === null) {
+			forgetRead();
+			notice = `${terminal === 'trade' ? 'Trade Terminal' : 'Repair Terminal'} scan failed`;
+		} else if (read.kind === 'read') {
+			// The digits exactly as the terminal prints them, trailing zeros
+			// kept. Grouping commas go: the field reads a comma as a decimal
+			// comma, so `1,234` would read as one point two three four.
+			value = read.text.replaceAll(',', '');
+			readFigure = value;
+			rawText = read.rawText;
+			source = 'ocr';
+		} else {
+			forgetRead();
+			notice = terminalRefusalLine(read.reason, terminal);
 		}
 		phase = 'review';
 	}
@@ -286,18 +304,18 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 		},
 		set value(next: string) {
 			value = next;
+			// A figure typed over a read is the player's, not the terminal's.
+			if (source === 'ocr' && next !== readFigure) {
+				source = 'manual';
+				rawText = null;
+				readFigure = null;
+			}
 		},
 		get resetReason() {
 			return resetReason;
 		},
 		set resetReason(next: string) {
 			resetReason = next;
-		},
-		get rawText() {
-			return rawText;
-		},
-		get calibrated() {
-			return calibrated;
 		},
 		get notice() {
 			return notice;

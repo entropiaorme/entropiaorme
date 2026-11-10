@@ -121,12 +121,5 @@
     "width": 453,
     "height": 253,
     "right_offset": 258
-  },
-  "trade_terminal": {
-    "bottom_offset": 24,
-    "cells": {},
-    "width": 59,
-    "height": 20,
-    "right_offset": 275
   }
 }

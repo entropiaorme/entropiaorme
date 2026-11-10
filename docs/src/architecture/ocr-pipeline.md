@@ -50,8 +50,8 @@ Five consumers share the recogniser:
 | Consumer | Input | Output |
 | --- | --- | --- |
 | Skill-panel scan | A captured panel sliced into per-cell crops | A `name → level` map |
-| Repair-cost read | A single small numeric region on the repair terminal | A parsed PED cost |
-| Trade Terminal value read | The total TT value shown for seven armour pieces or seven plates | A reviewable PED value for a limited-set observation |
+| Repair-cost read | The whole game window, searched for the Repair Terminal and its labelled cost | The cost exactly as shown, or a typed refusal |
+| Trade Terminal value read | The whole game window, searched for the Trade Terminal and its labelled total | The total exactly as shown, or a typed refusal, for a limited-set observation |
 | Sale-window read | One calibrated auction panel sliced into independently validated fields | A reviewable listing draft |
 | Map-coordinate read | A calibrated radar readout strip, split into its two halves | Parsed longitude and latitude |
 
@@ -328,31 +328,30 @@ chasing a moving accuracy target, is recorded in
 
 ## The shared repair and Trade Terminal reads
 
-The repair-cost read reuses the recogniser for a single number rather than a
-panel. Given the repair terminal's region (derived from the live game window),
-it captures one frame, recognises the cost text, and parses it into a PED value:
-commas are read as decimal points, spaces are dropped, and the first digit run
-with an optional single fraction is taken (`parse_cost` in
-`app/src-tauri/eo-services/src/repair_ocr.rs`). Each failure leg (window
-not found, invalid region, capture failure, engine unavailable) surfaces a
-distinct error while still returning a zeroed cost, so the caller's contract is
-preserved. It shares the capture and recognition seams with the skill scan but
-holds no multi-page state machine.
+The repair-cost and Trade Terminal reads capture the whole game window and
+hand it to the interface reader (`app/src-tauri/eo-services/src/game_ui/`),
+which finds the terminal by the title the client prints along its top and
+the figure by its label (`REPAIR COST:`, `TOTAL AMOUNT:`), wherever the
+player has put the window and at whatever size. What the client's interface
+looks like is data in the bundled interface profile
+(`app/src-tauri/entropia-orme/resources/ui_profile.json`), not constants in
+code. A figure is accepted only when its reading has exactly the shape of a
+PED amount and its ink is as wide as that reading predicts; anything else is
+refused rather than approximated.
 
-The limited-protection read uses the same one-number service against the Trade
-Terminal total. The player places either all seven armour pieces or all seven
-plates in the terminal, without selling them, and reviews the recognised value
-before confirming it. Successive confirmed readings measure consumed TT; the
-protection service, not OCR, applies the set's frozen average markup and spreads
-the result over the sessions the player ticks (ADR-0031).
+The answer is the figure, or a typed refusal naming why there is none: the
+game window was not found or could not be captured, the terminal is not open
+(or its title is covered), the figure is covered or out of view, the figure
+did not read, or no recogniser or profile is available. A refusal carries no
+number, so it can never be recorded as a cost; the player sees what to change
+and can always enter the figure by hand.
 
-Both rectangles use the live game window's bottom-right docking convention.
-The repair rectangle has a shipped fallback. The Trade Terminal rectangle is
-the total-value field itself, loaded from the calibrated `trade_terminal`
-geometry entry; until that entry exists, capture uses an explicitly provisional
-fallback and the result carries `calibrated = false`. The review surface exposes
-that state and permits manual entry, so placeholder coordinates cannot
-masquerade as trusted evidence.
+The limited-protection read uses the Trade Terminal total. The player places
+either all seven armour pieces or all seven plates in the terminal, without
+selling them, and reviews the value before confirming it. Successive
+confirmed readings measure consumed TT; the protection service, not OCR,
+applies the set's frozen average markup and spreads the result over the
+sessions the player ticks (ADR-0031).
 
 ## The auction sale-window read
 

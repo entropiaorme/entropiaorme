@@ -2,17 +2,15 @@
 //! window's fields, so a listing can be recorded from what the game
 //! shows rather than retyped.
 //!
-//! Built on the repair read's shape: the window lookup, the capture and
-//! the recogniser arrive as injected providers, and the capture region
-//! derives at scan time from the live game window (the user docks the
-//! sale window bottom-right at default interface scale; the calibrated
-//! anchor encodes each field's rectangle relative to that corner).
+//! The window lookup, the capture and the recogniser arrive as injected
+//! providers, and the capture region derives at scan time from the live
+//! game window (the user docks the sale window bottom-right at default
+//! interface scale; the calibrated anchor encodes each field's rectangle
+//! relative to that corner).
 //!
-//! One difference from the repair read, and it is the whole design. The
-//! repair read answers with a single number that the user sees beside
-//! its own raw text, so an unreadable frame can answer zero. Here every
-//! field feeds a draft that becomes a ledger entry, so a field that does
-//! not read must come back **empty**, never approximate. An empty field
+//! Every field feeds a draft that becomes a ledger entry, so a field
+//! that does not read must come back **empty**, never approximate, and
+//! never zero. An empty field
 //! costs the user one retype; a confidently wrong one corrupts a
 //! transaction record silently, and nothing downstream can tell it from
 //! a figure that was really on screen.

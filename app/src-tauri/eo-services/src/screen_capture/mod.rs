@@ -1,13 +1,12 @@
 //! Screen-region capture for OCR. A region (`x`, `y`, `w`, `h`, global
 //! screen coordinates) goes in; PNG bytes (the skill-scan path, RGB-encoded)
-//! or a [`BgrImage`] (the repair-OCR path) comes out.
+//! or a [`BgrImage`] (the path the game-window readers take) comes out.
 //!
 //! The backend is per platform: a GDI `BitBlt` of the screen device context
 //! on Windows; on Linux the X server's root window on an Xorg session
 //! (`x11`) and the ScreenCast portal elsewhere (`portal`, behind the
-//! `linux-capture` feature). Every other host returns `None`, so the
-//! scan/repair routes report "engine unavailable" rather than serving an
-//! empty capture.
+//! `linux-capture` feature). Every other host returns `None`, so a read
+//! reports that the capture failed rather than serving an empty one.
 
 use image::ImageEncoder;
 
@@ -32,8 +31,9 @@ pub fn capture_region_png(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Capture a screen rectangle as a BGR image (the repair-OCR path). `None`
-/// on a non-positive region, a capture failure, or a host with no capturer.
+/// Capture a screen rectangle as a BGR image (the game-window readers'
+/// path). `None` on a non-positive region, a capture failure, or a host
+/// with no capturer.
 pub fn capture_region_bgr(x: i64, y: i64, w: i64, h: i64) -> Option<BgrImage> {
     let bgra = platform::capture_bgra(x, y, w, h)?;
     // BGRA -> BGR (drop the alpha), matching the `[:, :, :3]` slice of the
@@ -49,6 +49,16 @@ pub fn capture_region_bgr(x: i64, y: i64, w: i64, h: i64) -> Option<BgrImage> {
         h: h as usize,
         w: w as usize,
     })
+}
+
+/// The area of the screen the capturer can grab from, as `(x, y, width,
+/// height)` in global screen coordinates, where it is limited to one: the
+/// X screen on an Xorg session, the monitor shared through the portal
+/// elsewhere on Linux. `None` where no limit is known, so a caller asks
+/// for the rectangle it wants as it is: GDI grabs any rectangle, and the
+/// portal names its monitor only once its stream has a frame.
+pub fn capturable_area() -> Option<(i64, i64, i64, i64)> {
+    platform::capturable_area()
 }
 
 /// Encode a captured BGR frame as PNG bytes.
@@ -191,6 +201,11 @@ mod platform {
             None
         }
     }
+
+    /// GDI grabs any rectangle of the desktop, so it names no limit.
+    pub fn capturable_area() -> Option<(i64, i64, i64, i64)> {
+        None
+    }
 }
 
 /// The Linux capturer: the X server's own screen on an Xorg session, the
@@ -203,6 +218,23 @@ mod platform {
             return super::x11::capture_bgra(x, y, w, h);
         }
         portal_capture(x, y, w, h)
+    }
+
+    pub fn capturable_area() -> Option<(i64, i64, i64, i64)> {
+        if super::x11::session_is_x11() {
+            return super::x11::screen_area();
+        }
+        portal_area()
+    }
+
+    #[cfg(feature = "linux-capture")]
+    fn portal_area() -> Option<(i64, i64, i64, i64)> {
+        super::portal::monitor_area()
+    }
+
+    #[cfg(not(feature = "linux-capture"))]
+    fn portal_area() -> Option<(i64, i64, i64, i64)> {
+        None
     }
 
     #[cfg(feature = "linux-capture")]
@@ -224,11 +256,15 @@ mod portal;
 mod x11;
 
 /// The stand-down capturer: every host without a capture backend (neither
-/// Windows nor Linux). Returns `None` so the scan/repair routes report
-/// "engine unavailable" rather than serving an empty capture.
+/// Windows nor Linux). Every capture is `None`, so a read reports that
+/// the capture failed rather than serving an empty frame.
 #[cfg(not(any(windows, target_os = "linux")))]
 mod platform {
     pub fn capture_bgra(_x: i64, _y: i64, _w: i64, _h: i64) -> Option<Vec<u8>> {
+        None
+    }
+
+    pub fn capturable_area() -> Option<(i64, i64, i64, i64)> {
         None
     }
 }

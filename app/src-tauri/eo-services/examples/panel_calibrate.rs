@@ -1,6 +1,6 @@
-//! Guided calibration for a docked game panel: record each rectangle by
-//! hovering its corners, and write the result into `panel_geometry.json`
-//! as an entry the scan presets read back.
+//! Guided calibration for the docked sale window: record each rectangle
+//! by hovering its corners, and write the result into
+//! `panel_geometry.json` as an entry the scan presets read back.
 //!
 //! The panel docks in the game window's bottom-right corner, so every
 //! recorded corner converts to an offset from that corner the moment it
@@ -12,7 +12,6 @@
 //! ```sh
 //! cargo run -p eo-services --features linux-capture --example panel_calibrate
 //! cargo run -p eo-services --features linux-capture --example panel_calibrate -- --only quantity,buyout
-//! cargo run -p eo-services --features linux-capture --example panel_calibrate -- --panel trade_terminal
 //! ```
 //!
 //! Confirmation is a press of Enter in this terminal while the pointer
@@ -25,7 +24,7 @@ use std::io::Write;
 
 use eo_services::eu_window;
 use eo_services::scan_presets::{
-    compute_region, CellGeometry, PanelAnchor, ScanPresets, SALE_WINDOW_KEY, TRADE_TERMINAL_KEY,
+    compute_region, CellGeometry, PanelAnchor, ScanPresets, SALE_WINDOW_KEY,
 };
 use serde_json::Value;
 
@@ -47,42 +46,6 @@ const SALE_WINDOW_FIELDS: &[(&str, &str)] = &[
     ("buyout", "buyout"),
 ];
 
-#[derive(Clone, Copy)]
-enum PanelKind {
-    SaleWindow,
-    TradeTerminal,
-}
-
-impl PanelKind {
-    fn key(self) -> &'static str {
-        match self {
-            Self::SaleWindow => SALE_WINDOW_KEY,
-            Self::TradeTerminal => TRADE_TERMINAL_KEY,
-        }
-    }
-
-    fn fields(self) -> &'static [(&'static str, &'static str)] {
-        match self {
-            Self::SaleWindow => SALE_WINDOW_FIELDS,
-            Self::TradeTerminal => &[],
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::SaleWindow => "sale window",
-            Self::TradeTerminal => "Trade Terminal",
-        }
-    }
-
-    fn rectangle_label(self) -> &'static str {
-        match self {
-            Self::SaleWindow => "the whole sale window",
-            Self::TradeTerminal => "the total TT value",
-        }
-    }
-}
-
 /// A recorded point, as offsets from the game window's bottom-right
 /// corner: larger `dx` is further left, larger `dy` is further up.
 #[derive(Debug, Clone, Copy)]
@@ -95,7 +58,6 @@ struct Options {
     out: std::path::PathBuf,
     shots: Option<std::path::PathBuf>,
     only: Vec<String>,
-    panel: PanelKind,
 }
 
 fn default_out() -> std::path::PathBuf {
@@ -108,7 +70,6 @@ fn parse_args() -> Result<Options, String> {
         out: default_out(),
         shots: None,
         only: Vec::new(),
-        panel: PanelKind::SaleWindow,
     };
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -123,23 +84,11 @@ fn parse_args() -> Result<Options, String> {
                     .filter(|name| !name.is_empty())
                     .collect()
             }
-            "--panel" => {
-                options.panel = match value?.as_str() {
-                    "sale_window" => PanelKind::SaleWindow,
-                    "trade_terminal" => PanelKind::TradeTerminal,
-                    other => return Err(format!("unknown panel: {other}")),
-                }
-            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }
     for name in &options.only {
-        if !options
-            .panel
-            .fields()
-            .iter()
-            .any(|(field, _)| field == name)
-        {
+        if !SALE_WINDOW_FIELDS.iter().any(|(field, _)| field == name) {
             return Err(format!("unknown field: {name}"));
         }
     }
@@ -273,7 +222,7 @@ fn main() {
     let options = parse_args().unwrap_or_else(|error| {
         eprintln!("calibrate: {error}");
         eprintln!(
-            "usage: panel_calibrate [--panel sale_window|trade_terminal] [--out <panel_geometry.json>] [--shots <dir>] [--only <fields>]"
+            "usage: panel_calibrate [--out <panel_geometry.json>] [--shots <dir>] [--only <fields>]"
         );
         std::process::exit(2);
     });
@@ -283,14 +232,11 @@ fn main() {
         std::process::exit(1);
     }
 
-    eprintln!(
-        "Dock the {} in the game's bottom-right corner at default interface scale.",
-        options.panel.label()
-    );
+    eprintln!("Dock the sale window in the game's bottom-right corner at default interface scale.");
     eprintln!("Keep this terminal focused: hover a corner with the pointer and press Enter here.");
     eprintln!();
 
-    let key = options.panel.key();
+    let key = SALE_WINDOW_KEY;
     let previous = existing_entry(&options.out, key);
     let recalibrating = !options.only.is_empty();
 
@@ -321,7 +267,7 @@ fn main() {
             }
         }
     } else {
-        let Some((top_left, bottom_right)) = prompt_rect(options.panel.rectangle_label()) else {
+        let Some((top_left, bottom_right)) = prompt_rect("the whole sale window") else {
             eprintln!("calibrate: stopped without recording anything");
             std::process::exit(1);
         };
@@ -371,7 +317,7 @@ fn main() {
     }
 
     eprintln!();
-    for (name, description) in options.panel.fields() {
+    for (name, description) in SALE_WINDOW_FIELDS {
         if recalibrating && !options.only.iter().any(|only| only == name) {
             continue;
         }
@@ -408,26 +354,16 @@ fn main() {
         std::process::exit(1);
     }
     eprintln!();
-    match options.panel {
-        PanelKind::SaleWindow => eprintln!(
-            "Wrote {} fields to {}",
-            anchor.cells.len(),
-            options.out.display()
-        ),
-        PanelKind::TradeTerminal => eprintln!(
-            "Wrote the Trade Terminal total-value rectangle to {}",
-            options.out.display()
-        ),
-    }
+    eprintln!(
+        "Wrote {} fields to {}",
+        anchor.cells.len(),
+        options.out.display()
+    );
 
     // Read the file back through the loader the app uses, so what was
     // written is confirmed to be what the app will see.
     let presets = ScanPresets::new(&options.out);
-    let loaded = match options.panel {
-        PanelKind::SaleWindow => presets.sale_window,
-        PanelKind::TradeTerminal => presets.trade_terminal,
-    };
-    if loaded != anchor {
+    if presets.sale_window != anchor {
         eprintln!("calibrate: the file did not read back as recorded");
         std::process::exit(1);
     }

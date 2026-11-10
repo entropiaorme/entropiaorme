@@ -57,7 +57,8 @@ fn fold(raw: &str) -> String {
 
 /// A number in the client's notation: an integer part that is either
 /// ungrouped or grouped in threes by commas (never a mixture, never a
-/// short group), then an optional fraction. Returns the value.
+/// short group), with no leading zero unless it is a lone `0`, then an
+/// optional fraction. Returns the value.
 fn grouped_number(text: &str) -> Option<f64> {
     let (whole, fraction) = match text.split_once('.') {
         Some((w, f)) => (w, Some(f)),
@@ -75,10 +76,16 @@ fn grouped_number(text: &str) -> Option<f64> {
     {
         return None;
     }
+    // The client never pads an amount with zeros: `0.05` and `0` are
+    // printed, `0123.45` and `0,123.45` are not. A leading zero is a
+    // misread digit (an `8` read as `0` has the same width), not a value.
+    if groups[0].starts_with('0') && whole != "0" {
+        return None;
+    }
     if groups.len() > 1 {
-        // Leading group one to three digits and not a bare zero run;
-        // every later group exactly three. This is the rule that turns
-        // a collapsed digit (`1,44.77`) into a refusal.
+        // Leading group one to three digits; every later group exactly
+        // three. This is the rule that turns a collapsed digit
+        // (`1,44.77`) into a refusal.
         if groups[0].len() > 3 || groups[1..].iter().any(|g| g.len() != 3) {
             return None;
         }
@@ -173,6 +180,13 @@ pub fn distance_labels(raw: &str, unit: &str) -> Option<Vec<u32>> {
             .trim_start();
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// The amount of a [`Grammar::PedAmount`] reading's canonical text,
+/// without its unit: `27.47542 PED` is `27.47542`. Other text is returned
+/// as it is.
+pub fn without_unit(text: &str) -> &str {
+    text.strip_suffix(" PED").unwrap_or(text)
 }
 
 /// Check `raw` against `grammar`. `None` is a refusal.
@@ -371,6 +385,28 @@ mod tests {
         assert_eq!(number(Grammar::GroupedDecimal, "12,452.68"), Some(12452.68));
         assert_eq!(number(Grammar::GroupedDecimal, "1"), Some(1.0));
         assert_eq!(number(Grammar::GroupedDecimal, "198259"), Some(198259.0));
+    }
+
+    #[test]
+    fn a_leading_zero_is_refused_unless_the_whole_part_is_zero() {
+        for raw in ["0,123.45", "0123.45", "00.5", "007", "0,000", "00"] {
+            assert_eq!(parse(Grammar::GroupedDecimal, raw), None, "{raw:?}");
+        }
+        assert_eq!(parse(Grammar::PedAmount, "0,123.45 PED"), None);
+        assert_eq!(parse(Grammar::PedAmount, "0123.45 PED"), None);
+        assert_eq!(parse(Grammar::Percent, "05%"), None);
+        assert_eq!(number(Grammar::GroupedDecimal, "0.05"), Some(0.05));
+        assert_eq!(number(Grammar::GroupedDecimal, "0"), Some(0.0));
+        assert_eq!(number(Grammar::GroupedDecimal, "10"), Some(10.0));
+        assert_eq!(number(Grammar::GroupedDecimal, "1,000"), Some(1000.0));
+        assert_eq!(number(Grammar::PedAmount, "0.00 PED"), Some(0.0));
+    }
+
+    #[test]
+    fn the_unit_comes_off_an_amount_and_nothing_else() {
+        assert_eq!(without_unit("1,234.56789 PED"), "1,234.56789");
+        assert_eq!(without_unit("2.20 PED"), "2.20");
+        assert_eq!(without_unit("201.92%"), "201.92%");
     }
 
     #[test]

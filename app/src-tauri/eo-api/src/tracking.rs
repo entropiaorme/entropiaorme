@@ -49,6 +49,7 @@ use serde_json::{json, Map, Value};
 use eo_services::tracking_reads::*;
 
 use crate::activities::ActivitySummary;
+use crate::protection::TerminalReadResult;
 use crate::Nullable;
 use crate::{Api, ApiError};
 
@@ -117,9 +118,6 @@ const SNAPSHOT_FIELDS: [&str; 58] = [
     "healing",
     "warnings",
 ];
-
-/// The repair-scan response-model field order (`exclude_unset`).
-const REPAIR_FIELDS: [&str; 4] = ["cost_ped", "raw_text", "confidence", "error"];
 
 /// A tracker-command precondition surfaced at the facade: a state
 /// conflict ("No active session"), mapped to 409 with the error's own
@@ -1196,20 +1194,6 @@ pub struct ArmourCostResult {
     pub armour_cost: f64,
 }
 
-/// The one-shot repair-cost read (`exclude_unset`): the cost / raw text /
-/// confidence on success, plus `error` on a logical refusal.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RepairScanResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_ped: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 // ── Facade methods ──────────────────────────────────────────────────
 
 impl Api {
@@ -1802,18 +1786,17 @@ impl Api {
         serde_json::from_value(value).map_err(ApiError::internal("tracking armour cost shaping"))
     }
 
-    /// The one-shot repair-cost OCR read, gated on `repair_ocr_enabled`
-    /// (400 when disabled). The `session_id` is unused (the reference
-    /// ignores it too); it stays in the signature for the route mapping.
-    pub fn tracking_repair_scan(&self, session_id: String) -> Result<RepairScanResult, ApiError> {
+    /// Read the Repair Terminal's repair cost off the game window, gated
+    /// on `repair_ocr_enabled` (400 when disabled). The `session_id` is
+    /// unused: the terminal is read, not a session.
+    pub fn tracking_repair_scan(&self, session_id: String) -> Result<TerminalReadResult, ApiError> {
         let _ = session_id;
         let config = load_config_readonly(&self.data_dir)
             .map_err(ApiError::internal("repair scan config"))?;
         if !config.repair_ocr_enabled {
             return Err(ApiError::bad_request("Repair OCR is disabled"));
         }
-        let value = project(&self.repair_ocr.scan_repair_cost(), &REPAIR_FIELDS);
-        serde_json::from_value(value).map_err(ApiError::internal("repair scan shaping"))
+        Ok(self.repair_ocr.scan_repair_cost().into())
     }
 
     /// Set which app-wide statistics an ended session is kept out of: the

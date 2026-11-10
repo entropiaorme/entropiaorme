@@ -343,10 +343,8 @@
 				<div>
 					<p class="text-sm text-text">Repair-cost OCR</p>
 					<p class="text-xs text-text-tertiary mt-0.5">
-						For UL armour repair cost tracking. Dock the in-game repair terminal at the
-						bottom-right of the Entropia Universe window; the cost number is read from a
-						fixed region relative to that corner. Manual entry is always available from
-						the overlay.
+						Reads the repair cost off the Repair Terminal when you record an unlimited armour
+						repair. Manual entry stays available.
 					</p>
 					{#if savedIndicator === 'repairOcr'}
 						<p class="text-xs text-success mt-1">Saved</p>

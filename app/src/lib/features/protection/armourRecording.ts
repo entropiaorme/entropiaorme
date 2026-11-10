@@ -11,7 +11,7 @@
  * by one, for the piece that was left unrepaired last time.
  */
 
-import type { ProtectionCandidateSession } from '$lib/api';
+import type { ProtectionCandidateSession, TerminalReadRefusal } from '$lib/api';
 
 /** The sessions of one session type, oldest first. */
 export interface SessionGroup {
@@ -184,4 +184,37 @@ export function recordingToken(): string {
 		globalThis.crypto?.randomUUID?.() ??
 		`armour-${Date.now()}-${Math.random().toString(36).slice(2)}`
 	);
+}
+
+/** The terminal a recording reads its figure from. */
+export type RecordingTerminal = 'repair' | 'trade';
+
+/** What to tell the player when a terminal read gave no figure: what to
+ * change in the game for the next read, or that the figure is theirs to type. */
+export function terminalRefusalLine(
+	reason: TerminalReadRefusal,
+	terminal: RecordingTerminal,
+): string {
+	const name = terminal === 'repair' ? 'Repair Terminal' : 'Trade Terminal';
+	const figure = terminal === 'repair' ? 'The repair cost' : 'The total';
+	switch (reason) {
+		case 'gameWindowNotFound':
+			return 'The Entropia Universe window was not found';
+		case 'captureFailed':
+			return 'The game window could not be captured; enter the amount by hand';
+		case 'terminalNotOpen':
+			return `Open the ${name} in the game, with its title in view`;
+		case 'figureNotVisible':
+			return `${figure} is covered by another window or off the screen`;
+		case 'figureNotRead':
+			return `${figure} did not read clearly; enter it by hand`;
+		case 'gameWindowOffScreen':
+			return 'The game window is off the screen this app can capture; move it onto that screen';
+		case 'readerUnavailable':
+			return 'The terminal reader is not available; enter the amount by hand';
+		default: {
+			const unhandled: never = reason;
+			return unhandled;
+		}
+	}
 }

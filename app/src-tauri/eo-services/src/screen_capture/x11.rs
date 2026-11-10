@@ -85,6 +85,19 @@ fn connect() -> Option<Display> {
     })
 }
 
+/// The X screen, which on Xorg is all there is to capture, as
+/// `(0, 0, width, height)`; `None` when no X display is reachable.
+pub fn screen_area() -> Option<(i64, i64, i64, i64)> {
+    let mut slot = DISPLAY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_none() {
+        *slot = connect();
+    }
+    let server = slot.as_ref()?;
+    Some((0, 0, server.width, server.height))
+}
+
 /// Capture the rectangle (global screen coordinates, which on Xorg are the
 /// root window's) as top-down 32-bit BGRA. `None` on a non-positive or
 /// off-screen rectangle, an unsupported pixel format, or any X error.

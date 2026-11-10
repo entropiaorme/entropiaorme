@@ -1,5 +1,6 @@
 //! Protection cost recording: the limited-set catalogue, the sessions a
-//! recording could be spread over, and the two recording commands.
+//! recording could be spread over, the two recording commands, and the
+//! terminal reads that fill a recording in.
 //!
 //! These DTOs keep the armour/plate vocabulary closed at the IPC
 //! boundary. The service owns persistence and allocation; this facade
@@ -16,6 +17,7 @@ use eo_services::protection::{
     RecordingCandidates as ServiceCandidates, RepairOutcome as ServiceRepairOutcome,
     StreamBacklog as ServiceBacklog, UndoTarget as ServiceUndoTarget,
 };
+use eo_services::repair_ocr::{TerminalReading, TerminalRefusal};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -355,14 +357,75 @@ pub struct ProtectionRepairOutcome {
     pub cost_window: ProtectionCostWindow,
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+/// A figure read off a game terminal (the Repair Terminal's repair cost,
+/// the Trade Terminal's total), or why there is none. A refusal carries
+/// no figure at all, so nothing downstream can mistake it for one.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TerminalReadResult {
+    /// The figure exactly as the terminal shows it.
+    #[serde(rename_all = "camelCase")]
+    Read {
+        /// The amount recorded.
+        value_ped: f64,
+        /// The amount as the terminal prints it, without the unit:
+        /// `2.20`, `1,234.56789`. This is what the player is shown.
+        text: String,
+        /// What the recogniser saw, kept with a recording as its evidence
+        /// and not shown.
+        raw_text: String,
+    },
+    #[serde(rename_all = "camelCase")]
+    Refused { reason: TerminalReadRefusal },
+}
+
+/// Why a terminal read produced no figure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ProtectionScanResult {
-    pub value_ped: Nullable<f64>,
-    pub raw_text: Nullable<String>,
-    pub confidence: Nullable<f64>,
-    pub error: Nullable<String>,
-    pub calibrated: bool,
+pub enum TerminalReadRefusal {
+    /// No game window is showing.
+    GameWindowNotFound,
+    /// The game window lies wholly outside what can be captured.
+    GameWindowOffScreen,
+    /// The game window was found but could not be captured.
+    CaptureFailed,
+    /// The terminal is not open, or its title is covered.
+    TerminalNotOpen,
+    /// The figure is covered by another window or out of view.
+    FigureNotVisible,
+    /// The figure is in view but did not read as a valid amount.
+    FigureNotRead,
+    /// No recogniser or interface profile is available.
+    ReaderUnavailable,
+}
+
+impl From<TerminalRefusal> for TerminalReadRefusal {
+    fn from(refusal: TerminalRefusal) -> Self {
+        match refusal {
+            TerminalRefusal::GameWindowNotFound => Self::GameWindowNotFound,
+            TerminalRefusal::GameWindowOffScreen => Self::GameWindowOffScreen,
+            TerminalRefusal::CaptureFailed => Self::CaptureFailed,
+            TerminalRefusal::TerminalNotOpen => Self::TerminalNotOpen,
+            TerminalRefusal::FigureNotVisible => Self::FigureNotVisible,
+            TerminalRefusal::FigureNotRead => Self::FigureNotRead,
+            TerminalRefusal::ReaderUnavailable => Self::ReaderUnavailable,
+        }
+    }
+}
+
+impl From<Result<TerminalReading, TerminalRefusal>> for TerminalReadResult {
+    fn from(read: Result<TerminalReading, TerminalRefusal>) -> Self {
+        match read {
+            Ok(reading) => Self::Read {
+                value_ped: reading.value_ped,
+                text: reading.text,
+                raw_text: reading.raw_text,
+            },
+            Err(refusal) => Self::Refused {
+                reason: refusal.into(),
+            },
+        }
+    }
 }
 
 impl Api {
@@ -500,33 +563,9 @@ impl Api {
             .map_err(protection_error)
     }
 
-    pub fn protection_trade_terminal_scan(&self) -> Result<ProtectionScanResult, ApiError> {
-        let value = self.repair_ocr.scan_trade_terminal_value();
-        Ok(ProtectionScanResult {
-            value_ped: value
-                .get("cost_ped")
-                .and_then(serde_json::Value::as_f64)
-                .into(),
-            raw_text: value
-                .get("raw_text")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-                .filter(|text| !text.is_empty())
-                .into(),
-            confidence: value
-                .get("confidence")
-                .and_then(serde_json::Value::as_f64)
-                .into(),
-            error: value
-                .get("error")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-                .into(),
-            calibrated: value
-                .get("calibrated")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
-        })
+    /// Read the Trade Terminal's total off the game window.
+    pub fn protection_trade_terminal_scan(&self) -> Result<TerminalReadResult, ApiError> {
+        Ok(self.repair_ocr.scan_trade_terminal_value().into())
     }
 }
 
@@ -698,5 +737,42 @@ mod tests {
             serde_json::from_str(r#"{"kind":"reading","observationId":5}"#).unwrap();
         assert_eq!(reading, ProtectionUndoTarget::Reading { observation_id: 5 });
         assert!(serde_json::from_str::<ProtectionUndoTarget>(r#"{"kind":"session"}"#).is_err());
+    }
+
+    #[test]
+    fn a_terminal_reading_reaches_the_wire_with_its_figure() {
+        let read = TerminalReadResult::from(Ok(TerminalReading {
+            value_ped: 1234.56789,
+            text: "1,234.56789".into(),
+            raw_text: "1,234.56789PED".into(),
+        }));
+        assert_eq!(
+            serde_json::to_value(&read).unwrap(),
+            serde_json::json!({
+                "kind": "read",
+                "valuePed": 1234.56789,
+                "text": "1,234.56789",
+                "rawText": "1,234.56789PED",
+            })
+        );
+    }
+
+    #[test]
+    fn every_refusal_reaches_the_wire_by_name_and_without_a_figure() {
+        for (refusal, reason) in [
+            (TerminalRefusal::GameWindowNotFound, "gameWindowNotFound"),
+            (TerminalRefusal::GameWindowOffScreen, "gameWindowOffScreen"),
+            (TerminalRefusal::CaptureFailed, "captureFailed"),
+            (TerminalRefusal::TerminalNotOpen, "terminalNotOpen"),
+            (TerminalRefusal::FigureNotVisible, "figureNotVisible"),
+            (TerminalRefusal::FigureNotRead, "figureNotRead"),
+            (TerminalRefusal::ReaderUnavailable, "readerUnavailable"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(TerminalReadResult::from(Err(refusal))).unwrap(),
+                serde_json::json!({"kind": "refused", "reason": reason}),
+                "{refusal:?}"
+            );
+        }
     }
 }

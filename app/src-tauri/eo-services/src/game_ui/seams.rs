@@ -22,3 +22,43 @@ pub type RegionCapture = Arc<dyn Fn(i64, i64, i64, i64) -> Option<BgrImage> + Se
 /// image could not be read: there is no recogniser, or the recogniser
 /// failed on it.
 pub type FrameReader = Arc<dyn Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync>;
+
+/// Why no frame of the game window could be had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FrameUnavailable {
+    /// No game client window is showing, or it has no area to capture
+    /// (it is minimised, say). The player can act on this: start the
+    /// game, or bring its window back.
+    #[error("the game window was not found")]
+    WindowNotFound,
+    /// The game window is showing but lies wholly outside what the
+    /// capturer can see: on another monitor than the one shared for
+    /// capture, or entirely off the screen. The player can act on this
+    /// too: move the window onto the captured screen.
+    #[error("the game window is outside the area that can be captured")]
+    OutsideCapturableArea,
+    /// Some of the window is within the capturable area but its pixels
+    /// could not be had: the platform's capturer failed, or this host
+    /// has none.
+    #[error("the game window could not be captured")]
+    CaptureFailed,
+}
+
+/// The game window as one frame: the client area of the game's window
+/// (everything the game draws, without the desktop's title bar or
+/// border), captured as a BGR image at the moment of the call. Where
+/// only part of the client area can be captured (the window hangs off
+/// the screen, or over the edge of the monitor shared for capture), the
+/// frame is that part; the client's windows cut by its edge are found
+/// as such.
+///
+/// A reader takes this rather than a rectangle of the screen because
+/// the client's windows can sit anywhere in the game window at any
+/// size; the reader finds what it wants in the frame itself.
+///
+/// The ways of getting nothing are told apart by the error:
+/// [`FrameUnavailable::WindowNotFound`] when there is no game window to
+/// capture, [`FrameUnavailable::OutsideCapturableArea`] when none of it
+/// can be captured, and [`FrameUnavailable::CaptureFailed`] when some of
+/// it can but its pixels could not be had.
+pub type GameWindowFrame = Arc<dyn Fn() -> Result<BgrImage, FrameUnavailable> + Send + Sync>;

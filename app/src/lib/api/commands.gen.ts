@@ -2760,14 +2760,6 @@ export interface ProtectionRepairOutcome {
 	costWindow: ProtectionCostWindow;
 }
 
-export interface ProtectionScanResult {
-	valuePed: number | null;
-	rawText: string | null;
-	confidence: number | null;
-	error: string | null;
-	calibrated: boolean;
-}
-
 /**
  * One session's protection-cost standing.
  */
@@ -3213,17 +3205,6 @@ export interface ReloadSpeedNow {
 	itemLimitPercent: number;
 	consumedLimitPercent: number;
 	totalLimitPercent: number;
-}
-
-/**
- * The one-shot repair-cost read (`exclude_unset`): the cost / raw text /
- * confidence on success, plus `error` on a logical refusal.
- */
-export interface RepairScanResult {
-	cost_ped?: number | null;
-	raw_text?: string | null;
-	confidence?: number | null;
-	error?: string | null;
 }
 
 /**
@@ -3923,6 +3904,29 @@ export interface TableVerdict {
 }
 
 /**
+ * Why a terminal read produced no figure.
+ */
+export type TerminalReadRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'terminalNotOpen' | 'figureNotVisible' | 'figureNotRead' | 'readerUnavailable';
+
+/**
+ * A figure read off a game terminal (the Repair Terminal's repair cost,
+ * the Trade Terminal's total), or why there is none. A refusal carries
+ * no figure at all, so nothing downstream can mistake it for one.
+ */
+export type TerminalReadResult = {
+		/** The amount recorded. */
+		valuePed: number;
+		/** The amount as the terminal prints it, without the unit: `2.20`, `1,234.56789`. This is what the player is shown. */
+		text: string;
+		/** What the recogniser saw, kept with a recording as its evidence and not shown. */
+		rawText: string;
+		kind: 'read';
+	} | {
+		reason: TerminalReadRefusal;
+		kind: 'refused';
+	};
+
+/**
  * One day of the Overview timeline.
  */
 export interface TimelineDay {
@@ -4559,7 +4563,18 @@ export async function protectionRepairConfirm(input: ProtectionRepairInput): Pro
 	return invokeCommand('protection_repair_confirm', { input });
 }
 
-export async function protectionTradeTerminalScan(): Promise<ProtectionScanResult> {
+export async function protectionTradeTerminalScan(): Promise<{
+		/** The amount recorded. */
+		valuePed: number;
+		/** The amount as the terminal prints it, without the unit: `2.20`, `1,234.56789`. This is what the player is shown. */
+		text: string;
+		/** What the recogniser saw, kept with a recording as its evidence and not shown. */
+		rawText: string;
+		kind: 'read';
+	} | {
+		reason: TerminalReadRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('protection_trade_terminal_scan', {});
 }
 
@@ -5202,7 +5217,18 @@ export async function trackingArmourCost(sessionId: string, cost: number): Promi
 	return invokeCommand('tracking_armour_cost', { session_id: sessionId, cost });
 }
 
-export async function trackingRepairScan(sessionId: string): Promise<RepairScanResult> {
+export async function trackingRepairScan(sessionId: string): Promise<{
+		/** The amount recorded. */
+		valuePed: number;
+		/** The amount as the terminal prints it, without the unit: `2.20`, `1,234.56789`. This is what the player is shown. */
+		text: string;
+		/** What the recogniser saw, kept with a recording as its evidence and not shown. */
+		rawText: string;
+		kind: 'read';
+	} | {
+		reason: TerminalReadRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('tracking_repair_scan', { session_id: sessionId });
 }
 

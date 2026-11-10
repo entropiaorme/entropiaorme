@@ -58,8 +58,8 @@ use crate::market::{
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
-    ProtectionScanResult, ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput,
-    ProtectionStream, ProtectionUndoTarget,
+    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput, ProtectionStream,
+    ProtectionUndoTarget, TerminalReadResult,
 };
 use crate::quests::{
     Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
@@ -74,9 +74,9 @@ use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatc
 use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
 use crate::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
-    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult,
-    SessionConfigResult, SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage,
-    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
+    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
+    StartResult, StopResult, TrackingSnapshot,
 };
 use crate::weapons::{
     WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
@@ -266,7 +266,7 @@ pub fn manifest() -> Vec<CommandSpec> {
         CommandSpec {
             name: "protection_trade_terminal_scan",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(ProtectionScanResult))),
+            returns: Some(schema(schema_for!(TerminalReadResult))),
         },
         CommandSpec {
             name: "healing_outputs",
@@ -1680,7 +1680,7 @@ pub fn manifest() -> Vec<CommandSpec> {
                 name: "session_id",
                 schema: schema(schema_for!(String)),
             }],
-            returns: Some(schema(schema_for!(RepairScanResult))),
+            returns: Some(schema(schema_for!(TerminalReadResult))),
         },
         CommandSpec {
             name: "tracking_session_exclusion",

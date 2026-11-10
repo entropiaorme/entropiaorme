@@ -1,7 +1,8 @@
 //! Behavioural pins for the tracking family over the typed facade: the
 //! session reads (list, detail, tag suggestions), the idle dashboard
 //! snapshot, the post-hoc session edits (rename mob, armour cost), the
-//! lifecycle guards (start / stop), and the repair-scan gate.
+//! lifecycle guards (start / stop), and the terminal reads (the repair
+//! scan's gate and how a refusal reaches the wire).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use eo_services::clock::RealClock;
 use eo_services::db::Db;
 use eo_services::event_bus::EventBus;
 use eo_services::game_data_store::GameDataStore;
+use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
 
 use crate::common;
 
@@ -27,6 +29,17 @@ async fn make_api(dir: &Path, seed: bool, settings: Option<&str>) -> Api {
 /// [`make_api`] plus a clone of the underlying database handle, for tests
 /// that seed or verify rows directly.
 async fn make_api_db(dir: &Path, seed: bool, settings: Option<&str>) -> (Api, Db) {
+    make_api_with(dir, seed, settings, None).await
+}
+
+/// [`make_api_db`] with the terminal reader over `terminals` in place of
+/// the inert default.
+async fn make_api_with(
+    dir: &Path,
+    seed: bool,
+    settings: Option<&str>,
+    terminals: Option<RepairProviders>,
+) -> (Api, Db) {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();
     let data_dir = dir.join("data");
@@ -56,7 +69,9 @@ async fn make_api_db(dir: &Path, seed: bool, settings: Option<&str>) -> (Api, Db
         handles.skill_tracker,
         handles.skill_scan,
         handles.spacebar,
-        handles.repair_ocr,
+        terminals.map_or(handles.repair_ocr, |providers| {
+            Arc::new(RepairOcrService::new(providers))
+        }),
         handles.sale_window_ocr,
         handles.quests.clone(),
         None,
@@ -325,20 +340,96 @@ async fn repair_scan_is_bad_request_when_disabled() {
     );
 }
 
+/// The interface profile the application ships.
+fn bundled_profile() -> Arc<eo_services::game_ui::profile::UiProfile> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../entropia-orme/resources/ui_profile.json");
+    Arc::new(
+        eo_services::game_ui::profile::UiProfile::load(&path)
+            .expect("the bundled interface profile loads"),
+    )
+}
+
+/// The terminal reader over `frame`, with a recogniser that reads every
+/// crop as a valid repair cost: whatever comes back as a refusal was
+/// refused for where it looked, not for what it read.
+fn terminals_over(
+    frame: eo_services::game_ui::seams::GameWindowFrame,
+    profile: Option<Arc<eo_services::game_ui::profile::UiProfile>>,
+) -> RepairProviders {
+    RepairProviders {
+        frame,
+        profile,
+        read_text: Some(Arc::new(|_| Some(("2.20 PED".to_string(), 0.99)))),
+    }
+}
+
+/// Both terminal reads through the facade, as their wire JSON.
+async fn terminal_reads(dir: &Path, providers: RepairProviders) -> [serde_json::Value; 2] {
+    let (api, _) = make_api_with(
+        dir,
+        false,
+        Some("{\"repair_ocr_enabled\": true}"),
+        Some(providers),
+    )
+    .await;
+    [
+        serde_json::to_value(api.tracking_repair_scan("ended".to_string()).unwrap()).unwrap(),
+        serde_json::to_value(api.protection_trade_terminal_scan().unwrap()).unwrap(),
+    ]
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn repair_scan_soft_error_rides_the_body() {
+async fn a_repair_scan_refusal_reaches_the_wire_without_a_figure() {
+    use eo_services::game_ui::seams::FrameUnavailable;
+    // Each refusal rides the result body by name and carries no figure,
+    // zero or otherwise.
+    for (frame, profile, reason) in [
+        (
+            FrameUnavailable::WindowNotFound,
+            Some(bundled_profile()),
+            "gameWindowNotFound",
+        ),
+        (
+            FrameUnavailable::OutsideCapturableArea,
+            Some(bundled_profile()),
+            "gameWindowOffScreen",
+        ),
+        (
+            FrameUnavailable::CaptureFailed,
+            Some(bundled_profile()),
+            "captureFailed",
+        ),
+        (FrameUnavailable::WindowNotFound, None, "readerUnavailable"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let providers = terminals_over(Arc::new(move || Err(frame)), profile);
+        for read in terminal_reads(dir.path(), providers).await {
+            assert_eq!(
+                read,
+                serde_json::json!({"kind": "refused", "reason": reason})
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_game_window_without_the_terminal_is_refused_as_not_open() {
     let dir = tempfile::tempdir().unwrap();
-    // Enabled, but the inert providers find no game window: the service's
-    // logical refusal rides the result body alongside the zeroed reads.
-    let api = make_api(dir.path(), false, Some("{\"repair_ocr_enabled\": true}")).await;
-    let result = api.tracking_repair_scan("ended".to_string()).unwrap();
-    assert_eq!(result.cost_ped, Some(0.0));
-    assert_eq!(result.raw_text.as_deref(), Some(""));
-    assert_eq!(result.confidence, Some(0.0));
-    assert_eq!(
-        result.error.as_deref(),
-        Some("Entropia Universe window not found: start the game first")
-    );
+    // The game window is there but shows no terminal: the reader looks
+    // for the terminal's title and, not finding it, reads nothing at all.
+    let scene = eo_services::skill_panel::BgrImage {
+        data: vec![90; 400 * 300 * 3],
+        h: 300,
+        w: 400,
+    };
+    let providers = terminals_over(Arc::new(move || Ok(scene.clone())), Some(bundled_profile()));
+    for read in terminal_reads(dir.path(), providers).await {
+        assert_eq!(
+            read,
+            serde_json::json!({"kind": "refused", "reason": "terminalNotOpen"})
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

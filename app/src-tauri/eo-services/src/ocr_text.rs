@@ -7,11 +7,9 @@
 //! extends into the space a shorter one's suffix occupied.
 //!
 //! So the number is taken as the first digit run with an optional
-//! fraction, and everything after it is ignored. The repair-cost read
-//! established that shape; the sale-window read needs it too, with one
-//! difference: it must be able to refuse. A cost that fails to parse can
-//! show as zero, but a listing field that fails to parse must stay empty
-//! so nobody commits a figure the screen never showed.
+//! fraction, and everything after it is ignored. A figure that does not
+//! parse is refused, never read as zero: a field that fails to parse
+//! stays empty so nobody commits a figure the screen never showed.
 
 use crate::skill_panel::digit_value;
 
@@ -40,35 +38,26 @@ pub fn parse_amount(text: &str) -> Option<f64> {
     number.parse().ok()
 }
 
-/// The repair terminal's cost, where an unreadable figure is zero: the
-/// cost is shown beside its own raw text and confidence, so a zero reads
-/// as "nothing was found" in context rather than as a free repair.
-pub fn parse_cost(text: &str) -> f64 {
-    parse_amount(text).unwrap_or(0.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn costs_parse_through_comma_space_and_noise() {
-        assert_eq!(parse_cost("12.50"), 12.5);
-        assert_eq!(parse_cost("12,50"), 12.5);
-        assert_eq!(parse_cost("1 234,5"), 1234.5);
-        assert_eq!(parse_cost("PED 0.05"), 0.05);
-        assert_eq!(parse_cost("cost: 2.20 PED"), 2.2);
-        assert_eq!(parse_cost("12."), 12.0);
-        assert_eq!(parse_cost("1.2.3"), 1.2);
-        assert_eq!(parse_cost("no digits"), 0.0);
-        assert_eq!(parse_cost(""), 0.0);
-        assert_eq!(parse_cost(".5"), 5.0);
-        assert_eq!(parse_cost("0,0,7"), 0.0);
+    fn amounts_parse_through_comma_space_and_noise() {
+        assert_eq!(parse_amount("12.50"), Some(12.5));
+        assert_eq!(parse_amount("12,50"), Some(12.5));
+        assert_eq!(parse_amount("1 234,5"), Some(1234.5));
+        assert_eq!(parse_amount("PED 0.05"), Some(0.05));
+        assert_eq!(parse_amount("cost: 2.20 PED"), Some(2.2));
+        assert_eq!(parse_amount("12."), Some(12.0));
+        assert_eq!(parse_amount("1.2.3"), Some(1.2));
+        assert_eq!(parse_amount(".5"), Some(5.0));
+        assert_eq!(parse_amount("0,0,7"), Some(0.0));
         // Fullwidth digits convert by value; a fullwidth decimal point is
         // not a fraction dot, so the run ends there.
-        assert_eq!(parse_cost("\u{ff11}\u{ff12}.50"), 12.5);
-        assert_eq!(parse_cost("1\u{ff12}3"), 123.0);
-        assert_eq!(parse_cost("\u{ff11}\u{ff12}\u{ff0e}50"), 12.0);
+        assert_eq!(parse_amount("\u{ff11}\u{ff12}.50"), Some(12.5));
+        assert_eq!(parse_amount("1\u{ff12}3"), Some(123.0));
+        assert_eq!(parse_amount("\u{ff11}\u{ff12}\u{ff0e}50"), Some(12.0));
     }
 
     #[test]

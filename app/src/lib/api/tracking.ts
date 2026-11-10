@@ -127,6 +127,7 @@ export const setSessionConfig = commands.trackingSessionConfig;
  * backend reads back as the protected default rather than as no session;
  * the app never sends one. */
 export const selectDefinition = commands.trackingDefinitionSelect;
+/** Read the Repair Terminal's repair cost off the game window, or why it could not be. */
 export const scanRepairCost = commands.trackingRepairScan;
 export const saveArmourCost = commands.trackingArmourCost;
 /** What the Activities control offers right now: the session

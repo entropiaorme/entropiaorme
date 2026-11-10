@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProtectionCandidateSession } from '$lib/api';
+import type { ProtectionCandidateSession, TerminalReadRefusal } from '$lib/api';
 import {
 	chosenSessions,
 	EMPTY_SELECTION,
@@ -9,6 +9,7 @@ import {
 	parseAmount,
 	projectedShare,
 	startAt,
+	terminalRefusalLine,
 	toggleEarlier,
 	toggleGroup,
 	toggleSession,
@@ -127,5 +128,40 @@ describe('amount parsing', () => {
 		expect(parseAmount('')).toBeNull();
 		expect(parseAmount('-1')).toBeNull();
 		expect(parseAmount('abc')).toBeNull();
+	});
+});
+
+describe('a terminal read that gave no figure', () => {
+	const reasons: TerminalReadRefusal[] = [
+		'gameWindowNotFound',
+		'captureFailed',
+		'gameWindowOffScreen',
+		'terminalNotOpen',
+		'figureNotVisible',
+		'figureNotRead',
+		'readerUnavailable',
+	];
+
+	it('names the terminal and the figure the player has to deal with', () => {
+		expect(terminalRefusalLine('terminalNotOpen', 'repair')).toBe(
+			'Open the Repair Terminal in the game, with its title in view',
+		);
+		expect(terminalRefusalLine('terminalNotOpen', 'trade')).toBe(
+			'Open the Trade Terminal in the game, with its title in view',
+		);
+		expect(terminalRefusalLine('figureNotVisible', 'repair')).toBe(
+			'The repair cost is covered by another window or off the screen',
+		);
+		expect(terminalRefusalLine('figureNotRead', 'trade')).toBe(
+			'The total did not read clearly; enter it by hand',
+		);
+	});
+
+	it('gives every reason its own line and never a figure', () => {
+		for (const terminal of ['repair', 'trade'] as const) {
+			const lines = reasons.map((reason) => terminalRefusalLine(reason, terminal));
+			expect(new Set(lines).size).toBe(reasons.length);
+			for (const line of lines) expect(line).not.toMatch(/\d/);
+		}
 	});
 });

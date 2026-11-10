@@ -117,9 +117,11 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 html-escape = "0.2"
 # The persistence stack: the synchronous SQLite core behind the database
 # seam, which sits behind a narrow handle so the driver stays swappable.
-# Pinned to the 0.39 minor; `bundled` compiles a private SQLite so the graph
+# Pinned to the 0.41 minor, the first line on libsqlite3-sys 0.39, whose
+# bundled SQLite carries the fix for RUSTSEC-2026-0459 (0.40 still bundles
+# the affected library); `bundled` compiles a private SQLite so the graph
 # carries exactly one copy (the `links` key permits no second).
-rusqlite = { version = "~0.39", features = ["bundled", "hooks"] }
+rusqlite = { version = "~0.41", features = ["bundled", "hooks"] }
 # SHA-384 for the migration ledger's checksum column (the accounting the
 # database seam validates on every open).
 sha2 = "0.10"

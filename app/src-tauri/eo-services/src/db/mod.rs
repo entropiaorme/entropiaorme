@@ -1078,11 +1078,7 @@ fn snapshot_rows_sync(
         // (no caller input reaches this string).
         let sql = format!("{} ORDER BY {}", spec.query, spec.order_by.join(", "));
         let mut statement = connection.prepare(&sql)?;
-        let columns: Vec<String> = statement
-            .column_names()
-            .iter()
-            .map(|&name| name.to_string())
-            .collect();
+        let columns: Vec<String> = statement.column_names().map(str::to_string).collect();
         let json_rows = statement
             .query_map([], |row| Ok(row_to_json(row, &columns)))?
             .collect::<rusqlite::Result<Vec<Result<Value, DbError>>>>()?

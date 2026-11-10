@@ -175,11 +175,7 @@ fn row_to_json_sync(row: &rusqlite::Row, columns: &[String]) -> Result<Value, Db
 /// canonically serialised (typed by its stored value) for comparison.
 fn snapshot(conn: &rusqlite::Connection, sql: &'static str) -> Result<Vec<Value>, DbError> {
     let mut stmt = conn.prepare(sql)?;
-    let columns: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|&name| name.to_string())
-        .collect();
+    let columns: Vec<String> = stmt.column_names().map(str::to_string).collect();
     let rows = stmt
         .query_map([], |row| Ok(row_to_json_sync(row, &columns)))?
         .collect::<rusqlite::Result<Vec<Result<Value, DbError>>>>()?;

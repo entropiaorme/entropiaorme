@@ -38,6 +38,8 @@ jobs:
       - name: Install the Tauri system dependencies
         run: |
           sudo apt-get update
+          # The 22.04 image's LLVM libunwind-14-dev blocks the libunwind-dev that libgstreamer1.0-dev needs; ask for it first so apt swaps them.
+          sudo apt-get install -y libunwind-dev
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf file \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev

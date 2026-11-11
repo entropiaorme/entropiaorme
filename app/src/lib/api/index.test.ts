@@ -544,34 +544,25 @@ describe('suggestion lookups', () => {
 	});
 });
 
-describe('manual-scan wrappers dispatch typed commands', () => {
+describe('skill-scan wrappers dispatch typed commands', () => {
 	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
-		['getManualSkillScanStatus', () => api.getManualSkillScanStatus(), 'scan_status', {}],
+		['getSkillScanStatus', () => api.getSkillScanStatus(), 'scan_status', {}],
+		['startSkillScan', () => api.startSkillScan(), 'scan_start', {}],
+		['cancelSkillScan', () => api.cancelSkillScan(), 'scan_cancel', {}],
 		[
-			'startManualSkillScan passes the page count',
-			() => api.startManualSkillScan(5),
-			'scan_start',
-			{ page_count: 5 },
+			'acceptSkillScan names the review and saves only what adds up',
+			() => api.acceptSkillScan(4),
+			'scan_accept',
+			{ scan: 4, save_anyway: false },
 		],
 		[
-			'startManualSkillScan defaults the page count to null',
-			() => api.startManualSkillScan(),
-			'scan_start',
-			{ page_count: null },
+			'acceptSkillScan saves figures that do not add up only when told',
+			() => api.acceptSkillScan(4, true),
+			'scan_accept',
+			{ scan: 4, save_anyway: true },
 		],
-		['captureManualSkillPage', () => api.captureManualSkillPage(), 'scan_capture', {}],
-		['cancelManualSkillScan', () => api.cancelManualSkillScan(), 'scan_cancel', {}],
-		['undoManualSkillCapture', () => api.undoManualSkillCapture(), 'scan_undo', {}],
-		['processManualSkillScan', () => api.processManualSkillScan(), 'scan_process', {}],
-		['acceptManualSkillScan', () => api.acceptManualSkillScan(), 'scan_accept', {}],
-		['rejectManualSkillScan', () => api.rejectManualSkillScan(), 'scan_reject', {}],
-		['getManualSkillScanPending', () => api.getManualSkillScanPending(), 'scan_pending', {}],
-		[
-			'setSpacebarCapture passes the enabled flag',
-			() => api.setSpacebarCapture(true),
-			'scan_spacebar_capture',
-			{ enabled: true },
-		],
+		['rejectSkillScan names the review', () => api.rejectSkillScan(4), 'scan_reject', { scan: 4 }],
+		['getSkillScanReview', () => api.getSkillScanReview(), 'scan_pending', {}],
 	];
 	it.each(rows)('%s', async (_name, call, command, args) => {
 		await call();
@@ -579,14 +570,24 @@ describe('manual-scan wrappers dispatch typed commands', () => {
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);
 	});
 
-	it('returns the held pending payload when present', async () => {
-		tauriInvoke.mockResolvedValue({ skills: { Anatomy: 12 } });
-		await expect(api.getManualSkillScanPending()).resolves.toEqual({ skills: { Anatomy: 12 } });
+	it('returns the held review when present', async () => {
+		const review = {
+			scan: 4,
+			skills: { Anatomy: 12 },
+			total: { check: 'matches' },
+			nearMisses: [],
+			guesses: [],
+			unknown: [],
+			unplaced: [],
+			repeated: [],
+		};
+		tauriInvoke.mockResolvedValue(review);
+		await expect(api.getSkillScanReview()).resolves.toEqual(review);
 	});
 
-	it('maps an absent pending result to null (the command returns null directly)', async () => {
+	it('maps an absent review to null (the command returns null directly)', async () => {
 		tauriInvoke.mockResolvedValue(null);
-		await expect(api.getManualSkillScanPending()).resolves.toBeNull();
+		await expect(api.getSkillScanReview()).resolves.toBeNull();
 	});
 });
 
@@ -649,8 +650,10 @@ describe('re-exported client and shell surface', () => {
 	it('forwards ApiError from ./client and the shell window commands from ./shell', async () => {
 		expect(api.ApiError).toBe(FakeApiError);
 		tauriInvoke.mockResolvedValue('aGVsbG8=');
-		expect(await api.manualSkillScanCapturePng(2)).toBe('data:image/png;base64,aGVsbG8=');
-		expect(tauriInvoke).toHaveBeenCalledWith('capture_png', { page: 2 });
+		expect(await api.planetMapImage('Calypso', 'image/jpeg')).toBe(
+			'data:image/jpeg;base64,aGVsbG8=',
+		);
+		expect(tauriInvoke).toHaveBeenCalledWith('planet_map_image', { planet: 'Calypso' });
 		await api.toggleOverlay();
 		expect(tauriInvoke).toHaveBeenCalledWith('toggle_overlay');
 		await api.toggleCartographyOverlay();

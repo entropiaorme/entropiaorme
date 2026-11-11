@@ -6,9 +6,9 @@
 //! [`PlanetMapStore`]. The typed read serves the full catalogue (the
 //! frontend derives its pixel/game-unit transforms from the calibration
 //! fields); the raster itself is raw bytes and rides a bespoke shell
-//! command outside the manifest, exactly like the manual-scan capture
-//! preview. A facade composed without the bundle serves an empty
-//! catalogue: the maps surface stands down, nothing errors at startup.
+//! command outside the manifest. A facade composed without the bundle
+//! serves an empty catalogue: the maps surface stands down, nothing
+//! errors at startup.
 
 use std::sync::Arc;
 

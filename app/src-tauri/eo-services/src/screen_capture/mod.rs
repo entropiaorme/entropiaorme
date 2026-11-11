@@ -1,6 +1,7 @@
 //! Screen-region capture for OCR. A region (`x`, `y`, `w`, `h`, global
-//! screen coordinates) goes in; PNG bytes (the skill-scan path, RGB-encoded)
-//! or a [`BgrImage`] (the path the game-window readers take) comes out.
+//! screen coordinates) goes in; a [`BgrImage`] (the path the readers take)
+//! or PNG bytes (RGB-encoded, for the calibration and capture-probe tools)
+//! comes out.
 //!
 //! The backend is per platform: a GDI `BitBlt` of the screen device context
 //! on Windows; on Linux the X server's root window on an Xorg session
@@ -14,6 +15,8 @@ use crate::skill_panel::BgrImage;
 
 /// Capture a screen rectangle as PNG bytes (RGB-encoded). `None` on a
 /// non-positive region, a capture failure, or a host with no capturer.
+/// The app itself reads captures as [`BgrImage`]s; this form serves the
+/// maintainer tools under `examples/` that save what they captured.
 pub fn capture_region_png(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
     let bgra = platform::capture_bgra(x, y, w, h)?;
     let (pw, ph) = (w as u32, h as u32);
@@ -49,6 +52,19 @@ pub fn capture_region_bgr(x: i64, y: i64, w: i64, h: i64) -> Option<BgrImage> {
         h: h as usize,
         w: w as usize,
     })
+}
+
+/// Make sure the capturer is running, starting it if it must be started:
+/// `false` only where starting it needs the player's consent (the
+/// ScreenCast portal on a Wayland desktop) and the start failed, because
+/// the consent was declined or not given, or the portal did not answer.
+/// Every later capture would try the start again, asking for consent
+/// again; a caller that captures on its own schedule asks this first and
+/// stops when it fails, rather than putting the question to the player
+/// over and over. Where nothing has to be started, it is `true`, and a
+/// capture that then fails says so itself.
+pub fn start_capture() -> bool {
+    platform::start_capture()
 }
 
 /// The area of the screen the capturer can grab from, as `(x, y, width,
@@ -206,6 +222,11 @@ mod platform {
     pub fn capturable_area() -> Option<(i64, i64, i64, i64)> {
         None
     }
+
+    /// GDI needs nothing started.
+    pub fn start_capture() -> bool {
+        true
+    }
 }
 
 /// The Linux capturer: the X server's own screen on an Xorg session, the
@@ -225,6 +246,22 @@ mod platform {
             return super::x11::screen_area();
         }
         portal_area()
+    }
+
+    pub fn start_capture() -> bool {
+        super::x11::session_is_x11() || portal_start()
+    }
+
+    #[cfg(feature = "linux-capture")]
+    fn portal_start() -> bool {
+        super::portal::start()
+    }
+
+    /// Without the portal backend there is nothing to start; a capture
+    /// stands down by itself.
+    #[cfg(not(feature = "linux-capture"))]
+    fn portal_start() -> bool {
+        true
     }
 
     #[cfg(feature = "linux-capture")]
@@ -266,6 +303,10 @@ mod platform {
 
     pub fn capturable_area() -> Option<(i64, i64, i64, i64)> {
         None
+    }
+
+    pub fn start_capture() -> bool {
+        true
     }
 }
 

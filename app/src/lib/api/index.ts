@@ -98,7 +98,6 @@ export {
 	hideNavigationOverlays,
 	hideSaleCaptureOverlay,
 	hideScanOverlay,
-	manualSkillScanCapturePng,
 	planetMapImage,
 	showNavigationOverlays,
 	showSaleCaptureOverlay,

@@ -67,7 +67,7 @@ export async function showScanOverlay(): Promise<void> {
 	await invoke('show_scan_overlay');
 }
 
-/** Hide the scan overlay window. */
+/** Hide the scan overlay window; the skill scan stops collecting with it. */
 export async function hideScanOverlay(): Promise<void> {
 	await invoke('hide_scan_overlay');
 }
@@ -118,13 +118,6 @@ export async function getUpdateChannel(): Promise<string> {
 /** Hand off to the updater: install the staged update and restart. */
 export async function installUpdate(): Promise<void> {
 	await invoke('install_update');
-}
-
-/** The manual-scan capture preview PNG for a page, as a base64 `data:`
- * URL for an `<img>` `src`. */
-export async function manualSkillScanCapturePng(page: number): Promise<string> {
-	const encoded = await invoke<string>('capture_png', { page });
-	return `data:image/png;base64,${encoded}`;
 }
 
 /** A bundled planet map's raster as a base64 `data:` URL for an `<img>`

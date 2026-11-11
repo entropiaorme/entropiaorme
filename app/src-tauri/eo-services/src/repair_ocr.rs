@@ -93,7 +93,12 @@ impl From<FrameUnavailable> for TerminalRefusal {
         match error {
             FrameUnavailable::WindowNotFound => TerminalRefusal::GameWindowNotFound,
             FrameUnavailable::OutsideCapturableArea => TerminalRefusal::GameWindowOffScreen,
-            FrameUnavailable::CaptureFailed => TerminalRefusal::CaptureFailed,
+            // A terminal read is asked for by the player each time, so a
+            // capture that was not allowed is simply one that failed; the
+            // next read asks for consent again.
+            FrameUnavailable::CaptureFailed | FrameUnavailable::CaptureNotStarted => {
+                TerminalRefusal::CaptureFailed
+            }
         }
     }
 }
@@ -307,6 +312,10 @@ mod tests {
             ),
             (
                 FrameUnavailable::CaptureFailed,
+                TerminalRefusal::CaptureFailed,
+            ),
+            (
+                FrameUnavailable::CaptureNotStarted,
                 TerminalRefusal::CaptureFailed,
             ),
         ] {

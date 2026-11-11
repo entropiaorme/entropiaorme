@@ -1,6 +1,6 @@
 # Event taxonomy
 
-EntropiaOrme is an analytical desktop application whose Rust core observes a stream of game-state changes (parsed chat-log lines, manual skill scans) and pushes the resulting changes to the frontend windows without polling. Internally this is built as **two distinct event systems**, layered so that each solves a different problem. This page documents both layers end to end: from the low-level, synchronous, in-process topics that core services use to coordinate, up to the coarse typed envelopes that cross to the webview over the in-process Tauri event bridge.
+EntropiaOrme is an analytical desktop application whose Rust core observes a stream of game-state changes (parsed chat-log lines, skill scans) and pushes the resulting changes to the frontend windows without polling. Internally this is built as **two distinct event systems**, layered so that each solves a different problem. This page documents both layers end to end: from the low-level, synchronous, in-process topics that core services use to coordinate, up to the coarse typed envelopes that cross to the webview over the in-process Tauri event bridge.
 
 The two-layer shape is implemented in Rust under `app/src-tauri/`: the low-level bus lives in the `eo-services` crate (`app/src-tauri/eo-services/src/event_bus.rs`, with its typed payloads in `app/src-tauri/eo-services/src/bus_events.rs`), and the domain envelopes and the typed broadcast channel live in the `eo-wire` crate (`app/src-tauri/eo-wire/src/domain_events.rs` and `app/src-tauri/eo-wire/src/bus.rs`). This began life as a Python FastAPI sidecar; the Rust implementation is now the only one.
 
@@ -98,7 +98,7 @@ Every envelope struct and every payload struct carries `#[serde(deny_unknown_fie
 | Topic | Fires when | Payload |
 | --- | --- | --- |
 | `tracking.session.updated` | the live session started, advanced a tick that changed its readout, or stopped; also after a decision on a weapon mismatch | `sessionId` (nullable, never omitted), `status` (`active` / `idle`), `reason` (`started` / `updated` / `stopped`) |
-| `scan.status.changed` | the manual skill scan changed phase or advanced a capture or OCR step | `phase` (`idle` / `capturing` / `processing` / `awaiting_review`) |
+| `scan.status.changed` | the skill scan changed phase, collected a page, or what stops the game's view being collected changed | `phase` (`idle` / `capturing` / `processing` / `awaiting_review`; the scan collects pages as it reads them, so it has no separate `processing` step and never sends it) |
 | `harvest.recorded` | a harvesting attempt, successful or failed, has been written durably | `harvestId`, `success` |
 | `navigation.updated` | persisted navigation state changed | none |
 | `protection.updated` | a protection write committed (a repair or reading, an undo, a limited set changed) | none |
@@ -160,11 +160,11 @@ The tracker (`app/src-tauri/eo-services/src/tracker.rs`) produces `tracking.sess
 
 In all three paths the published value is a typed `TrackingSessionUpdated` instance, with `occurred_at` produced by `to_iso_utc(...)`. The `session_id` is captured under the lock and passed into the emit helper rather than re-read off the live session, so the published id provably belongs to the session whose mutation the event describes even if a concurrent `stop_session` has since cleared it.
 
-### The manual-scan service
+### The skill-scan service
 
-The manual skill-scan service (`app/src-tauri/eo-services/src/skill_scan_manual.rs`) produces `scan.status.changed`. It has no external tick boundary like the tracker's, so it coalesces with an internal **settled-boundary key**. The helper `publish_status` is called after releasing the lock at every settled mutation point (verb completion, each per-page OCR step, worker completion). Under the lock it computes a `status_key()` projection of the owned state and compares it to the last published key (`last_emitted_key`); it advances the key and publishes only when the key actually moved. This coalesces to one frame per discrete status change rather than one per call, and ensures the main and worker threads cannot both emit the same transition. The key is baselined at construction to the resting idle status, so the redundant initial idle frame is suppressed (listeners hydrate the idle status via the GET on mount).
+The skill-scan service (`app/src-tauri/eo-services/src/skill_scan/mod.rs`) produces `scan.status.changed`. It has no external tick boundary like the tracker's, so it coalesces on its own status. The helper `publish_status` is called after releasing the lock at every settled change (a verb's completion, each look its worker writes back, the scan's completion). Under the lock it computes the status and compares it to the last published one (`last_emitted`); it advances that and publishes only when the status actually moved. This coalesces to one frame per discrete status change rather than one per call (a worker looking twice a second at an unchanged view publishes nothing), and ensures the caller's and the worker's threads cannot both emit the same transition. The last published status is baselined at construction to the resting idle status, so the redundant initial idle frame is suppressed (listeners read the idle status on mount).
 
-The payload carries only the coarse `phase`. Per-page capture / OCR progress liveness rides the snapshot re-hydration the frame triggers, rather than widening the wire: the emitter fires on every discrete progress change, but the payload stays a minimal invalidation signal.
+The payload carries only the coarse `phase`. Progress (a page collected) and the hint shown to the player ride the status re-read the frame triggers, rather than widening the wire: the emitter fires on every discrete change of status, but the payload stays a minimal invalidation signal. A hint is shown only once it has held for two looks running, so a view flickering between covered and clear does not send a frame per look.
 
 ### The other producers
 

@@ -98,26 +98,41 @@ fn archive_prior_skill_anchors(
     Ok(())
 }
 
-/// The completion write: the drift summary computes first (returned
-/// for the caller's observability), then prior scan anchors archive
-/// and the new anchors insert at one shared instant, under one
-/// commit.
+/// One skill's level as a scan read it, and when: the moment the page
+/// showing it was captured, in epoch seconds.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScannedLevel {
+    pub skill: String,
+    pub level: f64,
+    pub scanned_at: f64,
+}
+
+/// The completion write: the drift summary computes first (returned for
+/// the caller's observability), then prior scan anchors archive and the
+/// new anchors insert under one commit, each stamped with the moment its
+/// own page was read. A scan's pages are read over minutes, and a review
+/// can wait longer still, while the chat log goes on recording gains; a
+/// level stamped with when it was read never supersedes one recorded
+/// after it, because the current level is the latest in time.
 pub async fn complete_skill_scan(
     db: &Db,
-    levels: &[(String, f64)],
-    scan_time: f64,
+    levels: &[ScannedLevel],
 ) -> Result<Option<Value>, DbError> {
-    let drift = scan_drift_summary(db, levels).await?;
-    let names: Vec<String> = levels.iter().map(|(name, _)| name.clone()).collect();
+    let pairs: Vec<(String, f64)> = levels
+        .iter()
+        .map(|scanned| (scanned.skill.clone(), scanned.level))
+        .collect();
+    let drift = scan_drift_summary(db, &pairs).await?;
+    let names: Vec<String> = levels.iter().map(|scanned| scanned.skill.clone()).collect();
     let levels = levels.to_vec();
     db.with_writer(move |conn| {
         let tx = conn.transaction()?;
         archive_prior_skill_anchors(&tx, &names)?;
-        for (skill_name, level) in &levels {
+        for scanned in &levels {
             tx.execute(
                 "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
                  VALUES (?, ?, 'scan', ?)",
-                rusqlite::params![skill_name, level, scan_time],
+                rusqlite::params![scanned.skill, scanned.level, scanned.scanned_at],
             )?;
         }
         tx.commit()?;
@@ -125,20 +140,6 @@ pub async fn complete_skill_scan(
     })
     .await?;
     Ok(drift)
-}
-
-/// Last scan instant + unique scanned-skill count, for hydrating the
-/// scan actor's resting status at startup.
-pub async fn hydrate_skill_scan_state(db: &Db) -> Result<(Option<f64>, i64), DbError> {
-    db.with_reader(|conn| {
-        Ok(conn.query_row(
-            "SELECT MAX(scanned_at), COUNT(DISTINCT skill_name) FROM skill_calibrations \
-             WHERE source = 'scan'",
-            [],
-            |row| Ok((row.get::<_, Option<f64>>(0)?, row.get::<_, i64>(1)?)),
-        )?)
-    })
-    .await
 }
 
 #[cfg(test)]
@@ -166,6 +167,54 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    fn scanned(skill: &str, level: f64, scanned_at: f64) -> ScannedLevel {
+        ScannedLevel {
+            skill: skill.to_string(),
+            level,
+            scanned_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn each_level_is_stamped_with_when_its_page_was_read() {
+        let (_dir, db) = db_fixture().await;
+        complete_skill_scan(
+            &db,
+            &[scanned("Rifle", 101.0, 50.0), scanned("Sweat", 10.5, 80.0)],
+        )
+        .await
+        .unwrap();
+        let stamps: Vec<(String, f64)> = db
+            .with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT skill_name, scanned_at FROM skill_calibrations ORDER BY scanned_at",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+                })?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            stamps,
+            vec![("Rifle".to_string(), 50.0), ("Sweat".to_string(), 80.0)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gain_recorded_after_a_page_was_read_survives_the_scan() {
+        let (_dir, db) = db_fixture().await;
+        // The page showing Rifle is read at 100; the chat log records a
+        // gain at 160; the player accepts the scan later still.
+        seed(&db, "Rifle", 4000.60, "chatlog", 160.0).await;
+        complete_skill_scan(&db, &[scanned("Rifle", 4000.10, 100.0)])
+            .await
+            .unwrap();
+        let levels = latest_skill_levels(&db).await.unwrap();
+        assert_eq!(levels, vec![("Rifle".to_string(), 4000.60)]);
     }
 
     #[tokio::test]
@@ -217,8 +266,8 @@ mod tests {
         seed(&db, "Rifle", 100.5, "chatlog", 55.0).await;
         seed(&db, "Sweat", 10.0, "scan", 50.0).await;
 
-        let levels = vec![("Rifle".to_string(), 101.0)];
-        complete_skill_scan(&db, &levels, 70.0).await.unwrap();
+        let levels = vec![scanned("Rifle", 101.0, 70.0)];
+        complete_skill_scan(&db, &levels).await.unwrap();
 
         // The Rifle scan anchor moved to the archive; the chatlog
         // trail and the untouched Sweat anchor stay live.
@@ -260,17 +309,5 @@ mod tests {
                 ("Rifle".to_string(), 101.0, "scan".to_string()),
             ]
         );
-
-        let (last, count) = hydrate_skill_scan_state(&db).await.unwrap();
-        assert_eq!(last, Some(70.0));
-        assert_eq!(count, 2, "Sweat and Rifle both carry scan anchors");
-    }
-
-    #[tokio::test]
-    async fn hydration_on_an_empty_table_reads_idle() {
-        let (_dir, db) = db_fixture().await;
-        let (last, count) = hydrate_skill_scan_state(&db).await.unwrap();
-        assert_eq!(last, None);
-        assert_eq!(count, 0);
     }
 }

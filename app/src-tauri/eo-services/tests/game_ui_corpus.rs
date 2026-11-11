@@ -24,8 +24,8 @@ use eo_services::game_ui::radar::{
     find_radar, read_coordinates, ring_scale, CoordError, CoordinateBounds,
 };
 use eo_services::game_ui::skills::{
-    nearest_skill, read_skills_page, Admission, Checksum, RowName, SkillRow, SkillVocabulary,
-    SkillsError, SkillsPage, SkillsSweep, SkillsTableProfile,
+    nearest_skill, read_skills_page, Admission, Checksum, NameReading, RowName, SkillRow,
+    SkillVocabulary, SkillsError, SkillsPage, SkillsSweep, SkillsTableProfile,
 };
 use eo_services::ocr_engine::{load_bgr_png, OcrEngine};
 use eo_services::planet_maps::PlanetMapStore;
@@ -798,7 +798,11 @@ fn a_sweep_of_every_page_adds_up_to_the_panels_total() {
         .iter()
         .map(|s| format!("{} {}", s.raw_name, s.points_text))
         .collect();
-    let near_misses = result.skills.iter().filter(|s| s.near_miss).count();
+    let near_misses = result
+        .skills
+        .iter()
+        .filter(|s| s.reading != NameReading::Spelled)
+        .count();
     println!(
         "skills sweep: {} pages, {} known ({near_misses} by near miss), {} unknown {unknown:?}, checksum {:?}, total {:?}",
         SWEEP_FRAMES.len(),

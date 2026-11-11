@@ -86,27 +86,27 @@ use eo_services::event_bus::{EventBus, Topic};
 use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::game_data_store::GameDataStore;
 use eo_services::game_ui::profile::UiProfile;
-use eo_services::game_ui::seams::{FrameReader, GameWindowFrame, RegionLookup};
+use eo_services::game_ui::seams::{FrameReader, GameWindowFrame};
+use eo_services::game_ui::skills::SkillVocabulary;
 use eo_services::hotbar_listener::{
     GameFocusProbe, HotbarListener, HotbarResolver, ItemResolver, ResolvedHotbarItem,
     HOTBAR_SLOT_KEYS,
 };
 use eo_services::keystroke_source::{HookKeystrokeSource, KeystrokeSource, SharedKeystrokeSource};
-use eo_services::ocr_engine::load_bgr_png;
 pub use eo_services::ocr_engine::OcrEngine;
 use eo_services::passive_effects::reload_seconds_under;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
 use eo_services::sale_window_ocr::{SaleWindowOcrService, SaleWindowProviders};
-use eo_services::scan_completion::{
-    complete_skill_scan, hydrate_skill_scan_state, latest_skill_levels,
-};
+use eo_services::scan_completion::{complete_skill_scan, latest_skill_levels, ScannedLevel};
 use eo_services::scan_presets::ScanPresets;
-use eo_services::screen_capture::{capture_region_bgr, capture_region_png};
-use eo_services::skill_panel::{read_skill_panel, BgrImage};
-pub use eo_services::skill_scan_manual::SkillScanManual;
-use eo_services::skill_scan_manual::{ScanProviders, ScanRegion};
+use eo_services::screen_capture::capture_region_bgr;
+use eo_services::skill_panel::BgrImage;
+pub use eo_services::skill_scan::SkillScanService;
+use eo_services::skill_scan::{
+    CompletionCallback, SkillScanProviders, DEFAULT_IDLE_LIMIT, DEFAULT_TICK,
+};
 use eo_services::skill_tracker::SkillTracker;
 pub use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::time::naive_to_epoch;
@@ -505,16 +505,15 @@ pub struct Composed {
     /// composition tests, which drive the warmed engine directly.
     #[cfg_attr(not(test), allow(dead_code))]
     pub ocr_engine: Option<Arc<OcrEngine>>,
-    /// The manual skill-scan state machine, composed on the spine bus (its
-    /// `scan.status.changed` envelopes reach the shell's event bridge) over
-    /// the OCR extraction providers. Always constructed so the scan
-    /// operations serve;
-    /// its capture and extraction seams stand down to "engine unavailable"
-    /// when the OCR runtime is absent (a golden-pinned reply).
-    pub skill_scan: Arc<SkillScanManual>,
-    /// The spacebar-capture listener, composed over the scan and the shared
-    /// OS hook. Held for the spacebar-capture toggle and the exit
-    /// seam (its teardown).
+    /// The skill scan, composed on the spine bus (its `scan.status.changed`
+    /// envelopes reach the shell's event bridge) over the whole game
+    /// window, the interface profile and the shared engine. Always
+    /// constructed so the scan operations serve; without the engine or
+    /// the profile it rests unavailable and never captures.
+    pub skill_scan: Arc<SkillScanService>,
+    /// The spacebar-capture listener, composed over the shared OS hook for
+    /// the development research capture. Held for the exit seam (its
+    /// teardown).
     pub spacebar_listener: Arc<SpacebarCaptureListener>,
     /// The coordinate-calibration Enter listener, on the same shared OS
     /// hook; enabled only while a calibration flow is live. Held for the
@@ -774,19 +773,19 @@ async fn compose_with(
         profile: load_ui_profile(&resources.join(UI_PROFILE_FILE)),
     };
 
-    let (skill_scan, sale_window_ocr, spacebar_listener) = compose_scan_services(
-        producers.bus_handle(),
-        ocr_engine.clone(),
-        game_data.clone(),
-        db.clone(),
-        clock.clone(),
-        ScanPaths {
+    let (skill_scan, sale_window_ocr, spacebar_listener) = compose_scan_services(ScanInputs {
+        bus: producers.bus_handle(),
+        ocr_engine: ocr_engine.clone(),
+        game_ui: &game_ui,
+        game_data: game_data.clone(),
+        db: db.clone(),
+        clock: clock.clone(),
+        paths: ScanPaths {
             geometry: geometry_path,
             debug: data_dir.join("debug"),
         },
-        producers.keystroke_source_handle(),
-    )
-    .await;
+        keystroke_source: producers.keystroke_source_handle(),
+    });
 
     // The terminal reads (the Repair Terminal's cost, the Trade Terminal's
     // total): the whole game window, the interface profile, and the shared
@@ -795,11 +794,7 @@ async fn compose_with(
     let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders {
         frame: game_ui.frame.clone(),
         profile: game_ui.profile.clone(),
-        read_text: ocr_engine.clone().map(|engine| -> FrameReader {
-            Arc::new(move |frame: &BgrImage| {
-                engine.recognize_bgr(&frame.data, frame.h, frame.w).ok()
-            })
-        }),
+        read_text: frame_reader(ocr_engine.clone()),
     }));
 
     // Coordinate capture: the maps feature's two-point calibration flow
@@ -928,8 +923,8 @@ async fn compose_with(
     // The typed-command facade shares the read surface's handles plus the
     // producers the write families signal (the config writer, the hunt
     // tracker, the hotbar gate, the chat-log watcher, the skill tracker
-    // a codex claim suppresses on, and the manual-scan state machine +
-    // spacebar listener the scan family drives), so the facade and the
+    // a codex claim suppresses on, the skill scan the scan family drives,
+    // and the spacebar listener the research capture arms), so the facade and the
     // producer spine serve over the same live instances.
     let api = Arc::new(
         eo_api::Api::new(
@@ -1095,10 +1090,26 @@ async fn build_ocr_engine(models: PathBuf) -> Option<Arc<OcrEngine>> {
 
 /// Where the scan services read their calibration and drop what they saw.
 struct ScanPaths {
-    /// The calibration artefact, beside the snapshot in both layouts.
+    /// The sale window's calibration artefact, beside the snapshot in both
+    /// layouts.
     geometry: PathBuf,
-    /// Where a scan leaves its last captured frame for later inspection.
+    /// Where a development sale-window read leaves its last captured panel
+    /// for later inspection.
     debug: PathBuf,
+}
+
+/// What the scan services are composed over.
+struct ScanInputs<'a> {
+    /// The spine bus their status frames publish on.
+    bus: Arc<EventBus>,
+    ocr_engine: Option<Arc<OcrEngine>>,
+    game_ui: &'a GameUi,
+    game_data: Arc<GameDataStore>,
+    db: Db,
+    clock: Arc<dyn Clock>,
+    paths: ScanPaths,
+    /// The shared OS keyboard hook the spacebar listener rides.
+    keystroke_source: Arc<dyn KeystrokeSource>,
 }
 
 /// What the readers of the game's interface are composed over: the
@@ -1126,7 +1137,7 @@ fn load_ui_profile(path: &std::path::Path) -> Option<Arc<UiProfile>> {
         Err(err) => {
             tracing::warn!(
                 target: "eo::composition",
-                "interface profile at {} unusable ({err}); the terminal reads stand down",
+                "interface profile at {} unusable ({err}); the readers of the game window stand down",
                 path.display()
             );
             None
@@ -1134,110 +1145,78 @@ fn load_ui_profile(path: &std::path::Path) -> Option<Arc<UiProfile>> {
     }
 }
 
-/// Compose the manual skill scan and the sale-window read over the OCR
-/// engine, the live game-window region lookups, and the on-demand screen
-/// capturer. The scan publishes `scan.status.changed` on
-/// the spine `bus` (so its frames reach the shell's event bridge), persists
-/// accepted calibrations through the shared `pool`, and hydrates its resting
-/// status from the same. When the OCR runtime is absent the providers stand
-/// down to "engine unavailable" rather than declining composition, so the
-/// scan operations still serve (the scan reports offline, a golden-pinned
-/// reply). All three services are always constructed.
-async fn compose_scan_services(
-    bus: Arc<EventBus>,
-    ocr_engine: Option<Arc<OcrEngine>>,
-    game_data: Arc<GameDataStore>,
-    db: Db,
-    clock: Arc<dyn Clock>,
-    paths: ScanPaths,
-    keystroke_source: Arc<dyn KeystrokeSource>,
+/// The skill scan's completion callback: it persists an accepted scan's
+/// levels through the shared database handle, each stamped with when its
+/// page was read, bridging onto the runtime from the calling thread the
+/// same dual way the tracker's providers do. A persist error is answered
+/// to the player rather than panicking.
+fn skill_scan_completion(db: Db, runtime: tokio::runtime::Handle) -> CompletionCallback {
+    Arc::new(move |levels: &[ScannedLevel]| {
+        let levels = levels.to_vec();
+        let db = db.clone();
+        block_on_pool(
+            &runtime,
+            async move { complete_skill_scan(&db, &levels).await },
+        )
+        .map(|_drift| ())
+        .map_err(Into::into)
+    })
+}
+
+/// The engine as a recogniser of one crop; `None` without an engine.
+fn frame_reader(engine: Option<Arc<OcrEngine>>) -> Option<FrameReader> {
+    engine.map(|engine| -> FrameReader {
+        Arc::new(move |frame: &BgrImage| engine.recognize_bgr(&frame.data, frame.h, frame.w).ok())
+    })
+}
+
+/// Compose the skill scan, the sale-window read, and the spacebar
+/// listener. The skill scan reads the whole game window through the
+/// interface profile and the shared engine, checking what it reads
+/// against the bundled skill list; it publishes `scan.status.changed` on
+/// the spine `bus` (so its frames reach the shell's event bridge) and
+/// persists an accepted scan through the shared database. Without the
+/// engine or the profile it rests unavailable rather than declining
+/// composition, so the scan operations still serve. The sale-window read
+/// captures its calibrated rectangle over the same engine. All three
+/// services are always constructed.
+fn compose_scan_services(
+    inputs: ScanInputs<'_>,
 ) -> (
-    Arc<SkillScanManual>,
+    Arc<SkillScanService>,
     Arc<SaleWindowOcrService>,
     Arc<SpacebarCaptureListener>,
 ) {
-    let runtime = tokio::runtime::Handle::current();
+    let ScanInputs {
+        bus,
+        ocr_engine,
+        game_ui,
+        game_data,
+        db,
+        clock,
+        paths,
+        keystroke_source,
+    } = inputs;
 
-    // The calibrated panel grid and the canonical skill vocabulary the
-    // panel reader resolves names against; both read existing snapshot
-    // assets (the geometry artefact beside the snapshot dir, the skill
-    // names from the bundled `skills` endpoint), so this is port scope, not
-    // new surface.
-    let presets = Arc::new(ScanPresets::new(&paths.geometry));
-    let skill_geom = presets.skill.to_geom_value();
-    let vocab: Vec<String> = game_data
-        .get_entities("skills")
-        .iter()
-        .filter_map(|entity| {
-            entity
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect();
-
-    // The skill-scan provider seams: engine availability is fixed at the
-    // load attempt (the engine never reloads at runtime); the region lookup
-    // reads the live game window through the calibrated anchor; the capturer
-    // grabs the PNG on demand; the extractor decodes, slices, OCRs, and
-    // filters to resolved (name, level) rows.
-    let has_engine = ocr_engine.is_some();
-    let region_presets = presets.clone();
-    let skill_region: RegionLookup = Arc::new(move || eu_window::skill_region(&region_presets));
-    let capture_region: Arc<dyn Fn(ScanRegion) -> Option<Vec<u8>> + Send + Sync> =
-        Arc::new(|(tl, br): ScanRegion| {
-            capture_region_png(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
-        });
-    let extract_engine = ocr_engine.clone();
-    let extract_geom = skill_geom;
-    let extract_vocab = vocab;
-    let extract_page_levels: eo_services::skill_scan_manual::PageExtractor =
-        Arc::new(move |png: &[u8]| {
-            read_skill_page_levels(&extract_engine, &extract_geom, &extract_vocab, png)
-        });
-
-    let scan_providers = ScanProviders {
-        engine_available: Arc::new(move || has_engine),
-        skill_region,
-        capture_region,
-        extract_page_levels,
-    };
-
-    // Hydrate the resting status (last scan time, skills count) from the
-    // persisted calibration history.
-    let (initial_scan_time, initial_skills_count) =
-        hydrate_skill_scan_state(&db).await.unwrap_or((None, 0));
-
-    let skill_scan = SkillScanManual::new(
-        scan_providers,
-        clock.clone(),
+    let skill_scan = SkillScanService::new(
+        SkillScanProviders {
+            frame: game_ui.frame.clone(),
+            profile: game_ui.profile.clone(),
+            read_text: frame_reader(ocr_engine.clone()),
+            vocabulary: SkillVocabulary::from_entities(game_data.get_entities("skills")),
+            tick: DEFAULT_TICK,
+            idle_limit: DEFAULT_IDLE_LIMIT,
+        },
+        clock,
         Some(bus),
-        initial_scan_time,
-        initial_skills_count,
     );
+    skill_scan
+        .set_completion_callback(skill_scan_completion(db, tokio::runtime::Handle::current()));
 
-    // The completion callback persists accepted calibrations through the
-    // shared database handle, bridging onto the runtime from the scan's
-    // worker thread the same dual way the tracker's providers do; a
-    // persist error surfaces on the scan status rather than panicking.
-    let completion_db = db.clone();
-    let completion_clock = clock.clone();
-    let completion_runtime = runtime;
-    skill_scan.set_completion_callback(Arc::new(move |levels: &[(String, f64)]| {
-        let scan_time = naive_to_epoch(completion_clock.now());
-        let levels = levels.to_vec();
-        let db = completion_db.clone();
-        block_on_pool(&completion_runtime, async move {
-            complete_skill_scan(&db, &levels, scan_time).await
-        })
-        .map(|_drift| ())
-        .map_err(Into::into)
-    }));
-
-    // The sale-window read: the same seams again, over the same warm
+    // The sale-window read: its calibrated rectangle over the same warm
     // engine and capturer. It takes the anchor as well as the region,
     // because it crops each field out of the one captured panel.
-    let sale_presets = presets;
+    let sale_presets = Arc::new(ScanPresets::new(&paths.geometry));
     let sale_engine = ocr_engine;
     let anchor_presets = sale_presets.clone();
     let sale_window_ocr = Arc::new(SaleWindowOcrService::new(SaleWindowProviders {
@@ -1268,50 +1247,12 @@ async fn compose_scan_services(
         }
     }));
 
-    // The spacebar-capture listener fires a manual-scan capture on a space
-    // press while the scan is capturing, over the SAME OS hook the hotbar
-    // listener rides (the hook is single-instance). Off until the overlay
-    // toggle enables it through the spacebar-capture command.
-    let spacebar = SpacebarCaptureListener::new(skill_scan.clone(), Some(keystroke_source));
+    // The spacebar-capture listener, over the SAME OS hook the hotbar
+    // listener rides (the hook is single-instance). Unarmed until the
+    // development research capture arms it.
+    let spacebar = SpacebarCaptureListener::new(Some(keystroke_source));
 
     (skill_scan, sale_window_ocr, spacebar)
-}
-
-/// Extract `{canonical_name: level}` rows from one captured skill-panel
-/// PNG: decode to BGR, slice the calibrated grid, OCR each name/level cell,
-/// estimate each bar fill, and keep only the rows that both resolved a name
-/// and parsed a level. Returns no rows when the engine is absent, the PNG
-/// is unreadable, or the grid is uncalibrated (the reader would otherwise
-/// have no rows to slice and would panic), so an installed build missing
-/// the calibration artefact degrades to an empty scan rather than crashing.
-fn read_skill_page_levels(
-    engine: &Option<Arc<OcrEngine>>,
-    skill_geom: &Value,
-    vocab: &[String],
-    png: &[u8],
-) -> Vec<(String, f64)> {
-    let Some(engine) = engine.as_ref() else {
-        return Vec::new();
-    };
-    if skill_geom.get("n_rows").and_then(Value::as_i64).is_none() {
-        return Vec::new();
-    }
-    let Ok((data, h, w)) = load_bgr_png(png) else {
-        return Vec::new();
-    };
-    let panel = BgrImage { data, h, w };
-    let read = |crop: &BgrImage| -> (String, f64) {
-        engine
-            .recognize_bgr(&crop.data, crop.h, crop.w)
-            .unwrap_or_default()
-    };
-    read_skill_panel(&read, &panel, skill_geom, vocab)
-        .into_iter()
-        .filter_map(|row| match (row.name, row.level) {
-            (Some(name), Some(level)) => Some((name, level)),
-            _ => None,
-        })
-        .collect()
 }
 
 /// Subscriber backlog bound for the typed domain channel (the shell's
@@ -2420,14 +2361,11 @@ mod tests {
     }
 
     /// The composed scan services are reachable and wired over the LIVE
-    /// providers, not the inert defaults: the manual scan reports a resting
-    /// idle status whose `configured` flag mirrors whether the OCR engine
-    /// loaded (the inert default's `engine_available` is always false, so a
-    /// host where the engine loads proves the real provider), and the
-    /// terminal reader is composed with its profile. The scan also
-    /// publishes onto the spine bus: a status-moving verb dispatches one
-    /// `scan.status.changed` frame through the domain bridge composed
-    /// alongside.
+    /// providers, not the inert defaults: the skill scan rests idle, able
+    /// to run exactly when the OCR engine loaded (the inert default has no
+    /// recogniser, profile or skill list, so a host where the engine loads
+    /// proves the real providers), and the terminal reader is composed
+    /// with its profile.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn composes_the_scan_services_over_live_providers() {
         let _ort = ORT_TEST_LOCK.lock().await;
@@ -2453,18 +2391,14 @@ mod tests {
             panic!("composition succeeds");
         };
 
-        let status = composed.skill_scan.get_status();
-        assert_eq!(status["phase"], "idle");
-        assert_eq!(status["captured_pages"], 0);
-        // `configured` mirrors whether the engine loaded (the real provider);
-        // `game_window_present` mirrors the live window-discovery seam, so
-        // it is compared against that seam's own answer rather than assumed
-        // absent (a dev host can legitimately have the real game running,
-        // which is precisely the live-provider wiring this test proves).
-        assert_eq!(status["configured"], composed.ocr_engine.is_some());
+        // Available means the engine, the bundled profile and the bundled
+        // skill list all reached the scan.
         assert_eq!(
-            status["game_window_present"],
-            eo_services::eu_window::game_window_present()
+            composed.skill_scan.status(),
+            eo_services::skill_scan::ScanStatus::Idle {
+                available: composed.ocr_engine.is_some(),
+                stopped: None,
+            }
         );
         // The scan composed on the spine bus (its status frames reach the
         // domain bridge); the forwarding is covered by
@@ -3095,7 +3029,7 @@ mod tests {
     }
 
     /// The LIVE scan-status path now the scan composes on the spine bus: a
-    /// status-moving verb on a `SkillScanManual` built over the same bus the
+    /// status-moving verb on a `SkillScanService` built over the same bus the
     /// bridge subscribes reaches a domain-channel subscriber as a typed
     /// `scan.status.changed` envelope, end to end (the bridge-forwards test
     /// publishes the event directly; this proves the scan's own publish
@@ -3110,24 +3044,89 @@ mod tests {
         let mut receiver = domain_bus.subscribe();
 
         let clock: Arc<dyn Clock> = Arc::new(MockClock::new(None, 0.0));
-        let scan = SkillScanManual::new(
-            ScanProviders {
-                engine_available: Arc::new(|| true),
-                skill_region: Arc::new(|| Some(([0, 0], [100, 200]))),
-                capture_region: Arc::new(|_| Some(vec![1, 2, 3])),
-                extract_page_levels: Arc::new(|_: &[u8]| Vec::new()),
+        let scan = SkillScanService::new(
+            SkillScanProviders {
+                frame: Arc::new(|| {
+                    Err(eo_services::game_ui::seams::FrameUnavailable::WindowNotFound)
+                }),
+                profile: load_ui_profile(&resource_root(&repo_snapshot()).join(UI_PROFILE_FILE)),
+                read_text: Some(Arc::new(|_: &BgrImage| Some((String::new(), 0.0)))),
+                vocabulary: SkillVocabulary::new(vec!["Agility".into()], Vec::new()),
+                tick: DEFAULT_TICK,
+                idle_limit: DEFAULT_IDLE_LIMIT,
             },
             clock,
             Some(bus.clone()),
-            None,
-            0,
         );
-        // `start` moves the status idle -> capturing, publishing one envelope.
-        scan.start(Some(2));
+        // `start` moves the status idle -> collecting, publishing one envelope.
+        scan.surface_shown();
+        scan.start().expect("the scan starts");
         let event = receiver.recv().await.expect("the envelope arrives");
         let DomainEvent::ScanStatusChanged(envelope) = event else {
             panic!("the scan publish routed to the wrong variant: {event:?}");
         };
         assert_eq!(envelope.payload.phase, ScanPhase::Capturing);
+        scan.shutdown();
+    }
+
+    /// The skill scan's composed completion writes each accepted level to
+    /// the database stamped with when its page was read, not when the
+    /// review was accepted: a gain the chat log recorded after a page was
+    /// read stays the current level.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_composed_scan_completion_writes_each_level_at_its_read_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join(DB_FILE_NAME)).await.unwrap();
+        db.with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
+                 VALUES ('Rifle', 4000.60, 'chatlog', 160.0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let complete = skill_scan_completion(db.clone(), tokio::runtime::Handle::current());
+        let levels = vec![
+            ScannedLevel {
+                skill: "Rifle".into(),
+                level: 4000.10,
+                scanned_at: 100.0,
+            },
+            ScannedLevel {
+                skill: "Aim".into(),
+                level: 1268.53,
+                scanned_at: 220.0,
+            },
+        ];
+        tokio::task::spawn_blocking(move || complete(&levels))
+            .await
+            .unwrap()
+            .expect("the levels are written");
+        let rows: Vec<(String, f64, f64)> = db
+            .with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT skill_name, level, scanned_at FROM skill_calibrations \
+                     WHERE source = 'scan' ORDER BY scanned_at",
+                )?;
+                let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("Rifle".to_string(), 4000.10, 100.0),
+                ("Aim".to_string(), 1268.53, 220.0),
+            ]
+        );
+        let mut current = latest_skill_levels(&db).await.unwrap();
+        current.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            current,
+            vec![("Aim".to_string(), 1268.53), ("Rifle".to_string(), 4000.60)]
+        );
     }
 }

@@ -21,14 +21,14 @@ use eo_services::hotbar_listener::HotbarListener;
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
 use eo_services::sale_window_ocr::{SaleWindowOcrService, SaleWindowProviders};
-use eo_services::skill_scan_manual::{ScanProviders, SkillScanManual};
+use eo_services::skill_scan::{SkillScanProviders, SkillScanService};
 use eo_services::skill_tracker::SkillTracker;
 use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::tracker::{HuntTracker, Providers};
 
 /// The write-family producer handles a facade under test takes by value,
-/// plus the manual-scan state machine and its spacebar listener (inert:
-/// default providers report no engine and no game window, so the scan
+/// plus the skill scan and the spacebar listener (inert: the scan's
+/// default providers load no reader and find no game window, so it
 /// answers its resting status the way the app does before any scan).
 pub struct ProducerHandles {
     /// The bus the producers share: a facade test that wires a service's
@@ -45,7 +45,7 @@ pub struct ProducerHandles {
     // two fields unread; every other facade test binary passes them to
     // `Api::new`.
     #[allow(dead_code)]
-    pub skill_scan: Arc<SkillScanManual>,
+    pub skill_scan: Arc<SkillScanService>,
     #[allow(dead_code)]
     pub spacebar: Arc<SpacebarCaptureListener>,
     // The tracking family's own facade test exercises repair-scan through
@@ -106,14 +106,12 @@ pub async fn producer_handles_with_tracker(
     ));
     let skill_tracker =
         SkillTracker::new(&bus, db.clone(), Arc::new(RealClock::new()), chatlog_clock);
-    let skill_scan = SkillScanManual::new(
-        ScanProviders::default(),
+    let skill_scan = SkillScanService::new(
+        SkillScanProviders::default(),
         Arc::new(RealClock::new()),
         None,
-        None,
-        0,
     );
-    let spacebar = SpacebarCaptureListener::new(skill_scan.clone(), None);
+    let spacebar = SpacebarCaptureListener::new(None);
     let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders::default()));
     let sale_window_ocr = Arc::new(SaleWindowOcrService::new(SaleWindowProviders::default()));
     let quests = QuestService::start(&bus, db.clone(), Arc::new(RealClock::new()), handle);

@@ -70,16 +70,6 @@ describe('planetMapImage', () => {
 	});
 });
 
-describe('manualSkillScanCapturePng', () => {
-	it('fetches the capture preview over the capture_png command as a base64 data URL', async () => {
-		const { manualSkillScanCapturePng } = await loadModule();
-		invokeMock.mockResolvedValue('aGVsbG8=');
-		const url = await manualSkillScanCapturePng(3);
-		expect(invokeMock).toHaveBeenCalledWith('capture_png', { page: 3 });
-		expect(url).toBe('data:image/png;base64,aGVsbG8=');
-	});
-});
-
 describe('startup readiness', () => {
 	it('awaits the settled outcome through substrate_ready', async () => {
 		const { awaitSubstrate } = await loadModule();

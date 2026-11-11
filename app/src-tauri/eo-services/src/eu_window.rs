@@ -1,18 +1,16 @@
 //! Locate and measure the Entropia Universe game window.
 //!
-//! Helpers used by the manual scan flow to derive capture regions from
-//! the live game window rather than a fixed-resolution preset table,
-//! the capture of the whole game window for the readers that find what
-//! they want in it themselves, and the focus check the hotbar listener consults before a slot key
-//! may move the tracked tool.
-//! On non-Windows platforms the helpers return None and callers handle
-//! the missing-window case, exactly as the original does. The capture
-//! regions compose these lookups with the pure geometry in
-//! `scan_presets`.
+//! The capture of the whole game window for the readers that find what
+//! they want in it themselves, the sale window's capture region derived
+//! from the live game window, and the focus check the hotbar listener
+//! consults before a slot key may move the tracked tool. Where the
+//! platform cannot find the window the helpers return None and callers
+//! handle the missing-window case. The sale window's region composes
+//! these lookups with the pure geometry in `scan_presets`.
 
 use crate::game_ui::seams::FrameUnavailable;
 use crate::scan_presets::{compute_region, ScanPresets};
-use crate::screen_capture::{capturable_area, capture_region_bgr};
+use crate::screen_capture::{capturable_area, capture_region_bgr, start_capture};
 use crate::skill_panel::BgrImage;
 
 pub const GAME_TITLE_PREFIX: &str = "Entropia Universe Client";
@@ -46,6 +44,11 @@ pub fn get_window_geometry(handle: WindowHandle) -> Option<(i64, i64, i64, i64)>
 pub fn capture_game_window() -> Result<BgrImage, FrameUnavailable> {
     let handle = find_game_window().ok_or(FrameUnavailable::WindowNotFound)?;
     let client = get_window_geometry(handle).ok_or(FrameUnavailable::WindowNotFound)?;
+    // Asked once, before the area and the pixels, each of which would
+    // otherwise try a failed start again and ask for consent twice.
+    if !start_capture() {
+        return Err(FrameUnavailable::CaptureNotStarted);
+    }
     let (x, y, w, h) = match capturable_area() {
         Some(area) => {
             capturable_part(client, area).ok_or(FrameUnavailable::OutsideCapturableArea)?
@@ -108,18 +111,6 @@ fn live_region(anchor: &crate::scan_presets::PanelAnchor) -> Option<([i64; 2], [
     let handle = find_game_window()?;
     let geometry = get_window_geometry(handle)?;
     compute_region(anchor, geometry)
-}
-
-/// The skill panel capture rect, or None when the game window is
-/// absent.
-pub fn skill_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
-    live_region(&presets.skill)
-}
-
-/// The profession panel capture rect, or None when the game window is
-/// absent.
-pub fn profession_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
-    live_region(&presets.profession)
 }
 
 /// The auction sale window's capture rect, or None when the game
@@ -526,8 +517,6 @@ mod tests {
             assert_eq!(game_focus(), GameFocus::Unknown);
             assert!(get_window_geometry(WindowHandle(1)).is_none());
             let presets = ScanPresets::new(std::path::Path::new("/nonexistent.json"));
-            assert!(skill_region(&presets).is_none());
-            assert!(profession_region(&presets).is_none());
             assert!(sale_window_region(&presets).is_none());
         }
         #[cfg(target_os = "linux")]

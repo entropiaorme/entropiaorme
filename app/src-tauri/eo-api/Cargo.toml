@@ -29,6 +29,10 @@ chrono = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+# The facade tests drive the skill scan over drawn skills windows, the same
+# fixtures the service's own tests use (dev builds only: features a
+# dev-dependency enables do not reach a normal build).
+eo-services = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true }
 tempfile = { workspace = true }
 chrono = { workspace = true }

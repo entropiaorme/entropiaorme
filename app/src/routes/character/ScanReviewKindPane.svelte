@@ -1,120 +1,30 @@
 <script lang="ts">
-	import {
-		acceptManualSkillScan,
-		rejectManualSkillScan,
-		getManualSkillScanPending,
-		getCharacterSkills,
-	} from '$lib/api';
-	import type { SkillLevel } from '$lib/types/analytics';
 	import Badge from '$lib/components/Badge.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import {
+		correction,
+		createSkillScanReviewModel,
+		type ReviewRow,
+	} from '$lib/features/skillScan/skillScanReviewModel.svelte';
 
-	let { onComplete }: { onComplete: () => void } = $props();
+	let { onComplete, saving = false }: { onComplete: () => void; saving?: boolean } = $props();
 
-	// Three-stop diff: anchor (last scan) → believed (running sum) → scanned (new).
-	// The most useful diff for validating the chatlog tracker is `scanned - believed`
-	// (the "correction") — it surfaces where the running sum was off vs. ground truth.
-	type DiffRow = {
-		name: string;
-		anchor: number | null;
-		believed: number | null;
-		scanned: number;
-		isAttribute: boolean;
-	};
-
-	let rows = $state<DiffRow[]>([]);
-	let loading = $state(true);
-	let busy = $state(false);
-	let error = $state<string | null>(null);
-
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			const [pending, current] = await Promise.all([
-				getManualSkillScanPending(),
-				getCharacterSkills(),
-			]);
-			if (!pending) {
-				error = 'No pending skill scan result';
-				rows = [];
-				return;
-			}
-			const byName = new Map<string, SkillLevel>(current.map((s) => [s.name, s]));
-			const built: DiffRow[] = Object.entries(pending.skills).map(([name, scanned]) => {
-				const prev = byName.get(name);
-				return {
-					name,
-					anchor: prev?.anchorLevel ?? null,
-					believed: prev?.level ?? null,
-					scanned,
-					isAttribute: prev?.isAttribute ?? false,
-				};
-			});
-			rows = sortByCorrection(built);
-		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
-			rows = [];
-		} finally {
-			loading = false;
-		}
-	}
-
-	// Default sort: largest absolute correction (scanned - believed) first — that's
-	// where the running sum diverged most from ground truth, which is where the
-	// user's eye should land first when validating.
-	function sortByCorrection(list: DiffRow[]): DiffRow[] {
-		return [...list].sort((a, b) => Math.abs(correction(b)) - Math.abs(correction(a)));
-	}
+	const review = createSkillScanReviewModel(() => onComplete());
+	let rows = $derived(review.rows);
+	let notes = $derived(review.notes);
+	let loading = $derived(review.loading);
+	let error = $derived(review.error);
+	// Nothing settles a review while one request about it is in flight, or
+	// while it is being saved.
+	let locked = $derived(review.busy || saving);
 
 	$effect(() => {
-		load();
+		void review.load();
 	});
-
-	async function accept() {
-		busy = true;
-		error = null;
-		try {
-			const result = await acceptManualSkillScan();
-			if (result.error) {
-				error = result.error;
-			} else {
-				onComplete();
-			}
-		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
-		} finally {
-			busy = false;
-		}
-	}
-
-	async function reject() {
-		busy = true;
-		error = null;
-		try {
-			const result = await rejectManualSkillScan();
-			if (result.error) {
-				error = result.error;
-			} else {
-				onComplete();
-			}
-		} catch (err) {
-			error = err instanceof Error ? err.message : String(err);
-		} finally {
-			busy = false;
-		}
-	}
-
-	// `correction` is what gets persisted as the new anchor minus what we believed
-	// the level was. Positive: tracker undercounted; negative: tracker overcounted.
-	function correction(row: DiffRow): number {
-		if (row.believed === null) return 0;
-		return row.scanned - row.believed;
-	}
 
 	// `runningGain` is anchor → believed: how much the chatlog tracker accumulated
 	// since the last scan. Useful as context next to the believed value.
-	function runningGain(row: DiffRow): number | null {
+	function runningGain(row: ReviewRow): number | null {
 		if (row.anchor === null || row.believed === null) return null;
 		return row.believed - row.anchor;
 	}
@@ -144,12 +54,25 @@
 		<span class="text-xs text-text-tertiary tabular-nums">{rows.length} rows</span>
 	</div>
 
+	{#if !loading && notes.length > 0}
+		<div class="mb-3 space-y-2 text-xs">
+			{#each notes as note (note.text)}
+				<div>
+					<p class="text-warning">{note.text}</p>
+					{#if note.items.length > 0}
+						<p class="text-text-secondary">{note.items.join(', ')}</p>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	{/if}
+
 	{#if loading}
 		<p class="py-8 text-center text-sm text-text-tertiary">Loading review…</p>
-	{:else if error}
+	{:else if error && rows.length === 0}
 		<p class="py-8 text-center text-sm text-warning">{error}</p>
 	{:else if rows.length === 0}
-		<p class="py-8 text-center text-sm text-text-tertiary">No rows extracted.</p>
+		<p class="py-8 text-center text-sm text-text-tertiary">Nothing in this scan can be saved.</p>
 	{:else}
 		<div class="flex-1 overflow-y-auto rounded border border-border">
 			<table class="w-full text-sm">
@@ -203,12 +126,33 @@
 		</div>
 	{/if}
 
+	{#if error && rows.length > 0}
+		<p class="mt-2 text-xs text-warning">{error}</p>
+	{/if}
+
 	<div class="mt-3 flex items-center justify-end gap-2">
-		<Button variant="ghost" onclick={reject} disabled={busy}>
-			{#snippet children()}Reject{/snippet}
-		</Button>
-		<Button onclick={accept} disabled={busy || loading || rows.length === 0}>
-			{#snippet children()}Accept{/snippet}
-		</Button>
+		{#if review.needsConfirmation}
+			<button
+				type="button"
+				class="mr-auto text-xs text-text-tertiary underline-offset-2 hover:text-text-secondary hover:underline disabled:opacity-50 cursor-pointer"
+				onclick={review.saveAnyway}
+				disabled={locked || loading || rows.length === 0}
+			>
+				Save these figures anyway
+			</button>
+			<Button variant="ghost" onclick={review.reject} disabled={locked}>
+				{#snippet children()}Reject{/snippet}
+			</Button>
+			<Button onclick={review.scanAgain} disabled={locked}>
+				{#snippet children()}Scan again{/snippet}
+			</Button>
+		{:else}
+			<Button variant="ghost" onclick={review.reject} disabled={locked}>
+				{#snippet children()}Reject{/snippet}
+			</Button>
+			<Button onclick={review.accept} disabled={locked || loading || rows.length === 0}>
+				{#snippet children()}Accept{/snippet}
+			</Button>
+		{/if}
 	</div>
 </div>

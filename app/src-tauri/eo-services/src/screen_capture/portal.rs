@@ -376,6 +376,13 @@ fn invalidate_engine(engine: &Arc<Engine>, reason: &str) {
     }
 }
 
+/// Start the engine if it is not running: `false` when the start failed
+/// (consent declined or not given, or the portal did not answer). Each
+/// call that finds no engine tries again, which may ask for consent.
+pub fn start() -> bool {
+    engine().is_some()
+}
+
 pub fn capture_bgra(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
     if w <= 0 || h <= 0 {
         return None;

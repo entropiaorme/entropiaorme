@@ -26,7 +26,7 @@
 	let mainTab = $state<'stats' | 'skilling' | 'codex'>('stats');
 	let statsSubTab = $state<'attributes' | 'skills' | 'professions'>('attributes');
 
-	// ── Manual scan status (drives in-flight view) ──────────────────────────────
+	// ── Skill scan status (drives in-flight view) ───────────────────────────────
 
 	// Scan status from the shared event-driven store. The effect below hydrates
 	// once and subscribes; the store re-reads on each backend scan frame the
@@ -113,7 +113,7 @@
 				</div>
 				{#if scanInFlight}
 					<span class="rounded-md bg-surface px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-text-secondary whitespace-nowrap">
-						{scanStatus?.phase === 'capturing' ? 'Capturing' : scanStatus?.phase === 'processing' ? 'Processing' : 'Awaiting review'}
+						{scanStatus?.phase === 'collecting' ? 'Collecting' : scanStatus?.phase === 'saving' ? 'Saving' : 'Awaiting review'}
 					</span>
 				{:else}
 					<Button size="sm" variant="secondary" onclick={model.openScanOverlay}>

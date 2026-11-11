@@ -74,7 +74,7 @@ pub mod session_scope;
 pub mod session_summary;
 pub mod session_weapon_rollup;
 pub mod skill_panel;
-pub mod skill_scan_manual;
+pub mod skill_scan;
 pub mod skill_tracker;
 pub mod skilling_forecast;
 pub mod skilling_routes;

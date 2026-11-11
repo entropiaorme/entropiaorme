@@ -181,14 +181,17 @@ fn begin_navigation_area_selection(
 
 #[tauri::command]
 fn show_scan_overlay(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("scan-overlay") {
-        // Position near a monitor's top-left so the overlay never collides
-        // with a bottom-right docked in-game skills/professions panel. The
-        // anchor is monitor-relative, not the raw screen origin, which on a
+    if let Some(window) = app.get_webview_window(SCAN_OVERLAY) {
+        // Position near a monitor's top-left, out of the way of the game's
+        // windows the player is paging through. The anchor is
+        // monitor-relative, not the raw screen origin, which on a
         // multi-monitor layout can lie outside every panel.
         let _ = window.set_position(monitor_anchor(&window, (40, 40)));
         let _ = window.show();
         let _ = window.set_focus();
+        if let Ok(facade) = commands::facade(&app) {
+            facade.skill_scan_window_shown_for_shell();
+        }
     }
 }
 
@@ -284,25 +287,27 @@ async fn capture_sale_from_overlay(
     })
 }
 
+/// Hide the scan overlay. The skill scan watches the game window only for
+/// the overlay the player pages alongside, so the watching stops with it;
+/// a finished scan awaiting review keeps its result for the main window.
 #[tauri::command]
 fn hide_scan_overlay(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("scan-overlay") {
+    scan_overlay_gone(&app);
+    if let Some(window) = app.get_webview_window(SCAN_OVERLAY) {
         let _ = window.hide();
     }
 }
 
-/// The manual-scan capture preview PNG for `page`, base64-encoded for an
-/// `<img>` `data:` URL. The facade returns raw image bytes, which cannot ride
-/// the typed-DTO command surface (the bindings are JSON), so this stays a
-/// bespoke command outside the manifest, base64-encoding the bytes here.
-#[tauri::command]
-async fn capture_png(app: tauri::AppHandle, page: u32) -> Result<String, String> {
-    use base64::Engine as _;
-    let facade = commands::facade(&app).map_err(|error| error.to_string())?;
-    let bytes = facade
-        .scan_capture_png(i64::from(page))
-        .map_err(|error| error.to_string())?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+/// The scan overlay's window label.
+const SCAN_OVERLAY: &str = "scan-overlay";
+
+/// The scan overlay is no longer showing, however it went: the skill scan
+/// stops collecting with it. Told to the scan before the window goes, so
+/// no start from the overlay can land after it.
+fn scan_overlay_gone(app: &tauri::AppHandle) {
+    if let Ok(facade) = commands::facade(app) {
+        facade.skill_scan_window_closed_for_shell();
+    }
 }
 
 /// A bundled planet map's raster, base64-encoded for an `<img>` `data:` URL
@@ -329,14 +334,15 @@ async fn planet_map_image(app: tauri::AppHandle, planet: String) -> Result<Strin
 // seam is the producer teardown path.
 struct Producers(Mutex<Option<composition::ProducerState>>);
 
-// Holds the manual-scan input listener and the scan state machine so the exit
-// seam tears them down: the spacebar listener detaches its share of the shared
-// OS keyboard hook (the hotbar listener detaches the other share via
-// `ProducerState::stop`), and the scan resets any in-flight capture state.
-// Both are the same `Arc`s the facade's scan family serves over.
+// Holds the input listeners and the skill scan so the exit seam tears them
+// down: the spacebar listener detaches its share of the shared OS keyboard
+// hook (the hotbar listener detaches the other share via
+// `ProducerState::stop`), and the skill scan stops and waits for its worker,
+// so nothing captures the screen behind the closing app. All are the same
+// `Arc`s the facade serves over.
 struct ScanInput {
     spacebar: std::sync::Arc<composition::SpacebarCaptureListener>,
-    skill_scan: std::sync::Arc<composition::SkillScanManual>,
+    skill_scan: std::sync::Arc<composition::SkillScanService>,
     coord_confirm: std::sync::Arc<eo_services::coord_capture::CoordConfirmListener>,
     radar_confirm: std::sync::Arc<eo_services::coord_capture::CoordConfirmListener>,
 }
@@ -449,9 +455,23 @@ pub fn run() {
             // tally — closing main alone leaves them open and the app
             // keeps running headless. Treat main-window close as a
             // request to exit the whole app.
-            if let WindowEvent::CloseRequested { .. } = event {
+            if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     window.app_handle().exit(0);
+                }
+                // The scan overlay is spawned once and shown again on the
+                // next scan, so the system's close hides it instead, and
+                // stops the skill scan collecting just as its own close
+                // button does.
+                if window.label() == SCAN_OVERLAY {
+                    api.prevent_close();
+                    scan_overlay_gone(window.app_handle());
+                    let _ = window.hide();
+                }
+            }
+            if let WindowEvent::Destroyed = event {
+                if window.label() == SCAN_OVERLAY {
+                    scan_overlay_gone(window.app_handle());
                 }
             }
         })
@@ -486,7 +506,7 @@ pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
         }
     }
 
-    // Tear down the scan input listener and reset the scan: the spacebar
+    // Tear down the input listeners and stop the skill scan: the spacebar
     // listener detaches its share of the shared OS hook.
     if let Some(state) = app.try_state::<ScanInput>() {
         state.spacebar.stop();
@@ -653,7 +673,7 @@ async fn simulate_slow_start() {
 fn install_native_services(app: &tauri::AppHandle, composed: composition::Composed) {
     // Clones for the exit seam, taken before the originals move into the
     // installed bundle below: the spacebar listener detaches its share of
-    // the shared OS hook and the scan resets in-flight state on close.
+    // the shared OS hook and the skill scan stops its worker on close.
     let exit_spacebar = composed.spacebar_listener.clone();
     let exit_skill_scan = composed.skill_scan.clone();
     let exit_coord_confirm = composed.coord_confirm.clone();
@@ -676,8 +696,8 @@ fn install_native_services(app: &tauri::AppHandle, composed: composition::Compos
     // for the app's lifetime, so the warmed engine (and its ONNX session)
     // lives exactly as long as its consumers; the ORT environment
     // self-releases at process exit.
-    // Hand the scan input listener and the scan state machine to the exit
-    // seam for deterministic teardown.
+    // Hand the input listeners and the skill scan to the exit seam for
+    // deterministic teardown.
     app.manage(ScanInput {
         spacebar: exit_spacebar,
         skill_scan: exit_skill_scan,
@@ -947,7 +967,7 @@ mod tests {
         assert!(csp.contains("ipc:"), "the IPC scheme must remain: {csp}");
         assert!(
             csp.contains("img-src 'self' data:"),
-            "img-src keeps data: for the base64 capture preview: {csp}"
+            "img-src keeps data: for the base64 planet map rasters: {csp}"
         );
     }
 

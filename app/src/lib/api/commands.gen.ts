@@ -40,13 +40,14 @@ export interface AbsorberComponent {
 }
 
 /**
- * The accept verb's result: `{ok, skills_persisted}` on success, the
- * lone `error` on a refusal (each key skipped when absent, preserving
- * the HTTP polymorphic body exactly).
+ * The accept verb's result: `{ok, skills_persisted}` on success; on a
+ * refusal, why (`refused`) and the message to show (`error`). Each key is
+ * skipped when absent.
  */
 export interface AcceptResult {
 	ok?: boolean | null;
 	skills_persisted?: number | null;
+	refused?: SkillScanRefusal | null;
 	error?: string | null;
 }
 
@@ -410,28 +411,6 @@ export interface CalibrationStatus {
 	calibrated: boolean;
 	lastCalibration: string | null;
 	stale: boolean;
-}
-
-/**
- * A capture verb's result: the status the grab settled on, plus the
- * 1-indexed page and whether the frame was captured. On a refusal the
- * page/captured extras are absent (the status carries the error).
- */
-export interface CaptureResult {
-	active: boolean;
-	processing: boolean;
-	captured_pages: number;
-	expected_pages: number;
-	last_scan_time: number | null;
-	skills_count: number;
-	configured: boolean;
-	game_window_present: boolean;
-	phase: ScanPhase;
-	processing_progress: ScanProgress;
-	has_pending_result: boolean;
-	error: string | null;
-	page?: number | null;
-	captured?: boolean | null;
 }
 
 /**
@@ -3165,11 +3144,12 @@ export interface RecommenderContribution {
 export type RecommenderTargetKind = 'hp' | 'profession';
 
 /**
- * The reject verb's result: `{ok: true}` on success, the lone `error`
- * on a refusal.
+ * The reject verb's result: `{ok: true}` on success; on a refusal, why
+ * and the message to show.
  */
 export interface RejectResult {
 	ok?: boolean | null;
+	refused?: SkillScanRefusal | null;
 	error?: string | null;
 }
 
@@ -3239,39 +3219,6 @@ export interface SaleWindowCapture {
 	confidence: number | null;
 	/** The fields that did not read, by the name the window gives them. */
 	unread: string[];
-	error: string | null;
-}
-
-/**
- * The settled scan phase, in the wire vocabulary the overlay switches on.
- */
-export type ScanPhase = 'idle' | 'capturing' | 'processing' | 'awaiting_review';
-
-/**
- * The per-page OCR progress counter.
- */
-export interface ScanProgress {
-	done: number;
-	total: number;
-}
-
-/**
- * The full manual-scan status, in the response-model field order the
- * HTTP layer emitted. `error` carries a logical refusal's message (null
- * on success); every other field is always present.
- */
-export interface ScanStatus {
-	active: boolean;
-	processing: boolean;
-	captured_pages: number;
-	expected_pages: number;
-	last_scan_time: number | null;
-	skills_count: number;
-	configured: boolean;
-	game_window_present: boolean;
-	phase: ScanPhase;
-	processing_progress: ScanProgress;
-	has_pending_result: boolean;
 	error: string | null;
 }
 
@@ -3601,10 +3548,119 @@ export interface SkillLevel {
 }
 
 /**
- * The held OCR result awaiting review: canonical skill name to level.
+ * A name this version does not know that is probably one of its skills.
  */
-export interface SkillScanPending {
+export interface SkillScanGuess {
+	/** What its name was read as. */
+	readAs: string;
+	/** The skill it probably is. */
+	probably: string;
+	/** The points exactly as the game prints them. */
+	pointsText: string;
+}
+
+/**
+ * What stops the game's view, as it is now, being collected.
+ */
+export type SkillScanHint = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'skillsWindowNotOpen' | 'skillsWindowCovered' | 'skillsWindowOffScreen' | 'notSkillsTab' | 'windowTooShort' | 'pageNotRead' | 'otherListing';
+
+/**
+ * A saved skill whose name was not read exactly.
+ */
+export interface SkillScanNearMiss {
+	/** The skill it was saved as. */
+	skill: string;
+	/** What its name was read as. */
+	readAs: string;
+}
+
+/**
+ * Why a scan verb was refused. A refused verb changes nothing.
+ */
+export type SkillScanRefusal = 'noReview' | 'staleReview' | 'totalNotConfirmed' | 'saving' | 'surfaceClosed' | 'workerUnavailable' | 'saveFailed';
+
+/**
+ * The answer to starting or cancelling: the status that results, and
+ * why the verb was refused when it was.
+ */
+export interface SkillScanReply {
+	status: SkillScanStatus;
+	refused: SkillScanRefusal | null;
+}
+
+/**
+ * A finished scan awaiting review.
+ */
+export interface SkillScanReview {
+	/** The scan this review is of: accepting or rejecting it names it. */
+	scan: number;
+	/** What accepting saves: each skill's name to its points. */
 	skills: Record<string, number>;
+	/** Whether the figures add up to the game's own total. */
+	total: SkillScanTotal;
+	/** Saved skills whose names were not read exactly. */
+	nearMisses: SkillScanNearMiss[];
+	/** Names this version does not know that are probably one of its skills; not saved. */
+	guesses: SkillScanGuess[];
+	/** Skills the game shows that this version does not know; not saved. */
+	unknown: SkillScanUnsaved[];
+	/** Rows whose name could be either of two skills; not saved. */
+	unplaced: SkillScanUnsaved[];
+	/** Skills read more than once; not saved. */
+	repeated: string[];
+}
+
+/**
+ * The skill scan's state.
+ */
+export type SkillScanStatus = {
+		/** A scan can run: the recogniser and the interface data loaded. */
+		available: boolean;
+		/** Why the last scan stopped by itself, when it did. */
+		stopped: SkillScanStop | null;
+		phase: 'idle';
+	} | {
+		/** Pages collected so far. */
+		pagesCollected: number;
+		/** How many pages the list has, once a page has shown it. */
+		pageCount: number | null;
+		/** The page numbers still to collect, once the count is known. */
+		missingPages: number[];
+		/** What stops the view in the game being collected, when something does. */
+		hint: SkillScanHint | null;
+		phase: 'collecting';
+	} | {
+		phase: 'awaitingReview';
+	} | {
+		phase: 'saving';
+	};
+
+/**
+ * Why a scan stopped collecting by itself, with no review.
+ */
+export type SkillScanStop = 'readFailed' | 'captureNotAllowed' | 'noNewPage';
+
+/**
+ * Whether a scan's figures add up to the game's own total.
+ */
+export type SkillScanTotal = {
+		check: 'matches';
+	} | {
+		sum: number;
+		total: number;
+		check: 'mismatch';
+	} | {
+		check: 'unchecked';
+	};
+
+/**
+ * A skill the game shows that the scan does not save.
+ */
+export interface SkillScanUnsaved {
+	/** The name as it was read. */
+	name: string;
+	/** The points exactly as the game prints them. */
+	pointsText: string;
 }
 
 /**
@@ -3808,15 +3864,6 @@ export interface SkillingSessionWeapon {
  * bindings expose only these two.
  */
 export type SkillingTargetKind = 'profession' | 'hp';
-
-/**
- * The spacebar-capture toggle acknowledgement: the resulting enabled
- * state after the flip.
- */
-export interface SpacebarResult {
-	ok: boolean;
-	enabled: boolean;
-}
 
 /**
  * The start lifecycle acknowledgement.
@@ -4082,26 +4129,6 @@ export type TreeSizeName = 'short' | 'long' | 'huge';
  * serialised forms are byte-identical to the strings they replace.
  */
 export type Trend = 'improving' | 'declining' | 'stable';
-
-/**
- * The undo verb's result: the status after the pop, plus the popped
- * page number. Absent on a refusal (the status carries the error).
- */
-export interface UndoResult {
-	active: boolean;
-	processing: boolean;
-	captured_pages: number;
-	expected_pages: number;
-	last_scan_time: number | null;
-	skills_count: number;
-	configured: boolean;
-	game_window_present: boolean;
-	phase: ScanPhase;
-	processing_progress: ScanProgress;
-	has_pending_result: boolean;
-	error: string | null;
-	undone_page?: number | null;
-}
 
 /**
  * Why a setup has no figures.
@@ -5089,44 +5116,48 @@ export async function marketItemHistory(itemName: string, horizon: MarketHorizon
 	return invokeCommand('market_item_history', { item_name: itemName, horizon });
 }
 
-export async function scanStatus(): Promise<ScanStatus> {
+export async function scanStatus(): Promise<{
+		/** A scan can run: the recogniser and the interface data loaded. */
+		available: boolean;
+		/** Why the last scan stopped by itself, when it did. */
+		stopped: SkillScanStop | null;
+		phase: 'idle';
+	} | {
+		/** Pages collected so far. */
+		pagesCollected: number;
+		/** How many pages the list has, once a page has shown it. */
+		pageCount: number | null;
+		/** The page numbers still to collect, once the count is known. */
+		missingPages: number[];
+		/** What stops the view in the game being collected, when something does. */
+		hint: SkillScanHint | null;
+		phase: 'collecting';
+	} | {
+		phase: 'awaitingReview';
+	} | {
+		phase: 'saving';
+	}> {
 	return invokeCommand('scan_status', {});
 }
 
-export async function scanStart(pageCount: number | null): Promise<ScanStatus> {
-	return invokeCommand('scan_start', { page_count: pageCount });
+export async function scanStart(): Promise<SkillScanReply> {
+	return invokeCommand('scan_start', {});
 }
 
-export async function scanCapture(): Promise<CaptureResult> {
-	return invokeCommand('scan_capture', {});
-}
-
-export async function scanCancel(): Promise<ScanStatus> {
+export async function scanCancel(): Promise<SkillScanReply> {
 	return invokeCommand('scan_cancel', {});
 }
 
-export async function scanUndo(): Promise<UndoResult> {
-	return invokeCommand('scan_undo', {});
+export async function scanAccept(scan: number, saveAnyway: boolean): Promise<AcceptResult> {
+	return invokeCommand('scan_accept', { scan, save_anyway: saveAnyway });
 }
 
-export async function scanProcess(): Promise<ScanStatus> {
-	return invokeCommand('scan_process', {});
+export async function scanReject(scan: number): Promise<RejectResult> {
+	return invokeCommand('scan_reject', { scan });
 }
 
-export async function scanAccept(): Promise<AcceptResult> {
-	return invokeCommand('scan_accept', {});
-}
-
-export async function scanReject(): Promise<RejectResult> {
-	return invokeCommand('scan_reject', {});
-}
-
-export async function scanPending(): Promise<SkillScanPending | null> {
+export async function scanPending(): Promise<SkillScanReview | null> {
 	return invokeCommand('scan_pending', {});
-}
-
-export async function scanSpacebarCapture(enabled: boolean): Promise<SpacebarResult> {
-	return invokeCommand('scan_spacebar_capture', { enabled });
 }
 
 export async function trackingSessions(cursor: string | null, limit: number | null, definitionId: number | null): Promise<SessionPage> {

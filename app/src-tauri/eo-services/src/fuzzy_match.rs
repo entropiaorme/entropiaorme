@@ -1,4 +1,4 @@
-//! The weighted fuzzy scorer the skill-name resolution uses, ported
+//! The weighted fuzzy scorers the readers and searches use, ported
 //! from the reference implementation of `rapidfuzz.fuzz.WRatio` (the
 //! library's own pure-Python form, the binding the original calls):
 //! the Indel ratio, the sliding-window partial ratio with its
@@ -274,28 +274,6 @@ pub fn wratio(a: &str, b: &str) -> f64 {
     end_ratio.max(partial_token_ratio(&a, &b) * UNBASE_SCALE * partial_scale)
 }
 
-/// `process.extract(..., limit=top_n)`: every vocab entry scored,
-/// ordered by score descending with ties kept in vocab order.
-pub fn extract_top<'a>(query: &str, vocab: &'a [String], top_n: usize) -> Vec<(&'a str, f64)> {
-    let mut scored: Vec<(usize, &'a str, f64)> = vocab
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| (index, entry.as_str(), wratio(query, entry)))
-        .collect();
-    scored.sort_by(|left, right| {
-        right
-            .2
-            .partial_cmp(&left.2)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(left.0.cmp(&right.0))
-    });
-    scored
-        .into_iter()
-        .take(top_n)
-        .map(|(_, entry, score)| (entry, score))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,40 +449,5 @@ mod tests {
         assert_close(partial_ratio(&c("abcd"), &c("dcba")), 40.0);
         assert_close(partial_ratio(&c("aabb"), &c("bbaa")), 66.66666666666667);
         assert_close(partial_ratio(&c("abxcd"), &c("abycd")), 80.0);
-    }
-
-    #[test]
-    fn extraction_orders_by_score_with_stable_ties() {
-        let vocab: Vec<String> = [
-            "Anatomy",
-            "Rifle",
-            "Wood Technology",
-            "Combat Reflexes",
-            "Evade",
-            "BLP Weaponry Technology",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-
-        // Both result sets were computed by the original library.
-        let top = extract_top("Food Technology", &vocab, 3);
-        assert_eq!(top[0].0, "Wood Technology");
-        assert_close(top[0].1, 93.33333333333333);
-        assert_eq!(top[1].0, "BLP Weaponry Technology");
-        assert_close(top[1].1, 85.5);
-        assert_eq!(top[2].0, "Anatomy");
-        assert_close(top[2].1, 41.53846153846154);
-
-        let top = extract_top("rifel", &vocab, 3);
-        assert_eq!(top[0].0, "Rifle");
-        assert_close(top[0].1, 60.0);
-        // The 36.0 tie keeps vocab order.
-        assert_eq!(top[1].0, "Combat Reflexes");
-        assert_close(top[1].1, 36.0);
-        assert_eq!(top[2].0, "BLP Weaponry Technology");
-        assert_close(top[2].1, 36.0);
-
-        assert!(extract_top("anything", &[], 3).is_empty());
     }
 }

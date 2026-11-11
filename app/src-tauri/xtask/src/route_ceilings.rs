@@ -31,7 +31,6 @@ const CEILINGS: &[(&str, usize)] = &[
     ("app/src/routes/updates/+page.svelte", 425),
     ("app/src/routes/analytics/OverviewTab.svelte", 575),
     ("app/src/routes/news/+page.svelte", 575),
-    ("app/src/routes/scan-overlay/+page.svelte", 600),
     ("app/src/routes/character/CodexTab.svelte", 600),
     ("app/src/routes/settings/+page.svelte", 625),
     ("app/src/routes/analytics/LedgerTab.svelte", 700),

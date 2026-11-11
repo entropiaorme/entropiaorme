@@ -42,6 +42,13 @@ pub enum FrameUnavailable {
     /// has none.
     #[error("the game window could not be captured")]
     CaptureFailed,
+    /// Screen capture could not be started: on a desktop that asks the
+    /// player's consent before an application may see the screen, the
+    /// consent was declined or not given. Asking again puts the question
+    /// to the player again, so a reader that captures on its own schedule
+    /// stops here instead of retrying.
+    #[error("screen capture was not allowed")]
+    CaptureNotStarted,
 }
 
 /// The game window as one frame: the client area of the game's window
@@ -58,7 +65,9 @@ pub enum FrameUnavailable {
 ///
 /// The ways of getting nothing are told apart by the error:
 /// [`FrameUnavailable::WindowNotFound`] when there is no game window to
-/// capture, [`FrameUnavailable::OutsideCapturableArea`] when none of it
-/// can be captured, and [`FrameUnavailable::CaptureFailed`] when some of
-/// it can but its pixels could not be had.
+/// capture, [`FrameUnavailable::CaptureNotStarted`] when screen capture
+/// was not allowed to start, [`FrameUnavailable::OutsideCapturableArea`]
+/// when none of the window can be captured, and
+/// [`FrameUnavailable::CaptureFailed`] when some of it can but its pixels
+/// could not be had.
 pub type GameWindowFrame = Arc<dyn Fn() -> Result<BgrImage, FrameUnavailable> + Send + Sync>;

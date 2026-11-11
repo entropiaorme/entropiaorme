@@ -1,28 +1,17 @@
-//! Capture regions for skill / profession scans: the pure geometry core.
+//! The capture rectangle of the auction sale window: the pure geometry
+//! core.
 //!
-//! The user docks the relevant in-game panel in the bottom-right
-//! corner at default UI scale; the panel pixel size is fixed by the
-//! game client regardless of window resolution, so the only variable
-//! is where the window's bottom-right corner sits. The capture rect
-//! anchors to that corner through these constants. Locating the live
-//! game window stays platform glue; the geometry here takes the
-//! window rect as an argument so the maths is host-independent.
+//! The sale window is read from a fixed rectangle anchored to the game
+//! window's bottom-right corner, with its fields at fixed offsets inside
+//! it. Locating the live game window stays platform glue; the geometry
+//! here takes the window rect as an argument so the maths is
+//! host-independent.
 //!
-//! Panel-relative grid geometry (row band + column splits) loads from
-//! the bundled `panel_geometry.json` when present, falling back to
-//! panel-anchor-only constants otherwise; an unreadable file falls
-//! back (the backend also logs a warning; this crate has no logging
-//! surface yet). The file is an optional calibration artefact, unlike
-//! the snapshot catalogue whose absence is a hard fault, and a
-//! wrong-shape payload also falls back where the backend would crash
-//! at import: this is a deliberate divergence from the original's strict
-//! typed reads.
-//!
-//! The panel rect itself may also come from that file, per field, over
-//! the fallback constants. Both are calibration facts of the same kind:
-//! the constants are the shipped default for panels that have one, and
-//! a panel calibrated after the fact carries its whole rect in the file
-//! rather than needing a code change to have anywhere to land.
+//! The rectangle and its fields load from the bundled
+//! `panel_geometry.json`, the artefact the calibration tool writes. The
+//! window has no shipped default: until it is calibrated its anchor is
+//! empty and yields no region. An absent, unreadable or wrong-shape file
+//! leaves it uncalibrated rather than failing.
 
 use std::path::Path;
 
@@ -40,9 +29,9 @@ pub struct CellGeometry {
     pub height: i64,
 }
 
-/// Bottom-right docked panel dimensions at default UI scale, plus the
-/// panel-relative grid geometry produced by the calibration step
-/// (empty until calibration has run).
+/// A panel's dimensions and its offsets from the game window's
+/// bottom-right corner, plus the panel-relative field geometry produced
+/// by the calibration step (empty until calibration has run).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelAnchor {
     pub width: i64,
@@ -71,13 +60,9 @@ impl PanelAnchor {
         }
     }
 
-    /// Encode the grid geometry as the JSON `skill_panel::read_skill_panel`
-    /// (and `slice_panel_cells`) consume: `n_rows` plus a `cells` map of
-    /// per-cell pixel extents. Built from this merged anchor (the
-    /// calibration file applied over the fallback), so an uncalibrated
-    /// anchor yields `{"n_rows": null, "cells": {}}` and the reader returns
-    /// no rows, exactly as the Python reference skips extraction without calibration.
-    pub fn to_geom_value(&self) -> Value {
+    /// The field geometry as the geometry file carries it: `n_rows` plus
+    /// a `cells` map of per-cell pixel extents.
+    fn to_geom_value(&self) -> Value {
         let mut cells = serde_json::Map::new();
         for (name, cell) in &self.cells {
             cells.insert(
@@ -126,14 +111,6 @@ impl CellGeometry {
     }
 }
 
-fn skill_fallback() -> PanelAnchor {
-    PanelAnchor::fallback(635, 331, 30, 170)
-}
-
-fn profession_fallback() -> PanelAnchor {
-    PanelAnchor::fallback(474, 293, 31, 161)
-}
-
 /// The auction sale window carries no shipped constants: its rect is
 /// whatever calibration recorded, and a degenerate fallback is the
 /// honest stand-in until then. `compute_region` refuses a zero-sized
@@ -144,8 +121,7 @@ fn sale_window_fallback() -> PanelAnchor {
 }
 
 /// Load `panel_geometry.json` if present and parseable; absence or an
-/// unreadable file yields the empty mapping (fallback constants then
-/// govern), matching the backend's fall-back for unreadable files;
+/// unreadable file yields the empty mapping (the fallbacks then govern);
 /// wrong-shape payloads also land here (see the module doc).
 fn load_geometry(path: &Path) -> Value {
     if !path.exists() {
@@ -201,8 +177,6 @@ fn build_anchor(entry: Option<&Value>, fallback: PanelAnchor) -> PanelAnchor {
 /// The panel anchors, built once from the geometry file beside the
 /// snapshot data.
 pub struct ScanPresets {
-    pub skill: PanelAnchor,
-    pub profession: PanelAnchor,
     pub sale_window: PanelAnchor,
 }
 
@@ -212,8 +186,6 @@ impl ScanPresets {
     pub fn new(geometry_path: &Path) -> Self {
         let geometry = load_geometry(geometry_path);
         Self {
-            skill: build_anchor(geometry.get("skill"), skill_fallback()),
-            profession: build_anchor(geometry.get("profession"), profession_fallback()),
             sale_window: build_anchor(geometry.get(SALE_WINDOW_KEY), sale_window_fallback()),
         }
     }
@@ -246,36 +218,29 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn to_geom_value_encodes_the_calibrated_grid_for_the_reader() {
-        let entry = json!({
-            "n_rows": 12,
+    /// A calibrated sale window, every field distinct.
+    fn calibrated() -> Value {
+        json!({
+            "width": 400,
+            "height": 220,
+            "right_offset": 12,
+            "bottom_offset": 40,
             "cells": {
-                "name": {"x_left": 5, "x_right": 100, "first_y_top": 10, "last_y_top": 300, "height": 18},
-                "level": {"x_left": 105, "x_right": 140, "first_y_top": 10, "last_y_top": 300, "height": 18},
-            }
-        });
-        let geom = build_anchor(Some(&entry), skill_fallback()).to_geom_value();
-        assert_eq!(geom["n_rows"], 12);
-        assert_eq!(geom["cells"]["name"]["x_left"], 5);
-        assert_eq!(geom["cells"]["name"]["x_right"], 100);
-        assert_eq!(geom["cells"]["level"]["height"], 18);
+                "quantity": {"x_left": 20, "x_right": 90, "first_y_top": 60, "last_y_top": 60, "height": 14},
+            },
+        })
+    }
+
+    fn presets_from(geometry: &Value) -> ScanPresets {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("panel_geometry.json");
+        std::fs::write(&path, geometry.to_string()).unwrap();
+        ScanPresets::new(&path)
     }
 
     #[test]
-    fn to_geom_value_of_an_uncalibrated_anchor_carries_no_cells() {
-        let geom = skill_fallback().to_geom_value();
-        assert_eq!(geom["n_rows"], Value::Null);
-        assert_eq!(geom["cells"], json!({}));
-    }
-
-    #[test]
-    fn fallback_constants_govern_without_a_geometry_file() {
+    fn without_a_geometry_file_the_sale_window_is_uncalibrated() {
         let presets = ScanPresets::new(Path::new("/nonexistent/panel_geometry.json"));
-        assert_eq!(presets.skill, skill_fallback());
-        assert_eq!(presets.profession, profession_fallback());
-        assert_eq!(presets.skill.width, 635);
-        assert_eq!(presets.profession.bottom_offset, 161);
         // An uncalibrated sale window has no rect, so it yields no
         // region rather than an arbitrary one.
         assert_eq!(presets.sale_window, sale_window_fallback());
@@ -283,28 +248,8 @@ mod tests {
     }
 
     #[test]
-    fn a_geometry_entry_can_carry_the_whole_panel_rect() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("panel_geometry.json");
-        std::fs::write(
-            &path,
-            json!({
-                "sale_window": {
-                    "width": 400,
-                    "height": 220,
-                    "right_offset": 12,
-                    "bottom_offset": 40,
-                    "cells": {
-                        "quantity": {"x_left": 20, "x_right": 90, "first_y_top": 60, "last_y_top": 60, "height": 14},
-                    },
-                },
-                // A partial override keeps the fallback's other fields.
-                "skill": {"width": 700},
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let presets = ScanPresets::new(&path);
+    fn a_geometry_entry_carries_the_whole_panel_rect() {
+        let presets = presets_from(&json!({ "sale_window": calibrated() }));
         assert_eq!(presets.sale_window.width, 400);
         assert_eq!(presets.sale_window.height, 220);
         assert_eq!(presets.sale_window.right_offset, 12);
@@ -314,12 +259,6 @@ mod tests {
         assert_eq!(
             presets.sale_window.cells[0].1.single_rect(),
             (20, 60, 70, 14)
-        );
-
-        assert_eq!(presets.skill.width, 700, "the override applies");
-        assert_eq!(
-            presets.skill.right_offset, 30,
-            "unnamed rect fields keep the fallback"
         );
     }
 
@@ -351,61 +290,40 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_geometry_falls_back() {
+    fn unreadable_geometry_leaves_the_sale_window_uncalibrated() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("panel_geometry.json");
         std::fs::write(&path, "{not json").unwrap();
         let presets = ScanPresets::new(&path);
-        assert_eq!(presets.skill, skill_fallback());
+        assert_eq!(presets.sale_window, sale_window_fallback());
     }
 
     #[test]
-    fn geometry_entries_overlay_rows_and_cells_on_the_fallback_rect() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("panel_geometry.json");
-        std::fs::write(
-            &path,
-            json!({
-                "skill": {
-                    "n_rows": 12,
-                    "cells": {
-                        "name": {"x_left": 10, "x_right": 200, "first_y_top": 5, "last_y_top": 300, "height": 20},
-                        "broken": {"x_left": 1},
-                        "empty": {},
-                    },
-                },
-                "profession": {},
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let presets = ScanPresets::new(&path);
-        // The panel rect stays the fallback's.
-        assert_eq!(presets.skill.width, 635);
-        assert_eq!(presets.skill.right_offset, 30);
-        assert_eq!(presets.skill.n_rows, Some(12));
-        assert_eq!(presets.skill.cells.len(), 1, "broken and empty cells skip");
-        let (name, cell) = &presets.skill.cells[0];
-        assert_eq!(name, "name");
-        assert_eq!(cell.x_right, 200);
-        assert_eq!(cell.height, 20);
+    fn broken_and_empty_cells_are_skipped() {
+        let mut entry = calibrated();
+        entry["cells"]["broken"] = json!({"x_left": 1});
+        entry["cells"]["empty"] = json!({});
+        let presets = presets_from(&json!({ "sale_window": entry }));
+        assert_eq!(presets.sale_window.cells.len(), 1);
+        assert_eq!(presets.sale_window.cells[0].0, "quantity");
         // An empty entry returns the fallback unchanged.
-        assert_eq!(presets.profession, profession_fallback());
+        let presets = presets_from(&json!({ "sale_window": {} }));
+        assert_eq!(presets.sale_window, sale_window_fallback());
     }
 
     #[test]
     fn regions_anchor_to_the_bottom_right_corner() {
-        let presets = ScanPresets::new(Path::new("/nonexistent/panel_geometry.json"));
-        // Window at (100, 50) sized 1920x1080: skill anchor 30/170
-        // offsets -> br (1990, 960), tl (1355, 629).
-        let region = compute_region(&presets.skill, (100, 50, 1920, 1080)).unwrap();
-        assert_eq!(region, ([1355, 629], [1990, 960]));
+        let presets = presets_from(&json!({ "sale_window": calibrated() }));
+        // Window at (100, 50) sized 1920x1080: offsets 12/40 put the
+        // bottom-right at (2008, 1090), and the 400x220 rect above it.
+        let region = compute_region(&presets.sale_window, (100, 50, 1920, 1080)).unwrap();
+        assert_eq!(region, ([1608, 870], [2008, 1090]));
 
         // A window smaller than the panel still yields a rect (negative
         // coordinates and all): the guard fires only for non-positive
         // anchor sizes, where the corners collapse.
-        let region = compute_region(&presets.skill, (0, 0, 10, 10)).unwrap();
-        assert_eq!(region, ([-655, -491], [-20, -160]));
+        let region = compute_region(&presets.sale_window, (0, 0, 10, 10)).unwrap();
+        assert_eq!(region, ([-402, -250], [-2, -30]));
         let zero_anchor = PanelAnchor::fallback(0, 17, 48, 86);
         assert!(compute_region(&zero_anchor, (0, 0, 800, 600)).is_none());
         let flat_anchor = PanelAnchor::fallback(50, 0, 48, 86);

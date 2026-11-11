@@ -74,6 +74,10 @@ gstreamer-video = { workspace = true, optional = true }
 # dependencies. Off by default so backend-member builds need no system stack;
 # the shell turns it on for Linux packaging.
 linux-capture = ["dep:ashpd", "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
+# Exposes the interface readers' test fixtures (drawn windows and a
+# stand-in recogniser) to the facade's tests. Enabled only as a
+# dev-dependency feature; no build that ships turns it on.
+test-support = []
 
 [dev-dependencies]
 criterion = { workspace = true }

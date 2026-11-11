@@ -193,13 +193,12 @@ fn facade_microbench() {
         bench!("ledger_presets_list", api.ledger_presets_list());
         bench!("inventory_list", api.inventory_list());
 
-        // The manual-scan status read, the after-leg of the HTTP dispatch
+        // The skill scan's status read, the after-leg of the HTTP dispatch
         // measurement (`GET_scan_skills_status`) the router micro-benchmark
         // captured before the family moved. The facade method is synchronous
-        // (the scan state machine locks an in-memory mutex, no await), so it
-        // is benched directly rather than through the async `bench!` macro,
-        // over the same resting default-provider scan (engine unavailable, no
-        // window, idle status) the before-leg measured.
+        // (the scan service locks an in-memory mutex, no await), so it is
+        // benched directly rather than through the async `bench!` macro,
+        // over a resting default-provider scan (no reader, idle status).
         for _ in 0..WARMUPS {
             api.scan_status().expect("scan status warm-up");
         }

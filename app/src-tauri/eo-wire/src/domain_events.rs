@@ -112,15 +112,15 @@ pub enum ScanPhase {
     AwaitingReview,
 }
 
-/// Push-to-pull invalidation signal for the manual skill-scan flow: the
-/// coarse phase only; the full status comes from the scan-status GET.
+/// Push-to-pull invalidation signal for the skill scan: the coarse phase
+/// only; the full status comes from the scan's status read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanStatusChangedPayload {
     pub phase: ScanPhase,
 }
 
-/// The manual skill-scan status changed.
+/// The skill scan's status changed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanStatusChanged {

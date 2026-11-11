@@ -40,7 +40,7 @@ use eo_services::protection::ProtectionService;
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::RepairOcrService;
 use eo_services::sale_window_ocr::SaleWindowOcrService;
-use eo_services::skill_scan_manual::SkillScanManual;
+use eo_services::skill_scan::SkillScanService;
 use eo_services::skill_tracker::SkillTracker;
 use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::tracker::HuntTracker;
@@ -96,11 +96,11 @@ pub struct Api {
     /// The skill tracker: a codex claim suppresses the claimed skill's
     /// next gain on it while a session is live.
     skill_tracker: Arc<SkillTracker>,
-    /// The manual skill-scan state machine: the scan family's verbs drive
-    /// it and read its status.
-    skill_scan: Arc<SkillScanManual>,
-    /// The hands-free spacebar-capture listener: the scan family's toggle
-    /// flips its enabled gate.
+    /// The skill scan: the scan family's verbs drive it and read its
+    /// status.
+    skill_scan: Arc<SkillScanService>,
+    /// The spacebar-capture listener: the development auction-fee
+    /// research capture arms it.
     spacebar: Arc<SpacebarCaptureListener>,
     /// The one-shot repair-cost OCR: the tracking family's repair-scan leg
     /// drives it (gated on the `repair_ocr_enabled` config flag).
@@ -211,7 +211,7 @@ impl Api {
         hotbar: Arc<HotbarListener>,
         watcher: Arc<ChatlogWatcher>,
         skill_tracker: Arc<SkillTracker>,
-        skill_scan: Arc<SkillScanManual>,
+        skill_scan: Arc<SkillScanService>,
         spacebar: Arc<SpacebarCaptureListener>,
         repair_ocr: Arc<RepairOcrService>,
         sale_window_ocr: Arc<SaleWindowOcrService>,

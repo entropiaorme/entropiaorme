@@ -1,12 +1,13 @@
 # OCR pipeline
 
-EntropiaOrme reads a player's skill levels directly from the in-game skills
-panel: the user captures the panel page by page, the application recognises
-the text in each cell, and the recognised values are resolved into a map of
-canonical skill name to level. The same recogniser also serves on-demand
-repair-cost, Trade Terminal value, auction sale-window, and map-coordinate
-reads. This page traces
-the shared machinery and the skill-panel journey stage by stage.
+EntropiaOrme reads a player's skill points directly from the game's own
+Skills window: while a scan is running the application watches the game
+window, reads each page of the window's SKILLS tab as the player pages
+through it, checks the figures against the total the game prints, and
+resolves each row's name against the bundled skill list. The same recogniser
+also serves on-demand repair-cost, Trade Terminal value, auction sale-window,
+and map-coordinate reads. This page traces the shared machinery and the skill
+scan's journey stage by stage.
 
 The pipeline runs in-process in the native Rust spine, and the Rust
 implementation is the implementation. The recogniser is pinned against a
@@ -17,13 +18,13 @@ For the wider context, see the [System overview](overview.md) and the
 
 ## Overview
 
-The skill scan is **manual and user-driven**: there is no continuous screen
-watching. The user docks the in-game skills panel in a known on-screen
-position, opens a dedicated scan overlay, and clicks "capture" once per page,
-manually flipping pages in-game between captures. Only after the final page is
-captured does recognition run; the result is then held for an in-app
-diff-review screen where the user accepts (persisting the values) or rejects
-(discarding them).
+The skill scan runs only while the player asks for it. The player opens the
+scan overlay, starts a scan, and pages through the Skills window in the game;
+about twice a second the scan captures the game window, reads the page
+showing, and keeps it once every row of it has read. Nothing is pressed per
+page, and nothing is captured unless a scan is collecting. When every page is
+in, the result is held for an in-app review where the player accepts
+(persisting the values) or rejects (discarding them).
 
 The recogniser is an ONNX model. Specifically it is the SVTRv2-mobile text
 recogniser, distributed as an ONNX graph and executed through ONNX Runtime.
@@ -49,13 +50,13 @@ Five consumers share the recogniser:
 
 | Consumer | Input | Output |
 | --- | --- | --- |
-| Skill-panel scan | A captured panel sliced into per-cell crops | A `name → level` map |
+| Skill scan | The whole game window, searched for the Skills window, page after page | Each skill's points exactly as shown, checked against the game's total, for review |
 | Repair-cost read | The whole game window, searched for the Repair Terminal and its labelled cost | The cost exactly as shown, or a typed refusal |
 | Trade Terminal value read | The whole game window, searched for the Trade Terminal and its labelled total | The total exactly as shown, or a typed refusal, for a limited-set observation |
 | Sale-window read | One calibrated auction panel sliced into independently validated fields | A reviewable listing draft |
 | Map-coordinate read | A calibrated radar readout strip, split into its two halves | Parsed longitude and latitude |
 
-This page focuses on the skill-panel scan; the repair-cost and Trade Terminal reads
+This page focuses on the skill scan; the repair-cost and Trade Terminal reads
 (`app/src-tauri/eo-services/src/repair_ocr.rs`) reuses the same recogniser
 for a single on-demand number and is summarised under
 [The shared repair and Trade Terminal reads](#the-shared-repair-and-trade-terminal-reads). The auction reader
@@ -70,49 +71,58 @@ result from silently becoming a map pin.
 
 ## The stages in order
 
-A captured page travels through a fixed sequence. The orchestration lives in
-`read_skill_panel` (`app/src-tauri/eo-services/src/skill_panel.rs`); the
-device-free post-processing is factored into the same module so it can be
-unit-tested without the engine, file IO, or screen-capture glue.
+Every reader of the game's interface runs the same stages, implemented in
+`app/src-tauri/eo-services/src/game_ui/`: find the window, cut out the text
+that matters, recognise it, and refuse anything that does not validate. What
+the client's interface looks like (its window frame, its titles, its table
+headings, its rule lines) is data in the bundled interface profile
+(`app/src-tauri/entropia-orme/resources/ui_profile.json`), so a redesigned
+client is answered by editing that file, not the code. The skill scan's own
+reader is `read_skills_page` (`app/src-tauri/eo-services/src/game_ui/skills.rs`).
 
 ### 1. Screen capture
 
-`capture_region_png`
-(`app/src-tauri/eo-services/src/screen_capture.rs`) is the single capture
-path. It takes a screen rectangle (`x`, `y`, `width`, `height`) and returns
-PNG-encoded bytes, so each page is stored as a self-contained PNG for preview
-and persistence; the bytes decode back to BGR, keeping the preview and
-recognition paths interchangeable. The capture is supplied to the scan service
-as an injected provider (`capture_region` on `ScanProviders`), so the scan
-logic stays independent of the platform capture mechanism.
+The game window is captured whole: the client area of the game's window, as
+one BGR frame, through the shared `GameWindowFrame` seam
+(`app/src-tauri/eo-services/src/game_ui/seams.rs`), which the composition root
+builds once over `capture_game_window`
+(`app/src-tauri/eo-services/src/eu_window.rs`). The answer is the frame, or why
+there is none: the game window was not found, lies outside what can be
+captured, or could not be captured.
 
-On Windows the provider performs an on-demand GDI capture. On Linux it acquires
-a user-consented ScreenCast portal session and consumes its PipeWire node
-through GStreamer. The portal's D-Bus connection is driven by a dedicated,
+On Windows the capture is an on-demand GDI capture. On Linux it acquires a
+user-consented ScreenCast portal session and consumes its PipeWire node through
+GStreamer. The portal's D-Bus connection is driven by a dedicated,
 process-lifetime Tokio worker because the PipeWire grant remains valid only
-while that peer is alive; the GStreamer pipeline retains the newest full-monitor
-frame and crops requested rectangles from it.
+while that peer is alive; the GStreamer pipeline retains the newest
+full-monitor frame and crops requested rectangles from it.
 
-### 2. Image decode and preprocess
+### 2. Finding the Skills window and its table
 
-When recognition runs, the stored PNG is decoded lazily. `load_bgr_png`
-(`app/src-tauri/eo-services/src/ocr_engine.rs`) turns the PNG byte-string
-into a BGR HWC `uint8` array.
+The client's windows are found by their frame, and the Skills window by the
+title along its top, wherever the player has put it and at whatever size. A
+window whose extent is uncertain, or that runs off the game window, is refused.
+Inside it, the table's header names the tab: its name and points headings
+belong to the SKILLS tab alone, so another tab is refused. The table's rule
+lines divide the rows and its dividers the columns; a row is read only when the
+whole of it is in view and uncovered, and the table's scrollbar says whether
+the whole list is in view, so a window too short for a whole page is told
+apart from one that shows it all.
 
-Each per-cell crop is then shaped for the model. The recogniser's preprocess
-resizes the crop to a fixed height of 48 pixels, normalises pixel values as
-`(v / 255 - 0.5) / 0.5`, keeps BGR channel order and CHW layout, and zero-pads
-the width. The padded width is `int(48 * max(w / h, 320 / 48))`: a crop wider
-than the `320 / 48` aspect floor pads to track its own aspect ratio, while
-narrower crops pad out to the floor width. `preprocess`
+### 3. Recognition
+
+Each run of lettering is shaped for the model and recognised. The recogniser's
+preprocess resizes a crop to a fixed height of 48 pixels, normalises pixel
+values as `(v / 255 - 0.5) / 0.5`, keeps BGR channel order and CHW layout, and
+zero-pads the width. The padded width is `int(48 * max(w / h, 320 / 48))`: a
+crop wider than the `320 / 48` aspect floor pads to track its own aspect ratio,
+while narrower crops pad out to the floor width. `preprocess`
 (`app/src-tauri/eo-services/src/ocr_engine.rs`) implements this
 resize-normalise-pad shape, with its bilinear resize written as a byte-for-byte
 match of OpenCV's fixed-point `INTER_LINEAR` path so the input tensor is exact.
 
-### 3. ONNX recognition
-
 The shaped tensor is fed to the ONNX session, which returns per-timestep class
-logits. The engine decodes those logits and produces a `(text, score)` pair:
+logits. The engine decodes them into a `(text, score)` pair:
 
 * **Text** comes from a CTC decode: a per-timestep argmax (the first maximum
   wins a tie), consecutive-duplicate timesteps collapsed against the previous
@@ -122,179 +132,148 @@ logits. The engine decodes those logits and produces a `(text, score)` pair:
 * **Score** is the mean of the kept timesteps' probabilities, or `0.0` when no
   characters survive.
 
-A cell whose confidence falls below the warning threshold (0.85) still flows
-through; the user is expected to catch any misread in the accept/reject diff
-review rather than have the cell silently dropped. The original Python oracle
-emitted a log line on such a cell; the Rust reader carries no such logging
-surface, consistent with logging living with the composition root.
+The score never decides whether a reading is believed: a recogniser can be
+confident and wrong. What is believed is decided by validation.
 
-### 4. Per-cell parsing
+### 4. Validation of each row
 
-A panel is not a single text field: it is a grid, and each row carries a name
-cell, a level cell, and a bar cell. The calibrated geometry (see
-[Geometry and vocabulary inputs](#geometry-and-vocabulary-inputs)) drives
-`slice_panel_cells`, which walks rows top to bottom and, within each row, the
-cells in geometry order, producing one crop per cell tagged with its row index
-and cell name. Each cell type is parsed differently:
+A row's points must have exactly the shape the client prints (digits grouped
+in thousands by commas, then any fraction) and their ink must be as wide as
+that reading predicts, which catches a digit lost or doubled; points crowding their
+column's divider, which may have lost leading digits, are refused. A row whose
+points do not validate is unread, never estimated.
 
-| Cell | Parse | Result |
-| --- | --- | --- |
-| `name` | OCR text, then fuzzy resolution against the vocabulary | A canonical skill name, or `None` |
-| `level` | First integer run of the OCR text (`parse_level`) | An integer, or `None` |
-| `bar` | Fill-ratio estimate over the bar pixels (`parse_bar_fill`); no OCR | A fraction in `[0, 1)` |
+A row's name is resolved against the bundled skill list
+(`resolve_name` in the same module): text that spells a skill up to case,
+spacing and punctuation is that skill; a name the client cut short with an
+ellipsis is the one skill it begins; a slip of a character or two from exactly
+one skill, clear of every other, is a near miss of that skill. Text near no
+skill is a skill the game has and the list lacks, kept as such and never given
+a listed name; text that could be either of two skills leaves the row unread.
 
-`parse_level` (`app/src-tauri/eo-services/src/skill_panel.rs`) reads the
-first run of digits from the level cell's recognised text. `parse_bar_fill`
-(same module) estimates the fractional progress within the current level
-directly from the bar crop's pixels: it takes the per-column mean luminance,
-thresholds at the midpoint of the column-mean range, and reports the rightmost
-bright column over the bar width (roughly 1% resolution on a 95-pixel bar).
-Low-contrast bars (where no fill edge is detectable, including empty bars)
-return `0.0`; a reading of `1.0` is treated as impossible mid-bar (the in-game
-bar would just have levelled up), so it is read as a misread of an empty bar
-and flipped to `0.0`. The grey conversion is a fixed-point BGR-to-grey path.
+### 5. The sweep across pages
 
-### 5. Fuzzy skill-name resolution
+A page is kept only when it is whole: every row in view read, none cut or
+covered, and the scrollbar showing the whole list. The sweep
+(`SkillsSweep`) holds the latest whole reading of each page number, in any
+order, for one listing: a page from another category or another page count is
+turned away, and a page whose skills differ from those already held for its
+number leaves that page missing until a later reading agrees with one of the
+two. When every page is in, the sweep merges them and checks them against the
+total the game prints: the whole points of every skill counted must add up to
+it. In the all-categories listing, a name the list did not know is looked at
+once more among the skills the sweep has not read, at a lower similarity floor;
+the skill it comes nearest is only a likely guess, never a reading, and in a
+single category's listing (where nearly every skill is unread) no guess is
+made at all.
 
-The recognised name text is a lookup key, not display text. `fuzzy_resolve`
-(`app/src-tauri/eo-services/src/skill_panel.rs`) resolves it against the
-canonical skill vocabulary snapshot, returning the chosen canonical entry, a
-score, and the top candidates. Resolution proceeds in tiers and stops at the
-first that matches:
+### 6. The review
 
-1. **Exact match.** If the cleaned text is present in the vocabulary verbatim,
-   it is taken as-is (score 100).
-2. **Normalised match.** Otherwise the text is normalised (whitespace removed,
-   lower-cased) and compared against each vocabulary entry under the same
-   normalisation. This covers case and spacing drift, for example `whip` versus
-   `Whip` or `FoodTechnology` versus `Food Technology` (score 100).
-3. **Fuzzy match.** Otherwise the text is scored against the whole vocabulary
-   with a `rapidfuzz`-compatible WRatio scorer, taking the top candidates; the
-   best-scoring vocabulary entry is selected as the canonical name.
-
-The canonical entry is what gets persisted. `extract_top`
-(`app/src-tauri/eo-services/src/fuzzy_match.rs`) implements the WRatio
-scoring that drives the fuzzy tier.
-
-### 6. Aggregation into a name-to-level map
-
-`read_skill_panel` groups the parsed cells by row. For each row it combines the
-integer from the level cell with the fractional bar fill into a single level
-value (`int_level + bar_fill`); a row whose level cell yielded no integer has a
-`None` level even when a bar was read. Rows whose name does not resolve are
-still emitted (with `name = None`) and the caller decides their fate. The
-per-page extractor wired in the composition root
-(`app/src-tauri/entropia-orme/src/composition.rs`) then filters to rows
-that have both a resolved name and a non-`None` level, yielding a
-`{canonical_name: level}` map for the page.
-
-Across a multi-page scan the per-page maps merge in page order, with later
-pages overwriting earlier entries for a duplicated name. First-seen ordering is
-preserved while the same later-page-wins overwrite applies (`extract_levels` in
-`app/src-tauri/eo-services/src/skill_scan_manual.rs`).
+What accepting saves is each skill the sweep read on its page exactly once,
+by the bundled list's name, with its points as read: spelled whole, or a near
+miss of exactly one skill (`app/src-tauri/eo-services/src/skill_scan/review.rs`).
+The review also tells the player, only when true, that the figures do not add
+up to the game's total or could not be checked against it, which skills were
+matched from a slightly misread name, which names were only guessed at, and
+which skills the game shows that this version does not know; guesses, unknown
+skills, names that could be either of two skills, and skills read more than
+once are shown and never saved. A review whose figures do not add up, or could
+not be checked, leads with scanning again; saving it takes an explicit second
+request.
 
 ### 7. Persistence via the completion callback
 
-The aggregated map is not written directly. It is held as a pending result for
-the diff-review screen; on **accept**, the scan service hands it to a
-completion callback installed by the composition root, which performs the
-actual persistence. A callback failure surfaces as an error on the scan status
-and leaves the pending result intact so the user can retry. On **reject**, the
-pending result is discarded. The scan service itself never owns the storage
-concern.
+The review is not written directly. On **accept**, which names the review it
+settles, the scan service hands its skills to a completion callback installed
+by the composition root, which performs the persistence. Each level is written
+stamped with the moment its page was captured, not the moment of acceptance:
+pages are read over minutes and a review can wait longer, while the chat log
+goes on recording gains, and the current level is the latest in time, so a
+reading never supersedes a gain recorded after it. A callback failure is
+answered to the player and leaves the review intact so they can retry. On
+**reject**, the review is discarded. The scan service itself never owns the
+storage concern.
 
-## The manual scan state machine
+## The scan service
 
-The user-driven flow is a small state machine over an owned scan state. It is
-implemented by `SkillScanManual`
-(`app/src-tauri/eo-services/src/skill_scan_manual.rs`) and exposed over
-typed Tauri commands by the scan and tracking facades
-(`app/src-tauri/eo-api/src/scan.rs` and
-`app/src-tauri/eo-api/src/tracking.rs`).
+The scan is implemented by `SkillScanService`
+(`app/src-tauri/eo-services/src/skill_scan/`) and exposed over typed Tauri
+commands by the scan facade (`app/src-tauri/eo-api/src/scan.rs`).
 
 ### Phases
 
-The reported phase is derived from the owned state:
+| Phase | Meaning |
+| --- | --- |
+| `idle` | No scan; carries whether one can run (the recogniser, the profile and the skill list loaded) and why the last scan stopped by itself, if it did |
+| `collecting` | Pages are being collected; carries how many of how many, which are missing, and what, if anything, stops the current view being collected |
+| `awaitingReview` | Every page is in; the review is open |
+| `saving` | The accepted review is being saved; every other request is refused at once |
 
-| Phase | Condition | Meaning |
-| --- | --- | --- |
-| `idle` | No active scan, nothing processing or pending | Resting state |
-| `capturing` | A scan is active | Capturing pages |
-| `processing` | Recognition is running | Background extraction in flight |
-| `awaiting_review` | A pending result is held | The diff review is open |
+What stops the current view being collected is one plain hint the player can
+act on: the game window or the Skills window is not found, the Skills window is
+covered or off the screen, it shows another tab, it is too short to show a
+whole page, the page did not read, or it is from another category than the
+pages already collected. A hint is shown once it has held for two looks
+running, and clears the same way.
 
-The status payload also reports the captured page count, the expected page
-count, per-page processing progress (`done`/`total`), whether the engine is
-available, whether the game window is present, and any error string.
+A scan stops by itself when reading fails, when screen capture is not allowed
+(on a desktop that asks the player's consent; it never asks again by itself),
+and when a while (three minutes by default, a setting of the service) passes
+with no new page.
 
 ### Commands
 
-The typed scan commands drive the service verbs:
+| Command | Effect |
+| --- | --- |
+| `scan_status` | Read the current status |
+| `scan_start` | Start collecting; a scan already under way is left as it is; refused while saving or while the scan window is closed |
+| `scan_cancel` | Stop collecting; refused while saving |
+| `scan_pending` | Read the review awaiting acceptance, with the number of its scan |
+| `scan_accept` | Save the named review via the completion callback; one whose figures do not add up only when the request says to save it anyway |
+| `scan_reject` | Discard the named review |
 
-| Command | Verb | Effect |
-| --- | --- | --- |
-| `scan_start` | `start` | Begin a scan; resolves the region and the (optional) page count |
-| `scan_capture` | `capture_current_page` | Grab the current page; stores its PNG (or records a failed grab) |
-| `scan_undo` | `undo_last_capture` | Pop the most recent capture, stepping the user back one page |
-| `scan_process` | `process` | Kick off recognition on a background worker |
-| `scan_accept` | `accept` | Persist the held result via the completion callback |
-| `scan_reject` | `reject` | Discard the held result |
-| `scan_cancel` | `cancel` | Abandon the active scan and reset |
-| `scan_status` | `get_status` | Read the current status |
-| `scan_pending` | `get_pending_result` | Read the held result awaiting review |
-| `capture_png` | `get_capture_png` | Read a captured page's PNG for preview (raw bytes, base64 at the shell) |
+Collecting happens only while the scan overlay shows: the shell tells the scan
+when the overlay is shown, and when it is hidden or closed, under the same lock
+a start checks, so no start can slip in after the overlay goes. A review keeps
+its result, since it lives in the main window.
 
-The default page count is 12; a scan may request between 1 and 30 pages, and a
-request outside that range is refused. The verbs guard their preconditions:
-`start` refuses when the engine is unavailable, the game window is not found, or
-a result is already pending; `process` refuses until the expected number of
-pages has been captured; `undo` and `process` refuse while processing or while
-a result awaits review.
+### The worker
 
-### Background worker
-
-`process` does not run recognition on the request thread. It snapshots the
-captures, flips the state to `processing`, and spawns a background worker that
-runs the per-page extraction. This is deliberate: the ONNX session is
-**single-threaded** (built with a single intra-op and inter-op thread,
-sequential execution, and a guard serialising calls), so the pages are
-extracted **serially** to avoid contention on the shared engine. As each page
-resolves, the worker advances the `done`/`total` progress. When the worker
-finishes it stores the result as the pending review (or records an error) and
-clears the processing flag. The worker catches all failures so a crash settles
-the state cleanly rather than wedging the scan, and exposes a join handle for
-orderly shutdown and test rigs.
+Each scan has its own number, its own sweep and a single worker thread of its
+own, so recognition never runs on an async runtime thread and nothing one scan
+read can reach another. Looks are taken one at a time across workers, so a scan
+started just after another ended never reads beside it. The worker captures and
+reads a page, writes the outcome back only while its scan is still the one
+collecting, and waits one tick (half a second by default, a setting of the
+service) before the next look. Leaving the collecting phase wakes and ends the
+worker; a worker caught mid-read drops what it read, and a failure anywhere in
+a look or its write-back ends the scan rather than leaving it showing as
+collecting. At app exit the service stops collecting and waits a short while
+for its worker; one held inside a capture by a consent prompt is not waited
+for.
 
 Status changes are announced over the in-process event bus as a
-`scan.status.changed` envelope, coalesced so each settled transition emits
+`scan.status.changed` envelope, coalesced so each change of status emits
 exactly one frame. The envelope carries only the coarse phase; a listener
-re-hydrates the full status via the status `GET`, so per-page progress stays
-live without widening the wire. This push-then-hydrate shape is shared with the
-rest of the application's eventing.
+re-reads the full status, so progress and hints stay live without widening the
+wire. This push-then-read shape is shared with the rest of the application's
+eventing.
 
-## Geometry and vocabulary inputs
+## Interface and vocabulary inputs
 
-Two committed data files drive the parse:
+Two committed data files drive the read:
 
-* **Panel geometry**
-  (`app/src-tauri/entropia-orme/resources/panel_geometry.json`) defines
-  the per-cell grid for each panel. The `skill` entry declares the row count
-  (`n_rows`) and, per cell (`name`, `level`, `bar`), the left/right x bounds,
-  the y-offset of the first and last row's top, and the cell height. Row tops
-  are interpolated linearly between the first and last offsets across `n_rows`,
-  with banker's rounding (round half to even) so the slicer lands on
-  deterministic pixel rows. The file also carries a `profession` entry with its
-  own cells (`name`, `rank_level`, `percent`, `bar`). The geometry is what
-  makes the slicer panel-shape-agnostic: a recalibration changes the file, not
-  the code.
+* **Interface profile**
+  (`app/src-tauri/entropia-orme/resources/ui_profile.json`) describes how the
+  client draws its interface: the window frame, the titles, the Skills table's
+  headings, total labels, scrollbar and the thresholds the reader measures
+  against. It holds no positions: a window is found wherever it is.
 * **Skill vocabulary snapshot**
   (`app/src-tauri/entropia-orme/resources/snapshot/skills.json`) is the
-  canonical list of skill names that fuzzy resolution matches against. Each
-  entry carries a `name` (plus auxiliary fields such as category and HP
-  increase); the OCR path reads the `name` values to form the vocabulary. The
-  snapshot is what `fuzzy_resolve` resolves recognised text into, so what gets
-  persisted is always a canonical vocabulary entry rather than raw recognised
-  text.
+  list of skill names and categories rows are resolved against, so what gets
+  persisted is always a listed skill name rather than raw recognised text. The
+  game can add skills before the bundled list catches up; such a skill is
+  shown in the review as one this version does not know, and not saved.
 
 ## Equivalence and the ground-truth bench
 
@@ -309,8 +288,7 @@ The bench is implemented in
 data cells and asserts the engine's raw-exact count is at least the committed
 figure of 262 over the same cells. The raw exact count is strict against
 screen-verbatim grading: spacing and case drift in the raw model text is
-precisely what the downstream name resolution recovers, so the production read
-path's effective accuracy sits well above the raw figure.
+precisely what the downstream name resolution recovers.
 
 The bench runs only where its inputs are present. The captured gameplay screens
 are held locally and kept out of the public tree, so the test runs only when

@@ -65,10 +65,7 @@ use crate::quests::{
     Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
     QuestInput, QuestRewardReviewInput, UnresolvedQuestReward,
 };
-use crate::scan::{
-    AcceptResult, CaptureResult, RejectResult, ScanStatus, SkillScanPending, SpacebarResult,
-    UndoResult,
-};
+use crate::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, SkillScanStatus};
 use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
@@ -1377,58 +1374,44 @@ pub fn manifest() -> Vec<CommandSpec> {
         CommandSpec {
             name: "scan_status",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(ScanStatus))),
+            returns: Some(schema(schema_for!(SkillScanStatus))),
         },
         CommandSpec {
             name: "scan_start",
-            args: vec![ArgSpec {
-                name: "page_count",
-                schema: schema(schema_for!(Option<i64>)),
-            }],
-            returns: Some(schema(schema_for!(ScanStatus))),
-        },
-        CommandSpec {
-            name: "scan_capture",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(CaptureResult))),
+            returns: Some(schema(schema_for!(SkillScanReply))),
         },
         CommandSpec {
             name: "scan_cancel",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(ScanStatus))),
-        },
-        CommandSpec {
-            name: "scan_undo",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(UndoResult))),
-        },
-        CommandSpec {
-            name: "scan_process",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(ScanStatus))),
+            returns: Some(schema(schema_for!(SkillScanReply))),
         },
         CommandSpec {
             name: "scan_accept",
-            args: Vec::new(),
+            args: vec![
+                ArgSpec {
+                    name: "scan",
+                    schema: schema(schema_for!(u64)),
+                },
+                ArgSpec {
+                    name: "save_anyway",
+                    schema: schema(schema_for!(bool)),
+                },
+            ],
             returns: Some(schema(schema_for!(AcceptResult))),
         },
         CommandSpec {
             name: "scan_reject",
-            args: Vec::new(),
+            args: vec![ArgSpec {
+                name: "scan",
+                schema: schema(schema_for!(u64)),
+            }],
             returns: Some(schema(schema_for!(RejectResult))),
         },
         CommandSpec {
             name: "scan_pending",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(Option<SkillScanPending>))),
-        },
-        CommandSpec {
-            name: "scan_spacebar_capture",
-            args: vec![ArgSpec {
-                name: "enabled",
-                schema: schema(schema_for!(bool)),
-            }],
-            returns: Some(schema(schema_for!(SpacebarResult))),
+            returns: Some(schema(schema_for!(Option<SkillScanReview>))),
         },
         CommandSpec {
             name: "tracking_sessions",
@@ -1770,7 +1753,7 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         // The planet-maps family: the catalogue read only. The raster
         // fetch answers raw bytes and rides a bespoke shell command
-        // outside the manifest, like the manual-scan capture preview.
+        // outside the manifest.
         CommandSpec {
             name: "planet_maps_list",
             args: Vec::new(),

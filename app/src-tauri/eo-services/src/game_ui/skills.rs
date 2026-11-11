@@ -239,6 +239,10 @@ pub struct SkillsPage {
     /// none went unread. A row naming a skill the vocabulary does not
     /// know is read, so it does not stop a page being whole.
     pub whole: bool,
+    /// The table's scrollbar shows rows out of view: the window is too
+    /// short to show the whole page at once, however the rows in view
+    /// read.
+    pub overflows: bool,
 }
 
 /// Why no page could be read. Every variant is a refusal.
@@ -960,6 +964,7 @@ pub fn read_skills_page(
     // track runs from the header's top to the bottom of the view; when it
     // cannot be made out, the list is not known to fit.
     let view_bottom = shape.rows.last().map(|(band, _)| band.bottom);
+    let mut overflows = false;
     let in_view = view_bottom.is_some_and(|bottom| {
         let strip = Rect::new(table_right + 1, header.0, window.rect.x1, bottom);
         if covered(strip) {
@@ -968,7 +973,10 @@ pub fn read_skills_page(
         match scrollbar(image, strip, shape.pitch, &table.scrollbar) {
             Scrollbar::NoThumb => true,
             Scrollbar::Thumb { top, bottom: end } => {
-                (end - top + 1) as f32 >= table.scrollbar.fill_share * strip.height() as f32
+                let fills =
+                    (end - top + 1) as f32 >= table.scrollbar.fill_share * strip.height() as f32;
+                overflows = !fills;
+                fills
             }
             Scrollbar::Unknown => false,
         }
@@ -1021,6 +1029,7 @@ pub fn read_skills_page(
         unread,
         partial,
         whole,
+        overflows,
     })
 }
 
@@ -1088,18 +1097,35 @@ fn name_lettering(
     }
 }
 
+/// How a row's name was taken as the skill a sweep holds it under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NameReading {
+    /// The text spelled the skill whole (or the row is the blank one).
+    Spelled,
+    /// Taken on its own page without spelling it whole: a slip of a
+    /// character or two near this skill and no other, or a name the
+    /// client cut short that only this skill begins. A reading, flagged
+    /// for checking.
+    NearMiss,
+    /// A name the vocabulary does not know, which the finished sweep
+    /// found nearest this skill among the skills it had not otherwise
+    /// read, at the looser sweep floor. A likely guess, not a reading.
+    Likely,
+}
+
 /// One skill in a finished sweep.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SweepEntry {
     /// `None` for the row the client draws without a name.
     pub name: Option<String>,
-    /// The name was not read whole: a slip, a name cut to fit, or a name
-    /// the sweep placed among the skills it had not otherwise read.
-    pub near_miss: bool,
+    /// How the name was taken as `name`.
+    pub reading: NameReading,
     /// The recogniser's text for the name.
     pub raw_name: String,
     pub points_text: String,
     pub points: f64,
+    /// The page the row was read on.
+    pub page: u32,
 }
 
 /// A skill the sweep read whose name it could not place.
@@ -1109,6 +1135,8 @@ pub struct UnknownSkill {
     pub raw_name: String,
     pub points_text: String,
     pub points: f64,
+    /// The page the row was read on.
+    pub page: u32,
 }
 
 /// Whether a sweep's skills add up to the total the panel prints.
@@ -1191,6 +1219,7 @@ enum Slot {
 #[derive(Debug, Clone)]
 pub struct SkillsSweep {
     uncounted: Vec<String>,
+    all_categories: String,
     near_miss: NearMissProfile,
     vocabulary: Vec<String>,
     category: Option<String>,
@@ -1218,6 +1247,7 @@ impl SkillsSweep {
     pub fn new(table: &SkillsTableProfile, vocabulary: &SkillVocabulary) -> Self {
         Self {
             uncounted: table.uncounted.clone(),
+            all_categories: table.all_categories.clone(),
             near_miss: table.near_miss.clone(),
             vocabulary: vocabulary.names.clone(),
             category: None,
@@ -1272,6 +1302,11 @@ impl SkillsSweep {
         }
     }
 
+    /// How many pages the listing has, once a kept page has told it.
+    pub fn page_count(&self) -> Option<u32> {
+        self.count
+    }
+
     /// The pages still to read, counting a page whose readings conflict;
     /// `None` until a page has told how many there are.
     pub fn missing(&self) -> Option<Vec<u32>> {
@@ -1286,50 +1321,70 @@ impl SkillsSweep {
     /// The merged skills and their checksum, once every page is whole
     /// and settled.
     ///
-    /// A name the vocabulary does not know is looked at again here, with
-    /// what the sweep knows: a skill the sweep has read elsewhere cannot
-    /// be this row too. Among the skills it has not read, one at or above
-    /// the profile's lower sweep floor, of about the name's length and
-    /// clear of the next by the margin, is taken as this row's skill and
-    /// flagged as a near miss; two that tie leave the row unresolved; none
-    /// near leaves it unknown (a skill the game has and the list lacks).
+    /// In the all-categories listing, a name the vocabulary does not know
+    /// is looked at again here, with what the sweep knows: a skill the
+    /// sweep has read elsewhere cannot be this row too. Among the skills
+    /// it has not read, one at or above the profile's lower sweep floor, of
+    /// about the name's length and clear of the next by the margin, is the
+    /// row's likely skill ([`NameReading::Likely`]); two that tie leave the
+    /// row unresolved; none near leaves it unknown (a skill the game has
+    /// and the list lacks). In a single category's listing nearly every
+    /// skill is one the sweep has not read, so the guess would be loose
+    /// enough to name almost anything: there an unknown name stays unknown.
     pub fn finish(&self) -> Option<SweepResult> {
         if !self.missing()?.is_empty() {
             return None;
         }
-        let pages: Vec<&SkillsPage> = self
+        let pages: Vec<(u32, &SkillsPage)> = self
             .pages
             .keys()
-            .filter_map(|index| self.page(*index))
+            .filter_map(|index| self.page(*index).map(|page| (*index, page)))
             .collect();
-        let rows: Vec<&SkillRow> = pages.iter().flat_map(|page| page.rows.iter()).collect();
-        let read: Vec<&str> = rows.iter().filter_map(|row| row.skill()).collect();
+        let rows: Vec<(u32, &SkillRow)> = pages
+            .iter()
+            .flat_map(|(index, page)| page.rows.iter().map(move |row| (*index, row)))
+            .collect();
+        let read: Vec<&str> = rows.iter().filter_map(|(_, row)| row.skill()).collect();
         let absent: Vec<&String> = self
             .vocabulary
             .iter()
             .filter(|name| !read.contains(&name.as_str()))
             .collect();
+        let placing = self.category.as_deref() == Some(self.all_categories.as_str());
         let mut skills = Vec::new();
         let mut unknown = Vec::new();
         let mut unresolved = Vec::new();
-        for row in &rows {
-            let (name, near_miss) = match &row.name {
-                RowName::Known { name, near_miss } => (Some(name.clone()), *near_miss),
-                RowName::Blank => (None, false),
+        for &(page, row) in &rows {
+            let (name, reading) = match &row.name {
+                RowName::Known { name, near_miss } => (
+                    Some(name.clone()),
+                    if *near_miss {
+                        NameReading::NearMiss
+                    } else {
+                        NameReading::Spelled
+                    },
+                ),
+                RowName::Blank => (None, NameReading::Spelled),
                 RowName::Unknown => {
                     let skill = UnknownSkill {
                         raw_name: row.raw_name.clone(),
                         points_text: row.points_text.clone(),
                         points: row.points,
+                        page,
                     };
-                    let key = label_key(strip_ellipsis(row.raw_name.trim()).0);
-                    let candidates = scored(&key, absent.iter().copied(), &self.near_miss);
-                    match single_best(
-                        &candidates,
-                        self.near_miss.sweep_score,
-                        self.near_miss.margin,
-                    ) {
-                        Best::One(name) => (Some(name.to_string()), true),
+                    let best = if placing {
+                        let key = label_key(strip_ellipsis(row.raw_name.trim()).0);
+                        let candidates = scored(&key, absent.iter().copied(), &self.near_miss);
+                        single_best(
+                            &candidates,
+                            self.near_miss.sweep_score,
+                            self.near_miss.margin,
+                        )
+                    } else {
+                        Best::None
+                    };
+                    match best {
+                        Best::One(name) => (Some(name.to_string()), NameReading::Likely),
                         Best::None => {
                             unknown.push(skill);
                             continue;
@@ -1343,10 +1398,11 @@ impl SkillsSweep {
             };
             skills.push(SweepEntry {
                 name,
-                near_miss,
+                reading,
                 raw_name: row.raw_name.clone(),
                 points_text: row.points_text.clone(),
                 points: row.points,
+                page,
             });
         }
         let mut duplicates: Vec<Option<String>> = Vec::new();
@@ -1356,7 +1412,7 @@ impl SkillsSweep {
                 duplicates.push(entry.name.clone());
             }
         }
-        let mut totals = pages.iter().filter_map(|page| page.total);
+        let mut totals = pages.iter().filter_map(|(_, page)| page.total);
         let total = totals.next();
         let agreed = total.filter(|first| totals.all(|t| t == *first));
         // The panel's total counts each skill's whole points: the
@@ -1404,7 +1460,10 @@ fn whole_points(points_text: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game_ui::test_support::{blank, bundled_profile, draw_window, fill};
+    use crate::game_ui::test_support::{
+        blank, bundled_profile, draw_window, fill, skills_drawing_vocabulary, skills_window,
+        standard_skills_layout, SkillsLayout, SKILLS_ROW_PITCH, THUMB,
+    };
 
     fn table_profile() -> SkillsTableProfile {
         bundled_profile().windows[WINDOW]
@@ -1631,8 +1690,6 @@ mod tests {
         assert_eq!(table_shape(&below, 0.05).rows.len(), 1);
     }
 
-    const THUMB: [u8; 3] = [146, 146, 146];
-
     fn scrollbar_strip(bars: &[Rect]) -> (BgrImage, Rect) {
         let mut image = blank(60, 700, [8, 11, 11]);
         for bar in bars {
@@ -1698,6 +1755,7 @@ mod tests {
             unread: Vec::new(),
             partial: 0,
             whole: true,
+            overflows: false,
         }
     }
 
@@ -1795,10 +1853,68 @@ mod tests {
         let result = sweep.finish().expect("the one page is in");
         let aim = &result.skills[1];
         assert_eq!(aim.name.as_deref(), Some("Aim"));
-        assert!(aim.near_miss);
+        assert_eq!(aim.reading, NameReading::Likely);
         assert_eq!(aim.raw_name, "Alm");
+        assert_eq!(aim.page, 1);
         assert!(result.unknown.is_empty());
         assert_eq!(result.checksum, Checksum::Matches);
+    }
+
+    #[test]
+    fn in_a_single_category_an_unknown_name_is_never_guessed() {
+        let vocabulary = SkillVocabulary::new(
+            ["Agility", "Aim", "Analysis"].map(String::from).to_vec(),
+            ["Combat"].map(String::from).to_vec(),
+        );
+        let mut sweep = SkillsSweep::new(&table_profile(), &vocabulary);
+        let mut combat = page(
+            1,
+            1,
+            1341,
+            vec![known("Agility", "73.71"), unknown("Alm", "1,268.53")],
+        );
+        combat.category = Some("Combat".into());
+        assert_eq!(sweep.accept(combat), Admission::Kept);
+        let result = sweep.finish().expect("the one page is in");
+        assert_eq!(result.skills.len(), 1);
+        assert_eq!(result.unknown.len(), 1);
+        assert_eq!(result.unknown[0].raw_name, "Alm");
+        assert_eq!(result.checksum, Checksum::Matches);
+    }
+
+    #[test]
+    fn each_entry_says_how_its_name_was_read_and_on_which_page() {
+        let mut sweep = sweep();
+        let mut all = pages(4000);
+        all[1].rows[1] = SkillRow {
+            name: RowName::Known {
+                name: "Laser Weaponry Technology".into(),
+                near_miss: true,
+            },
+            ..known("Laser Weaponry Technolgy", "2,499.5")
+        };
+        for page in all {
+            sweep.accept(page);
+        }
+        let result = sweep.finish().expect("every page is in");
+        let readings: Vec<(Option<&str>, NameReading, u32)> = result
+            .skills
+            .iter()
+            .map(|s| (s.name.as_deref(), s.reading, s.page))
+            .collect();
+        assert_eq!(
+            readings,
+            vec![
+                (None, NameReading::Spelled, 1),
+                (Some("Agility"), NameReading::Spelled, 1),
+                (Some("Promoter Rating"), NameReading::Spelled, 2),
+                (Some("Laser Weaponry Technology"), NameReading::NearMiss, 2),
+                (Some("Tools Technology"), NameReading::Spelled, 2),
+                (Some("Reputation"), NameReading::Spelled, 3),
+                (Some("Wood Carving"), NameReading::Spelled, 3),
+            ]
+        );
+        assert_eq!(result.unknown[0].page, 3);
     }
 
     #[test]
@@ -1933,241 +2049,12 @@ mod tests {
         }
     }
 
-    // A drawn skills window. Each piece of text is a block of one
-    // colour, and the stand-in recogniser reads a crop by the colour of
-    // its ink, so the geometry is exercised without a real recogniser.
-
-    const BACKGROUND: [u8; 3] = [120, 110, 90];
-    const RULE: [u8; 3] = [40, 44, 46];
-    const DIVIDER: [u8; 3] = [36, 40, 42];
-    const ICON: [u8; 3] = [90, 160, 230];
-
-    struct Drawn {
-        image: BgrImage,
-        palette: Vec<([u8; 3], String)>,
-    }
-
-    impl Drawn {
-        fn new(w: usize, h: usize) -> Self {
-            Self {
-                image: blank(w, h, BACKGROUND),
-                palette: Vec::new(),
-            }
-        }
-
-        /// Draw `text` as a block of a colour no other text has.
-        fn text(&mut self, rect: Rect, text: &str) {
-            let i = self.palette.len() as u8;
-            let rgb = [250 - i * 3, 120 + (i % 7) * 15, 130 + (i % 5) * 20];
-            fill(&mut self.image, rect, rgb);
-            self.palette.push((rgb, text.to_string()));
-        }
-
-        fn recogniser(&self) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
-            let palette = self.palette.clone();
-            move |crop: &BgrImage| {
-                let mut counts: Vec<usize> = vec![0; palette.len()];
-                for px in crop.data.chunks(3) {
-                    let rgb = [px[2], px[1], px[0]];
-                    if let Some(i) = palette.iter().position(|(c, _)| *c == rgb) {
-                        counts[i] += 1;
-                    }
-                }
-                let best = (0..palette.len()).max_by_key(|i| counts[*i]);
-                let text = best
-                    .filter(|i| counts[*i] > 0)
-                    .map_or(String::new(), |i| palette[i].1.clone());
-                Some((text, 0.99))
-            }
-        }
-    }
-
-    /// Where the drawn window's pieces go, as offsets from its corner.
-    struct Layout {
-        window: Rect,
-        name_header: (&'static str, i32),
-        points_header: &'static str,
-        pager: &'static str,
-        rows: Vec<(Option<&'static str>, &'static str)>,
-        /// Rows scrolled: the first row sits this far up under the header.
-        scrolled: i32,
-        /// The points' left edge, from the window's.
-        points_x: i32,
-        /// An extra upright line across the table, from the window's edge.
-        stray_divider: Option<i32>,
-        /// The scrollbar thumb's span, from the header's top.
-        thumb: Option<(i32, i32)>,
-        /// A pane drawn directly under the last row, the view ending on
-        /// its rule.
-        pane: bool,
-    }
-
-    const PITCH: i32 = 58;
-
-    fn draw(layout: &Layout) -> Drawn {
-        let mut d = Drawn::new(1100, 900);
-        let w = layout.window;
-        draw_window(&mut d.image, w);
-        d.text(
-            Rect::new(w.x0 + 80, w.y0 + 22, w.x0 + 330, w.y0 + 33),
-            "SKILLS & PROFESSIONS",
-        );
-        d.text(
-            Rect::new(w.x0 + 20, w.y0 + 112, w.x0 + 150, w.y0 + 124),
-            "ALL CATEGORIES",
-        );
-        d.text(
-            Rect::new(w.x0 + 380, w.y0 + 112, w.x0 + 520, w.y0 + 124),
-            "Total: 198259",
-        );
-        d.text(
-            Rect::new(w.x0 + 760, w.y0 + 112, w.x0 + 800, w.y0 + 124),
-            layout.pager,
-        );
-        // The rules stop short of the window's right edge, leaving the
-        // scrollbar's strip.
-        let (left, right) = (w.x0 + 7, w.x1 - 30);
-        let rule = |d: &mut Drawn, y: i32| fill(&mut d.image, Rect::new(left, y, right, y), RULE);
-        let header_top = w.y0 + 150;
-        rule(&mut d, header_top);
-        let header_labels = [
-            (
-                Rect::new(
-                    w.x0 + 30,
-                    header_top + 14,
-                    w.x0 + layout.name_header.1,
-                    header_top + 23,
-                ),
-                layout.name_header.0,
-            ),
-            (
-                Rect::new(w.x0 + 330, header_top + 14, w.x0 + 360, header_top + 23),
-                "Rank",
-            ),
-            (
-                Rect::new(w.x0 + 820, header_top + 14, w.x0 + 860, header_top + 23),
-                layout.points_header,
-            ),
-        ];
-        for (rect, text) in header_labels {
-            d.text(rect, text);
-        }
-        // The header is 32 pixels tall; the first row's top rule is its
-        // bottom until the table is scrolled, when rows slide up under it.
-        let first_top = header_top + 33 - layout.scrolled;
-        let mut last_rule = header_top;
-        for (k, (name, points)) in layout.rows.iter().enumerate() {
-            let top = first_top + k as i32 * PITCH;
-            for y in [top - 1, top + PITCH - 1] {
-                if y > header_top {
-                    rule(&mut d, y);
-                    last_rule = last_rule.max(y);
-                }
-            }
-            // What of a row lies under the header shows through it, but
-            // only below the header's top and clear of its labels.
-            let visible = |r: Rect| {
-                (r.y0 > header_top
-                    && header_labels
-                        .iter()
-                        .all(|(label, _)| label.padded(4).intersect(&r).is_none()))
-                .then_some(r)
-            };
-            if let Some(icon) = visible(Rect::new(w.x0 + 20, top + 8, w.x0 + 60, top + 48)) {
-                fill(&mut d.image, icon, ICON);
-            }
-            if let Some(name) = name {
-                if let Some(r) = visible(Rect::new(w.x0 + 80, top + 22, w.x0 + 230, top + 35)) {
-                    d.text(r, name);
-                }
-            }
-            if let Some(r) = visible(Rect::new(w.x0 + 420, top + 22, w.x0 + 500, top + 35)) {
-                d.text(r, "Newbie");
-            }
-            let points_x = w.x0 + layout.points_x;
-            // As wide as the client's numerals would make this figure.
-            let numerals = &bundled_profile().read.numerals;
-            let width = crate::game_ui::validate::expected_width(points, numerals)
-                .map_or(50, |units| (units * 14.0).round() as i32);
-            if let Some(r) = visible(Rect::new(
-                points_x,
-                top + 22,
-                points_x + width - 1,
-                top + 35,
-            )) {
-                d.text(r, points);
-            }
-        }
-        let mut dividers = vec![w.x0 + 300, w.x0 + 600, w.x0 + 760];
-        dividers.extend(layout.stray_divider.map(|x| w.x0 + x));
-        for x in dividers {
-            fill(
-                &mut d.image,
-                Rect::new(x, header_top + 1, x, last_rule - 1),
-                DIVIDER,
-            );
-        }
-        if layout.pane {
-            // The pane's own frame, its top two pixels below the last
-            // row's rule, as the description pane meets the table.
-            for (inset, rgb) in [(2, [45u8, 49, 49]), (3, [76, 82, 84])] {
-                fill(
-                    &mut d.image,
-                    Rect::new(left, last_rule + inset, right + 20, last_rule + inset),
-                    rgb,
-                );
-            }
-        }
-        if let Some((top, bottom)) = layout.thumb {
-            fill(
-                &mut d.image,
-                Rect::new(
-                    w.x1 - 24,
-                    header_top + 1 + top,
-                    w.x1 - 13,
-                    header_top + 1 + bottom,
-                ),
-                THUMB,
-            );
-        }
-        d
-    }
-
-    fn vocabulary_for_drawing() -> SkillVocabulary {
-        SkillVocabulary::new(
-            ["Agility", "Aim", "Alertness", "Analysis"]
-                .map(String::from)
-                .to_vec(),
-            Vec::new(),
-        )
-    }
-
-    fn standard() -> Layout {
-        Layout {
-            window: Rect::new(40, 30, 1000, 860),
-            name_header: ("Skill Name", 100),
-            points_header: "Points",
-            pager: "2 / 13",
-            rows: vec![
-                (None, "1"),
-                (Some("Agility"), "73.71"),
-                (Some("Aim"), "1,268.53"),
-                (Some("Alertness"), "3,068.94"),
-            ],
-            scrolled: 0,
-            points_x: 830,
-            stray_divider: None,
-            thumb: None,
-            pane: false,
-        }
-    }
-
-    fn read(layout: &Layout) -> Result<SkillsPage, SkillsError> {
-        let d = draw(layout);
+    fn read(layout: &SkillsLayout) -> Result<SkillsPage, SkillsError> {
+        let d = skills_window(layout);
         read_skills_page(
             &d.image,
             &bundled_profile(),
-            &vocabulary_for_drawing(),
+            &skills_drawing_vocabulary(),
             &d.recogniser(),
         )
     }
@@ -2178,7 +2065,7 @@ mod tests {
 
     #[test]
     fn a_whole_page_reads_every_row_and_its_toolbar() {
-        let page = read(&standard()).expect("the page reads");
+        let page = read(&standard_skills_layout()).expect("the page reads");
         assert_eq!(page.category.as_deref(), Some("ALL CATEGORIES"));
         assert_eq!(page.total, Some(198259));
         assert_eq!(page.page, Some((2, 13)));
@@ -2197,11 +2084,11 @@ mod tests {
     fn a_view_ending_on_a_row_boundary_is_whole_only_when_the_scrollbar_says_so() {
         // The view ends exactly on the last row's rule with a pane below,
         // as when the window is sized to a whole number of rows.
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.pane = true;
         assert!(read(&layout).expect("the page reads").whole);
         // A thumb shorter than its track: rows are out of view.
-        let track = 32 + 4 * PITCH;
+        let track = 32 + 4 * SKILLS_ROW_PITCH;
         layout.thumb = Some((0, track * 2 / 3));
         let page = read(&layout).expect("the page reads");
         assert_eq!(page.rows.len(), 4);
@@ -2213,7 +2100,7 @@ mod tests {
 
     #[test]
     fn the_professions_tab_is_refused() {
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.name_header = ("Profession Name", 100);
         layout.points_header = "Level";
         assert_eq!(read(&layout), Err(SkillsError::NotSkillsTab));
@@ -2225,7 +2112,7 @@ mod tests {
         // other heading confirms the tab and the column order places the
         // first.
         for (name_header, points_header) in [("Baiole ?", "Points"), ("Skill Name", "P0in")] {
-            let mut layout = standard();
+            let mut layout = standard_skills_layout();
             layout.name_header = (name_header, 100);
             layout.points_header = points_header;
             let page = read(&layout)
@@ -2240,7 +2127,7 @@ mod tests {
 
     #[test]
     fn a_skill_the_vocabulary_lacks_is_read_but_a_bad_number_is_not() {
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.rows[1] = (Some("Food Technology"), "73.71");
         let page = read(&layout).expect("the page reads");
         assert_eq!(page.rows.len(), 4);
@@ -2262,22 +2149,25 @@ mod tests {
 
     #[test]
     fn a_short_name_misread_on_its_page_is_placed_by_the_sweep() {
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.pager = "1 / 1";
         layout.rows[2] = (Some("Alm"), "1,268.53");
         let page = read(&layout).expect("the page reads");
         assert_eq!(page.rows[2].name, RowName::Unknown);
-        let mut sweep = SkillsSweep::new(&table_profile(), &vocabulary_for_drawing());
+        let mut sweep = SkillsSweep::new(&table_profile(), &skills_drawing_vocabulary());
         assert_eq!(sweep.accept(page), Admission::Kept);
         let result = sweep.finish().expect("the one page is in");
         let aim = &result.skills[2];
-        assert_eq!((aim.name.as_deref(), aim.near_miss), (Some("Aim"), true));
+        assert_eq!(
+            (aim.name.as_deref(), aim.reading),
+            (Some("Aim"), NameReading::Likely)
+        );
         assert!(result.unknown.is_empty());
     }
 
     #[test]
     fn points_crowding_their_columns_left_divider_are_unread() {
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         // The divider is at 760; the points start two pixels after it.
         layout.points_x = 763;
         let page = read(&layout).expect("the page reads");
@@ -2291,7 +2181,7 @@ mod tests {
         // An upright line just past the icon, read as a divider, leaves
         // the name column no wider than the icon: its empty cells prove
         // nothing about a name.
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.name_header = ("Skill Name", 58);
         layout.stray_divider = Some(65);
         let page = read(&layout).expect("the page reads");
@@ -2305,14 +2195,14 @@ mod tests {
 
     #[test]
     fn a_pager_past_any_listings_length_is_not_read() {
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.pager = "2 / 1000";
         assert_eq!(read(&layout).expect("the page reads").page, None);
     }
 
     #[test]
     fn a_page_scrolled_by_part_of_a_row_is_not_whole() {
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.scrolled = 40;
         let page = read(&layout).expect("the page reads");
         // The first row is under the header; the rest read.
@@ -2326,13 +2216,13 @@ mod tests {
 
     #[test]
     fn rows_under_a_window_in_front_are_partial() {
-        let layout = standard();
-        let mut d = draw(&layout);
+        let layout = standard_skills_layout();
+        let mut d = skills_window(&layout);
         // A window over the points of the third and fourth rows.
         let header_bottom = layout.window.y0 + 182;
         let front = Rect::new(
             layout.window.x0 + 790,
-            header_bottom + 2 * PITCH + 20,
+            header_bottom + 2 * SKILLS_ROW_PITCH + 20,
             1080,
             880,
         );
@@ -2340,7 +2230,7 @@ mod tests {
         let page = read_skills_page(
             &d.image,
             &bundled_profile(),
-            &vocabulary_for_drawing(),
+            &skills_drawing_vocabulary(),
             &d.recogniser(),
         )
         .expect("the page reads");
@@ -2351,7 +2241,7 @@ mod tests {
 
     #[test]
     fn a_window_run_off_the_screen_is_refused() {
-        let mut layout = standard();
+        let mut layout = standard_skills_layout();
         layout.window = Rect::new(400, 30, 1360, 860);
         assert_eq!(read(&layout), Err(SkillsError::WindowClipped));
     }

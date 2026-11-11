@@ -19,5 +19,6 @@ pub mod text;
 pub mod validate;
 pub mod window;
 
-#[cfg(test)]
-pub(crate) mod test_support;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_support;

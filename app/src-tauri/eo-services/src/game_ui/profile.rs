@@ -8,6 +8,9 @@ use serde::Deserialize;
 
 use super::field::ReadProfile;
 use super::locate::{TitleProfile, WindowProfile};
+use super::mob_history::MobHistoryProfile;
+use super::mob_names::MobNameProfile;
+use super::plates::PlateProfile;
 use super::radar::RadarProfile;
 use super::table::RuleProfile;
 use super::text::TextProfile;
@@ -37,6 +40,12 @@ pub struct UiProfile {
     pub windows: BTreeMap<String, WindowProfile>,
     /// The radar, and the coordinates printed under it.
     pub radar: RadarProfile,
+    /// Creatures' nameplates: their health bars and their lettering.
+    pub plates: PlateProfile,
+    /// How strictly a name read off a plate must match a known creature.
+    pub mob_names: MobNameProfile,
+    /// How plates read over time are grouped into fights and voted on.
+    pub mob_history: MobHistoryProfile,
 }
 
 /// Why a profile could not be used.

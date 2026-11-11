@@ -18,8 +18,13 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use eo_services::game_data_store::GameDataStore;
 use eo_services::game_ui::geometry::BgrImage;
 use eo_services::game_ui::locate::{read_window_field, ReadError};
+use eo_services::game_ui::mob_names::{resolve, MobCatalogue, Resolved};
+use eo_services::game_ui::plates::{
+    find_locked_plate, find_plates, read_locked_plate, PlateScratch, PlateTextError,
+};
 use eo_services::game_ui::profile::UiProfile;
 use eo_services::game_ui::radar::{
     find_radar, read_coordinates, read_planet_label, ring_scale, CoordError, CoordinateBounds,
@@ -1769,4 +1774,279 @@ fn has_repeat_digit(value: &str) -> bool {
         .as_bytes()
         .windows(2)
         .any(|pair| pair[0] == pair[1] && pair[0].is_ascii_digit())
+}
+
+// Creatures' nameplates.
+
+const PLATE_SHARDS: usize = 4;
+
+/// The plates a frame's labels list, top to bottom, each by whether it
+/// is the locked one; none for a frame whose labels list no plates.
+fn labelled_plates(labels: &Value) -> Vec<bool> {
+    labels
+        .get("plates")
+        .and_then(Value::as_array)
+        .map(|plates| {
+            plates
+                .iter()
+                .map(|plate| {
+                    plate["locked"]
+                        .as_bool()
+                        .expect("a plate says whether it is locked")
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The refusal's name, as the manifest gives it.
+fn refusal_name(refusal: &PlateTextError) -> String {
+    format!("{refusal:?}")
+        .split([' ', '{', '('])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Every plate the labels list is found, and no plate anywhere else: not
+/// the player's own health bar, the tool bar beside it, the progress bars
+/// in windows, or pictures of items. The locked plate is the one the
+/// manifest places, measured by hand from the frame's pixels. Its level
+/// must read exactly or be refused, every refusal must be one the
+/// manifest names with its reason, and its name, whatever the recogniser
+/// makes of it, must never resolve as a creature on the bundled list: the
+/// creature in these frames is not on it.
+fn replay_plates_shard(shard: usize) {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let store =
+        GameDataStore::new(&resources().join("snapshot")).expect("the bundled game data loads");
+    let catalogue = MobCatalogue::from_store(&store, Vec::new(), &profile.mob_names);
+    let (mut found, mut missed, mut false_plates) = (0usize, Vec::new(), Vec::new());
+    let mut level = Tally::default();
+    let mut problems = Vec::new();
+    let frames: Vec<(String, &Value)> = corpus
+        .frames()
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| index % PLATE_SHARDS == shard)
+        .map(|(_, frame)| frame)
+        .collect();
+    for (name, labels) in frames {
+        let want = labelled_plates(labels);
+        let placed = &corpus.manifest["frames"][name.as_str()]["locked_plate"];
+        let image = corpus.frame(&name);
+        let plates = find_plates(&image, &profile);
+        let got: Vec<bool> = plates.iter().map(|p| p.is_locked()).collect();
+        if want.is_empty() {
+            false_plates.extend(plates.iter().map(|p| format!("{name}: {p:?}")));
+            continue;
+        }
+        if got.len() < want.len() {
+            missed.push(format!(
+                "{name}: {} listed, {} found: {plates:?}",
+                want.len(),
+                got.len()
+            ));
+        } else if got.len() > want.len() {
+            false_plates.push(format!(
+                "{name}: {} listed, {} found: {plates:?}",
+                want.len(),
+                got.len()
+            ));
+        } else if got != want {
+            missed.push(format!(
+                "{name}: the lock is on plate {want:?}, found on {got:?}"
+            ));
+        } else {
+            found += got.len();
+        }
+        println!("  {name}: {plates:?}");
+        let mut scratch = PlateScratch::default();
+        let locked = find_locked_plate(&image, &profile, &mut scratch);
+        let Some(bar) = placed["bar"].as_array() else {
+            if locked.is_some() || want.contains(&true) {
+                problems.push(format!(
+                    "{name}: no locked plate is placed, found {locked:?}"
+                ));
+            }
+            continue;
+        };
+        let bar: Vec<i64> = bar.iter().filter_map(Value::as_i64).collect();
+        let at = locked.map(|p| {
+            vec![
+                p.bar.x0 as i64,
+                p.bar.y0 as i64,
+                p.bar.x1 as i64,
+                p.bar.y1 as i64,
+            ]
+        });
+        if at.as_ref() != Some(&bar) {
+            problems.push(format!(
+                "{name}: the locked bar is at {bar:?}, found {at:?}"
+            ));
+            continue;
+        }
+        let Some(plate) = read_locked_plate(&image, &profile, &read) else {
+            problems.push(format!("{name}: the locked plate did not read"));
+            continue;
+        };
+        let wanted_level = labels["plates"]
+            .as_array()
+            .and_then(|p| p.iter().find(|p| p["locked"].as_bool() == Some(true)))
+            .and_then(|p| p["level"].as_str())
+            .expect("the locked plate has a level");
+        // A refusal must be the one the manifest names for that field.
+        let excused = |field: &str, refusal: &PlateTextError| {
+            let named = &placed["refusals"][field];
+            named["refusal"].as_str() == Some(refusal_name(refusal).as_str())
+                && named["why"].as_str().is_some()
+        };
+        match &plate.level {
+            Ok(value) if format!("L{value}") == wanted_level => level.exact += 1,
+            Ok(value) => level.wrong.push(format!(
+                "{name}: read L{value}, the screen shows {wanted_level}"
+            )),
+            Err(refusal) => {
+                if !excused("level", refusal) {
+                    problems.push(format!(
+                        "{name}: the level was refused ({refusal}) unexcused"
+                    ));
+                }
+                level
+                    .refused
+                    .push(format!("{name} ({wanted_level}): {refusal}"));
+            }
+        }
+        if let Err(refusal) = &plate.name {
+            if !excused("name", refusal) {
+                problems.push(format!(
+                    "{name}: the name was refused ({refusal}) unexcused"
+                ));
+            } else {
+                println!(
+                    "  {name}: the name refused as {refusal_name}, as the manifest says: {}",
+                    placed["refusals"]["name"]["why"],
+                    refusal_name = refusal_name(refusal)
+                );
+            }
+        }
+        for field in ["level", "name"] {
+            let named = placed["refusals"][field]["refusal"].as_str();
+            let refused = match field {
+                "level" => plate.level.as_ref().err().map(refusal_name),
+                _ => plate.name.as_ref().err().map(refusal_name),
+            };
+            if named.is_some() && refused.as_deref() != named {
+                problems.push(format!(
+                    "{name}: the manifest expects the {field} refused as {named:?}, got {refused:?}"
+                ));
+            }
+        }
+        let resolved = plate.name.as_ref().ok().map(|raw| {
+            resolve(
+                raw,
+                plate.level.as_ref().ok().copied(),
+                &catalogue,
+                &profile.mob_names,
+            )
+        });
+        println!(
+            "  {name}: locked plate at {:?}, fill {:.3}; level {:?}; name {:?}, resolved {resolved:?}",
+            plate.bar, plate.fill, plate.level, plate.name
+        );
+        if matches!(
+            resolved,
+            Some(Resolved::Known { .. } | Resolved::Confirmed { .. } | Resolved::Species { .. })
+        ) {
+            problems.push(format!("{name}: {:?} resolved as {resolved:?}", plate.name));
+        }
+    }
+    println!(
+        "plates, shard {shard}: {found} found, {} missed, {} false",
+        missed.len(),
+        false_plates.len()
+    );
+    level.report(&format!("plate level, shard {shard}"));
+    assert!(
+        missed.is_empty(),
+        "plates the labels list were not found: {missed:#?}"
+    );
+    assert!(
+        false_plates.is_empty(),
+        "plates were found that are not there: {false_plates:#?}"
+    );
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+macro_rules! plate_shards {
+    ($($name:ident: $shard:expr,)*) => {$(
+        #[test]
+        fn $name() {
+            replay_plates_shard($shard);
+        }
+    )*};
+}
+
+plate_shards! {
+    plates_shard_0: 0,
+    plates_shard_1: 1,
+    plates_shard_2: 2,
+    plates_shard_3: 3,
+}
+
+/// How long the reads that run live take on full captures and on a
+/// 1920x1080 cut of them: the search for the locked plate, the window
+/// search and the whole read of the plate (other plates near it, the
+/// windows, the recogniser), and the radar's read. Printed, not asserted:
+/// an unoptimised build is many times slower than the application's.
+#[test]
+fn live_read_timing() {
+    use eo_services::game_ui::geometry::crop;
+    use eo_services::game_ui::geometry::Rect;
+    use eo_services::game_ui::window::find_windows;
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let bounds = calypso();
+    let mut scratch = PlateScratch::default();
+    let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+    for name in ["f24", "f52", "f54"] {
+        let full = corpus.frame(name);
+        let cut = crop(&full, Rect::new(640, 0, 2559, 1079));
+        for image in [&full, &cut] {
+            let runs = 5u32;
+            let time = |f: &mut dyn FnMut()| {
+                let started = std::time::Instant::now();
+                for _ in 0..runs {
+                    f();
+                }
+                started.elapsed() / runs
+            };
+            let search = time(&mut || {
+                std::hint::black_box(find_locked_plate(image, &profile, &mut scratch));
+            });
+            let windows = time(&mut || {
+                std::hint::black_box(find_windows(image, &profile.chrome));
+            });
+            let whole = time(&mut || {
+                std::hint::black_box(read_locked_plate(image, &profile, &read));
+            });
+            let radar = time(&mut || {
+                std::hint::black_box(read_coordinates(image, &profile, &bounds, &read).ok());
+            });
+            println!(
+                "{name} {}x{}: locked plate search {:.1} ms; window search {:.1} ms; whole plate read {:.1} ms; radar read {:.1} ms",
+                image.w,
+                image.h,
+                ms(search),
+                ms(windows),
+                ms(whole),
+                ms(radar)
+            );
+        }
+    }
 }

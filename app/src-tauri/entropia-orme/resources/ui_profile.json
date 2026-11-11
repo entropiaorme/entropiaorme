@@ -499,5 +499,187 @@
       }
     },
     "neighbourhood_margin": 0.25
+  },
+  "plates": {
+    "scales": [
+      {
+        "bar": [
+          164,
+          6
+        ],
+        "width_tolerance": 2,
+        "frame_width": 1,
+        "bevel_rows": 2,
+        "min_rows": 2,
+        "pointer_pixels": 6,
+        "lettering": {
+          "min_ink": 150,
+          "glyph_gap": 1,
+          "join_factor": 0.6,
+          "max_colour_distance": 110,
+          "line_slack": 0.3334,
+          "run_height": [
+            6,
+            30
+          ],
+          "min_ink_pixels": 20
+        },
+        "stroke": {
+          "max_chroma": 70,
+          "reach": 2,
+          "contrast": 50
+        }
+      }
+    ],
+    "run": {
+      "gradient": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.146,
+          18.0
+        ],
+        [
+          0.244,
+          38.5
+        ],
+        [
+          0.34,
+          56.7
+        ],
+        [
+          0.49,
+          60.0
+        ],
+        [
+          0.78,
+          54.3
+        ],
+        [
+          0.83,
+          56.0
+        ],
+        [
+          0.878,
+          70.6
+        ],
+        [
+          0.927,
+          85.0
+        ],
+        [
+          0.976,
+          99.3
+        ],
+        [
+          1.0,
+          105.0
+        ]
+      ],
+      "hue_tolerance": 20.0,
+      "min_chroma": 90,
+      "max_gap": 0.075,
+      "min_span": 0.9,
+      "share": 0.85
+    },
+    "frame": {
+      "rgb": [
+        3,
+        7,
+        5
+      ],
+      "tolerance": 4,
+      "bevel_rgb": [
+        60,
+        68,
+        66
+      ],
+      "bevel_tolerance": 12,
+      "share": 0.85,
+      "unfilled_rgb": [
+        6,
+        11,
+        8
+      ],
+      "unfilled_tolerance": 8,
+      "vivid_chroma": 150,
+      "max_stray": 0.1
+    },
+    "pointer": {
+      "area": [
+        0.4,
+        0.06,
+        0.6,
+        0.17
+      ],
+      "min_red": 180,
+      "max_other": 100
+    },
+    "line": {
+      "area": [
+        -1.2,
+        -0.2,
+        2.2,
+        -0.045
+      ],
+      "gap": 0.12,
+      "alignment": 0.3,
+      "descent": 0.8,
+      "panel_run": 0.05
+    },
+    "level": {
+      "label": "L",
+      "digits": [
+        1,
+        3
+      ],
+      "pitch": 0.0386,
+      "pitch_tolerance": 0.5,
+      "glyphs": [
+        2.0,
+        4.0
+      ]
+    }
+  },
+  "mob_names": {
+    "known_score": 86.0,
+    "guess_score": 80.0,
+    "margin": 4.0,
+    "sure_score": 97.0,
+    "min_letters": 3,
+    "min_letter_share": 0.7,
+    "placeholder_maturities": [
+      "Default"
+    ]
+  },
+  "mob_history": {
+    "join_gap_ms": 6500,
+    "rise_tolerance": 0.1,
+    "continue_ms": 2500,
+    "damaged_fill": 0.95,
+    "same_plate_rise": 0.01,
+    "same_plate_drop_per_s": 0.25,
+    "kill_lookback_ms": 4500,
+    "kill_lookahead_ms": 2500,
+    "log_resolution_ms": 1000,
+    "capture_slack_ms": 300,
+    "report_delay_ms": 2000,
+    "report_early_ms": 1000,
+    "report_slack_ms": 1000,
+    "left_span_ms": 1000,
+    "give_up_ms": 5000,
+    "min_votes": 1,
+    "provisional_reads": 2,
+    "vote_share": 0.66,
+    "consolidate_score": 80.0,
+    "retain_ms": 20000,
+    "max_pulses": 600,
+    "max_reads": 120,
+    "max_fights": 16,
+    "spellings": 256,
+    "stamped_spellings": 1024,
+    "spelling_texts": 4
   }
 }

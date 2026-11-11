@@ -26,6 +26,14 @@ pub fn bundled_profile() -> UiProfile {
         .expect("the bundled interface profile loads")
 }
 
+/// The creatures of the bundled game data, as its `mobs` collection
+/// lists them.
+pub fn bundled_mobs() -> Vec<serde_json::Value> {
+    let path = repo_root().join("app/src-tauri/entropia-orme/resources/snapshot/mobs.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path:?}: {e}"))
+}
+
 /// The private corpus of real captures, when this machine has one.
 /// Real gameplay screens stay out of the public tree, so tests over
 /// them run only where `EO_GAME_UI_CORPUS_DIR` names the corpus and
@@ -562,6 +570,16 @@ impl Lcg {
     pub fn range(&mut self, lo: i32, hi: i32) -> i32 {
         lo + (self.step() % (hi - lo + 1) as u64) as i32
     }
+
+    /// A value in `[0, 1)`.
+    pub fn unit(&mut self) -> f64 {
+        self.step() as f64 / (1u64 << 31) as f64
+    }
+
+    /// A value in `[lo, hi)`.
+    pub fn uniform(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * self.unit()
+    }
 }
 
 // A drawn radar: the disc, its rings and rim, the player's dot, and the
@@ -736,8 +754,9 @@ impl Printed {
     }
 }
 
-/// A scene with a radar drawn on it, and the stand-in recogniser for the
-/// lettering drawn there.
+/// A scene of the game world with what the client draws straight onto it
+/// (a radar, the coordinates under it, creatures' nameplates), and the
+/// stand-in recogniser for the lettering drawn there.
 pub struct RadarScene {
     pub image: BgrImage,
     palette: Vec<([u8; 3], String)>,
@@ -753,6 +772,83 @@ impl RadarScene {
             image: scenery(w, h, seed),
             palette: Vec::new(),
         }
+    }
+
+    /// A scene of `image`, with no lettering drawn on it yet.
+    pub fn over(image: BgrImage) -> Self {
+        Self {
+            image,
+            palette: Vec::new(),
+        }
+    }
+
+    /// Lettering the way the client prints it on the scene: `glyphs`
+    /// glyph outlines in a tint of `base` filling `rect`, on their own
+    /// dark shadow, read as `text`.
+    pub fn lettering(&mut self, rect: Rect, glyphs: i32, base: [u8; 3], text: &str) {
+        fill(&mut self.image, rect.padded(1), SHADOW);
+        let tint = self.tint(base, text);
+        self.glyphs((rect.x0, rect.x1), rect.y0, rect.height(), glyphs, tint);
+    }
+
+    /// A creature's nameplate the way the client draws it (see
+    /// [`draw_plate_bar`]), with `level` and `name` printed over the bar
+    /// on one line (see [`PlateDrawing::line`]) and the status icon some
+    /// way after the name. Returns the bar.
+    pub fn plate(&mut self, plate: &PlateDrawing, level: &str, name: &str) -> Rect {
+        let bar = draw_plate_bar(&mut self.image, plate);
+        let line = self.plate_line(plate, bar, level, name);
+        let s = plate.geometry.factor();
+        draw_status_icon(
+            &mut self.image,
+            (
+                line.x1 + (51.0 * s).round() as i32,
+                bar.y0 - (18.0 * s).round() as i32,
+            ),
+        );
+        bar
+    }
+
+    /// The level and the name over the bar at `bar`, as the client sets
+    /// them at the default scale (scaled for another): the level's
+    /// capitals 9 pixels tall from 21 above the bar at a pitch of 19/3, a
+    /// gap of 12, then the name 13 tall (its descenders included) from 22
+    /// above the bar at a pitch of 7. Returns the line's rectangle.
+    pub fn plate_line(&mut self, plate: &PlateDrawing, bar: Rect, level: &str, name: &str) -> Rect {
+        let s = plate.geometry.factor();
+        let px = |v: f64| (v * s).round() as i32;
+        let level_chars = level.chars().count() as i32;
+        let name_chars = name.chars().count() as i32;
+        let level_width = px(level_chars as f64 * LEVEL_PITCH).max(1);
+        let name_width = if name_chars == 0 {
+            0
+        } else {
+            name_chars * px(NAME_PITCH) - 2
+        };
+        let gap = px(12.0);
+        let width = level_width + if name_chars == 0 { 0 } else { gap + name_width };
+        let x0 = match plate.line {
+            LineAlign::Left => bar.x0 + px(7.0),
+            LineAlign::Centred => bar.x0 + (bar.width() - width) / 2,
+        };
+        let level_rect = Rect::new(
+            x0,
+            bar.y0 - px(21.0),
+            x0 + level_width - 1,
+            bar.y0 - px(21.0) + px(9.0) - 1,
+        );
+        self.lettering(level_rect, level_chars.max(1), LEVEL_TINT, level);
+        if name_chars == 0 {
+            return level_rect;
+        }
+        let name_rect = Rect::new(
+            level_rect.x1 + gap + 1,
+            bar.y0 - px(22.0),
+            level_rect.x1 + gap + name_width,
+            bar.y0 - px(22.0) + px(13.0) - 1,
+        );
+        self.lettering(name_rect, name_chars, WHITE, name);
+        Rect::new(level_rect.x0, name_rect.y0, name_rect.x1, name_rect.y1)
     }
 
     /// A radar with its coordinates printed under it: `lon` and `lat` are
@@ -1371,6 +1467,314 @@ pub fn standard_sale_layout() -> SaleLayout {
         hidden_dividers: Vec::new(),
         markup_mode: false,
     }
+}
+
+// Creatures' nameplates, drawn the way the client draws them over the
+// scene at the default interface scale: the bar's coloured part 164 by 6
+// pixels, inside a two-pixel bevel and a one-pixel frame, the level and
+// the name printed above it (as lettering on the scene, see
+// [`RadarScene::plate`]). The locked plate is drawn solid, every other
+// plate washed out: blended half and half with the scene behind it.
+
+/// A plate's pixel sizes: the bar's coloured part `(width, height)`, the
+/// frame's thickness and the bevel's rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlateGeometry {
+    pub bar: (i32, i32),
+    pub frame: i32,
+    pub bevel: i32,
+}
+
+impl PlateGeometry {
+    /// How much larger than the default scale this geometry is drawn.
+    pub fn factor(&self) -> f64 {
+        self.bar.0 as f64 / PLATE_DEFAULT.bar.0 as f64
+    }
+}
+
+/// The plate at the default interface scale, as measured on captures.
+pub const PLATE_DEFAULT: PlateGeometry = PlateGeometry {
+    bar: (164, 6),
+    frame: 1,
+    bevel: 2,
+};
+
+/// Where the line of lettering over a plate starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineAlign {
+    /// Seven pixels in from the bar's left end (scaled), as the captures
+    /// show it.
+    Left,
+    /// Centred on the bar, which the captures equally fit.
+    Centred,
+}
+
+pub const PLATE_FRAME: [u8; 3] = [3, 7, 5];
+pub const PLATE_BEVEL: [u8; 3] = [60, 68, 66];
+pub const PLATE_EMPTY: [u8; 3] = [6, 11, 8];
+const PLATE_SHADE: [u8; 3] = [16, 23, 20];
+const PLATE_CAP: [u8; 3] = [137, 152, 149];
+const PLATE_CAP_EDGE: [u8; 3] = [98, 110, 107];
+const PLATE_CAP_FOOT: [u8; 3] = [76, 87, 84];
+const PLATE_CAP_DARK: [u8; 3] = [38, 46, 43];
+const POINTER_RED: [u8; 3] = [232, 61, 61];
+const POINTER_WHITE: [u8; 3] = [210, 207, 202];
+const ICON_GREEN: [u8; 3] = [76, 150, 56];
+
+/// The level's pale cyan, and its glyphs' pitch; the name's pitch, in
+/// whole pixels so its glyphs stand evenly.
+pub const LEVEL_TINT: [u8; 3] = [168, 212, 212];
+pub const LEVEL_PITCH: f64 = 19.0 / 3.0;
+pub const NAME_PITCH: f64 = 7.0;
+
+/// The hue the client's bar shows along it, `(place, degrees)`, as
+/// measured on its captures.
+const PLATE_HUES: [(f64, f64); 11] = [
+    (0.0, 0.0),
+    (0.146, 18.0),
+    (0.244, 38.5),
+    (0.34, 56.7),
+    (0.49, 60.0),
+    (0.78, 54.3),
+    (0.83, 56.0),
+    (0.878, 70.6),
+    (0.927, 85.0),
+    (0.976, 99.3),
+    (1.0, 105.0),
+];
+
+/// How a plate is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlateLook {
+    /// The locked creature's: opaque and vivid.
+    Solid,
+    /// Every other creature's: blended with the scene.
+    Washed,
+}
+
+/// The small pointer the client draws under some plates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatePointer {
+    Absent,
+    Red,
+    White,
+}
+
+/// One plate to draw: the top-left of the bar's coloured part, the
+/// creature's health, how it is drawn, at what scale, and how its line of
+/// lettering is set.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlateDrawing {
+    pub at: (i32, i32),
+    pub fill: f64,
+    pub look: PlateLook,
+    pub pointer: PlatePointer,
+    pub geometry: PlateGeometry,
+    pub line: LineAlign,
+}
+
+impl PlateDrawing {
+    /// The locked creature's plate at `fill`, with its red pointer.
+    pub fn locked(at: (i32, i32), fill: f64) -> Self {
+        Self {
+            at,
+            fill,
+            look: PlateLook::Solid,
+            pointer: PlatePointer::Red,
+            geometry: PLATE_DEFAULT,
+            line: LineAlign::Left,
+        }
+    }
+
+    /// Another creature's plate, at full health.
+    pub fn washed(at: (i32, i32)) -> Self {
+        Self {
+            at,
+            fill: 1.0,
+            look: PlateLook::Washed,
+            pointer: PlatePointer::Absent,
+            geometry: PLATE_DEFAULT,
+            line: LineAlign::Left,
+        }
+    }
+}
+
+/// The bar's colour at column `c` of `width`, on its fill row `row`: the
+/// gradient's hue at full saturation, the top two rows lit and the bottom
+/// two shaded, as the client draws it.
+fn bar_colour(c: i32, width: i32, row: i32) -> [u8; 3] {
+    let place = (c as f64 + 0.5) / width as f64;
+    let mut h = PLATE_HUES[PLATE_HUES.len() - 1].1;
+    for pair in PLATE_HUES.windows(2) {
+        let ((p0, h0), (p1, h1)) = (pair[0], pair[1]);
+        if place <= p1 {
+            h = h0 + (h1 - h0) * (place - p0) / (p1 - p0);
+            break;
+        }
+    }
+    let value = if h <= 60.0 {
+        250.0
+    } else {
+        250.0 - (h - 60.0) / 45.0 * 38.0
+    };
+    let (r, g) = if h <= 60.0 {
+        (value, value * h.max(0.0) / 60.0)
+    } else {
+        (value * (120.0 - h) / 60.0, value)
+    };
+    let lit = [30.0, 13.0, 0.0, 0.0, 0.0, 0.0][row.clamp(0, 5) as usize];
+    let shade = [1.0, 1.0, 1.0, 1.0, 0.935, 0.835][row.clamp(0, 5) as usize];
+    [r, g, 0.0].map(|v: f64| ((v + lit).min(255.0) * shade).round() as u8)
+}
+
+/// Paint `rgb` at `(x, y)` as `look` draws it: as it is, or blended half
+/// and half with what is there.
+fn paint(image: &mut BgrImage, x: i32, y: i32, rgb: [u8; 3], look: PlateLook) {
+    if x < 0 || y < 0 || x >= image.w as i32 || y >= image.h as i32 {
+        return;
+    }
+    let shown = match look {
+        PlateLook::Solid => rgb,
+        PlateLook::Washed => {
+            let i = (y as usize * image.w + x as usize) * 3;
+            let under = [image.data[i + 2], image.data[i + 1], image.data[i]];
+            [0, 1, 2].map(|k| ((rgb[k] as u16 + under[k] as u16) / 2) as u8)
+        }
+    };
+    put(image, x, y, shown);
+}
+
+/// Draw a plate's bar the way the client does: the frame, the bevel with
+/// its pale caps at the left and dark ones at the right, the gradient as
+/// far as the creature's health reaches and the black empty part after
+/// it, and the pointer under it. At the default scale every pixel is as
+/// measured on captures; another geometry draws the same parts at its own
+/// sizes. Parts off the frame are clipped. Returns the bar's coloured
+/// part.
+pub fn draw_plate_bar(image: &mut BgrImage, plate: &PlateDrawing) -> Rect {
+    let g = plate.geometry;
+    let (w, h) = g.bar;
+    let (bx, by) = plate.at;
+    let look = plate.look;
+    let bar = Rect::new(bx, by, bx + w - 1, by + h - 1);
+    let (bevel, inset) = (g.bevel, g.frame + g.bevel);
+    for k in 0..g.frame {
+        let edge = bar.padded(inset - k);
+        for x in edge.x0..=edge.x1 {
+            paint(image, x, edge.y0, PLATE_FRAME, look);
+            paint(image, x, edge.y1, PLATE_FRAME, look);
+        }
+        for y in edge.y0 + 1..edge.y1 {
+            paint(image, edge.x0, y, PLATE_FRAME, look);
+            paint(image, edge.x1, y, PLATE_FRAME, look);
+        }
+    }
+    for x in bx..bx + w {
+        for y in by - bevel..by {
+            paint(image, x, y, PLATE_BEVEL, look);
+        }
+        for y in by + h..by + h + bevel {
+            paint(image, x, y, PLATE_SHADE, look);
+        }
+    }
+    // The caps: pale at the left end, dark at the right, each turning the
+    // bevel's corner so that the bevel runs exactly the bar's width.
+    if g == PLATE_DEFAULT {
+        let caps = [
+            (bx - 2, by - 2, PLATE_CAP_EDGE),
+            (bx - 1, by - 2, PLATE_BEVEL),
+            (bx - 1, by - 1, PLATE_CAP_EDGE),
+            (bx - 2, by + h + 1, PLATE_CAP_FOOT),
+            (bx - 1, by + h, PLATE_CAP_FOOT),
+            (bx - 1, by + h + 1, PLATE_SHADE),
+            (bx + w, by - 2, PLATE_BEVEL),
+            (bx + w, by - 1, PLATE_CAP_DARK),
+            (bx + w + 1, by - 2, PLATE_CAP_DARK),
+        ];
+        for y in by - 1..=by + h {
+            paint(image, bx - 2, y, PLATE_CAP, look);
+        }
+        for y in by..by + h {
+            paint(image, bx - 1, y, PLATE_CAP, look);
+        }
+        for y in by..=by + h + 1 {
+            paint(image, bx + w, y, PLATE_SHADE, look);
+        }
+        for y in by - 1..=by + h + 1 {
+            paint(image, bx + w + 1, y, PLATE_SHADE, look);
+        }
+        for (x, y, rgb) in caps {
+            paint(image, x, y, rgb, look);
+        }
+    } else {
+        for k in 1..=bevel {
+            for y in by - bevel..by + h + bevel {
+                let left = if k == 1 && y == by - bevel {
+                    PLATE_BEVEL
+                } else {
+                    PLATE_CAP
+                };
+                paint(image, bx - k, y, left, look);
+                let right = if k == 1 && y == by - bevel {
+                    PLATE_BEVEL
+                } else {
+                    PLATE_SHADE
+                };
+                paint(image, bx + w - 1 + k, y, right, look);
+            }
+        }
+    }
+    let reach = (plate.fill.clamp(0.0, 1.0) * w as f64).round() as i32;
+    for c in 0..w {
+        for row in 0..h {
+            let rgb = if c < reach {
+                bar_colour(c, w, row * 6 / h)
+            } else {
+                PLATE_EMPTY
+            };
+            paint(image, bx + c, by + row, rgb, look);
+        }
+    }
+    let pointer = match plate.pointer {
+        PlatePointer::Absent => None,
+        PlatePointer::Red => Some(POINTER_RED),
+        PlatePointer::White => Some(POINTER_WHITE),
+    };
+    if let Some(rgb) = pointer {
+        // Under the bar's middle, below the frame: at the default scale
+        // two rows four wide, then three rows two wide.
+        let cx = bx + w / 2 - 2;
+        let top = by + h + inset + 5;
+        let rows = (5.0 * g.factor()).round() as i32;
+        for dy in 0..rows {
+            let (from, to) = if dy < rows * 2 / 5 { (0, 3) } else { (1, 2) };
+            for dx in from..=to {
+                put(image, cx + dx, top + dy, rgb);
+            }
+        }
+    }
+    bar
+}
+
+/// The status icon the client draws after some names: a green tile with
+/// a white swirl.
+pub fn draw_status_icon(image: &mut BgrImage, (x, y): (i32, i32)) {
+    fill(image, Rect::new(x, y, x + 22, y + 14), ICON_GREEN);
+    fill(
+        image,
+        Rect::new(x + 5, y + 4, x + 17, y + 4),
+        [240, 240, 240],
+    );
+    fill(
+        image,
+        Rect::new(x + 5, y + 10, x + 17, y + 10),
+        [240, 240, 240],
+    );
+    fill(
+        image,
+        Rect::new(x + 10, y + 6, x + 12, y + 8),
+        [240, 240, 240],
+    );
 }
 
 #[cfg(test)]

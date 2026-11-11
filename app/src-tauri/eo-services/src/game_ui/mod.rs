@@ -10,6 +10,9 @@
 pub mod field;
 pub mod geometry;
 pub mod locate;
+pub mod mob_history;
+pub mod mob_names;
+pub mod plates;
 pub mod profile;
 pub mod radar;
 pub mod sale_queue;

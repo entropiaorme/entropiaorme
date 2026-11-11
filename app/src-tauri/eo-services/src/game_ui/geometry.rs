@@ -144,6 +144,27 @@ pub fn chroma(rgb: [u8; 3]) -> u8 {
     hi - lo
 }
 
+/// The hue of `rgb` in degrees, red at zero, yellow at 60 and green at
+/// 120, with the reds just short of a full turn given as small negative
+/// angles (`-60` to `300`), so a colour run through red stays continuous.
+/// `None` for a grey, which has no hue.
+pub fn hue(rgb: [u8; 3]) -> Option<f32> {
+    let [r, g, b] = rgb.map(f32::from);
+    let hi = r.max(g).max(b);
+    let c = hi - r.min(g).min(b);
+    if c <= 0.0 {
+        return None;
+    }
+    let h = if hi == r {
+        60.0 * (g - b) / c
+    } else if hi == g {
+        60.0 * (2.0 + (b - r) / c)
+    } else {
+        60.0 * (4.0 + (r - g) / c)
+    };
+    Some(if h >= 300.0 { h - 360.0 } else { h })
+}
+
 /// Whether every channel of `rgb` is within `tolerance` of `target`.
 pub fn near(rgb: [u8; 3], target: [u8; 3], tolerance: u8) -> bool {
     rgb.iter()
@@ -173,6 +194,17 @@ mod tests {
         assert_eq!(overrun.data, vec![2, 0, 0, 2, 1, 0]);
         let empty = image.crop(1, 0, 0, 3);
         assert_eq!((empty.w, empty.h, empty.data.len()), (3, 0, 0));
+    }
+
+    #[test]
+    fn hues_run_from_red_through_yellow_to_green_and_a_grey_has_none() {
+        assert_eq!(hue([248, 1, 0]).map(f32::round), Some(0.0));
+        assert_eq!(hue([255, 255, 0]), Some(60.0));
+        assert_eq!(hue([0, 255, 0]), Some(120.0));
+        assert_eq!(hue([0, 0, 255]), Some(240.0));
+        // A red leaning to blue sits just below zero, not near 360.
+        assert_eq!(hue([255, 0, 51]).map(f32::round), Some(-12.0));
+        assert_eq!(hue([90, 90, 90]), None);
     }
 
     #[test]

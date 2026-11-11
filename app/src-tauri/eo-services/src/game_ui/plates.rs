@@ -996,8 +996,20 @@ pub fn read_locked_plate(
 ) -> Option<PlateRead> {
     let mut scratch = PlateScratch::default();
     let locked = find_locked_plate(image, profile, &mut scratch)?;
-    let others = plates_near(image, &locked, profile);
-    read_plate(image, &locked, &[], &others, profile, recogniser)
+    read_found_plate(image, &locked, profile, recogniser)
+}
+
+/// Read `locked`, a plate [`find_locked_plate`] found in `image`: the
+/// second half of [`read_locked_plate`], for a watcher that keeps its own
+/// search buffers and measures the search and the reading apart.
+pub fn read_found_plate(
+    image: &BgrImage,
+    locked: &Plate,
+    profile: &UiProfile,
+    recogniser: &dyn Recogniser,
+) -> Option<PlateRead> {
+    let others = plates_near(image, locked, profile);
+    read_plate(image, locked, &[], &others, profile, recogniser)
 }
 
 #[cfg(test)]

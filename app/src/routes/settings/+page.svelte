@@ -15,6 +15,8 @@
 	} from '$lib/api';
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
+	import { inDevelopment } from '$lib/inDevelopment';
+	import MobDetectionSetting from '$lib/features/settings/MobDetectionSetting.svelte';
 
 	let settings = $state<AppSettings | null>(null);
 	let loading = $state(true);
@@ -159,6 +161,20 @@
 			flashSaved('repairOcr');
 		} catch (e) {
 			capabilityError = e instanceof Error ? e.message : 'Failed to update repair OCR';
+		} finally {
+			savingField = null;
+		}
+	}
+
+	async function handleMobDetection(checked: boolean) {
+		if (!settings) return;
+		savingField = 'mobDetection';
+		capabilityError = null;
+		try {
+			settings = await updateSettings({ mob_detection_enabled: checked });
+			flashSaved('mobDetection');
+		} catch (e) {
+			capabilityError = e instanceof Error ? e.message : 'Failed to update creature detection';
 		} finally {
 			savingField = null;
 		}
@@ -359,6 +375,17 @@
 			</div>
 
 			<Divider />
+
+			{#if inDevelopment.visible}
+				<MobDetectionSetting
+					enabled={settings.mobDetectionEnabled}
+					capture={settings.mobDetectionCapture}
+					disabled={savingField !== null}
+					saved={savedIndicator === 'mobDetection'}
+					onchange={handleMobDetection}
+				/>
+				<Divider />
+			{/if}
 
 			<!-- Loot filter -->
 			<div class="py-5 space-y-3">

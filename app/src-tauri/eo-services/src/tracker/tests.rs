@@ -372,6 +372,7 @@ fn session_lifecycle_round_trip() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![
             LootItem {
@@ -484,6 +485,7 @@ fn session_lifecycle_round_trip() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:11".into()),
         items: vec![],
         total_ped: 0.0,
@@ -684,6 +686,7 @@ fn stopping_a_session_relands_its_days_rollups() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![LootItem {
             item_name: "Animal Hide".into(),
@@ -926,6 +929,7 @@ fn loot_creates_and_persists_kills_with_filtering() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![
             LootItem {
@@ -1024,6 +1028,7 @@ fn loot_creates_and_persists_kills_with_filtering() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:04".into()),
         items: vec![LootItem {
             item_name: "Mud".into(),
@@ -1060,6 +1065,7 @@ fn a_server_stamped_loot_reading_lands_at_the_instant_it_names() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: Some("server-stamped".into()),
+        arrived_ms: None,
         timestamp: Some("2026-01-01T02:00:02".into()),
         items: vec![LootItem {
             item_name: "Animal Hide".into(),
@@ -1087,6 +1093,7 @@ fn exact_loot_source_reclassification_updates_the_live_aggregate() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: Some("quest-clump-1".into()),
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![
             LootItem {
@@ -1172,6 +1179,7 @@ fn loot_dedup_inside_the_window_only() {
         BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: Some(ts.into()),
             items: vec![LootItem {
                 item_name: "Animal Hide".into(),
@@ -1193,6 +1201,7 @@ fn loot_dedup_inside_the_window_only() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:05".into()),
         items: vec![LootItem {
             item_name: "Mud".into(),
@@ -1264,6 +1273,7 @@ fn snapshot_aggregates_and_rounds_the_readout() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![LootItem {
             item_name: "Animal Hide".into(),
@@ -1281,6 +1291,7 @@ fn snapshot_aggregates_and_rounds_the_readout() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:04".into()),
         items: vec![LootItem {
             item_name: "Mud".into(),
@@ -1461,6 +1472,7 @@ fn shots_before_the_first_press_are_never_repriced_by_it() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:03".into()),
         items: vec![],
         total_ped: 0.0,
@@ -2543,6 +2555,7 @@ fn globals_correlate_within_the_window() {
         BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: Some(ts.into()),
             items: vec![LootItem {
                 item_name: "Animal Hide".into(),
@@ -3645,6 +3658,7 @@ fn session_facet_and_declared_mob_rules() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![],
         total_ped: 0.0,
@@ -3716,6 +3730,7 @@ fn session_facet_and_declared_mob_rules() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:09".into()),
         items: vec![],
         total_ped: 0.0,
@@ -4201,6 +4216,7 @@ fn snapshot_prices_enhancer_cost_and_skips_costless_multipliers() {
         BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: Some(ts.into()),
             items: vec![LootItem {
                 item_name: name.into(),
@@ -4314,6 +4330,7 @@ fn an_unpriced_shot_never_borrows_a_library_cost() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![],
         total_ped: 0.0,
@@ -4395,6 +4412,7 @@ fn a_kill_persists_immutable_efficiency_and_session_looter_evidence() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![],
         total_ped: 0.0,
@@ -4560,6 +4578,7 @@ fn a_stopped_sessions_expected_loot_matches_its_live_figure() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:03".into()),
         items: vec![LootItem {
             item_name: "Animal Hide".into(),
@@ -4640,6 +4659,7 @@ fn a_costless_declared_tool_keys_its_own_entry_and_leaves_earlier_shots_unpriced
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:03".into()),
         items: vec![],
         total_ped: 0.0,
@@ -4826,6 +4846,7 @@ fn the_blacklist_provider_refreshes_at_session_start() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![
             LootItem {
@@ -4951,6 +4972,7 @@ fn a_global_at_the_exact_window_bound_is_not_correlated() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:20".into()),
         items: vec![LootItem {
             item_name: "Hide".into(),
@@ -5089,6 +5111,7 @@ fn harvest_tool_equip_prices_wood_swings_and_fails() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![
             LootItem {
@@ -5115,6 +5138,7 @@ fn harvest_tool_equip_prices_wood_swings_and_fails() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:06".into()),
         items: vec![LootItem {
             item_name: "Animal Hide".into(),
@@ -5169,6 +5193,7 @@ fn wood_loot_with_no_tool_records_zero_cost_and_warns_once() {
         rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: Some(ts.into()),
             items: vec![LootItem {
                 item_name: "Short Moonleaf Board".into(),
@@ -5251,6 +5276,7 @@ fn wood_group(ts: &str, board: Option<&str>) -> BusEvent {
     BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some(ts.into()),
         items,
         total_ped,
@@ -6019,6 +6045,7 @@ fn a_blacklisted_wood_group_still_routes_to_harvest_not_a_kill() {
     rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-01-01T00:00:02".into()),
         items: vec![
             LootItem {
@@ -6073,6 +6100,7 @@ fn the_cumulative_net_history_includes_harvest_swings() {
         rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: Some(ts.into()),
             items: vec![LootItem {
                 item_name: "Short Moonleaf Board".into(),

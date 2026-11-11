@@ -820,6 +820,10 @@ const OTHER_COMMANDS: &[&str] = &[
     "tracking_repair_scan",
     "tracking_session_exclusion",
     "tracking_session_delete",
+    // Which creatures a session's kills were: a record of the kills, not a
+    // statistic.
+    "tracking_mob_detections",
+    "tracking_mob_detection_settle",
     "session_definitions_list",
     "session_definition_create",
     "session_definition_update",

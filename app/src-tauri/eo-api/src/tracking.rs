@@ -306,6 +306,24 @@ pub struct MobBreakdownRow {
     pub current_name: String,
     pub original_name: Nullable<String>,
     pub kill_count: i64,
+    /// How sure the kills' creature is.
+    pub certainty: MobCertainty,
+}
+
+/// How sure a kill's creature is, where its mob is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MobCertainty {
+    /// As the player declared or settled it, or as detection read it
+    /// clearly.
+    Recorded,
+    /// A listed creature detection read only probably.
+    Probable,
+    /// A creature on no list, under the spelling detection read, not yet
+    /// confirmed by the player.
+    Unlisted,
+    /// The same, read only probably.
+    UnlistedProbable,
 }
 
 /// One per-tool aggregate.

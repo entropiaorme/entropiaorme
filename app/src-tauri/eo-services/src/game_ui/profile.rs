@@ -19,6 +19,11 @@ use super::window::ChromeProfile;
 /// The profile format this build reads.
 pub const PROFILE_FORMAT: u32 = 1;
 
+/// The shortest interval the creature watcher may look at the screen at,
+/// whatever a profile says: a floor on what the watcher may cost the
+/// machine the game is running on, not a measurement of the client.
+pub const MIN_PULSE_MS: i64 = 250;
+
 /// One client interface, described as data.
 #[derive(Debug, Clone, Deserialize)]
 pub struct UiProfile {
@@ -62,18 +67,54 @@ pub enum ProfileError {
 impl UiProfile {
     /// Parse a profile from its JSON text.
     pub fn from_json(text: &str) -> Result<Self, ProfileError> {
-        let profile: UiProfile = serde_json::from_str(text)?;
+        let mut profile: UiProfile = serde_json::from_str(text)?;
         if profile.format != PROFILE_FORMAT {
             return Err(ProfileError::Format {
                 found: profile.format,
                 expected: PROFILE_FORMAT,
             });
         }
+        profile.mob_history.pulse_ms = profile.mob_history.pulse_ms.max(MIN_PULSE_MS);
         Ok(profile)
     }
 
     /// Load a profile from a file.
     pub fn load(path: &Path) -> Result<Self, ProfileError> {
         Self::from_json(&std::fs::read_to_string(path)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bundled_text() -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../entropia-orme/resources/ui_profile.json"),
+        )
+        .expect("the bundled profile reads")
+    }
+
+    #[test]
+    fn the_watcher_cadence_is_held_to_its_floor() {
+        let text = bundled_text();
+        assert_eq!(
+            UiProfile::from_json(&text).unwrap().mob_history.pulse_ms,
+            1000
+        );
+        for (written, kept) in [
+            (10, MIN_PULSE_MS),
+            (0, MIN_PULSE_MS),
+            (-5, MIN_PULSE_MS),
+            (400, 400),
+        ] {
+            let quick = text.replace("\"pulse_ms\": 1000", &format!("\"pulse_ms\": {written}"));
+            assert_ne!(quick, text);
+            assert_eq!(
+                UiProfile::from_json(&quick).unwrap().mob_history.pulse_ms,
+                kept
+            );
+        }
     }
 }

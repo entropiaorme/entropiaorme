@@ -28,6 +28,12 @@ export const IN_DEVELOPMENT_SURFACES: readonly InDevelopmentSurface[] = [
 			'Armour costs can be recorded, reviewed, undone and re-recorded, but recording has not yet been walked in live play.',
 		graduates: 'Recording has been walked in live play.',
 	},
+	{
+		id: 'creature-detection',
+		summary:
+			'Reads the name over the creature you are locked on to and records which creature each kill was. Tried so far only on simulated ordinary hunts, where it named about three kills in four (one in two hundred wrongly) and kept your declared mob for the rest. Off until you turn it on.',
+		graduates: 'Detection has been checked against live hunts.',
+	},
 ] as const;
 
 /** The registered surface for `id`. Throws on an unregistered id, matching

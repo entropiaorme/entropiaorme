@@ -53,6 +53,9 @@ use eo_api::market::{
     MarketHorizon, MarketManualMarkup, MarketManualMarkupInput, MarketOverviewRow,
     MarketPastePreview, MarketUnitPriceResult,
 };
+use eo_api::mob_detection::{
+    MobDetectionGroupRef, MobDetectionReview, MobDetectionSettleResult, MobDetectionTarget,
+};
 use eo_api::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
@@ -1438,6 +1441,26 @@ pub async fn tracking_restore_mob(
 ) -> Result<MobEditResult, ApiError> {
     facade(&app)?
         .tracking_restore_mob(session_id, current_mob_name)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_detections(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<MobDetectionReview, ApiError> {
+    facade(&app)?.tracking_mob_detections(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_detection_settle(
+    app: tauri::AppHandle,
+    session_id: String,
+    group: MobDetectionGroupRef,
+    target: MobDetectionTarget,
+) -> Result<MobDetectionSettleResult, ApiError> {
+    facade(&app)?
+        .tracking_mob_detection_settle(session_id, group, target)
         .await
 }
 

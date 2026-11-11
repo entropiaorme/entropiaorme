@@ -127,6 +127,13 @@ pub struct Metrics {
     events_published: AtomicU64,
     ocr_latency: LatencyHistogram,
     db_query_latency: LatencyHistogram,
+    // The creature watcher's cost per look at the game window, stage by
+    // stage: taking the frame, searching it for the locked plate, and
+    // reading the plate found (recognition and name matching). A look
+    // that finds no plate records no reading.
+    plate_capture_latency: LatencyHistogram,
+    plate_search_latency: LatencyHistogram,
+    plate_read_latency: LatencyHistogram,
     // Drift gauges, set by the periodic resource sampler. `0` means
     // "not yet sampled" (the page renders a dash); resident-set bytes and
     // the OS handle/descriptor count are the two monotonic-growth signals a
@@ -141,6 +148,9 @@ impl Metrics {
             events_published: AtomicU64::new(0),
             ocr_latency: LatencyHistogram::new(),
             db_query_latency: LatencyHistogram::new(),
+            plate_capture_latency: LatencyHistogram::new(),
+            plate_search_latency: LatencyHistogram::new(),
+            plate_read_latency: LatencyHistogram::new(),
             rss_bytes: AtomicU64::new(0),
             handle_count: AtomicU64::new(0),
         }
@@ -164,6 +174,24 @@ impl Metrics {
         self.db_query_latency.record(elapsed);
     }
 
+    /// Record how long one look of the creature watcher took to capture
+    /// the game window.
+    pub fn record_plate_capture(&self, elapsed: Duration) {
+        self.plate_capture_latency.record(elapsed);
+    }
+
+    /// Record how long one look took to search its frame for the locked
+    /// plate.
+    pub fn record_plate_search(&self, elapsed: Duration) {
+        self.plate_search_latency.record(elapsed);
+    }
+
+    /// Record how long one look took to read the locked plate it found and
+    /// match the name.
+    pub fn record_plate_read(&self, elapsed: Duration) {
+        self.plate_read_latency.record(elapsed);
+    }
+
     /// Set the latest resident-set-size sample, in bytes.
     pub fn set_rss_bytes(&self, bytes: u64) {
         self.rss_bytes.store(bytes, Ordering::Relaxed);
@@ -179,6 +207,9 @@ impl Metrics {
             events_published: self.events_published.load(Ordering::Relaxed),
             ocr_latency: self.ocr_latency.snapshot(),
             db_query_latency: self.db_query_latency.snapshot(),
+            plate_capture_latency: self.plate_capture_latency.snapshot(),
+            plate_search_latency: self.plate_search_latency.snapshot(),
+            plate_read_latency: self.plate_read_latency.snapshot(),
             rss_bytes: self.rss_bytes.load(Ordering::Relaxed),
             handle_count: self.handle_count.load(Ordering::Relaxed),
         }
@@ -199,6 +230,9 @@ pub struct MetricsSnapshot {
     pub events_published: u64,
     pub ocr_latency: HistogramSnapshot,
     pub db_query_latency: HistogramSnapshot,
+    pub plate_capture_latency: HistogramSnapshot,
+    pub plate_search_latency: HistogramSnapshot,
+    pub plate_read_latency: HistogramSnapshot,
     pub rss_bytes: u64,
     pub handle_count: u64,
 }
@@ -283,6 +317,39 @@ mod tests {
         assert_eq!(snap.db_query_latency.sum_us, 129);
         // The OCR histogram stays untouched (no cross-wiring).
         assert_eq!(snap.ocr_latency.count, 0);
+    }
+
+    #[test]
+    fn each_watcher_stage_lands_in_its_own_histogram() {
+        let m = Metrics::new();
+        m.record_plate_capture(Duration::from_micros(4_000));
+        m.record_plate_search(Duration::from_micros(30_000));
+        m.record_plate_search(Duration::from_micros(20_000));
+        m.record_plate_read(Duration::from_micros(90_000));
+        let snap = m.snapshot();
+        assert_eq!(
+            (
+                snap.plate_capture_latency.count,
+                snap.plate_capture_latency.sum_us
+            ),
+            (1, 4_000)
+        );
+        assert_eq!(
+            (
+                snap.plate_search_latency.count,
+                snap.plate_search_latency.sum_us
+            ),
+            (2, 50_000)
+        );
+        assert_eq!(
+            (
+                snap.plate_read_latency.count,
+                snap.plate_read_latency.sum_us
+            ),
+            (1, 90_000)
+        );
+        assert_eq!(snap.ocr_latency.count, 0);
+        assert_eq!(snap.db_query_latency.count, 0);
     }
 
     #[test]

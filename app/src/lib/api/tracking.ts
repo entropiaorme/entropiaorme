@@ -114,6 +114,12 @@ export async function reassignSession(sessionId: string, definitionId: string) {
 }
 export const renameSessionMob = commands.trackingRenameMob;
 export const restoreSessionMob = commands.trackingRestoreMob;
+/** Every creature and suggestion the screen gave an ended session's kills,
+ * grouped by creature and grade, the least certain first. */
+export const getMobDetections = commands.trackingMobDetections;
+/** Settle every kill of one group: name the creature, or put back the
+ * declared mob each kill had. Answers with the refreshed review. */
+export const settleMobDetection = commands.trackingMobDetectionSettle;
 /** Set the session facets (full-state apply: null clears a facet). The
  * name is fixed while a session runs (the backend answers 409 on an
  * attempted change): it is a stamp of the definition's name, so a

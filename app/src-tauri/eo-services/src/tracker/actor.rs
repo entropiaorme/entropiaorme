@@ -111,6 +111,9 @@ pub(super) enum TrackerMsg {
     /// The wake-up at a dose's expiry: nothing to do beyond the sweep every
     /// message runs first.
     DoseWake,
+    /// One look of the creature watcher: no reply, since the watcher's
+    /// thread never waits on the tracker (see `detection`).
+    MobPulse(crate::mob_watch::MobPulse),
     /// Test-only structural inspection: run a closure against the
     /// actor's owned state (the typestate replaced the lockable state
     /// tests used to peek at).
@@ -173,6 +176,9 @@ pub(super) struct TrackerActor {
     pub(super) sender: mpsc::UnboundedSender<TrackerMsg>,
     subscriptions: Vec<(Topic, Registration)>,
     status: watch::Sender<TrackerStatus>,
+    /// The detection setting as last applied: turning it on lets the
+    /// watcher ask for a capture the desktop refused before.
+    pub(super) detection_setting: bool,
 }
 
 impl TrackerActor {
@@ -208,7 +214,9 @@ impl TrackerActor {
             sender,
             subscriptions: Vec::new(),
             status,
+            detection_setting: false,
         };
+        actor.detection_setting = actor.providers.config.mob_detection_enabled();
         actor.refresh_loot_filter();
 
         let recovered = actor.recover_orphaned_sessions().await;
@@ -251,6 +259,7 @@ impl TrackerActor {
             }
             TrackerMsg::ReloadConfig(reply) => {
                 self.reload_config();
+                self.sync_detection().await;
                 let _ = reply.send(());
             }
             TrackerMsg::DecideWeaponMismatch(decision, reply) => {
@@ -301,6 +310,7 @@ impl TrackerActor {
                 let _ = reply.send(result);
             }
             TrackerMsg::DoseWake => {}
+            TrackerMsg::MobPulse(pulse) => self.on_mob_pulse(pulse).await,
             #[cfg(test)]
             TrackerMsg::Inspect(probe) => probe(self),
         }

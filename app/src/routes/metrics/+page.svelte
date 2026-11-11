@@ -146,6 +146,9 @@
 		<section class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
 			{@render histogramCard('OCR inference latency', snapshot.ocr_latency)}
 			{@render histogramCard('Database query latency', snapshot.db_query_latency)}
+			{@render histogramCard('Creature watcher: capture', snapshot.plate_capture_latency)}
+			{@render histogramCard('Creature watcher: plate search', snapshot.plate_search_latency)}
+			{@render histogramCard('Creature watcher: plate reading', snapshot.plate_read_latency)}
 		</section>
 	{:else}
 		<p class="text-sm text-slate-400">Loading…</p>

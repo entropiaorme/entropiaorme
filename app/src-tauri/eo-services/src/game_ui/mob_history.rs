@@ -76,6 +76,9 @@ use super::plates::PlateRead;
 /// reads the locked plate about once a second.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MobHistoryProfile {
+    /// How often the watcher reads the locked plate: the cadence every
+    /// span below is measured against.
+    pub pulse_ms: i64,
     /// A reading joins a fight read at most this long before it.
     pub join_gap_ms: i64,
     /// A reading may show this much more health than its fight's last

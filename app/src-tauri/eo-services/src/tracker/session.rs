@@ -153,6 +153,9 @@ pub(super) struct ActiveSession {
     /// Believed-current Animal, Mutant, and Robot Looter levels captured at
     /// session start so later calibration cannot rewrite this evidence.
     pub(super) hunting_looters: HuntingLooterLevels,
+    /// The history of the locked plate and the kills waiting on it, while
+    /// creature detection runs for this session.
+    pub(super) detection: Option<super::detection::SessionDetection>,
 }
 
 impl ActiveSession {
@@ -188,6 +191,7 @@ impl ActiveSession {
                 mutant: 0.0,
                 robot: 0.0,
             },
+            detection: None,
         }
     }
 
@@ -960,6 +964,7 @@ impl TrackerActor {
         self.restore_persisted_weapon_effects(start_ts).await;
         self.subscribe_handlers();
         self.publish_status();
+        self.start_detection();
 
         self.bus
             .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
@@ -1011,6 +1016,13 @@ impl TrackerActor {
     /// summary, and the stop events; then the in-memory clear
     /// (dropping the whole `ActiveSession`).
     pub(super) async fn stop_session(&mut self) -> Result<Option<TrackingSession>, DbError> {
+        // The kills still waiting on detection are answered before anything
+        // below sums the session's kills; the watcher itself stops only once
+        // the stop has committed, so a stop that fails leaves the session
+        // fully live, still watching.
+        if self.session.active().is_some() {
+            self.answer_waiting_kills().await;
+        }
         let (
             session,
             session_id,
@@ -1110,6 +1122,7 @@ impl TrackerActor {
             })
             .await?;
         self.unsubscribe_handlers();
+        self.drop_detection();
 
         // Session end is a quiescent boundary: checkpoint and truncate the WAL
         // so its growth over a tracked session is bounded. Best-effort: the

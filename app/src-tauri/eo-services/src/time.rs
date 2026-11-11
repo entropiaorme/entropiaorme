@@ -94,6 +94,13 @@ pub fn naive_to_epoch(instant: NaiveDateTime) -> f64 {
     instant_to_epoch(resolve_local(instant))
 }
 
+/// The injected clock's wall-clock instant as whole epoch milliseconds:
+/// the one time base the creature watcher's looks and the log reader's
+/// arrival of a kill line are both stamped on, so the two compare.
+pub fn clock_epoch_ms(clock: &dyn crate::clock::Clock) -> i64 {
+    (naive_to_epoch(clock.now()) * 1000.0).round() as i64
+}
+
 /// A naive `datetime.isoformat()`: no offset suffix, microseconds
 /// only when non-zero. The instant-carrying surfaces render through
 /// `local_isoformat`, which converts to the local wall clock and then

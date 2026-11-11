@@ -8,11 +8,18 @@
 //!     unfinished.
 //!
 //!   - Rule (the published channel is stamped): every step in the release
-//!     workflow that builds the frontend sets `ENTROPIAORME_STABLE_CHANNEL`
-//!     to `1` in its own `env` block. That stamp is what hides in-development
-//!     surfaces from people who did not build the app. Losing it, or setting
-//!     it to anything else, is silent in CI and visible only to whoever
-//!     downloads the release, so it gets a mechanical check.
+//!     workflow that builds the app (its frontend, its Rust binary, or both)
+//!     sets `ENTROPIAORME_STABLE_CHANNEL` to `1` in its own `env` block. That
+//!     stamp is what hides in-development surfaces from people who did not
+//!     build the app, and what keeps the backend's in-development features
+//!     off in a published build. Losing it, or setting it to anything else,
+//!     is silent in CI and visible only to whoever downloads the release, so
+//!     it gets a mechanical check.
+//!
+//!   - Rule (the backend reads the same stamp): the settings module, where
+//!     the backend decides whether an in-development feature may run, reads
+//!     the stamp by this guard's own name at compile time. A renamed or
+//!     removed read would leave a feature on in a published build.
 //!
 //! Why guards rather than a written convention: a surface lands ahead of its
 //! capability precisely when attention is elsewhere, and graduating it is the
@@ -40,8 +47,14 @@ use crate::git;
 
 const REGISTRY: &str = "app/src/lib/inDevelopment/registry.ts";
 const RELEASE_WORKFLOW: &str = ".github/workflows/release.yml";
-/// Build invocations in the release workflow that produce frontend assets.
-const FRONTEND_BUILD_MARKERS: &[&str] = &["tauri -- build", "build-installer.ps1"];
+/// The release workflow's build invocations: each builds the frontend
+/// assets and the Rust binary of a published artefact.
+const RELEASE_BUILD_MARKERS: &[&str] = &["tauri -- build", "build-installer.ps1"];
+/// Invocations that would build the Rust binary alone, should a release
+/// step ever do so.
+const RUST_BUILD_MARKERS: &[&str] = &["cargo build", "cargo tauri"];
+/// Where the backend reads the stamp.
+const RUST_CHANNEL_READER: &str = "app/src-tauri/eo-services/src/config_service.rs";
 const CHANNEL_STAMP: &str = "ENTROPIAORME_STABLE_CHANNEL";
 
 /// A single lint violation: file, 1-based line number, detail.
@@ -186,8 +199,9 @@ pub fn channel_stamp_findings(text: &str) -> Vec<Finding> {
     for (start, end) in step_ranges(&lines) {
         let step = &lines[start..end];
         let Some((offset, marker)) = step.iter().enumerate().find_map(|(i, line)| {
-            FRONTEND_BUILD_MARKERS
+            RELEASE_BUILD_MARKERS
                 .iter()
+                .chain(RUST_BUILD_MARKERS)
                 .find(|m| line.contains(**m))
                 .map(|m| (i, *m))
         }) else {
@@ -198,12 +212,12 @@ pub fn channel_stamp_findings(text: &str) -> Vec<Finding> {
         }
         let detail = if step.iter().any(|line| stamp_any.is_match(line)) {
             format!(
-                "builds the frontend ({marker}) but sets {CHANNEL_STAMP} to something other than \
+                "builds the app ({marker}) but sets {CHANNEL_STAMP} to something other than \
 1; a published artefact would carry surfaces still registered as in-development"
             )
         } else {
             format!(
-                "builds the frontend ({marker}) without setting {CHANNEL_STAMP} to 1 in this \
+                "builds the app ({marker}) without setting {CHANNEL_STAMP} to 1 in this \
 step; a published artefact would carry surfaces still registered as in-development"
             )
         };
@@ -214,6 +228,23 @@ step; a published artefact would carry surfaces still registered as in-developme
         });
     }
     findings
+}
+
+/// Flag a settings module that does not read the stamp, by this guard's
+/// name, at compile time (comments do not count).
+pub fn rust_reader_findings(text: &str) -> Vec<Finding> {
+    let read = format!("option_env!(\"{CHANNEL_STAMP}\")");
+    if strip_comments(text).contains(&read) {
+        return Vec::new();
+    }
+    vec![Finding {
+        path: RUST_CHANNEL_READER.to_string(),
+        lineno: 1,
+        detail: format!(
+            "does not read {CHANNEL_STAMP} with `{read}`; the backend could not tell a published \
+build and would run its in-development features there"
+        ),
+    }]
 }
 
 /// Repo-relative tracked frontend sources, excluding the register itself and
@@ -278,6 +309,16 @@ landed, delete the entry and its marker"
         Err(e) => {
             return Err(format!(
                 "in-development: cannot read {RELEASE_WORKFLOW}: {e}"
+            ))
+        }
+    }
+
+    let reader_path = repo_root.join(RUST_CHANNEL_READER);
+    match std::fs::read_to_string(&reader_path) {
+        Ok(text) => findings.extend(rust_reader_findings(&text)),
+        Err(e) => {
+            return Err(format!(
+                "in-development: cannot read {RUST_CHANNEL_READER}: {e}"
             ))
         }
     }
@@ -409,6 +450,31 @@ mod tests {
     // ── published-channel stamp ───────────────────────────────────────────
 
     #[test]
+    fn flags_a_rust_build_step_missing_the_channel_stamp() {
+        let yml = "      - name: Build\n        run: cargo build --release -p entropia-orme\n";
+        let f = channel_stamp_findings(yml);
+        assert_eq!(f.len(), 1);
+        assert!(f[0].detail.contains("cargo build"));
+        let stamped = "      - name: Build\n        env:\n          ENTROPIAORME_STABLE_CHANNEL: '1'\n        run: cargo build --release\n";
+        assert!(channel_stamp_findings(stamped).is_empty());
+    }
+
+    #[test]
+    fn accepts_a_settings_module_that_reads_the_stamp() {
+        let text = "pub fn published_build() -> bool {\n    option_env!(\"ENTROPIAORME_STABLE_CHANNEL\") == Some(\"1\")\n}\n";
+        assert!(rust_reader_findings(text).is_empty());
+    }
+
+    #[test]
+    fn flags_a_settings_module_reading_another_name_or_none() {
+        let renamed = "option_env!(\"ENTROPIAORME_CHANNEL\") == Some(\"1\")";
+        assert_eq!(rust_reader_findings(renamed).len(), 1);
+        let commented = "// option_env!(\"ENTROPIAORME_STABLE_CHANNEL\")\nfn published_build() -> bool { false }\n";
+        assert_eq!(rust_reader_findings(commented).len(), 1);
+        assert_eq!(rust_reader_findings("").len(), 1);
+    }
+
+    #[test]
     fn flags_a_frontend_build_step_missing_the_channel_stamp() {
         let yml = "      - name: Build\n        run: npm run tauri -- build --bundles deb\n";
         let f = channel_stamp_findings(yml);
@@ -497,7 +563,7 @@ mod tests {
 
         // Guard against a vacuous pass: if the workflow's build invocations are
         // renamed, the markers match nothing and the rule trivially succeeds.
-        for marker in FRONTEND_BUILD_MARKERS {
+        for marker in RELEASE_BUILD_MARKERS {
             assert!(
                 text.contains(marker),
                 "no build invocation matches {marker:?}; the rule would pass vacuously"

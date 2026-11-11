@@ -7,7 +7,10 @@
 //! handle the missing-window case.
 
 use crate::game_ui::seams::{FrameArea, FrameUnavailable, GameFrame};
-use crate::screen_capture::{capturable_area, capture_region_bgr, start_capture};
+use crate::screen_capture::{
+    capturable_area, capturable_area_running, capture_region_bgr, capture_region_bgr_running,
+    capture_running, start_capture,
+};
 
 pub const GAME_TITLE_PREFIX: &str = "Entropia Universe Client";
 
@@ -38,6 +41,19 @@ pub fn get_window_geometry(handle: WindowHandle) -> Option<(i64, i64, i64, i64)>
 ///
 /// [`GameWindowFrame`]: crate::game_ui::seams::GameWindowFrame
 pub fn capture_game_window(area: FrameArea) -> Result<GameFrame, FrameUnavailable> {
+    capture_window(area, true)
+}
+
+/// [`capture_game_window`] without ever starting the capturer: where it
+/// must be started (the ScreenCast portal) and is not running, the answer
+/// is [`FrameUnavailable::CaptureNotStarted`]. What a reader looking on its
+/// own schedule captures with, so it never asks the desktop for consent
+/// nor reopens a stream the player stopped.
+pub fn capture_game_window_running(area: FrameArea) -> Result<GameFrame, FrameUnavailable> {
+    capture_window(area, false)
+}
+
+fn capture_window(area: FrameArea, may_start: bool) -> Result<GameFrame, FrameUnavailable> {
     let handle = find_game_window().ok_or(FrameUnavailable::WindowNotFound)?;
     let window = get_window_geometry(handle).ok_or(FrameUnavailable::WindowNotFound)?;
     // A part of the window is captured as far as it lies inside it.
@@ -56,16 +72,31 @@ pub fn capture_game_window(area: FrameArea) -> Result<GameFrame, FrameUnavailabl
     };
     // Asked once, before the area and the pixels, each of which would
     // otherwise try a failed start again and ask for consent twice.
-    if !start_capture() {
+    let started = if may_start {
+        start_capture()
+    } else {
+        capture_running()
+    };
+    if !started {
         return Err(FrameUnavailable::CaptureNotStarted);
     }
-    let (x, y, w, h) = match capturable_area() {
+    let limit = if may_start {
+        capturable_area()
+    } else {
+        capturable_area_running()
+    };
+    let (x, y, w, h) = match limit {
         Some(area) => {
             capturable_part(client, area).ok_or(FrameUnavailable::OutsideCapturableArea)?
         }
         None => client,
     };
-    capture_region_bgr(x, y, w, h)
+    let pixels = if may_start {
+        capture_region_bgr(x, y, w, h)
+    } else {
+        capture_region_bgr_running(x, y, w, h)
+    };
+    pixels
         .map(|image| GameFrame {
             image,
             origin: (x, y),

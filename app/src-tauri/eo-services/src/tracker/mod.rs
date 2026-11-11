@@ -27,6 +27,9 @@ mod attribution;
 mod attribution_tests;
 mod combat;
 mod cycled;
+mod detection;
+#[cfg(test)]
+mod detection_tests;
 mod doses;
 #[cfg(test)]
 mod doses_tests;
@@ -55,11 +58,13 @@ pub use attribution::{
 };
 // The recorded session's expected loot reads its armour as the live readout does.
 pub(crate) use cycled::read_session_armour;
+#[cfg(test)]
+pub(crate) use detection::{write_detection, KillDetection, StampedMob};
 pub use doses::{DoseError, DoseStart};
 pub use intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec, OpenInterval,
 };
-pub use mob::{DeclaredMob, MobStampSource};
+pub use mob::{DeclaredMob, MobDetectionGrade, MobStampSource};
 pub use providers::{
     CarriedWeaponProfile, DefaultTrackingConfig, EquipmentLibrary, EquipmentProfile, GuardrailTool,
     HarvestGuardrailTools, InertEquipment, Providers, TrackingConfig, TreeSize,

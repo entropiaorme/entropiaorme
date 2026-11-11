@@ -28,6 +28,10 @@
 	import { createSessionDosesModel } from '$lib/features/consumables/sessionDosesModel.svelte';
 	import HealingEvidence from '$lib/features/healing/HealingEvidence.svelte';
 	import { createHealingReviewModel } from '$lib/features/healing/healingReviewModel.svelte';
+	import MobDetections from '$lib/features/tracking/MobDetections.svelte';
+	import { createMobDetectionModel } from '$lib/features/tracking/mobDetectionModel.svelte';
+	import { describeCertainty } from '$lib/features/tracking/mobDetection';
+	import { inDevelopment } from '$lib/inDevelopment';
 	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
 	import { describeUnpriced, hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
 	import { createWeaponReviewModel } from '$lib/features/weapons/weaponReviewModel.svelte';
@@ -80,6 +84,17 @@
 		apply: (fresh) => {
 			detail = fresh;
 		},
+	});
+
+	// Which creatures the kills were detected as: settling a group restamps
+	// its kills, so the session's figures re-read.
+	const mobDetections = createMobDetectionModel({
+		sessionId: () => detail.sessionId,
+		onSettled: () => refetchSessionDetail(),
+	});
+	$effect(() => {
+		void detail.sessionId;
+		if (inDevelopment.visible) void mobDetections.refresh();
 	});
 
 	// A recording or undo from the overlay moves this session's armour cost,
@@ -475,6 +490,10 @@
 
 	<SessionDoses model={sessionDoses} />
 
+	{#if inDevelopment.visible}
+		<MobDetections model={mobDetections} />
+	{/if}
+
 	<!-- 1b2. Harvesting strip (shown only when the session harvested) -->
 	{#if detail.harvest && detail.harvest.swings > 0}
 		<Divider />
@@ -523,7 +542,7 @@
 		<div>
 			<h3 class="eyebrow mb-3">{attributionHeading}</h3>
 			<div class="rounded-md border border-border/60 divide-y divide-border/40">
-				{#each mobBreakdown as row (`${row.currentName}|${row.originalName ?? ''}`)}
+				{#each mobBreakdown as row (`${row.currentName}|${row.originalName ?? ''}|${row.certainty}`)}
 					{@const isEditing = mobEditMode === 'edit' && mobEditTarget === row.currentName}
 					{@const isRestoring = mobEditMode === 'restore' && mobEditTarget === row.currentName}
 					<div class="px-3 py-2 flex flex-wrap items-center gap-3 text-sm">
@@ -582,6 +601,9 @@
 						{:else}
 							<div class="flex flex-1 items-center gap-2 min-w-[200px]">
 								<span class="text-text">{row.currentName}</span>
+								{#if describeCertainty(row.certainty)}
+									<span class="text-xs text-text-tertiary">{describeCertainty(row.certainty)}</span>
+								{/if}
 								{#if row.originalName}
 									<span class="text-xs text-text-tertiary italic">
 										{attributionOriginallyLabel} {row.originalName}

@@ -74,12 +74,22 @@ fn guard<T>(lock: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// timeout or a declined consent leaves the slot empty, and the next
 /// user-invoked capture simply tries again.
 fn engine() -> Option<Arc<Engine>> {
+    engine_if(true)
+}
+
+/// The running engine, started first when `start` allows it. Without
+/// `start`, nothing is started: no consent is asked for and no stream the
+/// player stopped is reopened.
+fn engine_if(start: bool) -> Option<Arc<Engine>> {
     let mut slot = guard(&ENGINE);
     if slot
         .as_ref()
         .is_some_and(|engine| !engine.healthy.load(Ordering::Acquire))
     {
         *slot = None;
+    }
+    if slot.is_none() && !start {
+        return None;
     }
     if slot.is_none() {
         match start_engine() {
@@ -383,11 +393,24 @@ pub fn start() -> bool {
     engine().is_some()
 }
 
+/// Whether the stream is running now, without starting it.
+pub fn running() -> bool {
+    engine_if(false).is_some()
+}
+
 pub fn capture_bgra(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
+    crop(engine()?, x, y, w, h)
+}
+
+/// [`capture_bgra`] from the stream only if it is already running.
+pub fn capture_bgra_running(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
+    crop(engine_if(false)?, x, y, w, h)
+}
+
+fn crop(engine: Arc<Engine>, x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
     if w <= 0 || h <= 0 {
         return None;
     }
-    let engine = engine()?;
     if !engine.healthy.load(Ordering::Acquire) {
         return None;
     }
@@ -425,7 +448,15 @@ pub fn capture_bgra(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
 /// The monitor shared for capture, as `(x, y, width, height)` in global
 /// screen coordinates; `None` until the stream has produced a frame.
 pub fn monitor_area() -> Option<(i64, i64, i64, i64)> {
-    let engine = engine()?;
+    area_of(engine()?)
+}
+
+/// [`monitor_area`] only if the stream is already running.
+pub fn monitor_area_running() -> Option<(i64, i64, i64, i64)> {
+    area_of(engine_if(false)?)
+}
+
+fn area_of(engine: Arc<Engine>) -> Option<(i64, i64, i64, i64)> {
     if !engine.healthy.load(Ordering::Acquire) {
         return None;
     }

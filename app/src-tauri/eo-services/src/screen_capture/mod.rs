@@ -67,6 +67,36 @@ pub fn start_capture() -> bool {
     platform::start_capture()
 }
 
+/// Whether the capturer is running now, without starting it: what a reader
+/// that looks on its own schedule asks, so it never puts the desktop's
+/// consent question to the player, nor reopens a stream the player
+/// stopped. Where nothing has to be started, it is always running.
+pub fn capture_running() -> bool {
+    platform::capture_running()
+}
+
+/// [`capture_region_bgr`] from a capturer already running; `None` when it
+/// is not (nothing is started).
+pub fn capture_region_bgr_running(x: i64, y: i64, w: i64, h: i64) -> Option<BgrImage> {
+    let bgra = platform::capture_bgra_running(x, y, w, h)?;
+    let mut data = Vec::with_capacity((w as usize) * (h as usize) * 3);
+    for px in bgra.chunks_exact(4) {
+        data.push(px[0]);
+        data.push(px[1]);
+        data.push(px[2]);
+    }
+    Some(BgrImage {
+        data,
+        h: h as usize,
+        w: w as usize,
+    })
+}
+
+/// [`capturable_area`] of a capturer already running, starting nothing.
+pub fn capturable_area_running() -> Option<(i64, i64, i64, i64)> {
+    platform::capturable_area_running()
+}
+
 /// The area of the screen the capturer can grab from, as `(x, y, width,
 /// height)` in global screen coordinates, where it is limited to one: the
 /// X screen on an Xorg session, the monitor shared through the portal
@@ -227,6 +257,18 @@ mod platform {
     pub fn start_capture() -> bool {
         true
     }
+
+    pub fn capture_running() -> bool {
+        true
+    }
+
+    pub fn capture_bgra_running(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
+        capture_bgra(x, y, w, h)
+    }
+
+    pub fn capturable_area_running() -> Option<(i64, i64, i64, i64)> {
+        None
+    }
 }
 
 /// The Linux capturer: the X server's own screen on an Xorg session, the
@@ -250,6 +292,55 @@ mod platform {
 
     pub fn start_capture() -> bool {
         super::x11::session_is_x11() || portal_start()
+    }
+
+    pub fn capture_running() -> bool {
+        super::x11::session_is_x11() || portal_running()
+    }
+
+    pub fn capture_bgra_running(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
+        if super::x11::session_is_x11() {
+            return super::x11::capture_bgra(x, y, w, h);
+        }
+        portal_capture_running(x, y, w, h)
+    }
+
+    pub fn capturable_area_running() -> Option<(i64, i64, i64, i64)> {
+        if super::x11::session_is_x11() {
+            return super::x11::screen_area();
+        }
+        portal_area_running()
+    }
+
+    #[cfg(feature = "linux-capture")]
+    fn portal_running() -> bool {
+        super::portal::running()
+    }
+
+    /// Without the portal backend nothing is ever started.
+    #[cfg(not(feature = "linux-capture"))]
+    fn portal_running() -> bool {
+        true
+    }
+
+    #[cfg(feature = "linux-capture")]
+    fn portal_capture_running(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
+        super::portal::capture_bgra_running(x, y, w, h)
+    }
+
+    #[cfg(not(feature = "linux-capture"))]
+    fn portal_capture_running(_x: i64, _y: i64, _w: i64, _h: i64) -> Option<Vec<u8>> {
+        None
+    }
+
+    #[cfg(feature = "linux-capture")]
+    fn portal_area_running() -> Option<(i64, i64, i64, i64)> {
+        super::portal::monitor_area_running()
+    }
+
+    #[cfg(not(feature = "linux-capture"))]
+    fn portal_area_running() -> Option<(i64, i64, i64, i64)> {
+        None
     }
 
     #[cfg(feature = "linux-capture")]
@@ -307,6 +398,18 @@ mod platform {
 
     pub fn start_capture() -> bool {
         true
+    }
+
+    pub fn capture_running() -> bool {
+        true
+    }
+
+    pub fn capture_bgra_running(_x: i64, _y: i64, _w: i64, _h: i64) -> Option<Vec<u8>> {
+        None
+    }
+
+    pub fn capturable_area_running() -> Option<(i64, i64, i64, i64)> {
+        None
     }
 }
 

@@ -630,15 +630,25 @@ pub fn get_session_read(
 
     let mob_breakdown: Vec<Value> = {
         let mut stmt = conn.prepare(
-            "SELECT mob_name, original_mob_name, COUNT(*) FROM kills \
+            "SELECT mob_name, original_mob_name, COUNT(*), \
+                    CASE mob_detection_grade \
+                        WHEN 'guess' THEN 'probable' \
+                        WHEN 'provisional' THEN 'unlisted' \
+                        WHEN 'provisional_guess' THEN 'unlisted_probable' \
+                        ELSE 'recorded' END \
+             FROM kills \
              WHERE session_id = ? AND mob_name IS NOT NULL \
-             GROUP BY mob_name, original_mob_name ORDER BY COUNT(*) DESC",
+             GROUP BY 1, 2, 4 ORDER BY COUNT(*) DESC",
         )?;
         let rows = stmt.query_map(rusqlite::params![session_id], |row| {
             Ok(json!({
                 "currentName": row.get::<_, String>(0)?,
                 "originalName": row.get::<_, Option<String>>(1)?,
                 "killCount": row.get::<_, i64>(2)?,
+                // How sure the stamp is: as recorded, or detected only
+                // probably, or under the spelling read for a creature on no
+                // list, which the player has not confirmed yet.
+                "certainty": row.get::<_, String>(3)?,
             }))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -1674,6 +1684,10 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 rusqlite::params![sid],
             )?;
             tx.execute(
+                "DELETE FROM kill_mob_detections WHERE session_id = ?",
+                rusqlite::params![sid],
+            )?;
+            tx.execute(
                 "DELETE FROM kills WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;
@@ -2642,7 +2656,7 @@ mod tests {
                 ],
                 "lootBreakdown": [{"name": "Oil", "quantity": 2, "ttValue": 20.0}],
                 "deactivatedLootBreakdown": [{"name": "Hide", "quantity": 1, "ttValue": 10.0}],
-                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 2}],
+                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 2, "certainty": "recorded"}],
                 "effectiveLoot": 30.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 20, "damageDealt": 200.0, "crits": 1, "costAttributed": 10.0}],
                 "skillGains": [{"skillName": "Laser Weaponry Technology", "level": 42.5, "ttValueGained": 0.5}],
@@ -2796,7 +2810,7 @@ mod tests {
                 "deactivatedLootBreakdown": [
                     {"name": "Wood Shavings", "quantity": 2, "ttValue": 1.0},
                 ],
-                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 1}],
+                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 1, "certainty": "recorded"}],
                 "effectiveLoot": 28.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 10, "damageDealt": 100.0, "crits": 0, "costAttributed": 5.0}],
                 "skillGains": [],

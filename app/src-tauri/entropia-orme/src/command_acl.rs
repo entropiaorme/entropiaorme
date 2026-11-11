@@ -179,6 +179,8 @@ macro_rules! app_command_surface {
             tracking_reassign_session,
             tracking_rename_mob,
             tracking_restore_mob,
+            tracking_mob_detections,
+            tracking_mob_detection_settle,
             tracking_loot_item_activate,
             tracking_loot_item_deactivate,
             tracking_armour_cost,

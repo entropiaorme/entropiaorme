@@ -272,6 +272,10 @@ export interface AppSettings {
 	hotbarHooksEnabled: boolean;
 	keyboard: KeyboardAccess;
 	repairOcrEnabled: boolean;
+	/** Whether the creature being fought is read off the game screen while a session runs (the player's choice, or the build's default until they make one). */
+	mobDetectionEnabled: boolean;
+	/** Whether detection can capture the game window when a session wants it: what the settings say beside the toggle when it cannot. */
+	mobDetectionCapture: MobDetectionCapture;
 	developerModeEnabled: boolean;
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
 	sessionName: string;
@@ -997,6 +1001,16 @@ export interface DefinitionSelectResult {
 export interface DerivedSource {
 	itemName: string;
 	quantity: number;
+}
+
+/**
+ * A creature as a kill's stamp carries it: its display name, species and
+ * maturity (both empty for a creature on no list).
+ */
+export interface DetectedCreature {
+	name: string;
+	species: string;
+	maturity: string;
 }
 
 /**
@@ -2320,6 +2334,10 @@ export interface MetricsSnapshot {
 	events_published: number;
 	ocr_latency: HistogramSnapshot;
 	db_query_latency: HistogramSnapshot;
+	/** The creature watcher's cost per look: capturing the game window, searching it for the locked plate, and reading the plate found. */
+	plate_capture_latency: HistogramSnapshot;
+	plate_search_latency: HistogramSnapshot;
+	plate_read_latency: HistogramSnapshot;
 	rss_bytes: number;
 	handle_count: number;
 }
@@ -2331,7 +2349,14 @@ export interface MobBreakdownRow {
 	currentName: string;
 	originalName: string | null;
 	killCount: number;
+	/** How sure the kills' creature is. */
+	certainty: MobCertainty;
 }
+
+/**
+ * How sure a kill's creature is, where its mob is shown.
+ */
+export type MobCertainty = 'recorded' | 'probable' | 'unlisted' | 'unlisted_probable';
 
 /**
  * One row of the per-mob activity comparison.
@@ -2345,6 +2370,92 @@ export interface MobComparison {
 	pesPer100Ped: number;
 	lootRate: number;
 }
+
+/**
+ * Whether creature detection can capture the game window when a session
+ * wants it, as the settings show it beside the toggle.
+ */
+export type MobDetectionCapture = 'ready' | 'notRunning' | 'refused' | 'unavailable';
+
+/**
+ * How sure detection was of a creature. The upper four stamped the
+ * kills; the two lowest are suggestions the kills did not take.
+ */
+export type MobDetectionGrade = 'named' | 'guess' | 'provisional' | 'provisional_guess' | 'latest_read' | 'provisional_latest_read';
+
+/**
+ * One group of the session's detections.
+ */
+export interface MobDetectionGroup {
+	group: MobDetectionGroupRef;
+	killCount: number;
+	/** The text read off the plate most often for the group's kills. */
+	exampleText: string;
+	/** What the group's kills are recorded as now, when they agree. */
+	currentName: string | null;
+	/** The player has settled the group. */
+	reviewed: boolean;
+}
+
+/**
+ * Which group of a session's detections: the creature, at one grade,
+ * with the session's own key for a creature on no list (two such
+ * creatures can share a spelling, read at different levels).
+ */
+export interface MobDetectionGroupRef {
+	grade: MobDetectionGrade;
+	creature: DetectedCreature;
+	provisionalKey: string | null;
+}
+
+/**
+ * Every creature and suggestion detection gave an ended session's kills,
+ * the least certain first.
+ */
+export interface MobDetectionReview {
+	sessionId: string;
+	/** The session has ended, so its detections can be settled. */
+	ended: boolean;
+	groups: MobDetectionGroup[];
+}
+
+/**
+ * What settling a group came to.
+ */
+export type MobDetectionSettleResult = {
+		settled: MobDetectionSettled;
+		review: MobDetectionReview;
+		kind: 'settled';
+	} | {
+		creature: DetectedCreature;
+		kind: 'didYouMean';
+	};
+
+/**
+ * What a group was settled as.
+ */
+export type MobDetectionSettled = {
+		creature: DetectedCreature;
+		kind: 'listed';
+	} | {
+		creature: DetectedCreature;
+		kind: 'confirmed';
+	} | {
+		creature: DetectedCreature;
+		kind: 'newName';
+	} | {
+		kind: 'declared';
+	};
+
+/**
+ * What to settle a group as.
+ */
+export type MobDetectionTarget = {
+		name: string;
+		kind: 'creature';
+	} | {
+		kind: 'declared';
+	};
 
 /**
  * The mob rename / restore result.
@@ -3653,6 +3764,8 @@ export interface SettingsPatch {
 	/** Turn keyless tracking on or off for this machine. */
 	keyless_input?: boolean | null;
 	repair_ocr_enabled?: boolean | null;
+	/** Turn creature detection on or off. */
+	mob_detection_enabled?: boolean | null;
 	developer_mode_enabled?: boolean | null;
 	session_name?: string | null;
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */
@@ -5479,6 +5592,26 @@ export async function trackingRenameMob(sessionId: string, fromMobName: string, 
 
 export async function trackingRestoreMob(sessionId: string, currentMobName: string): Promise<MobEditResult> {
 	return invokeCommand('tracking_restore_mob', { session_id: sessionId, current_mob_name: currentMobName });
+}
+
+export async function trackingMobDetections(sessionId: string): Promise<MobDetectionReview> {
+	return invokeCommand('tracking_mob_detections', { session_id: sessionId });
+}
+
+export async function trackingMobDetectionSettle(sessionId: string, group: MobDetectionGroupRef, target: {
+		name: string;
+		kind: 'creature';
+	} | {
+		kind: 'declared';
+	}): Promise<{
+		settled: MobDetectionSettled;
+		review: MobDetectionReview;
+		kind: 'settled';
+	} | {
+		creature: DetectedCreature;
+		kind: 'didYouMean';
+	}> {
+	return invokeCommand('tracking_mob_detection_settle', { session_id: sessionId, group, target });
 }
 
 export async function trackingLootItemActivate(sessionId: string, itemName: string): Promise<LootItemEditResult> {

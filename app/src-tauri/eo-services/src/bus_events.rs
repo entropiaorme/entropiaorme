@@ -111,6 +111,13 @@ pub struct LootGroupPayload {
     /// fingerprints predate manual reward capture.
     #[serde(skip)]
     pub source_id: Option<String>,
+    /// When the log reader read the group's first loot line, in epoch
+    /// milliseconds on the application's injected clock (see
+    /// [`crate::time::clock_epoch_ms`]): how late the kill's report came,
+    /// which creature detection weighs. Absent for a group not read live
+    /// off the log. Internal like the source id, and for the same reason.
+    #[serde(skip)]
+    pub arrived_ms: Option<i64>,
     pub timestamp: Option<String>,
     pub items: Vec<LootItem>,
     pub total_ped: f64,
@@ -415,6 +422,7 @@ mod tests {
         let event = BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: Some("2026-01-01T00:00:02".into()),
             items: vec![LootItem {
                 item_name: "Shrapnel".into(),
@@ -439,6 +447,7 @@ mod tests {
         let no_ts = BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: None,
             items: vec![],
             total_ped: 0.0,

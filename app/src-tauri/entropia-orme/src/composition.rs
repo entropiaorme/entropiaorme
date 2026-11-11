@@ -95,6 +95,9 @@ use eo_services::hotbar_listener::{
     HOTBAR_SLOT_KEYS,
 };
 use eo_services::keystroke_source::{HookKeystrokeSource, KeystrokeSource, SharedKeystrokeSource};
+use eo_services::mob_watch::{
+    CatalogueCell, DetectorSlot, MobDetector, MobWatch, MobWatchProviders,
+};
 pub use eo_services::ocr_engine::OcrEngine;
 use eo_services::passive_effects::reload_seconds_under;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
@@ -360,6 +363,10 @@ pub struct ProducerState {
     // subscriptions for the substrate's lifetime, and the typed-command
     // facade serves the quest families over this same instance.
     quests: Arc<QuestService>,
+    // Creature detection, bound once the recogniser has loaded: the tracker
+    // starts and stops it with its sessions, and the exit path waits for
+    // its look in progress.
+    mob_detection: Arc<DetectorSlot>,
 }
 
 impl ProducerState {
@@ -377,7 +384,16 @@ impl ProducerState {
         if self.tracker.is_tracking() {
             let _ = block_on_pool(&self.runtime, self.tracker.stop_session());
         }
+        // Stopping the session stopped the creature watcher; wait, briefly,
+        // for a look still in progress, so nothing captures behind the
+        // closing app.
+        self.mob_detection.shutdown();
         self.watcher.stop();
+    }
+
+    /// Where creature detection is bound once the recogniser has loaded.
+    pub fn mob_detection_handle(&self) -> Arc<DetectorSlot> {
+        self.mob_detection.clone()
     }
 
     /// The composed watcher, for tests driving a replay through it.
@@ -771,6 +787,62 @@ async fn compose_with(
         profile: load_ui_profile(&resources.join(UI_PROFILE_FILE)),
     };
 
+    // Creature detection: the whole game window, the interface profile and
+    // the shared engine, matching names against the bundled creatures and
+    // the ones the player has confirmed. Bound into the slot the tracker
+    // was built with, so sessions started from now on can watch.
+    let mob_catalogue = Arc::new(match &game_ui.profile {
+        Some(profile) => {
+            match eo_services::mob_review::build_catalogue(&db, &game_data, &profile.mob_names)
+                .await
+            {
+                Ok(catalogue) => CatalogueCell::new(catalogue),
+                Err(err) => {
+                    tracing::warn!(
+                        target: "eo::composition",
+                        "confirmed creature names unreadable ({err}); matching the bundled list only"
+                    );
+                    CatalogueCell::new(eo_services::game_ui::mob_names::MobCatalogue::from_store(
+                        &game_data,
+                        Vec::new(),
+                        &profile.mob_names,
+                    ))
+                }
+            }
+        }
+        None => CatalogueCell::default(),
+    });
+    let mob_watch = MobWatch::new(
+        MobWatchProviders {
+            // Never the shared seam, which may start capture: the watcher
+            // captures only from a capture already running, and starts one
+            // only for the player's turning detection on.
+            frame: Arc::new(eu_window::capture_game_window_running),
+            capture_running: Arc::new(eo_services::screen_capture::capture_running),
+            start_capture: Arc::new(eo_services::screen_capture::start_capture),
+            enabled: {
+                let reader = producers
+                    .config_service_handle()
+                    .lock()
+                    .expect("config service")
+                    .reader();
+                Arc::new(move || reader.current().mob_detection_on())
+            },
+            focus: navigation_focus.clone(),
+            profile: game_ui.profile.clone(),
+            read_text: frame_reader(ocr_engine.clone()),
+            catalogue: mob_catalogue.clone(),
+            wait: None,
+        },
+        clock.clone(),
+    );
+    let mob_capture: eo_services::mob_watch::CaptureStatusProbe = {
+        let mob_watch = mob_watch.clone();
+        Arc::new(move || mob_watch.capture_status())
+    };
+    let mob_detector: Arc<dyn MobDetector> = Arc::new(mob_watch);
+    producers.mob_detection_handle().bind(mob_detector);
+
     let (skill_scan, sale_capture, spacebar_listener) = compose_scan_services(ScanInputs {
         bus: producers.bus_handle(),
         ocr_engine: ocr_engine.clone(),
@@ -820,10 +892,11 @@ async fn compose_with(
             move || reader.current().map_coord_region
         };
         let persist_config = producers.config_service_handle();
-        // A failed read leaves its crop and what was read there under the
-        // data dir's debug/ (tiny, overwritten, local-only): the standing
-        // instrument for diagnosing coordinates that will not read. A clean
-        // read leaves nothing.
+        // In a debug build, a failed read leaves its crop and what was read
+        // there under the data dir's debug/ (tiny, overwritten, local-only):
+        // the standing instrument for diagnosing coordinates that will not
+        // read. A clean read leaves nothing, and a release build never keeps
+        // a capture of the screen.
         let coord_debug_dir = data_dir.join("debug");
         CoordCaptureService::new(
             CoordCaptureProviders {
@@ -863,7 +936,9 @@ async fn compose_with(
                         .map(|_| ())
                         .map_err(|err| err.to_string())
                 }),
-                debug_dir: Arc::new(move || Some(coord_debug_dir.clone())),
+                debug_dir: Arc::new(move || {
+                    cfg!(debug_assertions).then(|| coord_debug_dir.clone())
+                }),
             },
             clock.clone(),
         )
@@ -958,6 +1033,14 @@ async fn compose_with(
             Some(navigation.0),
         )
         .with_input_access(producers.input_access())
+        .with_mob_detection(
+            mob_catalogue,
+            game_ui
+                .profile
+                .as_ref()
+                .map(|profile| profile.mob_names.clone()),
+            Some(mob_capture),
+        )
         .with_protection_changed({
             // Recording happens in the overlay's Cost popup while Equipment,
             // History, and the dashboard may be open elsewhere: each re-reads
@@ -1313,6 +1396,10 @@ fn compose_producers(
         chatlog_clock.clone(),
     ));
     watcher.set_signal_reward_filter(quests.watcher_signal_filter());
+    // A loot line's arrival is stamped on the application's clock, the one
+    // the creature watcher stamps its looks on, so the two compare.
+    watcher.set_arrival_clock(clock.clone());
+    let mob_detection = Arc::new(DetectorSlot::default());
 
     let skill_tracker = SkillTracker::new(&bus, db.clone(), clock.clone(), chatlog_clock.clone());
 
@@ -1359,15 +1446,18 @@ fn compose_producers(
             db.clone(),
             clock.clone(),
             chatlog_clock,
-            build_providers(
-                db,
-                config_reader,
-                machine_id.clone(),
-                &config,
-                runtime.clone(),
-                game_data,
-                doses,
-            ),
+            Providers {
+                detector: mob_detection.clone(),
+                ..build_providers(
+                    db,
+                    config_reader,
+                    machine_id.clone(),
+                    &config,
+                    runtime.clone(),
+                    game_data,
+                    doses,
+                )
+            },
         ),
     )?;
 
@@ -1462,6 +1552,7 @@ fn compose_producers(
         keystroke_source,
         machine_id,
         quests,
+        mob_detection,
     })
 }
 
@@ -1886,6 +1977,10 @@ impl TrackingConfig for LiveTrackingConfig {
             .current()
             .keyless_input_on(self.machine_id.as_deref())
     }
+
+    fn mob_detection_enabled(&self) -> bool {
+        self.reader.current().mob_detection_on()
+    }
 }
 
 /// Wire the hunt-tracker seams to their live sources: the equipment
@@ -1911,6 +2006,8 @@ fn build_providers(
         config: Arc::new(LiveTrackingConfig { reader, machine_id }),
         player_name: initial_config.player_name.clone(),
         doses,
+        // Bound by `compose_producers`, which owns the detector slot.
+        detector: Arc::new(eo_services::mob_watch::NoDetector),
     }
 }
 

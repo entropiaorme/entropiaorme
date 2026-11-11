@@ -160,6 +160,7 @@ fn loot(process: &Process) {
     process.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
         kind: LootTag,
         source_id: None,
+        arrived_ms: None,
         timestamp: Some("2026-07-30T17:26:45".into()),
         items: vec![LootItem {
             item_name: "Shrapnel".into(),

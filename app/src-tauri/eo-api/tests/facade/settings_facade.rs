@@ -82,6 +82,8 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "hotbarHooksEnabled",
             "keyboard",
             "repairOcrEnabled",
+            "mobDetectionEnabled",
+            "mobDetectionCapture",
             "developerModeEnabled",
             "sessionName",
             "declaredSkillBoostPercent",

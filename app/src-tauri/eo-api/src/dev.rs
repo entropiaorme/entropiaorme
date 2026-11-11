@@ -67,6 +67,11 @@ pub struct MetricsSnapshot {
     pub events_published: u64,
     pub ocr_latency: HistogramSnapshot,
     pub db_query_latency: HistogramSnapshot,
+    /// The creature watcher's cost per look: capturing the game window,
+    /// searching it for the locked plate, and reading the plate found.
+    pub plate_capture_latency: HistogramSnapshot,
+    pub plate_search_latency: HistogramSnapshot,
+    pub plate_read_latency: HistogramSnapshot,
     pub rss_bytes: u64,
     pub handle_count: u64,
 }

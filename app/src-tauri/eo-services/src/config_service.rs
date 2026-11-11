@@ -28,6 +28,22 @@ use serde_json::{Map, Value};
 
 use crate::passive_effects::{PassiveEffect, PassiveEffectKind, PassiveEffectSource};
 
+/// Whether this build is a published release. The release pipeline stamps
+/// it into every build it publishes; the same stamp hides the frontend's
+/// in-development surfaces, so a feature still in development stays off
+/// exactly where its controls are hidden. The `in-development` guard holds
+/// this read to the stamp's name.
+pub fn published_build() -> bool {
+    option_env!("ENTROPIAORME_STABLE_CHANNEL") == Some("1")
+}
+
+/// Whether creature detection runs: only when the player has turned it on,
+/// which is their consent to the screen being read; and, while the feature
+/// is in development, never in a published build whatever is stored.
+pub fn mob_detection_decision(published: bool, stored: Option<bool>) -> bool {
+    !published && stored == Some(true)
+}
+
 pub const HOTBAR_SLOTS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
 /// The hotbar presets the game offers, numbered from 1.
 pub const HOTBAR_PRESET_COUNT: u8 = 3;
@@ -61,6 +77,10 @@ pub struct AppConfig {
     /// leaves keyless tracking off there (see [`AppConfig::keyless_input_on`]).
     pub keyless_input_host: Option<String>,
     pub repair_ocr_enabled: bool,
+    /// Whether the player has turned creature detection on (the creature
+    /// they fight read off the game screen while a session runs); `None`
+    /// until they choose, which is off (see [`AppConfig::mob_detection_on`]).
+    pub mob_detection: Option<bool>,
     pub developer_mode_enabled: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
     /// across sessions so a declaration outlives the session that set it.
@@ -120,6 +140,7 @@ impl Default for AppConfig {
             hotbar_hooks_enabled: false,
             keyless_input_host: None,
             repair_ocr_enabled: false,
+            mob_detection: None,
             developer_mode_enabled: false,
             manual_mob_species: String::new(),
             manual_mob_maturity: String::new(),
@@ -153,6 +174,11 @@ impl AppConfig {
     /// on a machine running keyless.
     pub fn hotbar_keys_observed(&self, machine_id: Option<&str>) -> bool {
         self.hotbar_hooks_enabled && !self.keyless_input_on(machine_id)
+    }
+
+    /// Whether creature detection runs (see [`mob_detection_decision`]).
+    pub fn mob_detection_on(&self) -> bool {
+        mob_detection_decision(published_build(), self.mob_detection)
     }
 
     /// The default chat-log location under the user's home directory.
@@ -455,6 +481,8 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
             .filter(|host| !host.is_empty())
             .map(str::to_string),
         repair_ocr_enabled: toggle("repair_ocr_enabled"),
+        // Anything but a stored boolean reads as no choice made.
+        mob_detection: data.get("mob_detection").and_then(Value::as_bool),
         developer_mode_enabled: toggle("developer_mode_enabled"),
         manual_mob_species: string_or("manual_mob_species", ""),
         manual_mob_maturity: string_or("manual_mob_maturity", ""),
@@ -536,12 +564,13 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // hotbar and every carried weapon's damage band. They stay unknown and
 // carry through untouched, and a store written before `carried_weapon_ids`
 // seeds it once from them (see `carried_weapons_from_stored`).
-const KNOWN_KEYS: [&str; 21] = [
+const KNOWN_KEYS: [&str; 22] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
     "keyless_input_host",
     "repair_ocr_enabled",
+    "mob_detection",
     "developer_mode_enabled",
     "manual_mob_species",
     "manual_mob_maturity",
@@ -750,6 +779,11 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
                     .map(str::to_string);
             }
             "repair_ocr_enabled" => assign_bool(&mut config.repair_ocr_enabled, value),
+            "mob_detection" => {
+                if let Some(on) = value.as_bool() {
+                    config.mob_detection = Some(on);
+                }
+            }
             "developer_mode_enabled" => assign_bool(&mut config.developer_mode_enabled, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
             "manual_mob_maturity" => assign_string(&mut config.manual_mob_maturity, value),
@@ -814,6 +848,52 @@ fn assign_bool(slot: &mut bool, value: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn creature_detection_runs_only_on_the_players_word_and_never_in_a_published_build() {
+        assert!(!mob_detection_decision(false, None), "off until chosen");
+        assert!(!mob_detection_decision(false, Some(false)));
+        assert!(
+            mob_detection_decision(false, Some(true)),
+            "the player's consent"
+        );
+        assert!(!mob_detection_decision(true, Some(true)), "never published");
+        assert!(!mob_detection_decision(true, None));
+        assert!(!mob_detection_decision(true, Some(false)));
+        // A test build is not a published one.
+        assert!(!published_build());
+        let unset = from_stored(&Map::new());
+        assert_eq!(unset.mob_detection, None);
+        assert!(!unset.mob_detection_on());
+        for (stored, read) in [
+            (json!(true), Some(true)),
+            (json!(false), Some(false)),
+            (json!("yes"), None),
+            (Value::Null, None),
+        ] {
+            let mut data = Map::new();
+            data.insert("mob_detection".into(), stored);
+            let config = from_stored(&data);
+            assert_eq!(config.mob_detection, read);
+            assert!(!config.extra.contains_key("mob_detection"));
+        }
+        let mut config = AppConfig::default();
+        let mut updates = Map::new();
+        updates.insert("mob_detection".into(), json!(true));
+        apply_updates(&mut config, &updates);
+        assert!(config.mob_detection_on(), "turned on by the player");
+        updates.insert("mob_detection".into(), json!(false));
+        apply_updates(&mut config, &updates);
+        assert!(!config.mob_detection_on(), "and off again");
+        updates.insert("mob_detection".into(), json!(1));
+        apply_updates(&mut config, &updates);
+        assert_eq!(
+            config.mob_detection,
+            Some(false),
+            "only a boolean is a choice"
+        );
+    }
 
     fn service(dir: &Path) -> ConfigService {
         ConfigService::new(dir).unwrap()

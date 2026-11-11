@@ -59,6 +59,7 @@ pub mod loadout_comparison;
 pub mod manifest;
 pub mod maps;
 pub mod market;
+pub mod mob_detection;
 mod nullable;
 pub mod protection;
 pub mod quests;
@@ -153,6 +154,12 @@ pub struct Api {
     /// Post-play weapon review and the assignment of unpriced shots, over
     /// the shared database and injected clock.
     weapon_review: WeaponReviewService,
+    /// The review of which creatures a session's kills were detected as,
+    /// over the catalogue the creature watcher matches names with.
+    mob_review: eo_services::mob_review::MobReviewService,
+    /// Whether creature detection can capture the game window, for the
+    /// settings; `None` without a watcher (detection then cannot run).
+    mob_capture: Option<eo_services::mob_watch::CaptureStatusProbe>,
     /// The session-definition service (definition + roster lifecycle), built
     /// over the facade's shared db and clock; the tracking family's
     /// selection verb validates against it.
@@ -230,6 +237,16 @@ impl Api {
         let healing_review = HealingReviewService::new(db.clone(), clock.clone());
         let weapon_pricing =
             weapon_pricing(&config_service, game_data.clone(), tracker.dose_board());
+        // Until composition shares the watcher's catalogue and the name
+        // profile, the review lists and puts back declarations, but refuses
+        // a typed name it cannot check.
+        let mob_review = eo_services::mob_review::MobReviewService::new(
+            db.clone(),
+            clock.clone(),
+            Arc::new(eo_services::mob_watch::CatalogueCell::default()),
+            Some(game_data.clone()),
+            None,
+        );
         let weapon_review = WeaponReviewService::new(db.clone(), clock.clone())
             .with_pricing(weapon_pricing.clone());
         let session_definitions = eo_services::session_definitions::SessionDefinitionService::new(
@@ -280,6 +297,8 @@ impl Api {
             protection,
             healing_review,
             weapon_review,
+            mob_review,
+            mob_capture: None,
             weapon_pricing,
             session_definitions,
             definition_transition: tokio::sync::Mutex::new(()),
@@ -290,6 +309,27 @@ impl Api {
             navigation,
             input: settings::InputAccess::inert(),
         }
+    }
+
+    /// Review detected creatures over `catalogue`, the one the creature
+    /// watcher matches names with, checking typed names by `names`: a name
+    /// the player confirms is matched from the next look on. `capture`
+    /// tells the settings whether the watcher can capture.
+    pub fn with_mob_detection(
+        mut self,
+        catalogue: Arc<eo_services::mob_watch::CatalogueCell>,
+        names: Option<eo_services::game_ui::mob_names::MobNameProfile>,
+        capture: Option<eo_services::mob_watch::CaptureStatusProbe>,
+    ) -> Self {
+        self.mob_capture = capture;
+        self.mob_review = eo_services::mob_review::MobReviewService::new(
+            self.db.clone(),
+            self.clock.clone(),
+            catalogue,
+            Some(self.game_data.clone()),
+            names,
+        );
+        self
     }
 
     /// Attach this machine's input access: its identity, which keyless

@@ -22,6 +22,7 @@ mod facade_microbench;
 mod loadout_comparison_facade;
 mod maps_facade;
 mod market_facade;
+mod mob_detection_facade;
 mod quests_facade;
 mod scan_facade;
 mod session_definitions_facade;

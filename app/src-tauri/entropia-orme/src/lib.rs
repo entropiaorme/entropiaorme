@@ -1297,4 +1297,31 @@ mod tests {
             ]
         );
     }
+    #[test]
+    fn the_radar_renderer_keeps_a_read_only_capability() {
+        let capability = include_str!("../capabilities/radar-guidance.json");
+        assert!(capability.contains("\"windows\": [\"radar-guidance\"]"));
+        assert!(capability.contains("radar-guidance-commands"));
+        for forbidden in [
+            "trusted-commands",
+            "core:event:allow-emit",
+            "shell:allow-open",
+            "core:window:allow-create",
+            "core:webview:allow-create-webview-window",
+            "store:allow-set",
+        ] {
+            assert!(
+                !capability.contains(forbidden),
+                "the radar guidance capability must not grant {forbidden}: {capability}"
+            );
+        }
+        // A click-through renderer reads where to point and whether the
+        // backend is up; it writes nothing.
+        assert_eq!(
+            crate::command_acl::RADAR_GUIDANCE_COMMANDS,
+            ["navigation_snapshot", "radar_guidance", "substrate_ready"]
+        );
+        assert!(!crate::command_acl::RADAR_GUIDANCE_COMMANDS.contains(&"navigation_mark_visited"));
+        assert!(!crate::command_acl::RADAR_GUIDANCE_COMMANDS.contains(&"settings_update"));
+    }
 }

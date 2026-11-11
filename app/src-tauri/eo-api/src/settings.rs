@@ -202,6 +202,13 @@ pub struct AppSettings {
     pub hotbar_hooks_enabled: bool,
     pub keyboard: KeyboardAccess,
     pub repair_ocr_enabled: bool,
+    /// Whether the creature being fought is read off the game screen while
+    /// a session runs (the player's choice, or the build's default until
+    /// they make one).
+    pub mob_detection_enabled: bool,
+    /// Whether detection can capture the game window when a session wants
+    /// it: what the settings say beside the toggle when it cannot.
+    pub mob_detection_capture: crate::mob_detection::MobDetectionCapture,
     pub developer_mode_enabled: bool,
     /// The session facets the next session snapshots: the designated
     /// name (empty: not declared) and the skill boost (null: not
@@ -286,6 +293,9 @@ pub struct SettingsPatch {
     pub keyless_input: Option<bool>,
     #[serde(default)]
     pub repair_ocr_enabled: Option<bool>,
+    /// Turn creature detection on or off.
+    #[serde(default)]
+    pub mob_detection_enabled: Option<bool>,
     #[serde(default)]
     pub developer_mode_enabled: Option<bool>,
     #[serde(default)]
@@ -341,6 +351,9 @@ impl SettingsPatch {
         }
         if let Some(value) = self.repair_ocr_enabled {
             updates.insert("repair_ocr_enabled".into(), Value::Bool(value));
+        }
+        if let Some(value) = self.mob_detection_enabled {
+            updates.insert("mob_detection".into(), Value::Bool(value));
         }
         if let Some(value) = self.developer_mode_enabled {
             updates.insert("developer_mode_enabled".into(), Value::Bool(value));
@@ -403,6 +416,11 @@ impl Api {
             hotbar_hooks_enabled: config.hotbar_hooks_enabled,
             keyboard: self.input.access(&config),
             repair_ocr_enabled: config.repair_ocr_enabled,
+            mob_detection_enabled: config.mob_detection_on(),
+            mob_detection_capture: self.mob_capture.as_ref().map_or(
+                crate::mob_detection::MobDetectionCapture::Unavailable,
+                |status| status().into(),
+            ),
             developer_mode_enabled: config.developer_mode_enabled,
             session_name: config.session_name.clone(),
             declared_skill_boost_percent: config

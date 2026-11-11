@@ -29,6 +29,8 @@ vi.mock('$lib/api', () => ({
 	getSessionDetail: vi.fn(),
 	renameSessionMob: vi.fn(),
 	restoreSessionMob: vi.fn(),
+	getMobDetections: vi.fn(async () => ({ sessionId: 's1', ended: true, groups: [] })),
+	settleMobDetection: vi.fn(),
 }));
 
 // The protection bridge: capture the listener so a test can fire a write.
@@ -98,6 +100,31 @@ describe('the recorded session name', () => {
 		render(SessionDetail, { props: { detail: detail({ sessionName: 'Wrong Name' }) } });
 		expect(screen.queryByText('Rename')).toBeNull();
 		expect(screen.queryByLabelText('Session name')).toBeNull();
+	});
+});
+
+describe('the mob attribution', () => {
+	it('says how sure each creature is, and marks an unlisted one until it is confirmed', () => {
+		render(SessionDetail, {
+			props: {
+				detail: detail({
+					mobBreakdown: [
+						{ currentName: 'Gloomrat', originalName: null, killCount: 2, certainty: 'unlisted' },
+						{ currentName: 'Old Atrox', originalName: null, killCount: 1, certainty: 'probable' },
+						{
+							currentName: 'Snarl',
+							originalName: null,
+							killCount: 1,
+							certainty: 'unlisted_probable',
+						},
+						{ currentName: 'Young Atrox', originalName: null, killCount: 3, certainty: 'recorded' },
+					],
+				}),
+			},
+		});
+		expect(screen.getAllByText('not in the creature list, unconfirmed')).toHaveLength(1);
+		expect(screen.getAllByText('probably')).toHaveLength(1);
+		expect(screen.getAllByText('probably; not in the creature list, unconfirmed')).toHaveLength(1);
 	});
 });
 

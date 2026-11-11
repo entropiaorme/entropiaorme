@@ -655,6 +655,7 @@
     ]
   },
   "mob_history": {
+    "pulse_ms": 1000,
     "join_gap_ms": 6500,
     "rise_tolerance": 0.1,
     "continue_ms": 2500,

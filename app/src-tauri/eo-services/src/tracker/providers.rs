@@ -136,6 +136,12 @@ pub trait TrackingConfig: Send + Sync {
     fn keyless_input(&self) -> bool {
         false
     }
+
+    /// Whether the creature the player fights is read off the game screen
+    /// while a session runs.
+    fn mob_detection_enabled(&self) -> bool {
+        false
+    }
 }
 
 /// The tracker's wired dependencies. Defaults are the inert fallbacks
@@ -150,6 +156,10 @@ pub struct Providers {
     /// reader of the reload speed in effect (the composition shares it
     /// with the equipment library and the facade's pricing).
     pub doses: DoseBoard,
+    /// Creature detection: the watcher that reads the locked plate, and
+    /// the history a session keeps of it. Inert where nothing looks at a
+    /// screen.
+    pub detector: Arc<dyn crate::mob_watch::MobDetector>,
 }
 
 impl Default for Providers {
@@ -159,6 +169,7 @@ impl Default for Providers {
             config: Arc::new(DefaultTrackingConfig),
             player_name: String::new(),
             doses: DoseBoard::new(Arc::new(RealClock::new())),
+            detector: Arc::new(crate::mob_watch::NoDetector),
         }
     }
 }

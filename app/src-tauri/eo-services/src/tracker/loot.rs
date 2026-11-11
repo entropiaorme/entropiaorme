@@ -160,6 +160,9 @@ impl TrackerActor {
         let BusEvent::LootGroup(group) = event else {
             return;
         };
+        // A kill can be told by creature detection only when its line's
+        // logged second and its arrival are both known.
+        let mut detection_report: Option<i64> = None;
         let (routed, restamps, yield_restamps) = {
             let Self {
                 session,
@@ -175,11 +178,11 @@ impl TrackerActor {
             };
 
             let total_ped = group.total_ped;
-            let now = group
+            let logged = group
                 .timestamp
                 .as_deref()
-                .and_then(|raw| parse_timestamp_instant(chatlog_clock, raw))
-                .unwrap_or_else(|| resolve_local(clock.now()));
+                .and_then(|raw| parse_timestamp_instant(chatlog_clock, raw));
+            let now = logged.unwrap_or_else(|| resolve_local(clock.now()));
             let now_epoch = instant_to_epoch(now);
 
             // Loot deduplication (same fingerprint within 2s window).
@@ -344,6 +347,10 @@ impl TrackerActor {
                 // The regime's shots now sit in this kill.
                 active.weapons.attribution.settle_kill(&kill.id);
 
+                if logged.is_some() {
+                    detection_report = group.arrived_ms;
+                }
+
                 // Append the finalised kill to the session; the list tail
                 // doubles as the original's `_last_kill` alias.
                 active.session.kills.push(kill.clone());
@@ -354,7 +361,12 @@ impl TrackerActor {
         // The routed record is a detached value by here; the borrow of
         // the live session ended with the block above.
         match routed {
-            RoutedLoot::Kill(kill, evidence) => self.persist_kill(&kill, evidence).await,
+            RoutedLoot::Kill(kill, evidence) => {
+                self.persist_kill(&kill, evidence).await;
+                let logged_ms = (kill.timestamp * 1000.0).round() as i64;
+                self.await_detection(&kill.id, logged_ms, detection_report)
+                    .await;
+            }
             RoutedLoot::Harvest(harvest) => {
                 self.persist_harvest(&harvest).await;
                 if !restamps.is_empty() {

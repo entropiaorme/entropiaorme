@@ -77,6 +77,35 @@ describe('tracking wrappers dispatch typed commands', () => {
 			'tracking_restore_mob',
 			{ session_id: 's1', current_mob_name: 'Atrox Mature' },
 		],
+		[
+			'getMobDetections',
+			() => api.getMobDetections('s1'),
+			'tracking_mob_detections',
+			{ session_id: 's1' },
+		],
+		[
+			'settleMobDetection',
+			() =>
+				api.settleMobDetection(
+					's1',
+					{
+						grade: 'provisional',
+						creature: { name: 'Gloomrat', species: '', maturity: '' },
+						provisionalKey: 'GLOOMRAT L4 #0',
+					},
+					{ kind: 'declared' },
+				),
+			'tracking_mob_detection_settle',
+			{
+				session_id: 's1',
+				group: {
+					grade: 'provisional',
+					creature: { name: 'Gloomrat', species: '', maturity: '' },
+					provisionalKey: 'GLOOMRAT L4 #0',
+				},
+				target: { kind: 'declared' },
+			},
+		],
 		['releaseMob', () => api.releaseMob(), 'tracking_release_mob', {}],
 		[
 			'setSessionConfig',

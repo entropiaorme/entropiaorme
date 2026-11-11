@@ -55,6 +55,9 @@ use crate::market::{
     MarketHorizon, MarketManualMarkup, MarketManualMarkupInput, MarketOverviewRow,
     MarketPastePreview, MarketUnitPriceResult,
 };
+use crate::mob_detection::{
+    MobDetectionGroupRef, MobDetectionReview, MobDetectionSettleResult, MobDetectionTarget,
+};
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
@@ -1615,6 +1618,32 @@ pub fn manifest() -> Vec<CommandSpec> {
                 },
             ],
             returns: Some(schema(schema_for!(MobEditResult))),
+        },
+        CommandSpec {
+            name: "tracking_mob_detections",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(MobDetectionReview))),
+        },
+        CommandSpec {
+            name: "tracking_mob_detection_settle",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "group",
+                    schema: schema(schema_for!(MobDetectionGroupRef)),
+                },
+                ArgSpec {
+                    name: "target",
+                    schema: schema(schema_for!(MobDetectionTarget)),
+                },
+            ],
+            returns: Some(schema(schema_for!(MobDetectionSettleResult))),
         },
         CommandSpec {
             name: "tracking_loot_item_activate",

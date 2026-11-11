@@ -26,7 +26,7 @@ use eo_services::game_ui::radar::{
 };
 use eo_services::game_ui::sale_queue::{
     read_sale_queue, Buyout, ItemCatalogue, ItemName, QueueCount, QueuedItem, RowRefusal,
-    SaleQueue, SaleQueueError, Setting,
+    SaleQueue, SaleQueueError, Setting, ITEM_ENDPOINTS,
 };
 use eo_services::game_ui::seams::GameFrame;
 use eo_services::game_ui::skills::{
@@ -1421,17 +1421,7 @@ fn sale_locked(frame: &str, row: &str) -> &'static [&'static str] {
 /// The application's bundled item data, as the reader confirms names by.
 fn item_catalogue() -> ItemCatalogue {
     let mut entities = Vec::new();
-    for endpoint in [
-        "absorbers",
-        "enhancers",
-        "harvesting_tools",
-        "medical_tools",
-        "mindforce_implants",
-        "stimulants",
-        "weapon_amplifiers",
-        "weapon_vision_attachments",
-        "weapons",
-    ] {
+    for endpoint in ITEM_ENDPOINTS {
         let path = resources().join(format!("snapshot/{endpoint}.json"));
         let list: Vec<Value> = serde_json::from_str(
             &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}")),

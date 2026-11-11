@@ -12,6 +12,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import type { SaleQueueRefusal } from './commands.gen';
 
 /** Toggle the pre-spawned tracking overlay window's visibility. */
 export async function toggleOverlay(): Promise<void> {
@@ -72,21 +73,23 @@ export async function hideScanOverlay(): Promise<void> {
 	await invoke('hide_scan_overlay');
 }
 
-/** Show the sale-window capture button where a fullscreen game leaves it
+/** Show the sell-queue capture button where a fullscreen game leaves it
  * reachable. It is the main window's button in another place. */
 export async function showSaleCaptureOverlay(): Promise<void> {
 	await invoke('show_sale_capture_overlay');
 }
 
-/** Hide the sale-window capture overlay. */
+/** Hide the sell-queue capture overlay. */
 export async function hideSaleCaptureOverlay(): Promise<void> {
 	await invoke('hide_sale_capture_overlay');
 }
 
-export interface OverlayCaptureReply {
-	message: string;
-	failed: boolean;
-}
+/** What the capture button is told of its capture: how many queued items
+ * read, or why none did. Never a figure: the drafts wait for the main
+ * window's form. */
+export type OverlayCaptureReply =
+	| { kind: 'read'; drafts: number; unread: number }
+	| { kind: 'refused'; reason: SaleQueueRefusal };
 
 /** Consume the one-shot capture authority granted when Inventory opened the overlay. */
 export async function captureSaleFromOverlay(): Promise<OverlayCaptureReply> {

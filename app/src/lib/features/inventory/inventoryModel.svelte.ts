@@ -8,6 +8,7 @@ import type {
 	InventoryItem,
 	InventorySaleDraft,
 	ItemConversionInput,
+	ListingFieldSourceInput,
 	MarketHarvestData,
 	StockPosition,
 } from '$lib/api/commands.gen';
@@ -307,7 +308,7 @@ export function createInventoryModel() {
 		);
 	}
 
-	/** Candidate holdings for a name read or typed off the game's sale window.
+	/** Candidate holdings for a name read or typed off the game's sell window.
 	 * Conservative by construction: a winner comes back only for a match with
 	 * no plausible rival. */
 	async function resolveDraftName(name: string, channel: 'auction' | 'trade') {
@@ -319,18 +320,21 @@ export function createInventoryModel() {
 	}
 
 	/** Commit an intake draft against the holding the user reviewed. A typed
-	 * draft and a captured one cross the same boundary here; nothing in it is
-	 * specific to how the draft was filled. */
+	 * draft and a captured one cross the same boundary here; a captured one
+	 * also says where each of its figures came from, which an auction listing
+	 * records beside itself. */
 	async function createFromDraft({
 		fields,
 		channel,
 		holding,
 		occurredAt,
+		fieldSources = null,
 	}: {
 		fields: ListingDraftFields;
 		channel: 'auction' | 'trade';
 		holding: InventoryHoldingCandidate;
 		occurredAt: string | null;
+		fieldSources?: ListingFieldSourceInput[] | null;
 	}) {
 		const draft: InventorySaleDraft = {
 			draftId: crypto.randomUUID(),
@@ -346,7 +350,13 @@ export function createInventoryModel() {
 			confidence: null,
 		};
 		await withRefresh(
-			() => commitInventorySaleDraft({ draft, holding, occurredAt }),
+			() =>
+				commitInventorySaleDraft({
+					draft,
+					holding,
+					occurredAt,
+					fieldSources: channel === 'auction' ? fieldSources : null,
+				}),
 			channel === 'auction' ? 'Failed to create the listing' : 'Failed to record the trade',
 		);
 	}
@@ -465,7 +475,7 @@ export function createInventoryModel() {
 			.sort((a, b) => b.heldTt - a.heldTt || a.itemName.localeCompare(b.itemName)),
 	);
 	// Everything currently held, in one list, for the intake typeahead: the
-	// sale window names an item, not a profession or an asset class.
+	// sell window names an item, not a profession or an asset class.
 	const holdingOptions = $derived([
 		...loot.map((row) => ({
 			kind: 'loot',

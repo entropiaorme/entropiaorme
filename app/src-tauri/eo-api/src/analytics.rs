@@ -23,7 +23,9 @@
 
 use std::collections::BTreeMap;
 
-use eo_services::analytics::AnalyticsError;
+use eo_services::analytics::{
+    AnalyticsError, FieldSource, ListingField, ListingFieldSource, ListingTerms, ReadAssurance,
+};
 use eo_wire::normalizer::round_half_even;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -814,6 +816,80 @@ pub struct AuctionListingInput {
     /// How many days the listing runs for. Optional: a listing whose duration
     /// the player did not record simply never nudges for resolution.
     pub auction_days: Option<i64>,
+    /// Where each figure came from, for a listing drafted from a capture
+    /// of the game's sell queue; absent for one entered by hand.
+    pub field_sources: Option<Vec<ListingFieldSourceInput>>,
+}
+
+/// Where one figure of a listing came from.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ListingFieldSourceInput {
+    pub field: ListingFieldName,
+    pub source: FieldSourceInput,
+}
+
+/// A listing figure whose source is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ListingFieldName {
+    ItemName,
+    /// The queued stack's TT value as the window printed it.
+    TtValue,
+    Quantity,
+    StartingBid,
+    Buyout,
+    ListingFee,
+    AuctionDays,
+}
+
+/// Where a listing figure came from.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum FieldSourceInput {
+    /// Read off the sell window and kept as read, and checked by the
+    /// window's other figures: the text exactly as the window printed it,
+    /// absent only for a buyout the window showed switched off.
+    ReadChecked { text: Option<String> },
+    /// Read and kept as read, but nothing on screen fully confirms it: the
+    /// text exactly as the window printed it, absent only for a buyout the
+    /// window showed switched off.
+    ReadUnchecked { text: Option<String> },
+    /// The name read, which the application matched to a holding recorded
+    /// under another name: the name as the window printed it.
+    Matched { text: String },
+    /// Typed, or changed from what was read, by the player.
+    Typed,
+}
+
+fn field_sources(input: Option<Vec<ListingFieldSourceInput>>) -> Vec<ListingFieldSource> {
+    input
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| ListingFieldSource {
+            field: match entry.field {
+                ListingFieldName::ItemName => ListingField::ItemName,
+                ListingFieldName::TtValue => ListingField::TtValue,
+                ListingFieldName::Quantity => ListingField::Quantity,
+                ListingFieldName::StartingBid => ListingField::StartingBid,
+                ListingFieldName::Buyout => ListingField::Buyout,
+                ListingFieldName::ListingFee => ListingField::ListingFee,
+                ListingFieldName::AuctionDays => ListingField::AuctionDays,
+            },
+            source: match entry.source {
+                FieldSourceInput::ReadChecked { text } => FieldSource::Read {
+                    text,
+                    assurance: ReadAssurance::Checked,
+                },
+                FieldSourceInput::ReadUnchecked { text } => FieldSource::Read {
+                    text,
+                    assurance: ReadAssurance::Unchecked,
+                },
+                FieldSourceInput::Matched { text } => FieldSource::Matched { text },
+                FieldSourceInput::Typed => FieldSource::Typed,
+            },
+        })
+        .collect()
 }
 
 /// A sale-confirmation payload: the price the auction actually fetched and
@@ -954,6 +1030,9 @@ pub struct EquipmentListingInput {
     pub listed_at: Option<String>,
     /// How many days the listing runs for, when recorded.
     pub auction_days: Option<i64>,
+    /// Where each figure came from, for a listing drafted from a capture
+    /// of the game's sell queue; absent for one entered by hand.
+    pub field_sources: Option<Vec<ListingFieldSourceInput>>,
 }
 
 /// A completed fee-free player trade for one whole capital position.
@@ -986,29 +1065,6 @@ pub struct InventorySaleDraft {
     pub auction_days: Nullable<i64>,
     /// OCR may provide a field-level confidence. Manual drafts use null.
     pub confidence: Nullable<f64>,
-}
-
-/// What one look at the game's sale window resolved.
-/// Every field is nullable because every field can refuse: a value that
-/// did not read comes back empty and is named in `unread`, so the review
-/// surface shows a gap to fill rather than a figure to trust. `error` is
-/// set only when there was nothing to read at all (no game window, no
-/// calibration, no capture), and then no field is populated.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SaleWindowCapture {
-    pub observed_name: Nullable<String>,
-    pub quantity: Nullable<f64>,
-    pub tt_value: Nullable<f64>,
-    pub listing_fee: Nullable<f64>,
-    pub auction_days: Nullable<i64>,
-    pub starting_bid: Nullable<f64>,
-    pub buyout: Nullable<f64>,
-    /// The lowest confidence among the fields that did read.
-    pub confidence: Nullable<f64>,
-    /// The fields that did not read, by the name the window gives them.
-    pub unread: Vec<String>,
-    pub error: Nullable<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -1130,17 +1186,21 @@ impl Api {
         &self,
         input: AuctionListingInput,
     ) -> Result<AuctionListing, ApiError> {
+        let sources = field_sources(input.field_sources);
         let row = self
             .analytics
-            .create_auction_listing(
+            .create_auction_listing_with_terms(
                 input.profession.into(),
                 &input.item_name,
                 input.quantity,
-                input.starting_bid,
-                input.buyout,
-                input.listing_fee,
-                input.listed_at.as_deref(),
-                input.auction_days,
+                ListingTerms {
+                    starting_bid: input.starting_bid,
+                    buyout: input.buyout,
+                    listing_fee: input.listing_fee,
+                    listed_at: input.listed_at.as_deref(),
+                    auction_days: input.auction_days,
+                    sources: &sources,
+                },
             )
             .await
             .map_err(analytics_error("auction listing create"))?;
@@ -1545,67 +1605,6 @@ impl Api {
         Ok(rows.into_iter().map(inventory_item_dto).collect())
     }
 
-    /// Read the game's auction sale window once and answer what it said.
-    ///
-    /// This fills a form; it never commits. Capture and typing converge on
-    /// the same draft and meet the same checks, so a misread cannot reach
-    /// the ledger by a path a typo could not.
-    ///
-    /// Synchronous, like the repair read: the capture blocks on the portal,
-    /// so its caller must offload it rather than run it on a runtime worker.
-    pub fn inventory_sale_window_capture(&self) -> Result<SaleWindowCapture, ApiError> {
-        let read = self.sale_window_ocr.scan_sale_window();
-        let text = |key: &str| {
-            read.get(key)
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-                .into()
-        };
-        let number = |key: &str| read.get(key).and_then(serde_json::Value::as_f64).into();
-        let capture = SaleWindowCapture {
-            observed_name: text("item_name"),
-            quantity: number("quantity"),
-            tt_value: number("tt_value"),
-            // The window calls it the auction fee; the ledger has always
-            // called it the listing fee. Same money.
-            listing_fee: number("auction_fee"),
-            auction_days: read
-                .get("auction_days")
-                .and_then(serde_json::Value::as_i64)
-                .into(),
-            starting_bid: number("starting_bid"),
-            buyout: number("buyout"),
-            confidence: number("confidence"),
-            unread: read
-                .get("unread")
-                .and_then(serde_json::Value::as_array)
-                .map(|names| {
-                    names
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(str::to_string)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            error: text("error"),
-        };
-        // Held for the form to collect, since the overlay's button can be
-        // pressed while the form is not on screen.
-        if let Ok(mut slot) = self.last_sale_capture.lock() {
-            *slot = Some(capture.clone());
-        }
-        Ok(capture)
-    }
-
-    /// Collect the last sale-window read, clearing it.
-    pub fn inventory_sale_window_take_capture(&self) -> Nullable<SaleWindowCapture> {
-        self.last_sale_capture
-            .lock()
-            .ok()
-            .and_then(|mut slot| slot.take())
-            .into()
-    }
-
     /// Resolve a manual or OCR-originated transaction draft against current
     /// holdings. Resolution is conservative: ambiguity stays visible for the
     /// review surface instead of silently choosing a cost basis.
@@ -1653,14 +1652,18 @@ impl Api {
         &self,
         input: EquipmentListingInput,
     ) -> Result<AuctionListing, ApiError> {
+        let sources = field_sources(input.field_sources);
         self.analytics
-            .create_equipment_listing(
+            .create_equipment_listing_with_terms(
                 &input.item_id,
-                input.starting_bid,
-                input.buyout,
-                input.listing_fee,
-                input.listed_at.as_deref(),
-                input.auction_days,
+                ListingTerms {
+                    starting_bid: input.starting_bid,
+                    buyout: input.buyout,
+                    listing_fee: input.listing_fee,
+                    listed_at: input.listed_at.as_deref(),
+                    auction_days: input.auction_days,
+                    sources: &sources,
+                },
             )
             .await
             .map_err(analytics_error("equipment listing create"))?

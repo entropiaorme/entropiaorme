@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-	capturedDraft,
 	draftIssues,
 	EMPTY_DRAFT,
 	impliedMarkupPct,
@@ -91,45 +90,8 @@ describe('listing intake', () => {
 	});
 });
 
-describe('capturedDraft', () => {
-	const read = {
-		observedName: 'Shrapnel',
-		quantity: 2754889,
-		ttValue: 275.48,
-		listingFee: 64.51,
-		auctionDays: 6,
-		startingBid: 9276,
-		buyout: 9276,
-	};
-
-	it('fills the draft from what the window said', () => {
-		expect(capturedDraft(read)).toEqual({
-			itemName: 'Shrapnel',
-			quantity: 2754889,
-			ttValue: 275.48,
-			auctionFee: 64.51,
-			auctionDays: 6,
-			startingBid: 9276,
-			buyout: 9276,
-		});
-	});
-
-	it('leaves a field the read refused empty rather than guessing at it', () => {
-		const draft = capturedDraft({ ...read, quantity: null, startingBid: null });
-		expect(draft.quantity).toBeNull();
-		expect(draft.startingBid).toBeNull();
-		// A refusal must not be reported as committable: an empty quantity is
-		// exactly what the manual path already blocks on.
-		expect(isCommittable(draft, 'auction')).toBe(false);
-	});
-
-	it('treats an unread name as no name at all', () => {
-		expect(capturedDraft({ ...read, observedName: null }).itemName).toBe('');
-	});
-
-	it('carries a captured draft through the same checks a typed one meets', () => {
-		expect(isCommittable(capturedDraft(read), 'auction')).toBe(true);
-	});
+describe('a markup derived from a read TT value', () => {
+	const read = { ttValue: 275.48, startingBid: 9276 };
 
 	it('derives a markup off the shown TT, which the window has rounded', () => {
 		// The window showed TT 275.48 and markup 3367.10%. Those disagree:

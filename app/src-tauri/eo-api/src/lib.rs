@@ -39,7 +39,7 @@ use eo_services::market_service::MarketService;
 use eo_services::protection::ProtectionService;
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::RepairOcrService;
-use eo_services::sale_window_ocr::SaleWindowOcrService;
+use eo_services::sale_capture::SaleCaptureService;
 use eo_services::skill_scan::SkillScanService;
 use eo_services::skill_tracker::SkillTracker;
 use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
@@ -62,6 +62,7 @@ pub mod market;
 mod nullable;
 pub mod protection;
 pub mod quests;
+pub mod sale_capture;
 pub mod scan;
 pub mod session_definitions;
 pub mod settings;
@@ -105,21 +106,23 @@ pub struct Api {
     /// The one-shot repair-cost OCR: the tracking family's repair-scan leg
     /// drives it (gated on the `repair_ocr_enabled` config flag).
     repair_ocr: Arc<RepairOcrService>,
-    /// The one-shot sale-window OCR: the analytics family's listing-read
-    /// leg drives it, filling a draft the user reviews before committing.
-    sale_window_ocr: Arc<SaleWindowOcrService>,
-    /// Development-only auction-fee sampling over the production sale-window
-    /// reader. Its Space action is installed on the existing listener during
-    /// construction, so there is no second OS hook or OCR path.
+    /// The one-shot capture of the auction's sell queue: the inventory
+    /// family's listing capture drives it, filling drafts the player reviews
+    /// before anything is recorded.
+    sale_capture: Arc<SaleCaptureService>,
+    /// Development-only auction-fee sampling over the production sell-queue
+    /// capture. Its Space action is installed on the existing listener during
+    /// construction, so there is no second OS hook or reading path.
     auction_fee_research: Arc<AuctionFeeResearchService>,
-    /// The last sale-window read, waiting to be collected.
+    /// The last capture taken from the floating capture button, waiting to
+    /// be collected.
     ///
     /// Its whole purpose is to bridge the gap between the overlay's capture
     /// button and the main window's form: the form may not be on screen when
-    /// the button is pressed, so the values wait here until it opens. Taken
+    /// the button is pressed, so the drafts wait here until it opens. Taken
     /// once and cleared, and never persisted, because a capture nobody came
     /// back for is one worth taking again.
-    last_sale_capture: std::sync::Mutex<Option<analytics::SaleWindowCapture>>,
+    last_sale_capture: std::sync::Mutex<Option<sale_capture::SaleQueueCapture>>,
     /// How a stored weapon's props are prepared before pricing or showing
     /// them: the attack rate under the reload speed the declared passive
     /// effects put in force. Shared with the weapon review service, so
@@ -214,7 +217,7 @@ impl Api {
         skill_scan: Arc<SkillScanService>,
         spacebar: Arc<SpacebarCaptureListener>,
         repair_ocr: Arc<RepairOcrService>,
-        sale_window_ocr: Arc<SaleWindowOcrService>,
+        sale_capture: Arc<SaleCaptureService>,
         quests: Arc<QuestService>,
         planet_maps: Option<Arc<eo_services::planet_maps::PlanetMapStore>>,
         coord_capture: Option<Arc<eo_services::coord_capture::CoordCaptureService>>,
@@ -237,7 +240,7 @@ impl Api {
         let pin_configs =
             eo_services::pin_configs::PinConfigsService::new(db.clone(), clock.clone());
         let auction_fee_research =
-            AuctionFeeResearchService::new(sale_window_ocr.clone(), clock.clone(), &data_dir);
+            AuctionFeeResearchService::new(sale_capture.clone(), clock.clone(), &data_dir);
         let research = auction_fee_research.clone();
         let research_data_dir = data_dir.clone();
         let research_spacebar = Arc::downgrade(&spacebar);
@@ -267,7 +270,7 @@ impl Api {
             skill_scan,
             spacebar,
             repair_ocr,
-            sale_window_ocr,
+            sale_capture,
             auction_fee_research,
             last_sale_capture: std::sync::Mutex::new(None),
             codex,

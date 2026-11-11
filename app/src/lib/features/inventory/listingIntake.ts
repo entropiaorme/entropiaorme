@@ -1,5 +1,5 @@
 /**
- * The listing-intake draft: what the game's sale window says, before any of
+ * The listing-intake draft: what the game's sell window says, before any of
  * it becomes a transaction.
  *
  * The TT value is read, never worked out from what we hold. Our per-unit
@@ -39,7 +39,7 @@ export interface HoldingOption {
 	paidPerUnit?: number;
 }
 
-/** What the sale window states, as read or typed. Percentages are the game's
+/** What the sell window states, as read or typed. Percentages are the game's
  * own display form: 102.5 means 102.50%. */
 export interface ListingDraftFields {
 	itemName: string;
@@ -176,36 +176,4 @@ export function previewNetMarkup(
 	if (price === null || draft.ttValue === null) return null;
 	const fee = channel === 'auction' ? (draft.auctionFee ?? 0) : 0;
 	return price - draft.ttValue - fee;
-}
-
-/** What one read of the sale window said, in the shape the capture command
- * answers. Declared structurally rather than imported so this module stays
- * free of the generated wire types, as the rest of it is. */
-export interface CapturedSaleWindow {
-	observedName: string | null;
-	quantity: number | null;
-	ttValue: number | null;
-	listingFee: number | null;
-	auctionDays: number | null;
-	startingBid: number | null;
-	buyout: number | null;
-}
-
-/** A draft filled from a captured window.
- *
- * A capture replaces the form rather than merging into it. It is one look at
- * one window, so combining it with half-typed values would produce a listing
- * matching neither the screen nor the player's own entry. Fields the read
- * refused arrive null and stay null: an empty box asks to be filled, while a
- * plausible wrong number does not. */
-export function capturedDraft(read: CapturedSaleWindow): ListingDraftFields {
-	return {
-		itemName: read.observedName ?? '',
-		quantity: read.quantity,
-		ttValue: read.ttValue,
-		auctionFee: read.listingFee,
-		auctionDays: read.auctionDays,
-		startingBid: read.startingBid,
-		buyout: read.buyout,
-	};
 }

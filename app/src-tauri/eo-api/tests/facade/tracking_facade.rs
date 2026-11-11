@@ -72,7 +72,7 @@ async fn make_api_with(
         terminals.map_or(handles.repair_ocr, |providers| {
             Arc::new(RepairOcrService::new(providers))
         }),
-        handles.sale_window_ocr,
+        handles.sale_capture,
         handles.quests.clone(),
         None,
         None,
@@ -560,7 +560,7 @@ async fn deleting_a_session_cascades_and_guards_active_and_missing() {
         handles.skill_scan,
         handles.spacebar,
         handles.repair_ocr,
-        handles.sale_window_ocr,
+        handles.sale_capture,
         handles.quests.clone(),
         None,
         None,
@@ -1322,7 +1322,7 @@ async fn make_api_with_selection(
         handles.skill_scan,
         handles.spacebar,
         handles.repair_ocr,
-        handles.sale_window_ocr,
+        handles.sale_capture,
         handles.quests.clone(),
         None,
         None,

@@ -3939,6 +3939,239 @@ fn listing_expiry(listed_instant: Option<f64>, auction_days: Option<i64>) -> Opt
     Some(to_iso_utc(instant + (days as f64) * 86_400.0))
 }
 
+/// What a listing is posted on: its prices, its fee, when and for how
+/// long, and where each figure came from.
+#[derive(Debug, Clone, Copy)]
+pub struct ListingTerms<'a> {
+    pub starting_bid: f64,
+    pub buyout: Option<f64>,
+    pub listing_fee: f64,
+    /// A full local timestamp or a bare date; `None` means now.
+    pub listed_at: Option<&'a str>,
+    pub auction_days: Option<i64>,
+    /// Where each figure came from, for a listing drafted from a read of
+    /// the game's sell window; empty for one entered by hand.
+    pub sources: &'a [ListingFieldSource],
+}
+
+/// A figure of a listing whose source is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingField {
+    ItemName,
+    /// The queued stack's TT value as the window printed it.
+    TtValue,
+    Quantity,
+    StartingBid,
+    Buyout,
+    ListingFee,
+    AuctionDays,
+}
+
+impl ListingField {
+    fn as_str(self) -> &'static str {
+        match self {
+            ListingField::ItemName => "item_name",
+            ListingField::TtValue => "tt_value",
+            ListingField::Quantity => "quantity",
+            ListingField::StartingBid => "starting_bid",
+            ListingField::Buyout => "buyout",
+            ListingField::ListingFee => "listing_fee",
+            ListingField::AuctionDays => "auction_days",
+        }
+    }
+}
+
+/// Whether a figure read off the window was checked by another figure the
+/// window prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadAssurance {
+    /// The window's own figures fix it: a misread digit would have been
+    /// caught.
+    Checked,
+    /// Nothing on screen fully confirms it: only bounds held it, or nothing
+    /// did, or (for a name) the application's item data does not name it.
+    Unchecked,
+}
+
+/// Where a listing figure came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldSource {
+    /// Read off the game's sell window and kept as read: its text exactly
+    /// as the window printed it, and whether the window's other figures
+    /// checked it. The text is `None` only for a buyout the window showed
+    /// switched off, kept as no buyout.
+    Read {
+        text: Option<String>,
+        assurance: ReadAssurance,
+    },
+    /// The name read, which the application matched to a holding recorded
+    /// under another name: the text is the name as the window printed it.
+    Matched { text: String },
+    /// Typed, or changed from what was read, by the player.
+    Typed,
+}
+
+impl FieldSource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            FieldSource::Read {
+                assurance: ReadAssurance::Checked,
+                ..
+            } => "read_checked",
+            FieldSource::Read {
+                assurance: ReadAssurance::Unchecked,
+                ..
+            } => "read_unchecked",
+            FieldSource::Matched { .. } => "matched",
+            FieldSource::Typed => "typed",
+        }
+    }
+
+    fn text(&self) -> Option<&str> {
+        match self {
+            FieldSource::Read { text, .. } => text.as_deref(),
+            FieldSource::Matched { text } => Some(text),
+            FieldSource::Typed => None,
+        }
+    }
+}
+
+/// One figure's source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingFieldSource {
+    pub field: ListingField,
+    pub source: FieldSource,
+}
+
+/// The figures a listing records, which a read figure's text must be.
+struct RecordedFigures {
+    quantity: f64,
+    starting_bid: f64,
+    buyout: Option<f64>,
+    listing_fee: f64,
+    auction_days: Option<i64>,
+}
+
+/// A figure as the window prints it, as a number: digits with an optional
+/// fraction, and commas between thousands.
+fn printed_number(text: &str) -> Option<f64> {
+    let digits = text.replace(',', "");
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    digits.parse().ok().filter(|value: &f64| value.is_finite())
+}
+
+/// Refuse sources that cannot be true of the figures recorded: a figure
+/// named twice; a TT value typed, which the listing would not keep; a read
+/// without its text, unless it is a buyout switched off and recorded as
+/// none; an empty text; a read number that is not the number recorded; a
+/// match for anything but the name. The name's sources
+/// are checked by [`check_name_sources`], once the name is known.
+fn check_sources(
+    sources: &[ListingFieldSource],
+    figures: &RecordedFigures,
+) -> Result<(), AnalyticsError> {
+    let refuse = |message| Err(AnalyticsError::InvalidInput(message));
+    for (index, entry) in sources.iter().enumerate() {
+        if sources[..index]
+            .iter()
+            .any(|other| other.field == entry.field)
+        {
+            return refuse("a listing figure's source is given twice");
+        }
+        if matches!(entry.source, FieldSource::Matched { .. })
+            && entry.field != ListingField::ItemName
+        {
+            return refuse("only the item's name can be matched to a holding");
+        }
+        let text = match &entry.source {
+            // The listing keeps no TT value from the form, so a typed one
+            // would record nothing.
+            FieldSource::Typed if entry.field == ListingField::TtValue => {
+                return refuse("a TT value is recorded only as read");
+            }
+            FieldSource::Typed => continue,
+            FieldSource::Read { text: None, .. } => {
+                if entry.field == ListingField::Buyout && figures.buyout.is_none() {
+                    continue;
+                }
+                return refuse("only a buyout switched off is read without its text");
+            }
+            FieldSource::Read {
+                text: Some(text), ..
+            }
+            | FieldSource::Matched { text } => text,
+        };
+        if text.trim().is_empty() {
+            return refuse("a figure read off the screen keeps its text");
+        }
+        let recorded = match entry.field {
+            ListingField::ItemName => continue,
+            ListingField::TtValue => None,
+            ListingField::Quantity => Some(figures.quantity),
+            ListingField::StartingBid => Some(figures.starting_bid),
+            ListingField::ListingFee => Some(figures.listing_fee),
+            ListingField::Buyout => match figures.buyout {
+                Some(buyout) => Some(buyout),
+                None => return refuse("a read figure's text is not the figure recorded"),
+            },
+            ListingField::AuctionDays => match figures.auction_days {
+                Some(days) => Some(days as f64),
+                None => return refuse("a read figure's text is not the figure recorded"),
+            },
+        };
+        match (printed_number(text), recorded) {
+            (Some(_), None) => {}
+            (Some(read), Some(recorded)) if (read - recorded).abs() < 1e-9 => {}
+            _ => return refuse("a read figure's text is not the figure recorded"),
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a name's source that cannot be true of the name recorded: a name
+/// read and kept is the name recorded, and a name matched to a holding is
+/// recorded under that holding's other name.
+fn check_name_sources(sources: &[ListingFieldSource], name: &str) -> Result<(), &'static str> {
+    for entry in sources.iter().filter(|e| e.field == ListingField::ItemName) {
+        match &entry.source {
+            FieldSource::Read {
+                text: Some(text), ..
+            } if text.trim() != name.trim() => {
+                return Err("a name read and kept is the name recorded");
+            }
+            FieldSource::Matched { text } if text.trim() == name.trim() => {
+                return Err("a name matched to a holding is recorded under the holding's name");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Record where each figure of listing `listing_id` came from, the sources
+/// having passed [`check_sources`] and [`check_name_sources`].
+fn insert_field_sources(
+    tx: &rusqlite::Transaction<'_>,
+    listing_id: &str,
+    sources: &[ListingFieldSource],
+) -> rusqlite::Result<()> {
+    for entry in sources {
+        tx.execute(
+            "INSERT INTO auction_listing_field_sources (listing_id, field, source, read_text) \
+             VALUES (?, ?, ?, ?)",
+            rusqlite::params![
+                listing_id,
+                entry.field.as_str(),
+                entry.source.as_str(),
+                entry.source.text()
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 /// Split a caller's listing moment into the calendar date the ledger is keyed
 /// by and the precise instant the auction clock runs from.
 ///
@@ -5685,6 +5918,51 @@ impl AnalyticsService {
         listed_at: Option<&str>,
         auction_days: Option<i64>,
     ) -> Result<AuctionListingRow, AnalyticsError> {
+        self.create_auction_listing_with_terms(
+            profession,
+            item_name,
+            quantity,
+            ListingTerms {
+                starting_bid,
+                buyout,
+                listing_fee,
+                listed_at,
+                auction_days,
+                sources: &[],
+            },
+        )
+        .await
+    }
+
+    /// List stock on the auction on `terms`, recording where each of its
+    /// figures came from when the terms say. Otherwise exactly
+    /// [`create_auction_listing`](Self::create_auction_listing).
+    pub async fn create_auction_listing_with_terms(
+        &self,
+        profession: Profession,
+        item_name: &str,
+        quantity: f64,
+        terms: ListingTerms<'_>,
+    ) -> Result<AuctionListingRow, AnalyticsError> {
+        let ListingTerms {
+            starting_bid,
+            buyout,
+            listing_fee,
+            listed_at,
+            auction_days,
+            sources,
+        } = terms;
+        check_sources(
+            sources,
+            &RecordedFigures {
+                quantity,
+                starting_bid,
+                buyout,
+                listing_fee,
+                auction_days,
+            },
+        )?;
+        check_name_sources(sources, item_name).map_err(AnalyticsError::InvalidInput)?;
         if is_universal_ammo(item_name) {
             return Err(AnalyticsError::InvalidInput(
                 "Universal Ammo is liquid PED and cannot be listed",
@@ -5711,6 +5989,7 @@ impl AnalyticsService {
         let now = naive_to_epoch(self.clock.now());
         let (id_c, item_c, listed_c) = (id.clone(), item_name.to_string(), listed_at.clone());
         let instant_c = listed_instant;
+        let sources = sources.to_vec();
 
         self.db
             .with_writer(move |conn| {
@@ -5750,6 +6029,7 @@ impl AnalyticsService {
                     ],
                 )?;
 
+                insert_field_sources(&tx, &id_c, &sources)?;
                 record_opening_balance(&tx, &item_c, &id_c, &plan, &listed_c, now)?;
 
                 for allocation in &plan.allocations {
@@ -5812,6 +6092,48 @@ impl AnalyticsService {
         listed_at: Option<&str>,
         auction_days: Option<i64>,
     ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
+        self.create_equipment_listing_with_terms(
+            item_id,
+            ListingTerms {
+                starting_bid,
+                buyout,
+                listing_fee,
+                listed_at,
+                auction_days,
+                sources: &[],
+            },
+        )
+        .await
+    }
+
+    /// List one whole equipment holding on `terms`, recording where each
+    /// of its figures came from when the terms say. Otherwise exactly
+    /// [`create_equipment_listing`](Self::create_equipment_listing).
+    pub async fn create_equipment_listing_with_terms(
+        &self,
+        item_id: &str,
+        terms: ListingTerms<'_>,
+    ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
+        let ListingTerms {
+            starting_bid,
+            buyout,
+            listing_fee,
+            listed_at,
+            auction_days,
+            sources,
+        } = terms;
+        // An asset is listed whole; its name is checked once it is read.
+        check_sources(
+            sources,
+            &RecordedFigures {
+                quantity: 1.0,
+                starting_bid,
+                buyout,
+                listing_fee,
+                auction_days,
+            },
+        )?;
+        let sources = sources.to_vec();
         if starting_bid < 0.0 || listing_fee < 0.0 {
             return Err(AnalyticsError::InvalidInput(
                 "auction prices and fees cannot be negative",
@@ -5839,8 +6161,11 @@ impl AnalyticsService {
                     )
                     .optional()?;
                 let Some((name, tt_value, markup_paid)) = item else {
-                    return Ok(None);
+                    return Ok(Ok(None));
                 };
+                if let Err(refusal) = check_name_sources(&sources, &name) {
+                    return Ok(Err(refusal));
+                }
                 let cost_basis = tt_value + markup_paid;
                 let attributed = conversion::asset_attributed_share(&tx, &item_id)?;
                 tx.execute(
@@ -5870,6 +6195,7 @@ impl AnalyticsService {
                         cost_basis,
                     ],
                 )?;
+                insert_field_sources(&tx, &id, &sources)?;
                 tx.execute(
                     "UPDATE inventory_items SET state = 'listed', updated_at = ? WHERE id = ?",
                     rusqlite::params![now, item_id],
@@ -5894,10 +6220,11 @@ impl AnalyticsService {
                 }
                 let row = read_listing(&tx, &id)?;
                 tx.commit()?;
-                Ok(row)
+                Ok(Ok(row))
             })
             .await
-            .map_err(AnalyticsError::from)
+            .map_err(AnalyticsError::from)?
+            .map_err(AnalyticsError::InvalidInput)
     }
 
     /// Record an immediate fee-free player trade for one whole equipment
@@ -8230,6 +8557,325 @@ mod tests {
 
     fn position(rows: &[StockPositionRow], item: &str) -> Option<StockPositionRow> {
         rows.iter().find(|row| row.item_name == item).cloned()
+    }
+
+    /// Where each figure of a listing came from, as stored.
+    async fn field_sources(
+        service: &AnalyticsService,
+        listing_id: &str,
+    ) -> Vec<(String, String, Option<String>)> {
+        let id = listing_id.to_string();
+        service
+            .db
+            .with_reader(move |conn| {
+                let mut statement = conn.prepare(
+                    "SELECT field, source, read_text FROM auction_listing_field_sources \
+                     WHERE listing_id = ? ORDER BY field",
+                )?;
+                let rows = statement
+                    .query_map(rusqlite::params![id], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap()
+    }
+
+    fn read(text: &str, assurance: ReadAssurance) -> FieldSource {
+        FieldSource::Read {
+            text: Some(text.to_string()),
+            assurance,
+        }
+    }
+
+    fn source(field: ListingField, source: FieldSource) -> ListingFieldSource {
+        ListingFieldSource { field, source }
+    }
+
+    /// A listing drafted from a read keeps, per figure, whether the screen
+    /// gave it (checked by the window's other figures or not), the
+    /// application matched it, or the player typed it; one entered by hand
+    /// keeps nothing.
+    #[tokio::test]
+    async fn a_listing_records_where_each_figure_came_from() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let sources = [
+            source(
+                ListingField::ItemName,
+                read("Moonleaf Board", ReadAssurance::Unchecked),
+            ),
+            source(ListingField::StartingBid, read("2", ReadAssurance::Checked)),
+            source(
+                ListingField::Buyout,
+                FieldSource::Read {
+                    text: None,
+                    assurance: ReadAssurance::Checked,
+                },
+            ),
+            source(
+                ListingField::ListingFee,
+                read("0.50", ReadAssurance::Checked),
+            ),
+            source(
+                ListingField::TtValue,
+                read("1,234.50", ReadAssurance::Unchecked),
+            ),
+            source(ListingField::Quantity, FieldSource::Typed),
+        ];
+        let listing = service
+            .create_auction_listing_with_terms(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                10.0,
+                ListingTerms {
+                    starting_bid: 2.0,
+                    buyout: None,
+                    listing_fee: 0.5,
+                    listed_at: Some("2026-07-20T14:30:00"),
+                    auction_days: Some(7),
+                    sources: &sources,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            field_sources(&service, &listing.id).await,
+            vec![
+                ("buyout".into(), "read_checked".into(), None),
+                (
+                    "item_name".into(),
+                    "read_unchecked".into(),
+                    Some("Moonleaf Board".into())
+                ),
+                (
+                    "listing_fee".into(),
+                    "read_checked".into(),
+                    Some("0.50".into())
+                ),
+                ("quantity".into(), "typed".into(), None),
+                (
+                    "starting_bid".into(),
+                    "read_checked".into(),
+                    Some("2".into())
+                ),
+                (
+                    "tt_value".into(),
+                    "read_unchecked".into(),
+                    Some("1,234.50".into())
+                ),
+            ]
+        );
+
+        // A name read and matched by the application to a holding recorded
+        // under another name keeps the name as read.
+        let matched = [source(
+            ListingField::ItemName,
+            FieldSource::Matched {
+                text: "Moonleaf Bord".into(),
+            },
+        )];
+        let listing = service
+            .create_auction_listing_with_terms(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                1.0,
+                ListingTerms {
+                    starting_bid: 2.0,
+                    buyout: None,
+                    listing_fee: 0.5,
+                    listed_at: None,
+                    auction_days: None,
+                    sources: &matched,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            field_sources(&service, &listing.id).await,
+            vec![(
+                "item_name".into(),
+                "matched".into(),
+                Some("Moonleaf Bord".into())
+            )]
+        );
+
+        let by_hand = service
+            .create_auction_listing(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                5.0,
+                2.0,
+                None,
+                0.5,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(field_sources(&service, &by_hand.id).await.is_empty());
+    }
+
+    /// Each way sources can be untrue of the figures recorded is refused,
+    /// and leaves no listing, stock movement or fee behind.
+    #[tokio::test]
+    async fn sources_untrue_of_the_listing_are_refused_whole() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let checked = |text: &str| read(text, ReadAssurance::Checked);
+        let no_text = FieldSource::Read {
+            text: None,
+            assurance: ReadAssurance::Checked,
+        };
+        // The sources, the buyout and days recorded, and the refusal.
+        type Case = (
+            Vec<ListingFieldSource>,
+            Option<f64>,
+            Option<i64>,
+            &'static str,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                vec![
+                    source(ListingField::Quantity, FieldSource::Typed),
+                    source(ListingField::Quantity, checked("1")),
+                ],
+                None,
+                None,
+                "a listing figure's source is given twice",
+            ),
+            // Without text: only a buyout, and only one recorded as none.
+            (
+                vec![source(ListingField::ListingFee, no_text.clone())],
+                None,
+                None,
+                "only a buyout switched off is read without its text",
+            ),
+            (
+                vec![source(ListingField::Buyout, no_text.clone())],
+                Some(3.0),
+                None,
+                "only a buyout switched off is read without its text",
+            ),
+            (
+                vec![source(ListingField::StartingBid, checked("  "))],
+                None,
+                None,
+                "a figure read off the screen keeps its text",
+            ),
+            // A read number that is not the number recorded.
+            (
+                vec![source(ListingField::StartingBid, checked("3"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::Quantity, checked("1O"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::Buyout, checked("3"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::AuctionDays, checked("7"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::TtValue, FieldSource::Typed)],
+                None,
+                None,
+                "a TT value is recorded only as read",
+            ),
+            (
+                vec![source(
+                    ListingField::Quantity,
+                    FieldSource::Matched { text: "1".into() },
+                )],
+                None,
+                None,
+                "only the item's name can be matched to a holding",
+            ),
+            // The name: read and kept is the name recorded; matched is not.
+            (
+                vec![source(
+                    ListingField::ItemName,
+                    read("Moonleaf Bord", ReadAssurance::Unchecked),
+                )],
+                None,
+                None,
+                "a name read and kept is the name recorded",
+            ),
+            (
+                vec![source(
+                    ListingField::ItemName,
+                    FieldSource::Matched {
+                        text: "Moonleaf Board".into(),
+                    },
+                )],
+                None,
+                None,
+                "a name matched to a holding is recorded under the holding's name",
+            ),
+        ];
+        let ledger_before = ledger_descriptions(&service).await;
+        for (sources, buyout, days, message) in cases {
+            assert_eq!(
+                service
+                    .create_auction_listing_with_terms(
+                        Profession::Harvesting,
+                        "Moonleaf Board",
+                        1.0,
+                        ListingTerms {
+                            starting_bid: 2.0,
+                            buyout,
+                            listing_fee: 0.5,
+                            listed_at: None,
+                            auction_days: days,
+                            sources: &sources,
+                        },
+                    )
+                    .await
+                    .err()
+                    .map(|error| error.to_string()),
+                Some(AnalyticsError::InvalidInput(message).to_string()),
+                "{sources:?}"
+            );
+        }
+        assert!(service
+            .auction_listings(Profession::Harvesting)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(ledger_descriptions(&service).await, ledger_before);
+
+        // Thousands separators are the window's own, and read as such.
+        let grouped = [source(ListingField::StartingBid, checked("1,250"))];
+        assert!(service
+            .create_auction_listing_with_terms(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                1.0,
+                ListingTerms {
+                    starting_bid: 1250.0,
+                    buyout: None,
+                    listing_fee: 0.5,
+                    listed_at: None,
+                    auction_days: None,
+                    sources: &grouped,
+                },
+            )
+            .await
+            .is_ok());
     }
 
     /// A recorded duration survives the round trip and reports the day the

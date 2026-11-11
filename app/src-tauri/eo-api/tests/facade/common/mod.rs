@@ -20,7 +20,7 @@ use eo_services::event_bus::EventBus;
 use eo_services::hotbar_listener::HotbarListener;
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
-use eo_services::sale_window_ocr::{SaleWindowOcrService, SaleWindowProviders};
+use eo_services::sale_capture::{SaleCaptureProviders, SaleCaptureService};
 use eo_services::skill_scan::{SkillScanProviders, SkillScanService};
 use eo_services::skill_tracker::SkillTracker;
 use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
@@ -53,7 +53,7 @@ pub struct ProducerHandles {
     // `Api::new` and never reads it.
     #[allow(dead_code)]
     pub repair_ocr: Arc<RepairOcrService>,
-    pub sale_window_ocr: Arc<SaleWindowOcrService>,
+    pub sale_capture: Arc<SaleCaptureService>,
     // The composed quest service (its owning task subscribed on this
     // module's bus); the facade serves the quest families over it.
     pub quests: Arc<QuestService>,
@@ -113,7 +113,10 @@ pub async fn producer_handles_with_tracker(
     );
     let spacebar = SpacebarCaptureListener::new(None);
     let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders::default()));
-    let sale_window_ocr = Arc::new(SaleWindowOcrService::new(SaleWindowProviders::default()));
+    let sale_capture = Arc::new(SaleCaptureService::new(
+        SaleCaptureProviders::default(),
+        Arc::new(RealClock::new()),
+    ));
     let quests = QuestService::start(&bus, db.clone(), Arc::new(RealClock::new()), handle);
     ProducerHandles {
         bus,
@@ -125,7 +128,7 @@ pub async fn producer_handles_with_tracker(
         skill_scan,
         spacebar,
         repair_ocr,
-        sale_window_ocr,
+        sale_capture,
         quests,
     }
 }

@@ -195,13 +195,13 @@ jobs:
           mkdir -p "$stage"
           cp "$release/entropia-orme.exe" "$stage/"
           cp -r "$release/snapshot" "$release/models" "$release/ort" "$release/demo" "$stage/"
-          cp "$release/panel_geometry.json" "$release/ui_profile.json" "$stage/"
+          cp "$release/ui_profile.json" "$stage/"
           printf '%s\n' \
             'EntropiaOrme - Portable' \
             '' \
             'Extract this folder anywhere, then run entropia-orme.exe. Keep the' \
-            'snapshot, models, ort, and demo folders, and the panel_geometry.json' \
-            'and ui_profile.json files, next to the executable.' \
+            'snapshot, models, ort, and demo folders, and the ui_profile.json' \
+            'file, next to the executable.' \
             '' \
             'Settings persist to %APPDATA%\Roaming\EntropiaOrme\ on the host;' \
             'truly-portable mode is not in scope for the 0.x window.' \

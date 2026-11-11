@@ -402,6 +402,8 @@ export interface AuctionListingInput {
 	listedAt?: string | null;
 	/** How many days the listing runs for. Optional: a listing whose duration the player did not record simply never nudges for resolution. */
 	auctionDays?: number | null;
+	/** Where each figure came from, for a listing drafted from a capture of the game's sell queue; absent for one entered by hand. */
+	fieldSources?: ListingFieldSourceInput[] | null;
 }
 
 /**
@@ -998,6 +1000,25 @@ export interface DerivedSource {
 }
 
 /**
+ * The buyout as read: switched off, or a price.
+ */
+export type DraftBuyout = {
+		kind: 'off';
+	} | {
+		figure: ReadFigure;
+		kind: 'price';
+	};
+
+/**
+ * A queued item's name as read.
+ */
+export interface DraftName {
+	text: string;
+	/** What bears the name out. Only the application's item data confirms it; otherwise the player should check it against the window. */
+	found: NameFound;
+}
+
+/**
  * One configured component of a stored weapon setup.
  */
 export interface EquipmentComponent {
@@ -1099,6 +1120,8 @@ export interface EquipmentListingInput {
 	listedAt?: string | null;
 	/** How many days the listing runs for, when recorded. */
 	auctionDays?: number | null;
+	/** Where each figure came from, for a listing drafted from a capture of the game's sell queue; absent for one entered by hand. */
+	fieldSources?: ListingFieldSourceInput[] | null;
 }
 
 /**
@@ -1216,6 +1239,22 @@ export interface ExpectedHuntingEconomics {
 }
 
 export type ExpectedLooterSource = 'animal' | 'mutant' | 'robot' | 'three_looter_mean';
+
+/**
+ * Where a listing figure came from.
+ */
+export type FieldSourceInput = {
+		text?: string | null;
+		kind: 'readChecked';
+	} | {
+		text?: string | null;
+		kind: 'readUnchecked';
+	} | {
+		text: string;
+		kind: 'matched';
+	} | {
+		kind: 'typed';
+	};
 
 /**
  * The game-connection block: the configured chat-log path, whether it
@@ -1880,6 +1919,19 @@ export interface LifetimeStats {
 }
 
 /**
+ * A listing figure whose source is recorded.
+ */
+export type ListingFieldName = 'itemName' | 'quantity' | 'startingBid' | 'buyout' | 'listingFee' | 'auctionDays' | 'ttValue';
+
+/**
+ * Where one figure of a listing came from.
+ */
+export interface ListingFieldSourceInput {
+	field: ListingFieldName;
+	source: FieldSourceInput;
+}
+
+/**
  * Expected loot over the live session's whole Cycled at one looter basis.
  */
 export interface LiveExpectedAtBasis {
@@ -2338,6 +2390,11 @@ export interface NameComparison {
 	pesPer100Ped: number;
 	lootRate: number;
 }
+
+/**
+ * Where a queued item's name was found.
+ */
+export type NameFound = 'itemData' | 'inventoryList' | 'nowhere';
 
 /**
  * One position verb's answer. `refusal` is set exactly when `status` is
@@ -3078,6 +3135,42 @@ export interface QuestRewardReviewInput {
 	declarePaid?: boolean;
 }
 
+/**
+ * How many items the window says are queued, against the drafts and
+ * unread items a capture answers.
+ */
+export type QueuedCount = {
+		kind: 'all';
+	} | {
+		of: number;
+		kind: 'some';
+	} | {
+		kind: 'unread';
+	} | {
+		kind: 'mismatched';
+	};
+
+/**
+ * A figure of a queued item, by what the player knows it as.
+ */
+export type QueuedField = 'itemName' | 'ttValue' | 'quantity' | 'startingBid' | 'buyout' | 'auctionDays' | 'listingFee' | 'markup';
+
+/**
+ * One queued item, read whole, as a draft listing.
+ */
+export interface QueuedListingDraft {
+	/** Names this draft within its capture alone. */
+	draftId: string;
+	itemName: DraftName;
+	/** The TT value of the quantity queued. */
+	ttValue: ReadFigure;
+	quantity: ReadFigure;
+	startingBid: ReadFigure;
+	buyout: DraftBuyout;
+	auctionDays: ReadFigure;
+	listingFee: ReadFigure;
+}
+
 export type RadarCalibrationStatus = 'idle' | 'awaitCentre' | 'awaitNorthEdge';
 
 export interface RadarGeometry {
@@ -3155,6 +3248,17 @@ export interface RadarScale {
  * Why a placement has no scale.
  */
 export type RadarScaleMissing = 'labelsUnread' | 'noRings' | 'noReader';
+
+/**
+ * A figure as read.
+ */
+export interface ReadFigure {
+	value: number;
+	/** The figure exactly as the window prints it, without the unit: `11.52`, `162`. */
+	text: string;
+	/** Nothing the window prints checks this figure beyond its own shape and bounds, so a misread digit could pass: the player should check it against the window. */
+	check: boolean;
+}
 
 export interface RealisedDefinitionMarkup {
 	definitionId: number;
@@ -3299,27 +3403,31 @@ export interface ReturnsBreakdown {
 }
 
 /**
- * What one look at the game's sale window resolved.
- * Every field is nullable because every field can refuse: a value that
- * did not read comes back empty and is named in `unread`, so the review
- * surface shows a gap to fill rather than a figure to trust. `error` is
- * set only when there was nothing to read at all (no game window, no
- * calibration, no capture), and then no field is populated.
+ * One capture of the sell queue: the listing drafts it read, or why
+ * there are none.
  */
-export interface SaleWindowCapture {
-	observedName: string | null;
-	quantity: number | null;
-	ttValue: number | null;
-	listingFee: number | null;
-	auctionDays: number | null;
-	startingBid: number | null;
-	buyout: number | null;
-	/** The lowest confidence among the fields that did read. */
-	confidence: number | null;
-	/** The fields that did not read, by the name the window gives them. */
-	unread: string[];
-	error: string | null;
-}
+export type SaleQueueCapture = {
+		/** The capture's identity, increasing in the order captures were started: a capture with a lower one is older, and its drafts never replace a newer capture's. */
+		captureId: number;
+		/** When the screen was read, as a local timestamp: what a listing recorded from one of these drafts is dated to. */
+		readAt: string;
+		/** One per queued item that read whole, top to bottom. */
+		drafts: QueuedListingDraft[];
+		/** The queued items in view that did not read whole. */
+		unread: UnreadQueuedItem[];
+		/** How many items the window says are queued. */
+		queued: QueuedCount;
+		kind: 'read';
+	} | {
+		captureId: number;
+		reason: SaleQueueRefusal;
+		kind: 'refused';
+	};
+
+/**
+ * Why a capture produced no listing drafts.
+ */
+export type SaleQueueRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'captureNotAllowed' | 'sellWindowNotOpen' | 'sellWindowNotWhole' | 'queueNotVisible' | 'priceModeUnread' | 'otherPriceMode' | 'queueEmpty' | 'readerUnavailable';
 
 /**
  * A catalogue vocabulary the equipment pickers search; each maps to one snapshot
@@ -4235,6 +4343,28 @@ export type Trend = 'improving' | 'declining' | 'stable';
 export type UnmodelledReason = 'no_damage' | 'no_cost' | 'missing_efficiency';
 
 /**
+ * One figure of a queued item that did not read.
+ */
+export interface UnreadProblem {
+	field: QueuedField;
+	why: UnreadWhy;
+}
+
+/**
+ * A queued item in view that did not read whole. Nothing of it that did
+ * read is carried.
+ */
+export interface UnreadQueuedItem {
+	/** Each figure that failed, and how, in the order the row is read. */
+	problems: UnreadProblem[];
+}
+
+/**
+ * How a figure failed to read.
+ */
+export type UnreadWhy = 'notRead' | 'cutOff' | 'outOfBounds' | 'disagrees';
+
+/**
  * Recorded hits no protection cost covers yet.
  */
 export interface UnrecordedProtection {
@@ -5147,11 +5277,27 @@ export async function inventorySell(itemId: string, sale: InventorySellInput): P
 	return invokeCommand('inventory_sell', { item_id: itemId, sale });
 }
 
-export async function inventorySaleWindowCapture(): Promise<SaleWindowCapture> {
+export async function inventorySaleWindowCapture(): Promise<{
+		/** The capture's identity, increasing in the order captures were started: a capture with a lower one is older, and its drafts never replace a newer capture's. */
+		captureId: number;
+		/** When the screen was read, as a local timestamp: what a listing recorded from one of these drafts is dated to. */
+		readAt: string;
+		/** One per queued item that read whole, top to bottom. */
+		drafts: QueuedListingDraft[];
+		/** The queued items in view that did not read whole. */
+		unread: UnreadQueuedItem[];
+		/** How many items the window says are queued. */
+		queued: QueuedCount;
+		kind: 'read';
+	} | {
+		captureId: number;
+		reason: SaleQueueRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('inventory_sale_window_capture', {});
 }
 
-export async function inventorySaleWindowTakeCapture(): Promise<SaleWindowCapture | null> {
+export async function inventorySaleWindowTakeCapture(): Promise<SaleQueueCapture | null> {
 	return invokeCommand('inventory_sale_window_take_capture', {});
 }
 

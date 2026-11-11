@@ -87,6 +87,7 @@ use eo_services::expected_hunting::{with_current_offensive_efficiencies, Hunting
 use eo_services::game_data_store::GameDataStore;
 use eo_services::game_ui::geometry::BgrImage;
 use eo_services::game_ui::profile::UiProfile;
+use eo_services::game_ui::sale_queue::ItemCatalogue;
 use eo_services::game_ui::seams::{FrameReader, GameWindowFrame};
 use eo_services::game_ui::skills::SkillVocabulary;
 use eo_services::hotbar_listener::{
@@ -99,9 +100,8 @@ use eo_services::passive_effects::reload_seconds_under;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
-use eo_services::sale_window_ocr::{SaleWindowOcrService, SaleWindowProviders};
+use eo_services::sale_capture::{SaleCaptureProviders, SaleCaptureService};
 use eo_services::scan_completion::{complete_skill_scan, latest_skill_levels, ScannedLevel};
-use eo_services::scan_presets::ScanPresets;
 use eo_services::screen_capture::capture_region_bgr;
 pub use eo_services::skill_scan::SkillScanService;
 use eo_services::skill_scan::{
@@ -755,35 +755,29 @@ async fn compose_with(
 
     // The scan services compose on the spine bus (so their status frames
     // reach the shell's event bridge) over the OCR extraction providers
-    // and the
-    // shared single-owner pool, before the read surface takes ownership of
-    // `db`/`game_data`/`clock`/`data_dir`. The calibration artefact sits
-    // beside the snapshot dir in both the dev and installed layouts, so it
-    // resolves as the snapshot's sibling.
+    // and the shared single-owner pool, before the read surface takes
+    // ownership of `db`/`game_data`/`clock`/`data_dir`. The interface
+    // profile sits beside the snapshot dir in both the dev and installed
+    // layouts, so it resolves as the snapshot's sibling.
     let resources = resource_root(&snapshot);
-    let geometry_path = resources.join("panel_geometry.json");
 
     // The readers that find what they want in the game window themselves
     // are composed over one capture seam for the whole window and one
-    // interface profile (bundled beside the snapshot, like the calibration
-    // artefact). A profile that will not load is logged and leaves those
-    // readers unavailable; composition goes on without them.
+    // interface profile (bundled beside the snapshot). A profile that will
+    // not load is logged and leaves those readers unavailable; composition
+    // goes on without them.
     let game_ui = GameUi {
         frame: Arc::new(eu_window::capture_game_window),
         profile: load_ui_profile(&resources.join(UI_PROFILE_FILE)),
     };
 
-    let (skill_scan, sale_window_ocr, spacebar_listener) = compose_scan_services(ScanInputs {
+    let (skill_scan, sale_capture, spacebar_listener) = compose_scan_services(ScanInputs {
         bus: producers.bus_handle(),
         ocr_engine: ocr_engine.clone(),
         game_ui: &game_ui,
         game_data: game_data.clone(),
         db: db.clone(),
         clock: clock.clone(),
-        paths: ScanPaths {
-            geometry: geometry_path,
-            debug: data_dir.join("debug"),
-        },
         keystroke_source: producers.keystroke_source_handle(),
     });
 
@@ -957,7 +951,7 @@ async fn compose_with(
             skill_scan.clone(),
             spacebar_listener.clone(),
             repair_ocr.clone(),
-            sale_window_ocr.clone(),
+            sale_capture.clone(),
             producers.quests_handle(),
             planet_maps,
             Some(coord_capture.clone()),
@@ -1105,16 +1099,6 @@ async fn build_ocr_engine(models: PathBuf) -> Option<Arc<OcrEngine>> {
     Some(engine)
 }
 
-/// Where the scan services read their calibration and drop what they saw.
-struct ScanPaths {
-    /// The sale window's calibration artefact, beside the snapshot in both
-    /// layouts.
-    geometry: PathBuf,
-    /// Where a development sale-window read leaves its last captured panel
-    /// for later inspection.
-    debug: PathBuf,
-}
-
 /// What the scan services are composed over.
 struct ScanInputs<'a> {
     /// The spine bus their status frames publish on.
@@ -1124,7 +1108,6 @@ struct ScanInputs<'a> {
     game_data: Arc<GameDataStore>,
     db: Db,
     clock: Arc<dyn Clock>,
-    paths: ScanPaths,
     /// The shared OS keyboard hook the spacebar listener rides.
     keystroke_source: Arc<dyn KeystrokeSource>,
 }
@@ -1187,21 +1170,22 @@ fn frame_reader(engine: Option<Arc<OcrEngine>>) -> Option<FrameReader> {
     })
 }
 
-/// Compose the skill scan, the sale-window read, and the spacebar
+/// Compose the skill scan, the sell-queue capture, and the spacebar
 /// listener. The skill scan reads the whole game window through the
 /// interface profile and the shared engine, checking what it reads
 /// against the bundled skill list; it publishes `scan.status.changed` on
 /// the spine `bus` (so its frames reach the shell's event bridge) and
 /// persists an accepted scan through the shared database. Without the
 /// engine or the profile it rests unavailable rather than declining
-/// composition, so the scan operations still serve. The sale-window read
-/// captures its calibrated rectangle over the same engine. All three
+/// composition, so the scan operations still serve. The sell-queue capture
+/// reads the whole game window through the same profile and engine,
+/// confirming queued names against the bundled item data. All three
 /// services are always constructed.
 fn compose_scan_services(
     inputs: ScanInputs<'_>,
 ) -> (
     Arc<SkillScanService>,
-    Arc<SaleWindowOcrService>,
+    Arc<SaleCaptureService>,
     Arc<SpacebarCaptureListener>,
 ) {
     let ScanInputs {
@@ -1211,7 +1195,6 @@ fn compose_scan_services(
         game_data,
         db,
         clock,
-        paths,
         keystroke_source,
     } = inputs;
 
@@ -1224,52 +1207,31 @@ fn compose_scan_services(
             tick: DEFAULT_TICK,
             idle_limit: DEFAULT_IDLE_LIMIT,
         },
-        clock,
+        clock.clone(),
         Some(bus),
     );
     skill_scan
         .set_completion_callback(skill_scan_completion(db, tokio::runtime::Handle::current()));
 
-    // The sale-window read: its calibrated rectangle over the same warm
-    // engine and capturer. It takes the anchor as well as the region,
-    // because it crops each field out of the one captured panel.
-    let sale_presets = Arc::new(ScanPresets::new(&paths.geometry));
-    let sale_engine = ocr_engine;
-    let anchor_presets = sale_presets.clone();
-    let sale_window_ocr = Arc::new(SaleWindowOcrService::new(SaleWindowProviders {
-        sale_window_region: Arc::new(move || eu_window::sale_window_region(&sale_presets)),
-        anchor: Arc::new(move || anchor_presets.sale_window.clone()),
-        capture_region: Arc::new(capture_region_bgr),
-        read_text: Arc::new(move |frame: &BgrImage| {
-            sale_engine
-                .as_ref()?
-                .recognize_bgr(&frame.data, frame.h, frame.w)
-                .ok()
-        }),
-    }));
-
-    // A development read drops its captured panel under the data dir's
-    // debug/, the way a coordinate scan drops its frame: one small
-    // overwritten file, local only, and the only way to see afterwards what
-    // the recogniser was actually looking at when a field would not read.
-    // Release builds do not retain transaction pixels after recognition.
-    let sale_debug_dir = paths.debug;
-    sale_window_ocr.set_capture_tap(Arc::new(move |_panel, _region, frame| {
-        if cfg!(debug_assertions) {
-            eo_services::screen_capture::write_debug_frame(
-                &sale_debug_dir,
-                "sale-window-last.png",
-                frame,
-            );
-        }
-    }));
+    // The sell-queue capture: the whole game window, the interface profile
+    // and the shared engine, with the bundled item data built once into
+    // the catalogue that confirms a queued name.
+    let sale_capture = Arc::new(SaleCaptureService::new(
+        SaleCaptureProviders {
+            frame: game_ui.frame.clone(),
+            profile: game_ui.profile.clone(),
+            catalogue: Arc::new(ItemCatalogue::from_store(&game_data)),
+            read_text: frame_reader(ocr_engine),
+        },
+        clock,
+    ));
 
     // The spacebar-capture listener, over the SAME OS hook the hotbar
     // listener rides (the hook is single-instance). Unarmed until the
     // development research capture arms it.
     let spacebar = SpacebarCaptureListener::new(Some(keystroke_source));
 
-    (skill_scan, sale_window_ocr, spacebar)
+    (skill_scan, sale_capture, spacebar)
 }
 
 /// Subscriber backlog bound for the typed domain channel (the shell's

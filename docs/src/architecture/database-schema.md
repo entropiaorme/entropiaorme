@@ -72,7 +72,7 @@ from the first two).
 | --- | --- | --- |
 | Metadata | `db_metadata` | The schema-version row and other key/value markers. |
 | Equipment and calibration | `equipment_library`, `skill_calibrations`, `skill_calibrations_archive` | The player's equipment with its economics, and skill-level calibrations from scans. |
-| Inventory and stock | `inventory_items`, `stock_movements`, `auction_listings`, `private_sales`, `stock_conversions`, `stock_removals` | Held equipment and the lifecycle of loot after it is recorded: listings, trades, conversions, and removals as signed stock movements over immutable loot. |
+| Inventory and stock | `inventory_items`, `stock_movements`, `auction_listings`, `auction_listing_field_sources`, `private_sales`, `stock_conversions`, `stock_removals` | Held equipment and the lifecycle of loot after it is recorded: listings (with, for one drafted from a capture of the sell queue, whether each figure was read or typed), trades, conversions, and removals as signed stock movements over immutable loot. |
 | Ledger | `ledger_entries`, `ledger_presets` | Confirmed gains and losses outside tracked activity, and reusable entry presets. |
 | Skills and codex | `skill_gains`, `codex_progress`, `codex_claims` | Skill gains from the chat log, and codex rank progress and claims. |
 | Quests | `quests`, `quest_families`, `quest_mobs`, `quest_playlists`, `quest_claims`, `quest_runs`, `session_quest_completions`, the reward and review tables | The quest catalogue, runs and completions, and canonical reward accounting ([ADR-0026](../adr/0026-canonical-quest-reward-accounting.md)). |

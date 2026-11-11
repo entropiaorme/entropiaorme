@@ -5,7 +5,7 @@ Skills window: while a scan is running the application watches the game
 window, reads each page of the window's SKILLS tab as the player pages
 through it, checks the figures against the total the game prints, and
 resolves each row's name against the bundled skill list. The same recogniser
-also serves on-demand repair-cost, Trade Terminal value, auction sale-window,
+also serves on-demand repair-cost, Trade Terminal value, auction sell-queue,
 and map-coordinate reads. This page traces the shared machinery and the skill
 scan's journey stage by stage.
 
@@ -53,15 +53,15 @@ Five consumers share the recogniser:
 | Skill scan | The whole game window, searched for the Skills window, page after page | Each skill's points exactly as shown, checked against the game's total, for review |
 | Repair-cost read | The whole game window, searched for the Repair Terminal and its labelled cost | The cost exactly as shown, or a typed refusal |
 | Trade Terminal value read | The whole game window, searched for the Trade Terminal and its labelled total | The total exactly as shown, or a typed refusal, for a limited-set observation |
-| Sale-window read | One calibrated auction panel sliced into independently validated fields | A reviewable listing draft |
+| Sell-queue capture | The whole game window, searched for the Auction sell window and its sell queue, read row by row | A reviewable listing draft per queued item, or a typed refusal |
 | Map-coordinate read | The whole game window, searched for the radar and the coordinates printed under it | Longitude and latitude exactly as shown, or a typed refusal per value |
 
 This page focuses on the skill scan; the repair-cost and Trade Terminal reads
 (`app/src-tauri/eo-services/src/repair_ocr.rs`) reuses the same recogniser
 for a single on-demand number and is summarised under
 [The shared repair and Trade Terminal reads](#the-shared-repair-and-trade-terminal-reads). The auction reader
-(`app/src-tauri/eo-services/src/sale_window_ocr.rs`) is described under
-[The auction sale-window read](#the-auction-sale-window-read). The coordinate
+(`app/src-tauri/eo-services/src/sale_capture.rs`) is described under
+[The auction sell-queue capture](#the-auction-sell-queue-capture). The coordinate
 reader (`app/src-tauri/eo-services/src/coord_capture.rs`) finds the radar in
 the whole game window (`game_ui/radar.rs`) and reads `LON` and `LAT` under it,
 each checked by grammar, by the width of its own lettering and by the planet's
@@ -335,36 +335,66 @@ confirmed readings measure consumed TT; the protection service, not OCR,
 applies the set's frozen average markup and spreads the result over the
 sessions the player ticks (ADR-0031).
 
-## The auction sale-window read
+## The auction sell-queue capture
 
-The sale-window reader is another one-shot consumer of the shared capture and
-recognition seams. Its calibrated panel and per-field rectangles live in
-`app/src-tauri/entropia-orme/resources/panel_geometry.json`. The service
-captures the panel once, verifies a fixed heading landmark before trusting any
-field rectangle, then recognises the item name, quantity, TT value, auction fee,
-duration, starting bid, and buyout from crops of that single frame. Each field
-must clear the recogniser confidence floor and its own loose plausibility
-bounds; unreadable fields remain empty and are named back to the frontend so a
-plausible-looking misread is never silently substituted.
+The sell-queue capture is another one-shot consumer of the shared capture and
+recognition seams. It captures the whole game window and hands it to the
+interface reader (`app/src-tauri/eo-services/src/game_ui/sale_queue.rs`),
+which finds the `AUCTION / SELL` window by its title and the sell queue by its
+column headings, rule lines and dividers, wherever the player has put the
+window and at whatever size. Each queued row is read field by field, every
+value checked by its grammar and the width of its ink, and the figures the
+game prints twice or derives from one another are checked against each other:
+the markup under the opening bid and under a set buyout, the markup headline,
+and the fee the auction charges for the bid's markup. The quantity and the
+days are held only by the bounds the window prints; an item's name is
+confirmed by the bundled item data or, as weaker evidence, by the window's own
+inventory list. A row is answered only when every field reads and every check
+holds; otherwise it is answered unread, with the field that failed and how,
+and none of its figures. The queue's printed count says whether every queued
+item was read.
 
-The result is deliberately not an accounting command. The typed
-`inventory_sale_window_capture` operation returns a draft which fills the
-ordinary Create listing form, where the player reviews and may correct every
-value before the existing listing command is allowed to mutate stock or the
-ledger. A narrowly permissioned always-on-top overlay exposes the same capture
-while a fullscreen game is in front. Opening that overlay from the main window
-grants one capture, which the overlay consumes while receiving only success or
-failure status. The complete result is held in memory for a single-use
-`inventory_sale_window_take_capture` collection when the main form regains
-focus; it is never persisted. OCR therefore changes how the draft is filled,
+The typed `inventory_sale_window_capture` operation answers one draft per
+queued item, each figure as printed and marked for the player to check where
+nothing on screen fully confirms it (the TT value, the quantity, the days, a
+fee the model admits two values for at a boundary of its last place, and a
+name the item data does not confirm), or a typed refusal: the
+game window was not found or could not be captured, screen capture was not
+allowed, the sell window is not open or not wholly in view, the queue is
+covered, the prices are stated as markup, or the queue is empty. Each capture
+carries an identity in the order captures were started and the moment its
+screen was read. The result is deliberately not an accounting command: a draft
+fills the ordinary Create listing form, where the player reviews and may
+change every figure before the existing listing command is allowed to mutate
+stock or the ledger. Accepting a draft records the listing dated to when the
+screen was read, and records beside it, figure by figure, whether the figure
+went in as read and checked by the window's other figures, as read with
+nothing on screen fully confirming it, as a name the application matched to a
+holding of another name, or as the player typed it, with the text the window
+printed for each read (`auction_listing_field_sources`). The domain refuses
+sources that are untrue of the figures recorded. A recapture brings back rows
+the game still queues; one already recorded comes back marked as such and
+cannot be recorded again.
+
+A narrowly permissioned always-on-top overlay exposes the same capture while a
+fullscreen game is in front. Opening that overlay from the main window grants
+one capture, which the overlay consumes while receiving only how many queued
+items read or why none did. The complete capture is held in memory for a
+single-use `inventory_sale_window_take_capture` collection by the main form,
+which is told it is waiting; it is never persisted, and an older capture never
+replaces a newer one. The capture therefore changes how the form is filled,
 not the commit boundary it must cross.
 
 Development builds add a deliberately separate research session around the
-same reader (`app/src-tauri/eo-services/src/auction_fee_research.rs`). While
+same capture (`app/src-tauri/eo-services/src/auction_fee_research.rs`). While
 that session is armed, each Space press uses the existing shared keyboard
-source to capture another quoted auction scenario. The service writes a
-versioned JSONL record, an analysis-friendly CSV row, and a SHA-256-hashed PNG
-under the development data directory. The floating overlay sees
+source to capture the queued items' quoted fees again. The service writes a
+versioned JSONL record of the whole read, an analysis-friendly CSV line per
+queued item read, and a SHA-256-hashed PNG of the game window under the
+development data directory. The production capture refuses a row whose fee
+disagrees with the fee model; for this study the reader also sets aside such a
+row's printed figures, and the study records them with the fee flagged as
+disagreeing, which is the observation it exists for. The floating overlay sees
 only capture state and sample count; it never receives the OCR fields or the
 dataset path. This instrument performs no listing, inventory, ledger, or P&L
 mutation, and release builds refuse to start it.

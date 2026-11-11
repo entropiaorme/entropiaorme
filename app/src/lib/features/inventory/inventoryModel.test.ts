@@ -224,6 +224,65 @@ describe('central inventory model', () => {
 		});
 	});
 
+	it('commits a captured draft with where each figure came from, dated to its read', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		const fieldSources = [
+			{ field: 'startingBid' as const, source: { kind: 'readChecked' as const, text: '42' } },
+			{ field: 'quantity' as const, source: { kind: 'typed' as const } },
+		];
+		const holding = {
+			kind: 'loot',
+			holdingId: 'Animal Oil Residue',
+			name: 'Animal Oil Residue',
+			score: 100,
+		};
+		const fields = {
+			itemName: 'Animal Oil Residue',
+			quantity: 5,
+			ttValue: 0.5,
+			auctionFee: 0.5,
+			auctionDays: 7,
+			startingBid: 42,
+			buyout: null,
+		};
+
+		await model.createFromDraft({
+			fields,
+			channel: 'auction',
+			holding,
+			occurredAt: '2026-11-03T19:42:07',
+			fieldSources,
+		});
+		expect(mocked.commitInventorySaleDraft).toHaveBeenLastCalledWith({
+			draft: expect.objectContaining({ source: 'manual', startingBid: 42, auctionDays: 7 }),
+			holding,
+			occurredAt: '2026-11-03T19:42:07',
+			fieldSources,
+		});
+
+		// A trade records no listing, so it keeps no figure's source.
+		await model.createFromDraft({
+			fields: { ...fields, buyout: 50 },
+			channel: 'trade',
+			holding,
+			occurredAt: null,
+			fieldSources,
+		});
+		expect(mocked.commitInventorySaleDraft).toHaveBeenLastCalledWith(
+			expect.objectContaining({ fieldSources: null }),
+		);
+
+		// A listing typed by hand carries no sources.
+		await model.createFromDraft({ fields, channel: 'auction', holding, occurredAt: null });
+		expect(mocked.commitInventorySaleDraft).toHaveBeenLastCalledWith({
+			draft: expect.objectContaining({ source: 'manual' }),
+			holding,
+			occurredAt: null,
+			fieldSources: null,
+		});
+	});
+
 	it('applies the shared confidence threshold without hiding the observed markup', async () => {
 		mockedMarket.getMarketItemMarkups.mockResolvedValue({
 			nanocubeMarkupPct: 100.6,

@@ -63,7 +63,7 @@
 	<div class="min-w-0">
 		<p class="text-sm text-text">Auction fee research</p>
 		<p class="text-xs text-text-tertiary mt-0.5">
-			Capture quoted fees without creating a listing. Change the sale-window values and press Space for each sample.
+			Capture quoted fees without creating a listing. Change the sell queue's values and press Space for each sample.
 		</p>
 		{#if research?.outputDir}
 			<p class="mt-1 break-all font-mono text-[11px] text-text-tertiary">

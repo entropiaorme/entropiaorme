@@ -9,11 +9,6 @@ use std::sync::Arc;
 
 use crate::game_ui::geometry::{BgrImage, Rect};
 
-/// A screen rectangle found at scan time, as its top-left and
-/// bottom-right corners in screen coordinates; `None` when there is
-/// nothing to find (the game window is absent, say).
-pub type RegionLookup = Arc<dyn Fn() -> Option<([i64; 2], [i64; 2])> + Send + Sync>;
-
 /// A screen rectangle, given as `x`, `y`, width and height in screen
 /// coordinates, captured as BGR pixels; `None` when the capture fails.
 pub type RegionCapture = Arc<dyn Fn(i64, i64, i64, i64) -> Option<BgrImage> + Send + Sync>;

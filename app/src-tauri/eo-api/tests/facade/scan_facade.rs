@@ -172,7 +172,7 @@ async fn scan_api(dir: &Path, providers: SkillScanProviders) -> (Api, Arc<SkillS
         skill_scan.clone(),
         SpacebarCaptureListener::new(None),
         handles.repair_ocr,
-        handles.sale_window_ocr,
+        handles.sale_capture,
         handles.quests.clone(),
         None,
         None,

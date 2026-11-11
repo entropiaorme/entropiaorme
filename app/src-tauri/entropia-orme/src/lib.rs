@@ -251,9 +251,8 @@ fn show_scan_overlay(app: tauri::AppHandle) {
     }
 }
 
-/// The capture overlay's window label, shared with the command that decides
-/// whether a read came from it.
-pub const SALE_CAPTURE_OVERLAY: &str = "overlay-sale-capture";
+/// The capture overlay's window label.
+const SALE_CAPTURE_OVERLAY: &str = "overlay-sale-capture";
 
 /// One-shot authority granted only by the main window opening the capture
 /// overlay. The floating renderer can request a normal listing read once; it
@@ -261,16 +260,41 @@ pub const SALE_CAPTURE_OVERLAY: &str = "overlay-sale-capture";
 #[derive(Default)]
 struct SaleCaptureAuthority(Mutex<bool>);
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OverlayCaptureReply {
-    message: String,
-    failed: bool,
+/// What the capture button is told of its capture: how many queued items
+/// read, or why none did. Never a figure: the drafts are reviewed back in
+/// the main window's form.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum OverlayCaptureReply {
+    #[serde(rename_all = "camelCase")]
+    Read {
+        /// Queued items read whole.
+        drafts: usize,
+        /// Queued items in view that did not read whole.
+        unread: usize,
+    },
+    #[serde(rename_all = "camelCase")]
+    Refused {
+        reason: eo_api::sale_capture::SaleQueueRefusal,
+    },
 }
 
-/// The sale-window capture button, put where a fullscreen game leaves it
+impl From<&eo_api::sale_capture::SaleQueueCapture> for OverlayCaptureReply {
+    fn from(capture: &eo_api::sale_capture::SaleQueueCapture) -> Self {
+        use eo_api::sale_capture::SaleQueueCapture;
+        match capture {
+            SaleQueueCapture::Read { drafts, unread, .. } => Self::Read {
+                drafts: drafts.len(),
+                unread: unread.len(),
+            },
+            SaleQueueCapture::Refused { reason, .. } => Self::Refused { reason: *reason },
+        }
+    }
+}
+
+/// The sell-queue capture button, put where a fullscreen game leaves it
 /// reachable. It is the main window's button in another place and nothing
-/// more: the values it reads are reviewed back in the form, not here.
+/// more: the drafts it reads are reviewed back in the form, not here.
 #[tauri::command]
 fn show_sale_capture_overlay(
     app: tauri::AppHandle,
@@ -285,8 +309,9 @@ fn show_sale_capture_overlay(
         .unwrap_or(false);
     *authority.0.lock().expect("sale capture authority") = !research_active;
     if let Some(window) = app.get_webview_window(SALE_CAPTURE_OVERLAY) {
-        // Top-left of the monitor, clear of a bottom-right docked sale
-        // window, which is the one part of the screen it must never cover.
+        // Near a monitor's top-left: the player drags it clear of the sell
+        // window wherever that is, and the reader refuses a queue covered by
+        // it rather than misreading one.
         let _ = window.set_position(monitor_anchor(&window, (40, 40)));
         let _ = window.show();
         let _ = window.set_focus();
@@ -311,7 +336,9 @@ fn hide_sale_capture_overlay(
 }
 
 /// Consume the normal listing-read authority and return status only. The
-/// complete typed read waits in the facade for the main Inventory form.
+/// complete capture waits in the facade for the main Inventory form, which
+/// is told it is there: a form showing on a second screen would otherwise
+/// sit unchanged, looking exactly like a capture that failed.
 #[tauri::command]
 async fn capture_sale_from_overlay(
     app: tauri::AppHandle,
@@ -332,16 +359,19 @@ async fn capture_sale_from_overlay(
         return Err("sale capture is not armed; reopen it from Inventory".into());
     }
     let api = commands::facade(&app).map_err(|error| error.to_string())?;
-    let read = tokio::task::spawn_blocking(move || api.inventory_sale_window_capture())
-        .await
-        .map_err(|_| "sale capture task failed".to_string())?
-        .map_err(|error| error.to_string())?;
-    let error = read.error.0;
-    Ok(OverlayCaptureReply {
-        failed: error.is_some(),
-        message: error.unwrap_or_else(|| "Captured. Check the main window.".into()),
-    })
+    let capture =
+        tokio::task::spawn_blocking(move || api.inventory_sale_window_capture_for_shell())
+            .await
+            .map_err(|_| "sale capture task failed".to_string())?;
+    // Window orchestration, not a domain event: a refusal is held too, so
+    // the form drops drafts from an older capture rather than keep them
+    // standing as if they were this one's.
+    let _ = app.emit_to("main", SALE_CAPTURE_READY, ());
+    Ok(OverlayCaptureReply::from(&capture))
 }
+
+/// Told to the main window when a capture from the overlay is waiting.
+const SALE_CAPTURE_READY: &str = "sale-capture-ready";
 
 /// Hide the scan overlay. The skill scan watches the game window only for
 /// the overlay the player pages alongside, so the watching stops with it;
@@ -1139,6 +1169,42 @@ mod tests {
             !crate::command_acl::SALE_CAPTURE_COMMANDS.contains(&"inventory_sale_window_capture")
         );
         assert!(!crate::command_acl::SALE_CAPTURE_COMMANDS.contains(&"auction_listing_create"));
+    }
+
+    #[test]
+    fn the_capture_button_is_told_counts_or_a_reason_and_never_a_figure() {
+        let figure = serde_json::json!({"value": 162.0, "text": "162", "check": false});
+        let capture: eo_api::sale_capture::SaleQueueCapture =
+            serde_json::from_value(serde_json::json!({
+                "kind": "read",
+                "captureId": 3,
+                "readAt": "2026-11-03T19:42:07",
+                "drafts": [{
+                    "draftId": "3-0",
+                    "itemName": {"text": "Electric Attack Nanochip 3", "check": false},
+                    "ttValue": figure,
+                    "quantity": figure,
+                    "startingBid": figure,
+                    "buyout": {"kind": "off"},
+                    "auctionDays": figure,
+                    "listingFee": figure,
+                }],
+                "unread": [{"problems": [{"field": "listingFee", "why": "notRead"}]}],
+                "queued": {"kind": "some", "of": 3},
+            }))
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(super::OverlayCaptureReply::from(&capture)).unwrap(),
+            serde_json::json!({"kind": "read", "drafts": 1, "unread": 1})
+        );
+        let refused: eo_api::sale_capture::SaleQueueCapture = serde_json::from_value(
+            serde_json::json!({"kind": "refused", "captureId": 4, "reason": "sellWindowNotOpen"}),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(super::OverlayCaptureReply::from(&refused)).unwrap(),
+            serde_json::json!({"kind": "refused", "reason": "sellWindowNotOpen"})
+        );
     }
 
     #[test]

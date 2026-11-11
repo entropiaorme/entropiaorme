@@ -50,6 +50,7 @@ use serde_json::Value as Json;
 
 use crate::auction_fee::listing_fee_ped;
 use crate::fuzzy_match::ratio;
+use crate::game_data_store::GameDataStore;
 use crate::game_ui::geometry::BgrImage;
 
 use super::field::{
@@ -379,6 +380,11 @@ pub struct QueuedItem {
     /// The range of days the window allows.
     pub days_allowed: (u32, u32),
     pub fee: Amount,
+    /// Whether the fee model admits only the printed fee for this row's
+    /// opening bid and every TT value the printed one could stand for. At
+    /// a boundary of the fee's last place it admits two, and the fee is
+    /// then only bounded.
+    pub fee_fixed: bool,
     /// The markup headline.
     pub markup: MarkupText,
 }
@@ -393,6 +399,7 @@ impl QueuedItem {
             // Two witnesses agree on whether it is set, and a price is
             // fixed by its own figure as the bid is.
             QueueField::Buyout | QueueField::BuyoutSwitch => Assurance::CrossChecked,
+            QueueField::Fee if !self.fee_fixed => Assurance::Bounded,
             QueueField::Tt
             | QueueField::Fee
             | QueueField::Markup
@@ -462,6 +469,24 @@ pub struct UnreadQueueRow {
     /// Every reason, field by field; the checks between fields are made
     /// only when every field read.
     pub refusals: Vec<RowRefusal>,
+    /// For a row whose every field read and whose only failed check is the
+    /// fee's, every figure as printed: what a study of the fee model needs
+    /// of a fee the model does not predict. Nothing that lists a row takes
+    /// a figure from here.
+    pub fee_disagreement: Option<FeeDisagreement>,
+}
+
+/// The printed figures of a row whose fee is not the model's for its bid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FeeDisagreement {
+    pub name: String,
+    pub tt: String,
+    pub quantity: String,
+    pub opening_bid: String,
+    /// `None` for a buyout switched off.
+    pub buyout: Option<String>,
+    pub days: String,
+    pub fee: String,
 }
 
 /// The heading's count against what the reading saw.
@@ -535,6 +560,30 @@ impl From<ReadError> for SaleQueueError {
     }
 }
 
+/// The bundled game data's collections whose entities are items a player
+/// can hold and list.
+pub const ITEM_ENDPOINTS: [&str; 9] = [
+    "absorbers",
+    "enhancers",
+    "harvesting_tools",
+    "medical_tools",
+    "mindforce_implants",
+    "stimulants",
+    "weapon_amplifiers",
+    "weapon_vision_attachments",
+    "weapons",
+];
+
+/// An entity's name, and its `economy.max_tt` where it has one.
+fn catalogue_entry(entity: &Json) -> Option<(String, Option<f64>)> {
+    let name = entity.get("name")?.as_str()?.to_string();
+    let max_tt = entity
+        .get("economy")
+        .and_then(|e| e.get("max_tt"))
+        .and_then(Json::as_f64);
+    Some((name, max_tt))
+}
+
 /// The items the application knows, by name, with the most TT value one
 /// of each can hold where its data gives one.
 #[derive(Debug, Clone, Default)]
@@ -555,14 +604,18 @@ impl ItemCatalogue {
     /// From the bundled game data's item entities: each one's `name`, and
     /// its `economy.max_tt` where it has one.
     pub fn from_entities(entities: &[Json]) -> Self {
-        Self::new(entities.iter().filter_map(|entity| {
-            let name = entity.get("name")?.as_str()?.to_string();
-            let max_tt = entity
-                .get("economy")
-                .and_then(|e| e.get("max_tt"))
-                .and_then(Json::as_f64);
-            Some((name, max_tt))
-        }))
+        Self::new(entities.iter().filter_map(catalogue_entry))
+    }
+
+    /// From the bundled game data: every entity of the collections that
+    /// hold items ([`ITEM_ENDPOINTS`]).
+    pub fn from_store(store: &GameDataStore) -> Self {
+        Self::new(
+            ITEM_ENDPOINTS
+                .iter()
+                .flat_map(|endpoint| store.get_entities(endpoint))
+                .filter_map(catalogue_entry),
+        )
     }
 
     /// Whether the catalogue names `name` exactly, and the item's most TT
@@ -648,11 +701,21 @@ pub fn figure_agrees(figure: &MarkupText, price: f64, tt: &Amount) -> bool {
 /// captures cannot themselves exclude a dependence on days; the model's
 /// own measurements do.
 pub fn fee_agrees(fee: &Amount, bid: f64, tt: &Amount) -> bool {
+    let (least, most) = fee_window(bid, tt);
+    let fee = (fee.ped * 100.0).round() as i64;
+    fee >= least && fee <= most
+}
+
+/// The least and the most fee, in PEC, the auction charges for `bid` over
+/// any true TT value the printed one could stand for. When they differ, a
+/// fee read one PEC out at that boundary agrees as well as the true one.
+pub fn fee_window(bid: f64, tt: &Amount) -> (i64, i64) {
     let unit = last_place(&tt.text);
     let pec = |ped: f64| (ped * 100.0).round() as i64;
-    let least = listing_fee_ped(bid - tt.ped - unit);
-    let most = listing_fee_ped(bid - tt.ped + unit / 2.0);
-    pec(fee.ped) >= pec(least) && pec(fee.ped) <= pec(most)
+    (
+        pec(listing_fee_ped(bid - tt.ped - unit)),
+        pec(listing_fee_ped(bid - tt.ped + unit / 2.0)),
+    )
 }
 
 /// Why no value box could be told in a cell.
@@ -1609,7 +1672,11 @@ fn read_row(
         }
     }
     if !refusals.is_empty() {
-        return Ok(Err(UnreadQueueRow { raw_name, refusals }));
+        return Ok(Err(UnreadQueueRow {
+            raw_name,
+            refusals,
+            fee_disagreement: None,
+        }));
     }
     let mut take = |field| values.remove(&field);
     let name = match take(QueueField::Name) {
@@ -1690,11 +1757,26 @@ fn read_row(
         broken.push(RowRefusal::Disagrees(Identity::Fee));
     }
     if !broken.is_empty() {
+        let fee_disagreement =
+            (broken == [RowRefusal::Disagrees(Identity::Fee)]).then(|| FeeDisagreement {
+                name: name.clone(),
+                tt: tt.text.clone(),
+                quantity: quantity.text.clone(),
+                opening_bid: opening_bid.text.clone(),
+                buyout: match &buyout {
+                    Buyout::Off => None,
+                    Buyout::Price(price) => Some(price.text.clone()),
+                },
+                days: days.text.clone(),
+                fee: fee.text.clone(),
+            });
         return Ok(Err(UnreadQueueRow {
             raw_name,
             refusals: broken,
+            fee_disagreement,
         }));
     }
+    let (least_fee, most_fee) = fee_window(opening_bid.value as f64, &tt);
     let item = QueuedItem {
         name: if catalogued.is_some() {
             ItemName::Catalogued(name)
@@ -1709,6 +1791,7 @@ fn read_row(
         days,
         days_allowed,
         fee,
+        fee_fixed: least_fee == most_fee,
         markup: headline,
     };
     // Only the name's width over its height is used, which is the same
@@ -1781,6 +1864,7 @@ fn confirm_by_list(
                 unread.push(UnreadQueueRow {
                     raw_name: Some(name),
                     refusals: vec![RowRefusal::Disagrees(Identity::StackCount)],
+                    fee_disagreement: None,
                 });
             }
             _ => kept.push((row, name_rect)),
@@ -2578,6 +2662,62 @@ mod tests {
     }
 
     #[test]
+    fn a_fee_at_a_boundary_of_its_last_place_is_only_bounded() {
+        // A bid of 20 over a printed TT value of 1.98 could be over a true
+        // one anywhere from 1.98 to just under 1.99: the fee model charges
+        // 1.38 for some of those and 1.39 for others, and both agree.
+        let tt = amount("1.98 PED");
+        assert_eq!(fee_window(20.0, &tt), (138, 139));
+        assert!(fee_agrees(&amount("1.38 PED"), 20.0, &tt));
+        assert!(fee_agrees(&amount("1.39 PED"), 20.0, &tt));
+        assert!(!fee_agrees(&amount("1.40 PED"), 20.0, &tt));
+        // Away from a boundary the window holds one fee.
+        assert_eq!(fee_window(162.0, &amount("11.52 PED")), (733, 733));
+
+        let queue = read(&standard_sale_layout()).expect("the queue reads");
+        assert!(queue.rows.iter().all(|row| row.fee_fixed));
+        let mut row = queue.rows[0].clone();
+        assert_eq!(row.assurance(QueueField::Fee), Assurance::WithinWindow);
+        row.fee_fixed = false;
+        assert_eq!(row.assurance(QueueField::Fee), Assurance::Bounded);
+    }
+
+    #[test]
+    fn a_row_refused_only_for_its_fee_keeps_its_printed_figures_aside() {
+        let queue = read_with(&standard_sale_layout(), |text| {
+            if text == "7.33 PED" {
+                "7.38 PED".into()
+            } else {
+                text
+            }
+        })
+        .expect("the queue reads");
+        assert_eq!(queue.rows.len(), 2);
+        assert_eq!(
+            queue.unread[0].fee_disagreement,
+            Some(FeeDisagreement {
+                name: "Electric Attack Nanochip 3".into(),
+                tt: "11.52 PED".into(),
+                quantity: "1".into(),
+                opening_bid: "162".into(),
+                buyout: Some("172".into()),
+                days: "7".into(),
+                fee: "7.38 PED".into(),
+            })
+        );
+        // A row refused for anything besides its fee keeps nothing aside.
+        let queue = read_with(&standard_sale_layout(), |text| {
+            if text == "42" {
+                "43".into()
+            } else {
+                text
+            }
+        })
+        .expect("the queue reads");
+        assert_eq!(queue.unread[0].fee_disagreement, None);
+    }
+
+    #[test]
     fn names_are_compared_after_folding_and_spacing_only() {
         assert_eq!(
             normalised_name("  Eyeshadow  （Gold） "),
@@ -2599,6 +2739,33 @@ mod tests {
         );
         assert_eq!(catalogue.find("Opalo"), Some(None));
         assert_eq!(catalogue.find("opalo"), None);
+    }
+
+    #[test]
+    fn the_catalogue_takes_items_from_the_item_collections_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |endpoint: &str, entities: Json| {
+            std::fs::write(
+                dir.path().join(format!("{endpoint}.json")),
+                entities.to_string(),
+            )
+            .unwrap();
+        };
+        write(
+            "weapons",
+            serde_json::json!([{"name": "Sollomate Opalo", "economy": {"max_tt": 4.5}}]),
+        );
+        write(
+            "medical_tools",
+            serde_json::json!([{"name": "Vivo T1", "economy": {}}]),
+        );
+        // A creature is not an item, whatever its name.
+        write("mobs", serde_json::json!([{"name": "Atrox"}]));
+        let store = GameDataStore::new(dir.path()).unwrap();
+        let catalogue = ItemCatalogue::from_store(&store);
+        assert_eq!(catalogue.find("Sollomate Opalo"), Some(Some(4.5)));
+        assert_eq!(catalogue.find("Vivo T1"), Some(None));
+        assert_eq!(catalogue.find("Atrox"), None);
     }
 
     #[test]

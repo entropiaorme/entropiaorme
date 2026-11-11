@@ -1,15 +1,12 @@
 //! Locate and measure the Entropia Universe game window.
 //!
 //! The capture of the whole game window for the readers that find what
-//! they want in it themselves, the sale window's capture region derived
-//! from the live game window, and the focus check the hotbar listener
+//! they want in it themselves, and the focus check the hotbar listener
 //! consults before a slot key may move the tracked tool. Where the
 //! platform cannot find the window the helpers return None and callers
-//! handle the missing-window case. The sale window's region composes
-//! these lookups with the pure geometry in `scan_presets`.
+//! handle the missing-window case.
 
 use crate::game_ui::seams::{FrameArea, FrameUnavailable, GameFrame};
-use crate::scan_presets::{compute_region, ScanPresets};
 use crate::screen_capture::{capturable_area, capture_region_bgr, start_capture};
 
 pub const GAME_TITLE_PREFIX: &str = "Entropia Universe Client";
@@ -124,19 +121,6 @@ pub fn game_focus() -> GameFocus {
 /// corner).
 pub fn cursor_position() -> Option<(i64, i64)> {
     platform::cursor_position()
-}
-
-fn live_region(anchor: &crate::scan_presets::PanelAnchor) -> Option<([i64; 2], [i64; 2])> {
-    let handle = find_game_window()?;
-    let geometry = get_window_geometry(handle)?;
-    compute_region(anchor, geometry)
-}
-
-/// The auction sale window's capture rect, or None when the game
-/// window is absent or the panel has not been calibrated (its
-/// uncalibrated anchor is degenerate, which `compute_region` refuses).
-pub fn sale_window_region(presets: &ScanPresets) -> Option<([i64; 2], [i64; 2])> {
-    live_region(&presets.sale_window)
 }
 
 #[cfg(windows)]
@@ -528,15 +512,13 @@ mod tests {
     }
 
     #[test]
-    fn absent_windows_yield_none_regions() {
+    fn absent_windows_yield_none() {
         #[cfg(not(any(windows, target_os = "linux")))]
         {
             assert!(find_game_window().is_none());
             assert!(!game_window_present());
             assert_eq!(game_focus(), GameFocus::Unknown);
             assert!(get_window_geometry(WindowHandle(1)).is_none());
-            let presets = ScanPresets::new(std::path::Path::new("/nonexistent.json"));
-            assert!(sale_window_region(&presets).is_none());
         }
         #[cfg(target_os = "linux")]
         {

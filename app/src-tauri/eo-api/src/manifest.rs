@@ -21,8 +21,8 @@ use crate::analytics::{
     HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput,
     InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult,
     ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput,
-    LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, SaleWindowCapture,
-    ShrapnelConversionInput, StockConversionInput, StockPosition, StockRemovalInput,
+    LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, ShrapnelConversionInput,
+    StockConversionInput, StockPosition, StockRemovalInput,
 };
 use crate::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
@@ -65,6 +65,7 @@ use crate::quests::{
     Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
     QuestInput, QuestRewardReviewInput, UnresolvedQuestReward,
 };
+use crate::sale_capture::SaleQueueCapture;
 use crate::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, SkillScanStatus};
 use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
@@ -1235,12 +1236,12 @@ pub fn manifest() -> Vec<CommandSpec> {
         CommandSpec {
             name: "inventory_sale_window_capture",
             args: vec![],
-            returns: Some(schema(schema_for!(SaleWindowCapture))),
+            returns: Some(schema(schema_for!(SaleQueueCapture))),
         },
         CommandSpec {
             name: "inventory_sale_window_take_capture",
             args: vec![],
-            returns: Some(schema(schema_for!(Nullable<SaleWindowCapture>))),
+            returns: Some(schema(schema_for!(Nullable<SaleQueueCapture>))),
         },
         CommandSpec {
             name: "inventory_draft_resolve",

@@ -14,6 +14,7 @@ import type {
 	EquipmentTradeInput,
 	InventoryHoldingCandidate,
 	InventorySaleDraft,
+	ListingFieldSourceInput,
 	Profession,
 } from './commands.gen';
 import * as commands from './commands.gen';
@@ -79,11 +80,12 @@ export const deleteEquipmentHolding = commands.inventoryDelete;
 export const resolveInventoryDraft = (draft: InventorySaleDraft) =>
 	commands.inventoryDraftResolve(draft);
 
-/** Read the game's sale window once. Fills the form; commits nothing. */
+/** Read the game's sell queue once: a draft per queued item, or why there
+ * are none. Fills the form; commits nothing. */
 export const captureSaleWindow = () => commands.inventorySaleWindowCapture();
 
 /** Collect a capture taken while the form was not on screen, clearing it.
- * The overlay's button can be pressed from inside the game, so its read
+ * The overlay's button can be pressed from inside the game, so its capture
  * waits here until the form opens. */
 export const takeSaleWindowCapture = () => commands.inventorySaleWindowTakeCapture();
 
@@ -94,12 +96,16 @@ export interface ResolvedInventorySaleDraft {
 	draft: InventorySaleDraft;
 	holding: InventoryHoldingCandidate;
 	occurredAt: string | null;
+	/** Where each figure of an auction listing came from, for one drafted
+	 * from a capture of the sell queue; absent for one entered by hand. */
+	fieldSources?: ListingFieldSourceInput[] | null;
 }
 
 export async function commitInventorySaleDraft({
 	draft,
 	holding,
 	occurredAt,
+	fieldSources = null,
 }: ResolvedInventorySaleDraft): Promise<unknown> {
 	if (holding.kind === 'equipment') {
 		return draft.channel === 'auction'
@@ -110,6 +116,7 @@ export async function commitInventorySaleDraft({
 					listingFee: draft.listingFee ?? 0,
 					listedAt: occurredAt,
 					auctionDays: draft.auctionDays,
+					fieldSources,
 				})
 			: tradeEquipment({
 					itemId: holding.holdingId,
@@ -130,6 +137,7 @@ export async function commitInventorySaleDraft({
 				listingFee: draft.listingFee ?? 0,
 				listedAt: occurredAt,
 				auctionDays: draft.auctionDays,
+				fieldSources,
 			})
 		: tradeLoot({
 				itemName: holding.name,

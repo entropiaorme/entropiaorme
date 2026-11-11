@@ -126,7 +126,7 @@ async fn api_over_settings(dir: &Path, settings: Option<&str>) -> (Api, Db) {
             handles.skill_scan,
             handles.spacebar,
             handles.repair_ocr,
-            handles.sale_window_ocr,
+            handles.sale_capture,
             handles.quests.clone(),
             None,
             None,

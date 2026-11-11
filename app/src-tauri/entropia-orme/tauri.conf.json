@@ -134,7 +134,6 @@
     "resources": {
       "resources/snapshot/": "snapshot/",
       "resources/maps/": "maps/",
-      "resources/panel_geometry.json": "panel_geometry.json",
       "resources/ui_profile.json": "ui_profile.json",
       "resources/models/": "models/",
       "resources/ort/*.dll": "ort/"

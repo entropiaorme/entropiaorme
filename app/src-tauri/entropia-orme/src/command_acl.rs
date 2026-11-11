@@ -286,7 +286,7 @@ pub fn app_commands() -> Vec<&'static str> {
         .collect()
 }
 
-/// The capture overlay does one thing: read the sale window and take
+/// The capture overlay does one thing: read the sell queue and take
 /// itself off screen. It gets those commands, the fee-research capture
 /// pair, the startup readiness answer every window awaits, and the input
 /// cut every overlay applies to its own window (`hit_region`).

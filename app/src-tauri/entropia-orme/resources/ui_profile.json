@@ -14,6 +14,7 @@
     ],
     "ridge_max_chroma": 10,
     "ridge_step": 10,
+    "ridge_backing": 2,
     "ridge_widths": [
       2,
       1,
@@ -33,10 +34,13 @@
       64
     ],
     "side_support": 0.8,
+    "support_steps": 20,
+    "full_view_share": 0.97,
     "min_evidence": 300,
     "min_evidence_marked": 120,
     "min_visible_side": 12,
     "corner_reach": 40,
+    "boundary_reach": 6,
     "marker": {
       "search": [
         14,
@@ -56,6 +60,7 @@
     "glyph_gap": 2,
     "join_factor": 1.7,
     "max_colour_distance": 110,
+    "min_colour_ink": 12,
     "line_slack": 0.3334,
     "run_height": [
       5,
@@ -301,6 +306,7 @@
           "glyph_gap": 2,
           "join_factor": 1.7,
           "max_colour_distance": 110,
+          "min_colour_ink": 12,
           "line_slack": 0.3334,
           "run_height": [
             5,
@@ -395,6 +401,7 @@
         "glyph_gap": 1,
         "join_factor": 1.0,
         "max_colour_distance": 110,
+        "min_colour_ink": 12,
         "line_slack": 0.3334,
         "run_height": [
           4,
@@ -453,6 +460,7 @@
         "glyph_gap": 1,
         "join_factor": 1.0,
         "max_colour_distance": 110,
+        "min_colour_ink": 12,
         "line_slack": 0.3334,
         "run_height": [
           6,
@@ -485,6 +493,7 @@
         "glyph_gap": 1,
         "join_factor": 1.0,
         "max_colour_distance": 110,
+        "min_colour_ink": 12,
         "line_slack": 0.3334,
         "run_height": [
           6,
@@ -517,6 +526,7 @@
           "glyph_gap": 1,
           "join_factor": 0.6,
           "max_colour_distance": 110,
+          "min_colour_ink": 12,
           "line_slack": 0.3334,
           "run_height": [
             6,

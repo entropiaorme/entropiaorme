@@ -71,10 +71,14 @@ use super::field::label_key;
 use super::mob_names::{plate_strings, resolve, MobCatalogue, MobNameProfile, Resolved, Spelling};
 use super::plates::PlateRead;
 
+/// Plates are stamped in milliseconds; rates are stated per second.
+const MS_PER_SECOND: f64 = 1000.0; // not layout: the milliseconds in a second
+
 /// How readings are grouped into fights, kills given fights, and fights
 /// voted on, as the profile describes it. The values assume the watcher
 /// reads the locked plate about once a second.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MobHistoryProfile {
     /// How often the watcher reads the locked plate: the cadence every
     /// span below is measured against.
@@ -576,7 +580,7 @@ impl MobHistory {
             .and_then(|prev| {
                 self.fights.iter().position(|f| {
                     let last = f.last();
-                    let seconds = (at_ms - prev) as f64 / 1000.0;
+                    let seconds = (at_ms - prev) as f64 / MS_PER_SECOND;
                     !f.claimed
                         && last.at_ms == prev
                         && last.fill < p.damaged_fill

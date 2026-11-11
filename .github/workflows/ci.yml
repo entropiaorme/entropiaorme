@@ -166,10 +166,13 @@ jobs:
         # is declared once and marked where it renders; graduating it deletes
         # both), and the latest-in-time read convention (a database read that
         # means "the newest" orders by its timestamp column; an id-ordered read
-        # names its allowed case at the site), and the single search (every
+        # names its allowed case at the site), the single search (every
         # search box, picker, and filter matches through the shared search
-        # module). All bind on every pull request and push through this
-        # required job.
+        # module), and the interface profile (the game-interface readers reach
+        # the screen and the recogniser only through their pipeline's seams,
+        # keep their layout numbers in the profile, which rejects unknown
+        # entries, and never ship their test fixtures). All bind on every pull
+        # request and push through this required job.
         run: |
           cargo run -q -p xtask -- no-bare-setinterval
           cargo run -q -p xtask -- no-new-writable
@@ -178,6 +181,7 @@ jobs:
           cargo run -q -p xtask -- in-development
           cargo run -q -p xtask -- id-order
           cargo run -q -p xtask -- single-search
+          cargo run -q -p xtask -- ui-profile
 
   frontend:
     name: Frontend (build + check + test)

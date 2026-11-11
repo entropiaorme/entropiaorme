@@ -23,6 +23,7 @@ use super::geometry::{chroma, near, Pixels, Rect};
 /// What the client's window frame looks like. Every number is a
 /// measurement of the client's rendering and lives in the profile.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChromeProfile {
     /// The panel fill, `[r, g, b]`.
     pub panel_rgb: [u8; 3],
@@ -34,6 +35,9 @@ pub struct ChromeProfile {
     pub ridge_max_chroma: u8,
     /// On a two-pixel ridge the inner pixel is brighter by at least this.
     pub ridge_step: u8,
+    /// Panel pixels that follow the ridge inwards: a ridge pixel is a
+    /// border's outer edge only where this many pixels of fill back it.
+    pub ridge_backing: i32,
     /// Ridge thicknesses to try, in order of preference.
     pub ridge_widths: Vec<u8>,
     /// Of those, the ones that only a frame scaled by the desktop shows.
@@ -49,6 +53,16 @@ pub struct ChromeProfile {
     pub min_window_marked: [i32; 2],
     /// Share of a side's uncovered length that must show the ridge.
     pub side_support: f32,
+    /// Rectangles are ranked by their weakest side's share of ridge in
+    /// steps of one part in this many, so sides that differ by less tie
+    /// and the next measure decides.
+    pub support_steps: i32,
+    /// Share of a window's border that must be in view for nothing to
+    /// count as covering it.
+    pub full_view_share: f32,
+    /// How near the frame's edge a neighbouring side must reach for a
+    /// side to be taken as running off the frame.
+    pub boundary_reach: i32,
     /// Fewest ridge pixels, over all sides, that make a window.
     pub min_evidence: i32,
     /// The same floor for a rectangle whose title marker is seen.
@@ -65,6 +79,7 @@ pub struct ChromeProfile {
 /// The title marker's search box (relative to the window's corner) and
 /// what counts as its colour.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MarkerProfile {
     /// `[x0, y0, x1, y1]` offsets from the window's top-left corner.
     pub search: [i32; 4],
@@ -121,18 +136,21 @@ impl FoundWindow {
     }
 
     /// Whether nothing covers the window and none of it is off the frame.
-    pub fn fully_visible(&self) -> bool {
+    pub fn fully_visible(&self, chrome: &ChromeProfile) -> bool {
         [self.left, self.top, self.right, self.bottom]
             .iter()
             .all(|side| *side == Side::Seen)
-            && self.visible_border >= 0.97
+            && self.visible_border >= chrome.full_view_share
     }
 }
 
-const LEFT: u8 = 1;
-const RIGHT: u8 = 2;
-const TOP: u8 = 4;
-const BOTTOM: u8 = 8;
+const LEFT: u8 = 0b0001;
+const RIGHT: u8 = 0b0010;
+const TOP: u8 = 0b0100;
+const BOTTOM: u8 = 0b1000;
+
+/// A rectangle's sides, indexed left, top, right, bottom.
+const SIDES: usize = 4; // not layout: a rectangle has four sides
 
 /// Per-pixel flags: which border edges have their outer pixel here.
 struct EdgeMap {
@@ -191,21 +209,17 @@ fn edge_map<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -> EdgeM
                 if !ridge(1) {
                     continue;
                 }
+                // A ridge `width` pixels thick (its first pixel is known
+                // already), then the fill that backs it.
+                let backed = |width: i32| {
+                    (2..=width).all(ridge) && (1..=chrome.ridge_backing).all(|k| fill(width + k))
+                };
                 let hit = match ridge_px {
-                    1 => fill(2) && fill(3),
-                    2 => {
-                        ridge(2)
-                            && p(2).1 >= p(1).1.saturating_add(chrome.ridge_step)
-                            && fill(3)
-                            && fill(4)
-                    }
+                    1 => backed(1),
+                    2 => backed(2) && p(2).1 >= p(1).1.saturating_add(chrome.ridge_step),
                     // A scaled-up frame blurs the ridge across one to
-                    // three pixels; accept any of those shapes.
-                    _ => {
-                        (ridge(2) && ridge(3) && fill(4) && fill(5))
-                            || (ridge(2) && fill(3) && fill(4))
-                            || (fill(2) && fill(3))
-                    }
+                    // `ridge_px` pixels; accept any of those shapes.
+                    _ => (1..=i32::from(ridge_px)).any(backed),
                 };
                 if hit {
                     flags[i] |= bit;
@@ -314,17 +328,18 @@ struct Candidate {
     x1: i32,
     y1: i32,
     /// Sides that are the frame's own boundary: left, top, right, bottom.
-    beyond: [bool; 4],
+    beyond: [bool; SIDES],
 }
 
 struct Scored {
     candidate: Candidate,
     seen: usize,
-    /// Lowest share of ridge seen on any uncovered side, in twentieths.
+    /// Lowest share of ridge seen on any uncovered side, in the
+    /// profile's support steps.
     weakest_side: i32,
     evidence: i32,
     visible: i32,
-    hidden: [bool; 4],
+    hidden: [bool; SIDES],
     marker: bool,
 }
 
@@ -411,10 +426,10 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
             let mut seen = 0;
             let mut evidence = 0;
             let mut visible = 0;
-            let mut hidden = [false; 4];
+            let mut hidden = [false; SIDES];
             let mut weak = false;
-            let mut weakest_side = 20;
-            let mut side_hits = [0i32; 4];
+            let mut weakest_side = chrome.support_steps;
+            let mut side_hits = [0i32; SIDES];
             for (i, side) in sides.iter().enumerate() {
                 let Some((hit, free)) = side else { continue };
                 if *free < chrome.min_visible_side {
@@ -427,7 +442,7 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
                 }
                 seen += 1;
                 side_hits[i] = *hit;
-                weakest_side = weakest_side.min(hit * 20 / free);
+                weakest_side = weakest_side.min(hit * chrome.support_steps / free);
                 evidence += hit;
                 visible += free;
             }
@@ -453,7 +468,7 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
                                 free(x + dx * k, y) && map.at(x + dx * k, y, horizontal_bit)
                             })
                     };
-                let is_seen = |i: usize, hidden: &[bool; 4]| !c.beyond[i] && !hidden[i];
+                let is_seen = |i: usize, hidden: &[bool; SIDES]| !c.beyond[i] && !hidden[i];
                 let corners = [
                     (0, 1, meets(LEFT, c.x0, TOP, c.y0, 1, 1)),
                     (1, 2, meets(RIGHT, c.x1, TOP, c.y0, 1, -1)),
@@ -472,17 +487,17 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
                     }
                 }
                 let weight = |g: usize| -> i32 {
-                    (0..4)
+                    (0..SIDES)
                         .filter(|&i| group[i] == g && is_seen(i, &hidden))
                         .map(|i| side_hits[i])
                         .sum()
                 };
-                let main = (0..4)
+                let main = (0..SIDES)
                     .filter(|&i| is_seen(i, &hidden))
                     .map(|i| group[i])
                     .max_by_key(|&g| weight(g))
                     .expect("at least two sides are seen");
-                let joined_sides = (0..4)
+                let joined_sides = (0..SIDES)
                     .filter(|&i| is_seen(i, &hidden) && group[i] == main)
                     .count();
                 // Two opposite sides with both others off the frame have
@@ -494,7 +509,7 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
                     if joined_sides < 2 {
                         continue;
                     }
-                    for i in 0..4 {
+                    for i in 0..SIDES {
                         if is_seen(i, &hidden) && group[i] != main {
                             hidden[i] = true;
                             seen -= 1;
@@ -506,7 +521,7 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
             // A side taken as the frame's boundary must have a
             // neighbouring side actually reaching that boundary.
             let reaches = |bit: u8, fixed: i32, at: i32, vertical: bool| {
-                (0..6).any(|k| {
+                (0..chrome.boundary_reach).any(|k| {
                     let i = if at == 0 { k } else { at - k };
                     let (x, y) = if vertical { (fixed, i) } else { (i, fixed) };
                     map.at(x, y, bit)
@@ -765,7 +780,7 @@ mod tests {
         draw_window(&mut image, rect);
         let found = find_windows(&image, &chrome);
         assert_eq!(rects(&found), vec![rect]);
-        assert!(found[0].fully_visible());
+        assert!(found[0].fully_visible(&chrome));
         assert!(found[0].marker);
         assert_eq!(found[0].ridge_px, 2);
     }
@@ -780,8 +795,8 @@ mod tests {
         draw_window(&mut image, front);
         let found = find_windows(&image, &chrome);
         assert_eq!(rects(&found), vec![front, back]);
-        assert!(found[0].fully_visible());
-        assert!(!found[1].fully_visible());
+        assert!(found[0].fully_visible(&chrome));
+        assert!(!found[1].fully_visible(&chrome));
         assert!(found[1].extent_certain());
     }
 
@@ -845,7 +860,7 @@ mod tests {
         draw_window(&mut image, rect);
         let found = find_windows(&image, &chrome);
         assert_eq!(rects(&found), vec![rect]);
-        assert!(found[0].fully_visible(), "{:?}", found[0]);
+        assert!(found[0].fully_visible(&chrome), "{:?}", found[0]);
     }
 
     #[test]
@@ -882,7 +897,7 @@ mod tests {
         }
         let found = find_windows(&image, &chrome);
         assert_eq!(rects(&found), vec![rect]);
-        assert!(found[0].fully_visible(), "{:?}", found[0]);
+        assert!(found[0].fully_visible(&chrome), "{:?}", found[0]);
     }
 
     /// Two windows whose tops line up, and a third partly showing: the

@@ -31,9 +31,13 @@ use crate::game_data_store::GameDataStore;
 
 use super::field::label_key;
 
+/// The scale the fuzzy matcher scores on: a hundred is a perfect match.
+const PERCENT: f64 = 100.0; // not layout: the fuzzy matcher's percent scale
+
 /// How strictly a reading must match a known name, as the profile
 /// describes it.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MobNameProfile {
     /// Least similarity (0 to 100) at which a reading is taken as a
     /// known name strictly: as near as a misreading of a character or two
@@ -70,17 +74,22 @@ pub struct CatalogueMob {
     pub level: Option<u32>,
 }
 
+/// The letters and the digits a key is counted over; anything else in
+/// a key shares one further count.
+const LETTERS: usize = 'Z' as usize - 'A' as usize + 1;
+const DIGITS: usize = '9' as usize - '0' as usize + 1;
+
 /// Letter and digit counts of a key, for a cheap upper bound on how
 /// similar two keys can be before comparing them properly.
-type Counts = [u16; 37];
+type Counts = [u16; LETTERS + DIGITS + 1];
 
 fn counts(key: &[char]) -> Counts {
-    let mut out = [0u16; 37];
+    let mut out = [0u16; LETTERS + DIGITS + 1];
     for c in key {
         let slot = match c {
             'A'..='Z' => *c as usize - 'A' as usize,
-            '0'..='9' => 26 + (*c as usize - '0' as usize),
-            _ => 36,
+            '0'..='9' => LETTERS + (*c as usize - '0' as usize),
+            _ => LETTERS + DIGITS,
         };
         out[slot] = out[slot].saturating_add(1);
     }
@@ -94,7 +103,7 @@ fn bound(a: &Counts, a_len: usize, b: &Counts, b_len: usize) -> f64 {
     if a_len + b_len == 0 {
         return 0.0;
     }
-    200.0 * common as f64 / (a_len + b_len) as f64
+    2.0 * PERCENT * common as f64 / (a_len + b_len) as f64
 }
 
 /// Who a key names.
@@ -358,7 +367,7 @@ fn distinct(catalogue: &MobCatalogue, candidates: &[(Who, f64)]) -> Vec<(Who, f6
 }
 
 fn spelling_of(score: f64, profile: &MobNameProfile) -> Spelling {
-    if score >= 100.0 {
+    if score >= PERCENT {
         Spelling::Exact
     } else if score >= profile.known_score {
         Spelling::Near
@@ -460,7 +469,7 @@ pub fn resolve(
         .iter()
         .position(|name| label_key(name) == key)
     {
-        return answer(catalogue, Who::Confirmed(i), 100.0, profile);
+        return answer(catalogue, Who::Confirmed(i), PERCENT, profile);
     }
     let key_counts = counts(&key);
     let floor = profile.guess_score - profile.margin;

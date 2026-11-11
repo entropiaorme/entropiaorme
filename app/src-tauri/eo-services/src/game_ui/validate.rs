@@ -11,13 +11,16 @@ use serde::Deserialize;
 
 use super::geometry::{Pixels, Rect};
 
+/// Numbers are printed, read and checked in decimal.
+const DECIMAL: u32 = 10; // not layout: the radix numbers are written in
+
 /// The decimal value of a digit character the recogniser can emit: its
 /// decode alphabet carries exactly the ASCII and fullwidth digit forms,
 /// and a number read in either converts by value.
 pub(crate) fn digit_value(ch: char) -> Option<u32> {
     match ch {
         '0'..='9' => Some(ch as u32 - '0' as u32),
-        '\u{ff10}'..='\u{ff19}' => Some(ch as u32 - 0xff10),
+        '\u{ff10}'..='\u{ff19}' => Some(ch as u32 - '\u{ff10}' as u32),
         _ => None,
     }
 }
@@ -58,7 +61,7 @@ fn fold(raw: &str) -> String {
     raw.chars()
         .filter(|c| !c.is_whitespace())
         .map(|c| match digit_value(c) {
-            Some(d) => char::from_digit(d, 10).expect("decimal digit"),
+            Some(d) => char::from_digit(d, DECIMAL).expect("decimal digit"),
             None => c,
         })
         .collect()
@@ -140,7 +143,7 @@ pub fn labelled_integer(raw: &str, label: &str, digits: [usize; 2]) -> Option<Pa
         .trim()
         .chars()
         .map(|c| match digit_value(c) {
-            Some(d) => char::from_digit(d, 10).expect("decimal digit"),
+            Some(d) => char::from_digit(d, DECIMAL).expect("decimal digit"),
             None => c,
         })
         .collect();
@@ -171,7 +174,7 @@ pub fn distance_labels(raw: &str, unit: &str) -> Option<Vec<u32>> {
     let text: String = raw
         .chars()
         .map(|c| match digit_value(c) {
-            Some(d) => char::from_digit(d, 10).expect("decimal digit"),
+            Some(d) => char::from_digit(d, DECIMAL).expect("decimal digit"),
             None => c,
         })
         .collect();
@@ -268,7 +271,7 @@ pub fn last_place(text: &str) -> f64 {
     let digits = text.split_once('.').map_or(0, |(_, f)| {
         f.chars().take_while(char::is_ascii_digit).count()
     });
-    10f64.powi(-(digits as i32))
+    f64::from(DECIMAL).powi(-(digits as i32))
 }
 
 /// The amount of a [`Grammar::PedAmount`] reading's canonical text,
@@ -340,6 +343,7 @@ pub fn parse(grammar: Grammar, raw: &str) -> Option<Parsed> {
 /// the text a value is read as predicts how wide its ink must be, and a
 /// reading a digit short is most of a digit too narrow.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NumeralMetrics {
     /// A pixel is ink when its brightest channel reaches this.
     pub min_ink: u8,

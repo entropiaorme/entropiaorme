@@ -93,6 +93,7 @@ pub enum ValueSide {
 
 /// One field, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FieldProfile {
     /// The label as the client prints it.
     pub label: String,
@@ -105,6 +106,7 @@ pub struct FieldProfile {
 /// How runs are cropped for the recogniser and how strictly a label
 /// must match.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReadProfile {
     /// Margin added around a run before it is recognised, as a
     /// fraction of the run's height,

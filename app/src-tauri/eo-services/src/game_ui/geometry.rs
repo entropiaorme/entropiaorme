@@ -131,7 +131,7 @@ pub fn brightened(image: &BgrImage, rect: Rect, from: u8, to: u8) -> BgrImage {
     let mut out = crop(image, rect);
     let scale = to as f32 / from.max(1) as f32;
     for channel in out.data.iter_mut() {
-        *channel = (*channel as f32 * scale).round().min(255.0) as u8;
+        *channel = (*channel as f32 * scale).round().min(f32::from(u8::MAX)) as u8;
     }
     out
 }
@@ -155,15 +155,32 @@ pub fn hue(rgb: [u8; 3]) -> Option<f32> {
     if c <= 0.0 {
         return None;
     }
+    let turn = TURN_DEGREES as f32;
     let h = if hi == r {
-        60.0 * (g - b) / c
+        SEXTANT_DEGREES * (g - b) / c
     } else if hi == g {
-        60.0 * (2.0 + (b - r) / c)
+        SEXTANT_DEGREES * (GREEN_SEXTANT + (b - r) / c)
     } else {
-        60.0 * (4.0 + (r - g) / c)
+        SEXTANT_DEGREES * (BLUE_SEXTANT + (r - g) / c)
     };
-    Some(if h >= 300.0 { h - 360.0 } else { h })
+    Some(if h >= turn - SEXTANT_DEGREES {
+        h - turn
+    } else {
+        h
+    })
 }
+
+/// Degrees in a full turn.
+pub(crate) const TURN_DEGREES: f64 = 360.0; // not layout: the degrees of a full turn
+
+/// Degrees in a sixth of a turn: the hue circle steps from red through
+/// yellow, green, cyan, blue and magenta a sixth at a time.
+const SEXTANT_DEGREES: f32 = 60.0; // not layout: the degrees of a sixth of a turn
+
+/// Where green and blue sit on the hue circle, in sixths of a turn from
+/// red.
+const GREEN_SEXTANT: f32 = 2.0;
+const BLUE_SEXTANT: f32 = 4.0; // not layout: blue is four sixths of a turn from red
 
 /// Whether every channel of `rgb` is within `tolerance` of `target`.
 pub fn near(rgb: [u8; 3], target: [u8; 3], tolerance: u8) -> bool {

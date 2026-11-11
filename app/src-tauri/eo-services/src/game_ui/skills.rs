@@ -43,6 +43,7 @@ const WINDOW: &str = "skills";
 
 /// What the SKILLS tab's table looks like, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkillsTableProfile {
     /// The name column's header label.
     pub name_header: String,
@@ -93,6 +94,7 @@ pub struct SkillsTableProfile {
 
 /// When a name that spells no skill is taken as a slip of one.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NearMissProfile {
     /// Lowest similarity (0 to 100) of the name to a skill, on one page.
     pub score: f64,
@@ -110,6 +112,7 @@ pub struct NearMissProfile {
 /// The table's scrollbar: a plain grey thumb to the right of the table,
 /// drawn only when the list does not fit the view.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScrollbarProfile {
     /// Brightness range of the thumb.
     pub thumb_lum: [u8; 2],

@@ -11,6 +11,7 @@ use super::geometry::{chroma, near, Pixels, Rect};
 
 /// What a rule line looks like.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuleProfile {
     /// Brightness range of a horizontal rule (a selected row's outline
     /// is brighter than a plain rule, so the range is wide).

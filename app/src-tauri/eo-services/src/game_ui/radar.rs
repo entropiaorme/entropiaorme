@@ -38,7 +38,7 @@ use serde::Deserialize;
 use crate::game_ui::geometry::BgrImage;
 
 use super::field::{read_run, Recogniser};
-use super::geometry::{chroma, Pixels, Rect};
+use super::geometry::{chroma, Pixels, Rect, TURN_DEGREES};
 use super::profile::UiProfile;
 use super::text::{scenery_runs, stroke_ink, StrokeProfile, TextProfile, TextRun};
 use super::validate::{distance_labels, labelled_integer};
@@ -46,6 +46,7 @@ use super::window::find_windows;
 
 /// What the radar looks like, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RadarProfile {
     /// The map disc and its rim.
     pub disc: DiscProfile,
@@ -63,6 +64,7 @@ pub struct RadarProfile {
 
 /// The planet's name, printed over the scene centred above the disc.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanetLabelProfile {
     /// The band holding the name, from and to, in shares of the disc's
     /// radius above the disc's highest point.
@@ -84,6 +86,7 @@ pub struct PlanetLabelProfile {
 
 /// The map disc, its rim and the player's dot.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiscProfile {
     /// A pixel of the map is at least this green,
     pub min_green: u8,
@@ -135,6 +138,7 @@ pub struct DiscProfile {
 
 /// The white dot that marks the player at the radar's centre.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DotProfile {
     /// A pixel of the dot has every channel at least this bright
     pub min_channel: u8,
@@ -154,6 +158,7 @@ pub struct DotProfile {
 /// The range rings drawn inside the disc, and the distances printed
 /// beside them.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RingProfile {
     /// Points sampled round each circle.
     pub samples: usize,
@@ -196,6 +201,7 @@ pub enum Aligned {
 
 /// One of the two coordinates.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CoordinateProfile {
     /// The label printed before the value.
     pub label: String,
@@ -225,6 +231,7 @@ pub struct CoordinateProfile {
 
 /// The coordinates printed under the disc.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CoordinatesProfile {
     pub lon: CoordinateProfile,
     pub lat: CoordinateProfile,
@@ -420,10 +427,14 @@ fn edge_along(
     None
 }
 
+/// A determinant this near zero leaves a circle fit undefined: the
+/// points lie in a line, or as near one as floating point can tell.
+const SINGULAR: f64 = 1e-9; // not layout: floating-point tolerance of a circle fit
+
 /// The circle through three points, if they are not in a line.
 fn circumcircle(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> Option<Circle> {
     let d = 2.0 * (a.0 * (b.1 - c.1) + b.0 * (c.1 - a.1) + c.0 * (a.1 - b.1));
-    if d.abs() < 1e-9 {
+    if d.abs() < SINGULAR {
         return None;
     }
     let (a2, b2, c2) = (
@@ -458,7 +469,7 @@ fn least_squares_circle(points: &[(f64, f64)]) -> Option<Circle> {
         svuu += v * u * u;
     }
     let det = suu * svv - suv * suv;
-    if det.abs() < 1e-9 {
+    if det.abs() < SINGULAR {
         return None;
     }
     let (bu, bv) = ((suuu + suvv) / 2.0, (svvv + svuu) / 2.0);
@@ -567,7 +578,7 @@ fn fit_disc(
         .windows(2)
         .map(|w| w[1] - w[0])
         .chain(std::iter::once(
-            angles[0] + 360.0 - angles[angles.len() - 1],
+            angles[0] + TURN_DEGREES - angles[angles.len() - 1],
         ))
         .fold(0.0, f64::max);
     (widest <= disc.max_arc_gap).then_some(circle)
@@ -677,6 +688,10 @@ fn median(values: &mut [f64]) -> Option<f64> {
     Some(values[values.len() / 2])
 }
 
+/// The fewest points round the circle the ring search samples, whatever
+/// a profile says: fewer cannot tell a ring from a stray line.
+const MIN_RING_SAMPLES: usize = 8; // not layout: a floor on what a profile may ask for
+
 /// The radii of the rings in `radar`: each a stretch of radii whose
 /// middling brightness round the circle stands out from the map's,
 /// placed at the centre of its brightness. `None` when a stretch runs to
@@ -688,7 +703,7 @@ fn ring_radii(
     windows: &[Rect],
     rings: &RingProfile,
 ) -> Option<Vec<f64>> {
-    let samples = rings.samples.max(8);
+    let samples = rings.samples.max(MIN_RING_SAMPLES);
     let from = (rings.span[0] * radar.radius).ceil() as i32;
     let to = (rings.span[1] * radar.radius).floor() as i32;
     if to <= from {

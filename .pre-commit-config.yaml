@@ -100,6 +100,15 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # The game-interface readers reach the screen and the recogniser only
+      # through their pipeline's seams and keep their layout numbers in the
+      # interface profile. A whole-tree cargo xtask guard over the backend.
+      - id: ui-profile
+        name: readers keep to the pipeline and the profile (backend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- ui-profile'
+        language: system
+        pass_filenames: false
+        always_run: true
       # The authoring lint is diff-scoped (it inspects the lines a change adds,
       # against HEAD here); the version-stamp parity check reads the manifests
       # whole, so both always_run. Both are cargo xtask subcommands.

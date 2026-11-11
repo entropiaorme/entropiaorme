@@ -22,10 +22,11 @@ pub const PROFILE_FORMAT: u32 = 1;
 /// The shortest interval the creature watcher may look at the screen at,
 /// whatever a profile says: a floor on what the watcher may cost the
 /// machine the game is running on, not a measurement of the client.
-pub const MIN_PULSE_MS: i64 = 250;
+pub const MIN_PULSE_MS: i64 = 250; // not layout: a floor on the profile's cadence
 
 /// One client interface, described as data.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UiProfile {
     /// Format of this file; a build refuses a format it does not know.
     pub format: u32,
@@ -94,6 +95,60 @@ mod tests {
                 .join("../entropia-orme/resources/ui_profile.json"),
         )
         .expect("the bundled profile reads")
+    }
+
+    #[test]
+    fn the_bundled_profile_loads() {
+        let profile = UiProfile::from_json(&bundled_text()).expect("the bundled profile loads");
+        assert_eq!(profile.format, PROFILE_FORMAT);
+        assert!(profile.windows.contains_key("skills"));
+    }
+
+    /// Every object in `value` that a profile struct deserialises (all of
+    /// them but the maps keyed by name: the windows, and a window's
+    /// fields), by its path.
+    fn struct_paths(value: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                let keyed_by_name = path == "/windows"
+                    || (path.starts_with("/windows/") && path.ends_with("/fields"));
+                if !keyed_by_name {
+                    out.push(path.to_string());
+                }
+                for (key, child) in map {
+                    struct_paths(child, &format!("{path}/{key}"), out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, child) in items.iter().enumerate() {
+                    struct_paths(child, &format!("{path}/{i}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn an_entry_the_profile_does_not_know_is_refused_at_every_level() {
+        let bundled: serde_json::Value = serde_json::from_str(&bundled_text()).unwrap();
+        let mut paths = Vec::new();
+        struct_paths(&bundled, "", &mut paths);
+        assert!(paths.len() > 40, "{paths:?}");
+        for path in paths {
+            let mut stale = bundled.clone();
+            stale
+                .pointer_mut(&path)
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("an object")
+                .insert("misspelt_entry".to_string(), serde_json::Value::Null);
+            match UiProfile::from_json(&stale.to_string()) {
+                Err(ProfileError::Parse(error)) => assert!(
+                    error.to_string().contains("unknown field `misspelt_entry`"),
+                    "{path}: {error}"
+                ),
+                other => panic!("{path}: an unknown entry was accepted: {other:?}"),
+            }
+        }
     }
 
     #[test]

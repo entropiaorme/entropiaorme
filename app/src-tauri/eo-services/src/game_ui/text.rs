@@ -13,6 +13,7 @@ use super::geometry::{chroma, near, Pixels, Rect};
 
 /// What counts as ink and how glyphs join into runs.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TextProfile {
     /// A pixel is ink when its brightest channel reaches this.
     pub min_ink: u8,
@@ -24,6 +25,9 @@ pub struct TextProfile {
     pub join_factor: f32,
     /// Glyphs of visibly different colour never join, however close.
     pub max_colour_distance: u16,
+    /// Fewest ink pixels a glyph or run needs for its colour to be
+    /// judged: a dot or a comma carries too little to tell.
+    pub min_colour_ink: i32,
     /// Two pieces of lettering are on one line when the middle of the
     /// shorter lies within the taller's span widened by this share of the
     /// taller's height (a comma hangs just below a digit's foot).
@@ -96,6 +100,7 @@ fn find(parent: &mut [u32], mut a: u32) -> u32 {
 /// pale line with darker pixels close on both of its sides, which a
 /// broad bright surface does not have.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StrokeProfile {
     /// Largest channel spread a stroke pixel may have: it is a grey.
     pub max_chroma: u8,
@@ -349,8 +354,8 @@ fn join_runs(blobs: Vec<Blob>, profile: &TextProfile) -> Vec<Blob> {
                 continue;
             }
             // A dot or comma carries too little ink to judge colour by.
-            if blob.ink >= 12
-                && run.ink >= 12
+            if blob.ink >= profile.min_colour_ink
+                && run.ink >= profile.min_colour_ink
                 && colour_distance(blob.rgb(), run.rgb()) > profile.max_colour_distance
             {
                 continue;

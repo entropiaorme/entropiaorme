@@ -54,6 +54,7 @@ use super::window::{find_windows, ChromeProfile};
 
 /// What creatures' nameplates look like, as the profile describes them.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlateProfile {
     /// The plate's pixel sizes, one entry per interface scale measured.
     pub scales: Vec<PlateScale>,
@@ -71,6 +72,7 @@ pub struct PlateProfile {
 
 /// A plate's pixel sizes at one interface scale.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlateScale {
     /// The health bar's coloured part (filled or not), `[width, height]`.
     pub bar: [i32; 2],
@@ -96,6 +98,7 @@ pub struct PlateScale {
 
 /// The bar's colour run.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ColourRunProfile {
     /// The hue at points along the bar, `[place, degrees]`, the place
     /// from 0 at the bar's left end to 1 at its right, in order. Between
@@ -116,6 +119,7 @@ pub struct ColourRunProfile {
 
 /// The locked plate's frame and the bar inside it.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FrameProfile {
     /// The frame's colour,
     pub rgb: [u8; 3],
@@ -138,6 +142,7 @@ pub struct FrameProfile {
 
 /// The red pointer the client draws under the locked plate.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PointerProfile {
     /// Where it is looked for, `[left, top, right, bottom]`, in bar
     /// widths from the bar's top-left corner.
@@ -150,6 +155,7 @@ pub struct PointerProfile {
 
 /// The line of lettering over the bar.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LineProfile {
     /// The area searched for it, `[left, top, right, bottom]`, in bar
     /// widths from the bar's top-left corner: wide enough for a long name
@@ -172,6 +178,7 @@ pub struct LineProfile {
 
 /// The level, the line's first piece.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LevelProfile {
     /// The letter the client prints before the number.
     pub label: String,

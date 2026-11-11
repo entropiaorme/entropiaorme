@@ -26,6 +26,7 @@ use super::window::{find_windows, FoundWindow, Side};
 
 /// One kind of client window, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WindowProfile {
     /// The title as the client prints it.
     pub title: String,
@@ -42,6 +43,7 @@ pub struct WindowProfile {
 
 /// Where titles are looked for and how strictly they must match.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TitleProfile {
     /// Height of the strip along a window's top that holds its title.
     pub strip_height: i32,

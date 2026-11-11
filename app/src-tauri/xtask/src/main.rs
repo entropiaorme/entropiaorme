@@ -16,6 +16,7 @@
 //! xtask id-order            [--warn-only]
 //! xtask route-ceilings      [--warn-only]
 //! xtask single-search       [--warn-only]
+//! xtask ui-profile          [--warn-only]
 //! xtask bump-version        <NEW_VERSION>
 //! ```
 
@@ -31,6 +32,7 @@ mod no_bare_setinterval;
 mod no_new_writable;
 mod route_ceilings;
 mod single_search;
+mod ui_profile;
 mod version_stamps;
 mod vocabulary;
 
@@ -53,6 +55,7 @@ SUBCOMMANDS:
     id-order [--warn-only]                    require every id-ordered database read to name its allowed case
     route-ceilings [--warn-only]              hold tracked route files at or under their line ceilings
     single-search [--warn-only]               keep every frontend search on the shared search module
+    ui-profile [--warn-only]                  keep the game-interface readers on their pipeline and their layout in the profile
     bump-version <NEW_VERSION>                rewrite the app version stamps in lock-step
     gen-ts [--check]                          emit the TypeScript bindings for the typed IPC commands
 ";
@@ -76,6 +79,7 @@ fn main() -> ExitCode {
         "id-order" => id_order::run(rest),
         "route-ceilings" => route_ceilings::run(rest),
         "single-search" => single_search::run(rest),
+        "ui-profile" => ui_profile::run(rest),
         "bump-version" => bump_version::run(rest),
         "gen-ts" => gen_ts::run(rest),
         "-h" | "--help" | "help" => {

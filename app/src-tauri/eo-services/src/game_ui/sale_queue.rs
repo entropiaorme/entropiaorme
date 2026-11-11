@@ -75,6 +75,7 @@ const WINDOW: &str = "auction_sell";
 
 /// What the sell queue looks like, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SaleQueueProfile {
     /// The heading over the queue, which the client follows with the
     /// number of rows queued: `Sell Queue (3)`.
@@ -124,6 +125,7 @@ pub struct SaleQueueProfile {
 
 /// One column of the queue, by its heading, and the values it holds.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QueueColumn {
     pub heading: String,
     pub fields: Vec<FieldPick>,
@@ -131,6 +133,7 @@ pub struct QueueColumn {
 
 /// Which value a column holds, and which of the cell's lettering it is.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FieldPick {
     pub field: QueueField,
     pub pick: Pick,
@@ -225,6 +228,7 @@ pub enum Pick {
 
 /// How a spinner's box and its lettering are told apart.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpinnerProfile {
     /// Lettering in a box whose brightest channel is below this is no
     /// lettering: the box is empty, and nothing in it is brightened.
@@ -251,6 +255,7 @@ pub struct SpinnerProfile {
 /// How a lit switch is told from an unlit one: by the colour of its ink,
 /// lit in the client's accent colour, unlit in grey.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SwitchProfile {
     /// The ink's mean colour spreads its channels at least this far when
     /// lit,
@@ -262,6 +267,7 @@ pub struct SwitchProfile {
 /// The toggle between stating prices in PED and as markup: the readers'
 /// spinners hold PED only in the mode this names.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModeProfile {
     /// The toggle's label that must be lit.
     pub active: String,
@@ -652,13 +658,25 @@ pub fn normalised_name(raw: &str) -> String {
     let folded: String = raw
         .chars()
         .map(|c| match c {
-            '\u{ff01}'..='\u{ff5e}' => char::from_u32(c as u32 - 0xfee0).unwrap_or(c),
+            '\u{ff01}'..='\u{ff5e}' => {
+                char::from_u32(c as u32 - ('\u{ff01}' as u32 - '!' as u32)).unwrap_or(c)
+            }
             '\u{3000}' => ' ',
             other => other,
         })
         .collect();
     folded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+/// How far apart two amounts computed in floating point may be and still
+/// be the same amount.
+const EPSILON: f64 = 1e-9; // not layout: floating-point tolerance of PED arithmetic
+
+/// The scale a markup is stated in as a percentage.
+const PERCENT: f64 = 100.0; // not layout: the percent scale
+
+/// The game's currency: a PED is a hundred PEC.
+const PEC_PER_PED: f64 = 100.0; // not layout: the currency's own subdivision
 
 /// Whether a figure under a spinner agrees with the price in the spinner
 /// and the row's TT value. The client prints the TT value and the figure
@@ -670,7 +688,6 @@ pub fn normalised_name(raw: &str) -> String {
 /// Within that window a misread digit is not caught: a TT value read one
 /// unit high in its last place agrees as well as the true one.
 pub fn figure_agrees(figure: &MarkupText, price: f64, tt: &Amount) -> bool {
-    const EPSILON: f64 = 1e-9;
     match figure.kind {
         MarkupKind::AboveTt => {
             let short = price - tt.ped - figure.figure;
@@ -679,9 +696,9 @@ pub fn figure_agrees(figure: &MarkupText, price: f64, tt: &Amount) -> bool {
         MarkupKind::Percent => {
             let unit = last_place(&tt.text);
             let own = last_place(&figure.text);
-            let least = 100.0 * price / (tt.ped + unit) - own;
+            let least = PERCENT * price / (tt.ped + unit) - own;
             let most = if tt.ped - unit / 2.0 > 0.0 {
-                100.0 * price / (tt.ped - unit / 2.0) + own
+                PERCENT * price / (tt.ped - unit / 2.0) + own
             } else {
                 f64::INFINITY
             };
@@ -702,7 +719,7 @@ pub fn figure_agrees(figure: &MarkupText, price: f64, tt: &Amount) -> bool {
 /// own measurements do.
 pub fn fee_agrees(fee: &Amount, bid: f64, tt: &Amount) -> bool {
     let (least, most) = fee_window(bid, tt);
-    let fee = (fee.ped * 100.0).round() as i64;
+    let fee = (fee.ped * PEC_PER_PED).round() as i64;
     fee >= least && fee <= most
 }
 
@@ -711,7 +728,7 @@ pub fn fee_agrees(fee: &Amount, bid: f64, tt: &Amount) -> bool {
 /// fee read one PEC out at that boundary agrees as well as the true one.
 pub fn fee_window(bid: f64, tt: &Amount) -> (i64, i64) {
     let unit = last_place(&tt.text);
-    let pec = |ped: f64| (ped * 100.0).round() as i64;
+    let pec = |ped: f64| (ped * PEC_PER_PED).round() as i64;
     (
         pec(listing_fee_ped(bid - tt.ped - unit)),
         pec(listing_fee_ped(bid - tt.ped + unit / 2.0)),
@@ -1735,7 +1752,7 @@ fn read_row(
     // The catalogue's most TT value for one item bounds the row's.
     let catalogued = catalogue.find(&name);
     if let Some(Some(max_tt)) = catalogued {
-        if tt.ped > max_tt * quantity.value as f64 + 1e-9 {
+        if tt.ped > max_tt * quantity.value as f64 + EPSILON {
             broken.push(out_of(QueueField::Tt, &tt.text));
         }
     }

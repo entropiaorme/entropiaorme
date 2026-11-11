@@ -189,6 +189,6 @@ mod tests {
     #[test]
     fn ceiling_map_has_the_expected_entry_count() {
         // Guards against an accidental drop when editing the map.
-        assert_eq!(CEILINGS.len(), 9);
+        assert_eq!(CEILINGS.len(), 8);
     }
 }

@@ -575,5 +575,5 @@ jobs:
             echo "Frontend build, Rust workspace, coverage, and Linux build+bundle jobs passed. Gate satisfied."
             exit 0
           fi
-          echo "::error::A code change must pass the frontend build, the Rust workspace jobs, and the Linux build+bundle (frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT, linux-bundle: $LINUX_BUNDLE_RESULT).""
+          echo "::error::A code change must pass the frontend build, the Rust workspace jobs, and the Linux build+bundle (frontend: $FRONTEND_RESULT, rust: $RUST_RESULT, members: $RUST_MEMBERS_RESULT, coverage: $RUST_COVERAGE_RESULT, linux-bundle: $LINUX_BUNDLE_RESULT)."
           exit 1

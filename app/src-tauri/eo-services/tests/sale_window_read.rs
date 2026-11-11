@@ -20,10 +20,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use eo_services::game_ui::geometry::BgrImage;
 use eo_services::ocr_engine::{load_bgr_png, OcrEngine};
 use eo_services::sale_window_ocr::{SaleWindowOcrService, SaleWindowProviders};
 use eo_services::scan_presets::{ScanPresets, SALE_WINDOW_KEY};
-use eo_services::skill_panel::BgrImage;
 use serde_json::Value;
 
 fn repo_root() -> PathBuf {

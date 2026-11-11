@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::fuzzy_match::ratio;
-use crate::skill_panel::BgrImage;
+use crate::game_ui::geometry::BgrImage;
 
 use super::field::{first_label, label_key, read_run, Recogniser, Remembering};
 use super::geometry::{chroma, Pixels, Rect};

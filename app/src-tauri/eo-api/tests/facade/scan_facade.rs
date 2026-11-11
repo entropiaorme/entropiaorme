@@ -15,13 +15,13 @@ use eo_api::Api;
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
+use eo_services::game_ui::geometry::BgrImage;
 use eo_services::game_ui::seams::{FrameUnavailable, GameWindowFrame};
 use eo_services::game_ui::test_support::{
     bundled_profile, draw_skills_window, skills_drawing_vocabulary, skills_scene,
     standard_skills_layout, Lettering, SkillsLayout,
 };
 use eo_services::scan_completion::ScannedLevel;
-use eo_services::skill_panel::BgrImage;
 use eo_services::skill_scan::{SkillScanProviders, SkillScanService};
 use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use serde_json::json;

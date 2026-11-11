@@ -13,11 +13,11 @@
 use std::sync::Arc;
 
 use crate::game_ui::field::{FieldError, Remembering};
+use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::locate::{read_window_field, ReadError};
 use crate::game_ui::profile::UiProfile;
 use crate::game_ui::seams::{FrameReader, FrameUnavailable, GameWindowFrame};
 use crate::game_ui::validate::without_unit;
-use crate::skill_panel::BgrImage;
 
 /// The terminals a figure is read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1412,9 +1412,9 @@ mod tests {
     use super::*;
     use crate::clock::MockClock;
     use crate::coord_capture::{CoordCaptureProviders, CoordRegion};
+    use crate::game_ui::geometry::BgrImage;
     use crate::keystroke_source::MockKeystrokeSource;
     use crate::map_pins::{MapPinsService, NewMapPin};
-    use crate::skill_panel::BgrImage;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
     fn candidate(id: i64, lon: f64, lat: f64) -> Candidate {

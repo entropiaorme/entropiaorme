@@ -35,7 +35,7 @@
 
 use serde::Deserialize;
 
-use crate::skill_panel::BgrImage;
+use crate::game_ui::geometry::BgrImage;
 
 use super::field::{read_run, Recogniser};
 use super::geometry::{chroma, Pixels, Rect};

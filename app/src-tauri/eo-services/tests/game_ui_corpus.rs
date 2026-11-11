@@ -18,6 +18,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use eo_services::game_ui::geometry::BgrImage;
 use eo_services::game_ui::locate::{read_window_field, ReadError};
 use eo_services::game_ui::profile::UiProfile;
 use eo_services::game_ui::radar::{
@@ -30,7 +31,6 @@ use eo_services::game_ui::skills::{
 use eo_services::ocr_engine::{load_bgr_png, OcrEngine};
 use eo_services::planet_maps::PlanetMapStore;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders, Terminal, TerminalRefusal};
-use eo_services::skill_panel::BgrImage;
 use serde_json::Value;
 
 fn repo_root() -> PathBuf {

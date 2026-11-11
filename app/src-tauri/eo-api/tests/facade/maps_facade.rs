@@ -13,8 +13,8 @@ use eo_services::clock::RealClock;
 use eo_services::coord_capture::{CoordCaptureProviders, CoordCaptureService, CoordRegion};
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
+use eo_services::game_ui::geometry::BgrImage;
 use eo_services::planet_maps::PlanetMapStore;
-use eo_services::skill_panel::BgrImage;
 
 use crate::common;
 

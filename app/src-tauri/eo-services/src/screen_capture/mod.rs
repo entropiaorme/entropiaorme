@@ -11,7 +11,7 @@
 
 use image::ImageEncoder;
 
-use crate::skill_panel::BgrImage;
+use crate::game_ui::geometry::BgrImage;
 
 /// Capture a screen rectangle as PNG bytes (RGB-encoded). `None` on a
 /// non-positive region, a capture failure, or a host with no capturer.

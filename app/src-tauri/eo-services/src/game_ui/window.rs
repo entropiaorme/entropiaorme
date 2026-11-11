@@ -729,10 +729,10 @@ pub fn find_windows<P: Pixels>(image: &P, chrome: &ChromeProfile) -> Vec<FoundWi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game_ui::geometry::BgrImage;
     use crate::game_ui::test_support::{
         blank, bundled_profile, corpus_dir, corpus_frame, draw_window, put, Lcg,
     };
-    use crate::skill_panel::BgrImage;
 
     fn scenery(w: usize, h: usize, seed: u64) -> BgrImage {
         let mut rng = Lcg(seed);

@@ -45,13 +45,13 @@ use std::time::Duration;
 use crate::bus_events::BusEvent;
 use crate::clock::Clock;
 use crate::event_bus::EventBus;
+use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::profile::UiProfile;
 use crate::game_ui::seams::{FrameReader, FrameUnavailable, GameWindowFrame};
 use crate::game_ui::skills::{
     read_skills_page, Admission, SkillVocabulary, SkillsSweep, SkillsTableProfile, SweepResult,
 };
 use crate::scan_completion::ScannedLevel;
-use crate::skill_panel::BgrImage;
 use crate::time::{naive_to_epoch, to_iso_utc};
 use eo_wire::domain_events::{
     ScanPhase, ScanStatusChanged, ScanStatusChangedPayload, ScanStatusChangedTag,

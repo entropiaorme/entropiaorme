@@ -395,7 +395,7 @@ mod tests {
 
     /// Draw a "word": `glyphs` blocks of `h` tall, `gw` wide, `gap` apart.
     fn word(
-        image: &mut crate::skill_panel::BgrImage,
+        image: &mut crate::game_ui::geometry::BgrImage,
         (x, y): (i32, i32),
         glyphs: i32,
         (gw, h): (i32, i32),

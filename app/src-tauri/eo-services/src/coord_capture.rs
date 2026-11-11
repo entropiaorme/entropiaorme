@@ -32,8 +32,9 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::seams::{FrameReader, RegionCapture};
-use crate::skill_panel::{digit_value, BgrImage};
+use crate::game_ui::validate::digit_value;
 
 /// The persisted capture rectangle, in screen coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

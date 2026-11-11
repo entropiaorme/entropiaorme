@@ -27,10 +27,10 @@ use std::sync::{Arc, Mutex};
 use serde_json::{json, Map, Value};
 
 use crate::fuzzy_match::wratio;
+use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::seams::{FrameReader, RegionCapture, RegionLookup};
 use crate::ocr_text::parse_amount;
 use crate::scan_presets::PanelAnchor;
-use crate::skill_panel::BgrImage;
 
 /// The capture observer (the recording controller's seam): called as
 /// `tap(panel, region, frame)` after a successful grab.

@@ -390,9 +390,9 @@ fn csv_cell(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::clock::MockClock;
+    use crate::game_ui::geometry::BgrImage;
     use crate::sale_window_ocr::{SaleWindowProviders, SALE_FIELDS};
     use crate::scan_presets::{CellGeometry, PanelAnchor};
-    use crate::skill_panel::BgrImage;
     use std::sync::Barrier;
 
     fn service(root: &Path) -> Arc<AuctionFeeResearchService> {

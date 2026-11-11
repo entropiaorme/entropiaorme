@@ -85,6 +85,7 @@ use eo_services::eu_window;
 use eo_services::event_bus::{EventBus, Topic};
 use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::game_data_store::GameDataStore;
+use eo_services::game_ui::geometry::BgrImage;
 use eo_services::game_ui::profile::UiProfile;
 use eo_services::game_ui::seams::{FrameReader, GameWindowFrame};
 use eo_services::game_ui::skills::SkillVocabulary;
@@ -102,7 +103,6 @@ use eo_services::sale_window_ocr::{SaleWindowOcrService, SaleWindowProviders};
 use eo_services::scan_completion::{complete_skill_scan, latest_skill_levels, ScannedLevel};
 use eo_services::scan_presets::ScanPresets;
 use eo_services::screen_capture::capture_region_bgr;
-use eo_services::skill_panel::BgrImage;
 pub use eo_services::skill_scan::SkillScanService;
 use eo_services::skill_scan::{
     CompletionCallback, SkillScanProviders, DEFAULT_IDLE_LIMIT, DEFAULT_TICK,

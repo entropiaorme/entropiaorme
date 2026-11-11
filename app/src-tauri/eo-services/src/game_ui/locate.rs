@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::fuzzy_match::ratio;
-use crate::skill_panel::BgrImage;
+use crate::game_ui::geometry::BgrImage;
 
 use super::field::{
     label_key, read_field_in, read_run, FieldError, FieldProfile, FieldRead, Recogniser,

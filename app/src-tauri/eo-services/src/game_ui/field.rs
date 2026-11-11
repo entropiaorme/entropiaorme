@@ -11,7 +11,7 @@
 use serde::Deserialize;
 
 use crate::fuzzy_match::ratio;
-use crate::skill_panel::BgrImage;
+use crate::game_ui::geometry::BgrImage;
 
 use super::geometry::{crop, Rect};
 use super::text::{run_below, run_right_of, text_runs, TextProfile, TextRun};

@@ -14,9 +14,9 @@
 
 use std::path::{Path, PathBuf};
 
+use eo_services::game_ui::geometry::BgrImage;
 use eo_services::ocr_engine::{load_bgr_png, OcrEngine};
 use eo_services::scan_presets::ScanPresets;
-use eo_services::skill_panel::BgrImage;
 use eo_services::{eu_window, screen_capture};
 
 fn resource(relative: &str) -> PathBuf {

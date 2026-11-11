@@ -8,10 +8,10 @@
 //! handle the missing-window case. The sale window's region composes
 //! these lookups with the pure geometry in `scan_presets`.
 
+use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::seams::FrameUnavailable;
 use crate::scan_presets::{compute_region, ScanPresets};
 use crate::screen_capture::{capturable_area, capture_region_bgr, start_capture};
-use crate::skill_panel::BgrImage;
 
 pub const GAME_TITLE_PREFIX: &str = "Entropia Universe Client";
 

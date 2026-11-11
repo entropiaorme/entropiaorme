@@ -9,9 +9,18 @@
 
 use serde::Deserialize;
 
-use crate::skill_panel::digit_value;
-
 use super::geometry::{Pixels, Rect};
+
+/// The decimal value of a digit character the recogniser can emit: its
+/// decode alphabet carries exactly the ASCII and fullwidth digit forms,
+/// and a number read in either converts by value.
+pub(crate) fn digit_value(ch: char) -> Option<u32> {
+    match ch {
+        '0'..='9' => Some(ch as u32 - '0' as u32),
+        '\u{ff10}'..='\u{ff19}' => Some(ch as u32 - 0xff10),
+        _ => None,
+    }
+}
 
 /// The shapes a field's text can be required to have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -344,6 +353,17 @@ pub fn width_agrees<P: Pixels>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn ascii_and_fullwidth_digits_convert_by_value() {
+        assert_eq!(digit_value('0'), Some(0));
+        assert_eq!(digit_value('7'), Some(7));
+        assert_eq!(digit_value('\u{ff10}'), Some(0));
+        assert_eq!(digit_value('\u{ff19}'), Some(9));
+        for other in ['a', ' ', ',', '.', '\u{0660}', '\u{ff1a}'] {
+            assert_eq!(digit_value(other), None, "{other:?}");
+        }
+    }
+
     fn number(grammar: Grammar, raw: &str) -> Option<f64> {
         parse(grammar, raw).and_then(|p| p.number)
     }
@@ -495,7 +515,7 @@ mod tests {
     }
 
     /// A block of ink as wide as `text` should be at digit height `h`.
-    fn lettering(text: &str, h: i32) -> (crate::skill_panel::BgrImage, Rect) {
+    fn lettering(text: &str, h: i32) -> (crate::game_ui::geometry::BgrImage, Rect) {
         use crate::game_ui::test_support::{blank, fill};
         let width = (expected_width(text, &metrics()).expect("covered") * h as f32).round() as i32;
         let mut image = blank(600, 80, [8, 11, 11]);

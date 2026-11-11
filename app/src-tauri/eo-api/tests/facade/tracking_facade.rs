@@ -418,7 +418,7 @@ async fn a_game_window_without_the_terminal_is_refused_as_not_open() {
     let dir = tempfile::tempdir().unwrap();
     // The game window is there but shows no terminal: the reader looks
     // for the terminal's title and, not finding it, reads nothing at all.
-    let scene = eo_services::skill_panel::BgrImage {
+    let scene = eo_services::game_ui::geometry::BgrImage {
         data: vec![90; 400 * 300 * 3],
         h: 300,
         w: 400,

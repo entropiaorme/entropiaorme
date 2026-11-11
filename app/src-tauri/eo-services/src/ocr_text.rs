@@ -11,7 +11,7 @@
 //! parse is refused, never read as zero: a field that fails to parse
 //! stays empty so nobody commits a figure the screen never showed.
 
-use crate::skill_panel::digit_value;
+use crate::game_ui::validate::digit_value;
 
 /// The first digit run in `text` as a number, or None when there is no
 /// digit to read. Commas read as decimal points and spaces drop, so a

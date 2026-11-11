@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use crate::skill_panel::BgrImage;
+use crate::game_ui::geometry::BgrImage;
 
 /// A screen rectangle found at scan time, as its top-left and
 /// bottom-right corners in screen coordinates; `None` when there is

@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::game_ui::geometry::BgrImage;
 use crate::ocr_engine::load_bgr_png;
-use crate::skill_panel::BgrImage;
 
 use super::geometry::Rect;
 use super::profile::UiProfile;

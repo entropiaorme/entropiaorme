@@ -2125,10 +2125,15 @@ impl NavigationService {
                 } if *current == session => *held = Some(view),
                 _ => return false,
             }
-            state.looks += 1;
         }
-        self.guidance_looked.notify_all();
+        // The look counts as done only once its change has been told:
+        // whoever waits on the count then finds the telling already made.
         self.announce_guidance();
+        self.guidance
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .looks += 1;
+        self.guidance_looked.notify_all();
         true
     }
 
@@ -2162,8 +2167,8 @@ impl NavigationService {
                 state.lifecycle = Guiding::Off { stopped: stop };
             }
         }
-        self.guidance_looked.notify_all();
         self.announce_guidance();
+        self.guidance_looked.notify_all();
     }
 }
 

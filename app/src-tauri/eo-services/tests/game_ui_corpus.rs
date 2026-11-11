@@ -24,6 +24,10 @@ use eo_services::game_ui::profile::UiProfile;
 use eo_services::game_ui::radar::{
     find_radar, read_coordinates, read_planet_label, ring_scale, CoordError, CoordinateBounds,
 };
+use eo_services::game_ui::sale_queue::{
+    read_sale_queue, Buyout, ItemCatalogue, ItemName, QueueCount, QueuedItem, RowRefusal,
+    SaleQueue, SaleQueueError, Setting,
+};
 use eo_services::game_ui::seams::GameFrame;
 use eo_services::game_ui::skills::{
     nearest_skill, read_skills_page, Admission, Checksum, NameReading, RowName, SkillRow,
@@ -1311,4 +1315,468 @@ fn the_ring_scale_is_the_same_for_a_default_and_an_enlarged_radar() {
     for scale in &scales {
         assert!((scale / mean - 1.0).abs() <= 0.03, "{scales:?}");
     }
+}
+
+/// The fields of a queued row, as the labels name them, with the read
+/// row's canonical text for each. A switched-off buyout carries no price
+/// and is compared apart.
+fn queued_fields(item: &QueuedItem) -> [(&'static str, Option<String>); 8] {
+    [
+        ("name", Some(item.name.text().to_string())),
+        ("tt", Some(item.tt.text.clone())),
+        ("quantity", Some(item.quantity.text.clone())),
+        ("opening_bid", Some(item.opening_bid.text.clone())),
+        (
+            "buyout",
+            match &item.buyout {
+                Buyout::Off => None,
+                Buyout::Price(price) => Some(price.text.clone()),
+            },
+        ),
+        ("days", Some(item.days.text.clone())),
+        ("fee", Some(item.fee.text.clone())),
+        ("markup", Some(item.markup.text.clone())),
+    ]
+}
+
+/// The labels' field names, in the order a row prints them.
+const SALE_FIELDS: [&str; 8] = [
+    "name",
+    "tt",
+    "quantity",
+    "opening_bid",
+    "buyout",
+    "days",
+    "fee",
+    "markup",
+];
+
+/// The frames whose labels carry the sell queue, less the held-out ones,
+/// in shard `shard`.
+fn sale_frames(corpus: &Corpus, shard: usize) -> Vec<(String, Value)> {
+    corpus
+        .frames()
+        .into_iter()
+        .filter(|(_, labels)| labels.get("sale_queue").is_some())
+        .enumerate()
+        .filter(|(i, _)| i % SALE_SHARDS == shard)
+        .map(|(_, (name, labels))| (name, labels["sale_queue"].clone()))
+        .collect()
+}
+
+const SALE_SHARDS: usize = 4;
+
+/// The count the labels' heading text gives: `Sell Queue (3)` is 3.
+fn labelled_count(labels: &Value) -> u32 {
+    let text = labels["queue_text"].as_str().expect("queue text");
+    text.rsplit_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix(')'))
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("{text:?} has no count"))
+}
+
+/// The spinners the client draws greyed, for every queued row of every
+/// frame, as the labels' notes record them (f59 shows the same queue as
+/// f58 and f60, its notes saying so). A greyed buyout is a switched-off
+/// one. A row missing here fails the replay rather than being assumed
+/// editable.
+const SALE_LOCKED: [(&str, &str, &[&str]); 20] = [
+    ("f55", "Electric Attack Nanochip 3", &["quantity", "buyout"]),
+    ("f56", "Electric Attack Nanochip 3", &["quantity"]),
+    ("f57", "Electric Attack Nanochip 3", &["quantity"]),
+    ("f57", "Output Amplifier Component", &["buyout"]),
+    ("f57", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
+    ("f58", "Electric Attack Nanochip 3", &["quantity"]),
+    ("f58", "Eyeshadow (Gold)", &["buyout"]),
+    ("f58", "Eyeshadow (Olive Drab)", &["buyout"]),
+    ("f58", "Output Amplifier Component", &["buyout"]),
+    ("f58", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
+    ("f59", "Electric Attack Nanochip 3", &["quantity"]),
+    ("f59", "Eyeshadow (Gold)", &["buyout"]),
+    ("f59", "Eyeshadow (Olive Drab)", &["buyout"]),
+    ("f59", "Output Amplifier Component", &["buyout"]),
+    ("f59", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
+    ("f60", "Electric Attack Nanochip 3", &["quantity"]),
+    ("f60", "Eyeshadow (Gold)", &["buyout"]),
+    ("f60", "Eyeshadow (Olive Drab)", &["buyout"]),
+    ("f60", "Output Amplifier Component", &["buyout"]),
+    ("f60", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
+];
+
+/// The greyed spinners of one row, failing loudly where the table has no
+/// entry for it.
+fn sale_locked(frame: &str, row: &str) -> &'static [&'static str] {
+    SALE_LOCKED
+        .iter()
+        .find(|(f, r, _)| *f == frame && *r == row)
+        .map(|(_, _, locked)| *locked)
+        .unwrap_or_else(|| {
+            panic!(
+                "{frame}: {row:?} has no entry in the table of greyed spinners; add one from the \
+                 frame's notes before replaying it"
+            )
+        })
+}
+
+/// The application's bundled item data, as the reader confirms names by.
+fn item_catalogue() -> ItemCatalogue {
+    let mut entities = Vec::new();
+    for endpoint in [
+        "absorbers",
+        "enhancers",
+        "harvesting_tools",
+        "medical_tools",
+        "mindforce_implants",
+        "stimulants",
+        "weapon_amplifiers",
+        "weapon_vision_attachments",
+        "weapons",
+    ] {
+        let path = resources().join(format!("snapshot/{endpoint}.json"));
+        let list: Vec<Value> = serde_json::from_str(
+            &std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{path:?}: {e}"));
+        entities.extend(list);
+    }
+    ItemCatalogue::from_entities(&entities)
+}
+
+/// Per field, what became of every labelled value in a fully visible row.
+#[derive(Default)]
+struct FieldTallies(std::collections::BTreeMap<&'static str, Tally>);
+
+impl FieldTallies {
+    fn field(&mut self, field: &'static str) -> &mut Tally {
+        self.0.entry(field).or_default()
+    }
+
+    fn report(&self, what: &str) {
+        for field in SALE_FIELDS {
+            if let Some(tally) = self.0.get(field) {
+                tally.report(&format!("{what} {field}"));
+            }
+        }
+        for (field, tally) in &self.0 {
+            if !SALE_FIELDS.contains(field) {
+                tally.report(&format!("{what} {field}"));
+            }
+        }
+    }
+}
+
+/// Compare one reading of the queue with its labels.
+fn score_sale_queue(name: &str, labels: &Value, queue: &SaleQueue, fields: &mut FieldTallies) {
+    let labelled = labels["rows"].as_array().expect("rows");
+    let visible = |row: &Value| row["fully_visible"].as_bool() == Some(true);
+    for row in labelled {
+        sale_locked(name, row["name"].as_str().expect("named"));
+    }
+    let mut matched = vec![false; labelled.len()];
+    for item in &queue.rows {
+        let found = labelled
+            .iter()
+            .position(|row| row["name"].as_str() == Some(item.name.text()));
+        let i = match found {
+            Some(i) if matched[i] => {
+                fields
+                    .field("name")
+                    .wrong
+                    .push(format!("{name}: {:?} read twice", item.name.text()));
+                continue;
+            }
+            Some(i) if !visible(&labelled[i]) => {
+                fields.field("name").wrong.push(format!(
+                    "{name}: {:?} read, a row the screen does not show whole",
+                    item.name.text()
+                ));
+                continue;
+            }
+            Some(i) => i,
+            None => {
+                fields.field("name").wrong.push(format!(
+                    "{name}: read {:?}, which is no row on the screen ({item:?})",
+                    item.name.text()
+                ));
+                continue;
+            }
+        };
+        matched[i] = true;
+        let locked = sale_locked(name, item.name.text());
+        for (field, got) in queued_fields(item) {
+            let want = labelled[i][field].as_str().expect("labelled");
+            // A greyed buyout is switched off: its grey number is no
+            // price, and must not be returned as one.
+            let want = (field != "buyout" || !locked.contains(&"buyout")).then_some(want);
+            if got.as_deref() == want {
+                fields.field(field).exact += 1;
+            } else {
+                fields.field(field).wrong.push(format!(
+                    "{name}: {} {field} read {got:?}, the screen shows {want:?}",
+                    item.name.text()
+                ));
+            }
+        }
+        // Whether each spinner is greyed, as the screen shows it.
+        for (field, setting) in [
+            ("quantity", item.quantity.setting),
+            ("opening_bid", item.opening_bid.setting),
+            ("days", item.days.setting),
+        ] {
+            let want = if locked.contains(&field) {
+                Setting::Locked
+            } else {
+                Setting::Editable
+            };
+            if setting == want {
+                fields.field("spinner setting").exact += 1;
+            } else {
+                fields.field("spinner setting").wrong.push(format!(
+                    "{name}: {} {field} read as {setting:?}, the screen shows it {want:?}",
+                    item.name.text()
+                ));
+            }
+        }
+        match &item.name {
+            ItemName::Catalogued(_) => fields.field("name confirmed by the catalogue").exact += 1,
+            ItemName::Listed(_) => fields.field("name confirmed by the inventory list").exact += 1,
+            ItemName::Unconfirmed(_) => fields.field("name unconfirmed").exact += 1,
+        }
+    }
+    for (i, row) in labelled.iter().enumerate() {
+        if !visible(row) || matched[i] {
+            continue;
+        }
+        let label = row["name"].as_str().expect("named");
+        let unread = queue
+            .unread
+            .iter()
+            .find(|u| u.raw_name.as_deref().map(str::trim) == Some(label));
+        let line = format!("{name}: {label} ({:?})", unread.map(|u| u.refusals.clone()));
+        for field in SALE_FIELDS {
+            fields.field(field).refused.push(line.clone());
+        }
+    }
+}
+
+fn replay_sale_shard(shard: usize) {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = reader(engine);
+    let profile = profile();
+    let catalogue = item_catalogue();
+    let mut fields = FieldTallies::default();
+    let mut count = Tally::default();
+    for (name, labels) in sale_frames(&corpus, shard) {
+        let image = corpus.frame(&name);
+        let queue = match read_sale_queue(&image, &profile, &catalogue, &read) {
+            Ok(queue) => queue,
+            Err(SaleQueueError::NoRecogniser) => panic!("the recogniser stopped answering"),
+            Err(error) => panic!("{name}: the queue was refused: {error}"),
+        };
+        println!(
+            "  {name}: {} rows read, {} unread, {} partial, count {:?}",
+            queue.rows.len(),
+            queue.unread.len(),
+            queue.partial,
+            queue.count
+        );
+        let labelled = labels["rows"].as_array().expect("rows");
+        let cut = labelled
+            .iter()
+            .filter(|row| row["fully_visible"].as_bool() != Some(true))
+            .count();
+        assert_eq!(
+            queue.partial, cut,
+            "{name}: rows the screen does not show whole"
+        );
+        score_sale_queue(&name, &labels, &queue, &mut fields);
+        let want = labelled_count(&labels);
+        let whole = cut == 0 && labelled.len() == want as usize;
+        match queue.count {
+            QueueCount::Complete(n) if n == want && whole => count.exact += 1,
+            QueueCount::Incomplete { heading, .. } if heading == want && !whole => {
+                count.exact += 1
+            }
+            QueueCount::Unread => count.refused.push(format!("{name}: {want}")),
+            other => count.wrong.push(format!(
+                "{name}: the count reads {other:?}, the screen shows {want} with every row whole {whole}"
+            )),
+        }
+    }
+    fields.report(&format!("sale queue, shard {shard},"));
+    count.report(&format!("sale queue count, shard {shard}"));
+    let refused: Vec<&String> = fields.0.values().flat_map(|t| t.refused.iter()).collect();
+    assert!(
+        refused.is_empty(),
+        "rows the screen shows whole were refused: {refused:#?}"
+    );
+    assert!(count.refused.is_empty(), "{:?}", count.refused);
+}
+
+macro_rules! sale_shards {
+    ($($name:ident, $loss:ident: $shard:expr,)*) => {$(
+        #[test]
+        fn $name() {
+            replay_sale_shard($shard);
+        }
+
+        #[test]
+        fn $loss() {
+            replay_sale_digit_loss_shard($shard);
+        }
+    )*};
+}
+
+sale_shards! {
+    sale_queue_shard_0, sale_queue_digit_loss_shard_0: 0,
+    sale_queue_shard_1, sale_queue_digit_loss_shard_1: 1,
+    sale_queue_shard_2, sale_queue_digit_loss_shard_2: 2,
+    sale_queue_shard_3, sale_queue_digit_loss_shard_3: 3,
+}
+
+/// A recogniser that drops one of every repeated pair of digits in every
+/// reading: `100.00%` reads as `10.0%`, `11.52 PED` as `1.52 PED`.
+fn dropping_repeats(
+    read: impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync,
+) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
+    move |image: &BgrImage| {
+        let (text, confidence) = read(image)?;
+        Some((drop_repeated_digits(&text), confidence))
+    }
+}
+
+fn drop_repeated_digits(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        out.push(chars[i]);
+        let pair = i + 1 < chars.len() && chars[i].is_ascii_digit() && chars[i] == chars[i + 1];
+        i += if pair { 2 } else { 1 };
+    }
+    out
+}
+
+/// Every sell-queue frame read with a recogniser that drops one of every
+/// repeated pair of digits. A value a digit short still parses, so each
+/// damaged value must be refused by something else: its width, or the
+/// game's own figures disagreeing. Every row returned must still be the
+/// one on screen, field for field, and rows with nothing to damage must
+/// still read: the replay proves the refusals are the damage's, not the
+/// reader's failing everything.
+fn replay_sale_digit_loss_shard(shard: usize) {
+    let Some(corpus) = Corpus::open() else { return };
+    let Some(engine) = recogniser() else { return };
+    let read = dropping_repeats(reader(engine));
+    let profile = profile();
+    let catalogue = item_catalogue();
+    let (mut damaged, mut whole_read) = (0, 0);
+    let mut by: std::collections::BTreeMap<&'static str, usize> = Default::default();
+    let mut wrong = Vec::new();
+    for (name, labels) in sale_frames(&corpus, shard) {
+        let image = corpus.frame(&name);
+        let queue = match read_sale_queue(&image, &profile, &catalogue, &read) {
+            Ok(queue) => queue,
+            Err(SaleQueueError::NoRecogniser) => panic!("the recogniser stopped answering"),
+            Err(error) => panic!("{name}: the queue was refused: {error}"),
+        };
+        let labelled = labels["rows"].as_array().expect("rows");
+        for item in &queue.rows {
+            let Some(row) = labelled
+                .iter()
+                .find(|row| row["name"].as_str() == Some(item.name.text()))
+            else {
+                wrong.push(format!(
+                    "{name}: a row was read that is not on screen: {item:?}"
+                ));
+                continue;
+            };
+            let locked = sale_locked(&name, item.name.text());
+            for (field, got) in queued_fields(item) {
+                let want = row[field].as_str();
+                let want = want.filter(|_| field != "buyout" || !locked.contains(&"buyout"));
+                if got.as_deref() != want {
+                    wrong.push(format!(
+                        "{name}: {} {field} read {got:?}, the screen shows {want:?}",
+                        item.name.text()
+                    ));
+                }
+            }
+            whole_read += 1;
+        }
+        for row in labelled {
+            if row["fully_visible"].as_bool() != Some(true) {
+                continue;
+            }
+            let label = row["name"].as_str().expect("named");
+            let locked = sale_locked(&name, label);
+            // A switched-off buyout's number is never read, so its digits
+            // are not damaged.
+            let hit: Vec<&str> = SALE_FIELDS
+                .iter()
+                .filter(|f| **f != "buyout" || !locked.contains(&"buyout"))
+                .filter(|f| row[**f].as_str().is_some_and(has_repeat_digit))
+                .copied()
+                .collect();
+            let returned = queue.rows.iter().any(|item| item.name.text() == label);
+            if hit.is_empty() {
+                if !returned {
+                    wrong.push(format!(
+                        "{name}: {label} has nothing to damage, yet is unread"
+                    ));
+                }
+                continue;
+            }
+            damaged += hit.len();
+            if returned {
+                wrong.push(format!("{name}: {label} was returned with {hit:?} damaged"));
+                continue;
+            }
+            let Some(unread) = queue
+                .unread
+                .iter()
+                .find(|u| u.raw_name.as_deref().map(str::trim) == Some(label))
+            else {
+                wrong.push(format!(
+                    "{name}: {label} has {hit:?} damaged and was neither read nor refused"
+                ));
+                continue;
+            };
+            for refusal in &unread.refusals {
+                let how = match refusal {
+                    RowRefusal::WrongWidth { .. } => "its width",
+                    RowRefusal::Disagrees(_) => "the game's own figures",
+                    other => {
+                        wrong.push(format!(
+                            "{name}: {label} refused for another reason than its damage: {other}"
+                        ));
+                        continue;
+                    }
+                };
+                *by.entry(how).or_default() += 1;
+            }
+        }
+    }
+    println!(
+        "sale queue digit loss, shard {shard}: {damaged} values damaged, refusals by {by:?}; {whole_read} undamaged rows read exactly; {} WRONG",
+        wrong.len()
+    );
+    assert!(
+        wrong.is_empty(),
+        "a damaged value was accepted, or a refusal was not the damage's:\n{}",
+        wrong.join("\n")
+    );
+    assert!(
+        whole_read > 0,
+        "every shard holds a row with nothing to damage, which must read"
+    );
+}
+
+/// Whether a value has the same digit twice running.
+fn has_repeat_digit(value: &str) -> bool {
+    value
+        .as_bytes()
+        .windows(2)
+        .any(|pair| pair[0] == pair[1] && pair[0].is_ascii_digit())
 }

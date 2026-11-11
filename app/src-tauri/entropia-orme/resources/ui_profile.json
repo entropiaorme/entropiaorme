@@ -87,6 +87,8 @@
   },
   "read": {
     "crop_margin": 0.45,
+    "min_crop_margin": 2,
+    "below_reach": 1.0,
     "label_score": 80.0,
     "label_aspect_per_char": [
       0.3,
@@ -181,7 +183,152 @@
       }
     },
     "auction_sell": {
-      "title": "AUCTION / SELL"
+      "title": "AUCTION / SELL",
+      "sale_queue": {
+        "heading": "Sell Queue",
+        "columns": [
+          {
+            "heading": "NAME",
+            "fields": [
+              {
+                "field": "name",
+                "pick": "stack_upper"
+              },
+              {
+                "field": "tt",
+                "pick": "stack_lower"
+              }
+            ]
+          },
+          {
+            "heading": "QUANTITY",
+            "fields": [
+              {
+                "field": "quantity",
+                "pick": "boxed"
+              },
+              {
+                "field": "quantity_stack",
+                "pick": "under_box"
+              }
+            ]
+          },
+          {
+            "heading": "OPENING BID",
+            "fields": [
+              {
+                "field": "opening_bid",
+                "pick": "boxed"
+              },
+              {
+                "field": "opening_bid_figure",
+                "pick": "under_box"
+              }
+            ]
+          },
+          {
+            "heading": "BUYOUT",
+            "fields": [
+              {
+                "field": "buyout_switch",
+                "pick": "beside_box"
+              },
+              {
+                "field": "buyout",
+                "pick": "boxed"
+              },
+              {
+                "field": "buyout_figure",
+                "pick": "under_box"
+              }
+            ]
+          },
+          {
+            "heading": "DAYS",
+            "fields": [
+              {
+                "field": "days",
+                "pick": "boxed"
+              },
+              {
+                "field": "days_range",
+                "pick": "under_box"
+              }
+            ]
+          },
+          {
+            "heading": "FEE",
+            "fields": [
+              {
+                "field": "fee",
+                "pick": "only"
+              }
+            ]
+          },
+          {
+            "heading": "MARKUP",
+            "fields": [
+              {
+                "field": "markup",
+                "pick": "topmost"
+              }
+            ]
+          }
+        ],
+        "numerals": {
+          "min_ink": 110,
+          "body_row_share": 0.25,
+          "digit": 0.887,
+          "one": 0.8,
+          "comma": 0.363,
+          "period": 0.507,
+          "ped_suffix": 2.71,
+          "above_tt_prefix": 3.12,
+          "percent": 1.215,
+          "bracket": 0.413,
+          "bias": -0.296,
+          "tolerance": 0.4
+        },
+        "word_gap": 0.2,
+        "cut_reach": 2.0,
+        "row_slack": 0.05,
+        "header_height_share": 0.268,
+        "line_slack": 0.5,
+        "stack_gap": 1.0,
+        "picture_height": 0.25,
+        "figure_lettering": {
+          "min_ink": 55,
+          "glyph_gap": 2,
+          "join_factor": 1.7,
+          "max_colour_distance": 110,
+          "line_slack": 0.3334,
+          "run_height": [
+            5,
+            60
+          ],
+          "min_ink_pixels": 14,
+          "merge_pieces": true
+        },
+        "spinner": {
+          "min_peak": 40,
+          "locked_peak": 100,
+          "editable_peak": 160,
+          "lettering_peak": 232,
+          "stack_align": 0.1,
+          "second_box_share": 0.75
+        },
+        "switch": {
+          "lit_chroma": 60,
+          "unlit_chroma": 40
+        },
+        "mode": {
+          "active": "PED",
+          "others": [
+            "Markup"
+          ]
+        },
+        "name_aspect_slack": 0.15
+      }
     },
     "auction": {
       "title": "AUCTION"

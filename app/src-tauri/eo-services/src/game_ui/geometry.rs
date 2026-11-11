@@ -122,6 +122,20 @@ pub fn crop(image: &BgrImage, rect: Rect) -> BgrImage {
     )
 }
 
+/// The pixels of `rect`, clamped into the frame, with every channel
+/// scaled by `to / from` (saturating). Lettering the client draws dim,
+/// such as a locked control's, is brought up to the brightness that the
+/// thresholds for its bright lettering are stated in, so one set of
+/// thresholds finds and measures both.
+pub fn brightened(image: &BgrImage, rect: Rect, from: u8, to: u8) -> BgrImage {
+    let mut out = crop(image, rect);
+    let scale = to as f32 / from.max(1) as f32;
+    for channel in out.data.iter_mut() {
+        *channel = (*channel as f32 * scale).round().min(255.0) as u8;
+    }
+    out
+}
+
 /// Largest minus smallest channel: zero for a grey, large for a
 /// saturated colour.
 pub fn chroma(rgb: [u8; 3]) -> u8 {
@@ -159,5 +173,19 @@ mod tests {
         assert_eq!(overrun.data, vec![2, 0, 0, 2, 1, 0]);
         let empty = image.crop(1, 0, 0, 3);
         assert_eq!((empty.w, empty.h, empty.data.len()), (3, 0, 0));
+    }
+
+    #[test]
+    fn brightening_scales_every_channel_and_saturates() {
+        let image = BgrImage {
+            data: vec![10, 20, 66, 100, 0, 255],
+            h: 1,
+            w: 2,
+        };
+        let out = brightened(&image, Rect::new(1, 0, 1, 0), 66, 232);
+        assert_eq!((out.w, out.h), (1, 1));
+        assert_eq!(out.data, vec![255, 0, 255]);
+        let out = brightened(&image, Rect::new(0, 0, 0, 0), 66, 232);
+        assert_eq!(out.data, vec![35, 70, 232]);
     }
 }

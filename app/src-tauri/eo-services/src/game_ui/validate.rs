@@ -191,6 +191,86 @@ pub fn distance_labels(raw: &str, unit: &str) -> Option<Vec<u32>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// How a markup is stated: as an amount of PED above the item's TT value
+/// (`TT+160.47 PED`), or as a percentage of it (`201.92%`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkupKind {
+    AboveTt,
+    Percent,
+}
+
+/// A markup that passed its grammar.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MarkupText {
+    pub kind: MarkupKind,
+    /// The canonical spelling: `TT+160.47 PED` or `201.92%`.
+    pub text: String,
+    /// The PED above TT, or the percentage.
+    pub figure: f64,
+}
+
+/// A markup in either of the client's two notations: `TT+` then an
+/// amount of PED, or a number then a percent sign. Anything else,
+/// including a bare number, is a refusal.
+pub fn markup(raw: &str) -> Option<MarkupText> {
+    let text = fold(raw);
+    if let Some(amount) = text.strip_prefix("TT+") {
+        let parsed = parse(Grammar::PedAmount, amount)?;
+        return Some(MarkupText {
+            kind: MarkupKind::AboveTt,
+            text: format!("TT+{}", parsed.text),
+            figure: parsed.number?,
+        });
+    }
+    let parsed = parse(Grammar::Percent, &text)?;
+    Some(MarkupText {
+        kind: MarkupKind::Percent,
+        figure: parsed.number?,
+        text: parsed.text,
+    })
+}
+
+/// A whole number as the client prints a bound: digits without a
+/// leading zero (a lone `0` aside).
+fn bound_number(part: &str) -> Option<u32> {
+    if part.is_empty()
+        || (part.starts_with('0') && part != "0")
+        || !part.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    part.parse().ok()
+}
+
+/// A range the client prints under a control, `1-7`: two whole numbers
+/// joined by a hyphen or a dash (the recogniser renders the client's
+/// dash as any of them), the first no greater than the second.
+pub fn range(raw: &str) -> Option<(u32, u32)> {
+    let text = fold(raw);
+    let (low, high) =
+        text.split_once(['-', '\u{2010}', '\u{2011}', '\u{2013}', '\u{2212}', '~'])?;
+    let (low, high) = (bound_number(low)?, bound_number(high)?);
+    (low <= high).then_some((low, high))
+}
+
+/// The most a stack can give, as the client prints it under a quantity:
+/// `/ 52`. A slash, then a whole number of at least one.
+pub fn stack_size(raw: &str) -> Option<u32> {
+    let text = fold(raw);
+    let count = bound_number(text.strip_prefix(['/', '\u{ff0f}'])?)?;
+    (count >= 1).then_some(count)
+}
+
+/// One unit in the last place of a number's canonical text: `0.01` for
+/// `11.52 PED` or `201.92%`, `1` for `162`. A figure the client prints
+/// is exact to within this.
+pub fn last_place(text: &str) -> f64 {
+    let digits = text.split_once('.').map_or(0, |(_, f)| {
+        f.chars().take_while(char::is_ascii_digit).count()
+    });
+    10f64.powi(-(digits as i32))
+}
+
 /// The amount of a [`Grammar::PedAmount`] reading's canonical text,
 /// without its unit: `27.47542 PED` is `27.47542`. Other text is returned
 /// as it is.
@@ -221,7 +301,8 @@ pub fn parse(grammar: Grammar, raw: &str) -> Option<Parsed> {
             })
         }
         Grammar::Integer => {
-            if !text.chars().all(|c| c.is_ascii_digit()) {
+            // As with amounts, the client never pads a count with zeros.
+            if !text.chars().all(|c| c.is_ascii_digit()) || (text.starts_with('0') && text != "0") {
                 return None;
             }
             let number = text.parse().ok()?;
@@ -275,6 +356,16 @@ pub struct NumeralMetrics {
     pub period: f32,
     /// Width of ` PED` after an amount, space included.
     pub ped_suffix: f32,
+    /// Width of `TT+` before a markup stated in PED, where the lettering
+    /// measured includes markups.
+    #[serde(default)]
+    pub above_tt_prefix: Option<f32>,
+    /// Width of a percent sign after a number, likewise.
+    #[serde(default)]
+    pub percent: Option<f32>,
+    /// Advance of a bracket round a count, `(3)`, likewise.
+    #[serde(default)]
+    pub bracket: Option<f32>,
     /// What the first and last glyph's side bearings take off the sum.
     pub bias: f32,
     /// Largest disagreement accepted. Under half a digit.
@@ -282,19 +373,28 @@ pub struct NumeralMetrics {
 }
 
 /// The width `text` should have, in digit heights; `None` when it holds
-/// a character the metrics do not cover.
+/// a character the metrics do not cover, a markup's `TT+` or percent
+/// sign included where they do not measure those.
 pub fn expected_width(text: &str, metrics: &NumeralMetrics) -> Option<f32> {
-    let (number, suffix) = match text.strip_suffix(" PED") {
-        Some(number) => (number, metrics.ped_suffix),
+    let (text, prefix) = match text.strip_prefix("TT+") {
+        Some(rest) => (rest, metrics.above_tt_prefix?),
         None => (text, 0.0),
     };
-    let mut units = metrics.bias + suffix;
+    let (number, suffix) = if let Some(number) = text.strip_suffix(" PED") {
+        (number, metrics.ped_suffix)
+    } else if let Some(number) = text.strip_suffix('%') {
+        (number, metrics.percent?)
+    } else {
+        (text, 0.0)
+    };
+    let mut units = metrics.bias + prefix + suffix;
     for c in number.chars() {
         units += match c {
             '1' => metrics.one,
             '0' | '2'..='9' => metrics.digit,
             ',' => metrics.comma,
             '.' => metrics.period,
+            '(' | ')' => metrics.bracket?,
             _ => return None,
         };
     }
@@ -434,9 +534,75 @@ mod tests {
         assert_eq!(number(Grammar::Integer, "67739"), Some(67739.0));
         assert_eq!(number(Grammar::Integer, "６７７３９"), Some(67739.0));
         assert_eq!(parse(Grammar::Integer, "67,739"), None);
+        assert_eq!(number(Grammar::Integer, "0"), Some(0.0));
+        for raw in ["07", "00", "0172"] {
+            assert_eq!(parse(Grammar::Integer, raw), None, "{raw:?}");
+        }
         assert_eq!(parse(Grammar::Integer, "L0N"), None);
         assert_eq!(number(Grammar::Percent, "201.92%"), Some(201.92));
         assert_eq!(parse(Grammar::Percent, "201.92"), None);
+    }
+
+    #[test]
+    fn a_markup_reads_in_either_notation_or_is_refused() {
+        let read = |raw: &str| markup(raw).map(|m| (m.kind, m.text, m.figure));
+        assert_eq!(
+            read("TT+160.47 PED"),
+            Some((MarkupKind::AboveTt, "TT+160.47 PED".into(), 160.47))
+        );
+        assert_eq!(
+            read("TT+1,160.47PED"),
+            Some((MarkupKind::AboveTt, "TT+1,160.47 PED".into(), 1160.47))
+        );
+        assert_eq!(
+            read("201.92%"),
+            Some((MarkupKind::Percent, "201.92%".into(), 201.92))
+        );
+        assert_eq!(
+            read("１００.００%"),
+            Some((MarkupKind::Percent, "100.00%".into(), 100.0))
+        );
+        for raw in [
+            "",
+            "-",
+            "201.92",
+            "TT160.47 PED",
+            "TT+160.47",
+            "T+160.47 PED",
+            "TT+16,0.47 PED",
+            "201.92 %%",
+            "2O1.92%",
+            "+160.47 PED",
+            "TT+-160.47 PED",
+            "020.10%",
+        ] {
+            assert_eq!(markup(raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn ranges_and_stack_sizes_read_as_the_client_prints_them() {
+        assert_eq!(range("1-7"), Some((1, 7)));
+        assert_eq!(range("1\u{2013}7"), Some((1, 7)));
+        assert_eq!(range(" 0 - 9 "), Some((0, 9)));
+        assert_eq!(range("1~14"), Some((1, 14)));
+        for raw in ["", "-", "1-", "-7", "7-1", "01-7", "1-7-9", "1 7", "a-7"] {
+            assert_eq!(range(raw), None, "{raw:?}");
+        }
+        assert_eq!(stack_size("/ 52"), Some(52));
+        assert_eq!(stack_size("/9"), Some(9));
+        assert_eq!(stack_size("／ 4"), Some(4));
+        for raw in ["", "/", "52", "/ 0", "/ 052", "// 52", "/ 5x"] {
+            assert_eq!(stack_size(raw), None, "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn the_last_place_is_read_from_the_canonical_text() {
+        assert_eq!(last_place("11.52 PED"), 0.01);
+        assert_eq!(last_place("TT+160.47 PED"), 0.01);
+        assert_eq!(last_place("201.9%"), 0.1);
+        assert_eq!(last_place("162"), 1.0);
     }
 
     #[test]
@@ -538,12 +704,49 @@ mod tests {
         }
     }
 
+    /// The sell queue's numerals, which cover markups too.
+    fn queue_metrics() -> NumeralMetrics {
+        crate::game_ui::test_support::bundled_profile().windows["auction_sell"]
+            .sale_queue
+            .clone()
+            .expect("the bundled profile describes the sell queue")
+            .numerals
+    }
+
+    #[test]
+    fn a_markup_a_digit_short_is_too_narrow_for_its_ink() {
+        use crate::game_ui::test_support::{blank, fill};
+        let m = queue_metrics();
+        for h in [8, 10, 20] {
+            for (drawn, short) in [("TT+160.47 PED", "TT+16.47 PED"), ("100.00%", "10.00%")] {
+                let units = expected_width(drawn, &m).expect("covered");
+                let width = (units * h as f32).round() as i32;
+                let mut image = blank(600, 80, [8, 11, 11]);
+                let rect = Rect::new(20, 20, 20 + width - 1, 20 + h - 1);
+                fill(&mut image, rect, [200, 200, 200]);
+                let rect = rect.padded(4);
+                assert!(width_agrees(&image, rect, drawn, &m), "{drawn} at {h}");
+                assert!(!width_agrees(&image, rect, short, &m), "{short} at {h}");
+            }
+        }
+    }
+
     #[test]
     fn even_the_narrowest_glyphs_are_told_apart() {
         let m = metrics();
         let (image, rect) = lettering("111", 10);
         assert!(width_agrees(&image, rect, "111", &m));
         assert!(!width_agrees(&image, rect, "11", &m));
+    }
+
+    #[test]
+    fn markups_are_not_covered_by_metrics_that_do_not_measure_them() {
+        let m = metrics();
+        assert_eq!(expected_width("TT+160.47 PED", &m), None);
+        assert_eq!(expected_width("201.92%", &m), None);
+        assert_eq!(expected_width("(3)", &m), None);
+        assert!(expected_width("(3)", &queue_metrics()).is_some());
+        assert!(expected_width("160.47 PED", &m).is_some());
     }
 
     #[test]

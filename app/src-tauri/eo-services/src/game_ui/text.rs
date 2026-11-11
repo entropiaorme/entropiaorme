@@ -9,7 +9,7 @@
 
 use serde::Deserialize;
 
-use super::geometry::{chroma, Pixels, Rect};
+use super::geometry::{chroma, near, Pixels, Rect};
 
 /// What counts as ink and how glyphs join into runs.
 #[derive(Debug, Clone, Deserialize)]
@@ -32,6 +32,12 @@ pub struct TextProfile {
     pub run_height: [i32; 2],
     /// Fewest ink pixels in a run.
     pub min_ink_pixels: i32,
+    /// Merge runs on one line that overlap or stand within joining
+    /// distance. Small, dim lettering breaks into pieces (a percent
+    /// sign's parts, a faint stroke) that joining in reading order can
+    /// leave apart, one phrase as two runs that overlap.
+    #[serde(default)]
+    pub merge_pieces: bool,
 }
 
 /// One phrase-sized run of ink.
@@ -230,7 +236,13 @@ fn panel_ink<P: Pixels>(image: &P, x: i32, y: i32, profile: &TextProfile) -> boo
 /// Every run of text-like ink inside `roi`, in reading order.
 pub fn text_runs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<TextRun> {
     let blobs = glyph_blobs(image, roi, profile, &|x, y| panel_ink(image, x, y, profile));
-    finish_runs(join_runs(blobs, profile), profile)
+    let runs = join_runs(blobs, profile);
+    let runs = if profile.merge_pieces {
+        merge_lines(runs, profile)
+    } else {
+        runs
+    };
+    finish_runs(runs, profile)
 }
 
 /// Every run of lettering drawn straight onto the scene inside `roi`,
@@ -270,7 +282,8 @@ fn same_line(a: &Rect, b: &Rect, profile: &TextProfile) -> bool {
 /// into one. Strokes on the scene break into many small pieces where the
 /// scene behind them is bright: a fragment of a serif can open a run that
 /// the full glyph beside it is too tall to join, leaving one phrase split
-/// across runs that overlap. Lettering on a panel does not break up so.
+/// across runs that overlap. Lettering on a panel does not break up so,
+/// unless it is small and dim (see [`TextProfile::merge_pieces`]).
 fn merge_lines(mut runs: Vec<Blob>, profile: &TextProfile) -> Vec<Blob> {
     loop {
         let mut merged = false;
@@ -366,6 +379,27 @@ pub fn ink_groups<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec
         .collect()
 }
 
+/// The bounds of each connected group of anything drawn on the panel
+/// inside `roi`: every pixel that is not the panel's fill, however dim.
+/// The dim box the client frames a picture in is one group as tall as
+/// the box, where lettering beside it is many small ones; so this finds
+/// the frame of a picture whose own bright ink would join the
+/// lettering's run.
+pub fn drawn_groups<P: Pixels>(
+    image: &P,
+    roi: Rect,
+    panel_rgb: [u8; 3],
+    panel_tolerance: u8,
+    profile: &TextProfile,
+) -> Vec<Rect> {
+    glyph_blobs(image, roi, profile, &|x, y| {
+        !near(image.rgb(x, y), panel_rgb, panel_tolerance)
+    })
+    .into_iter()
+    .map(|blob| blob.rect)
+    .collect()
+}
+
 /// The run immediately to the right of `anchor` on its line, if any.
 pub fn run_right_of<'a>(anchor: &TextRun, runs: &'a [TextRun]) -> Option<&'a TextRun> {
     let mid = (anchor.rect.y0 + anchor.rect.y1) / 2;
@@ -378,10 +412,10 @@ pub fn run_right_of<'a>(anchor: &TextRun, runs: &'a [TextRun]) -> Option<&'a Tex
         .min_by_key(|r| r.rect.x0)
 }
 
-/// The nearest run below `anchor` that starts at about the same left
-/// edge, if any.
-pub fn run_below<'a>(anchor: &TextRun, runs: &'a [TextRun]) -> Option<&'a TextRun> {
-    let tolerance = anchor.rect.height().max(8);
+/// The nearest run below `anchor` that starts within `reach` of the
+/// anchor's heights of its left edge, if any.
+pub fn run_below<'a>(anchor: &TextRun, runs: &'a [TextRun], reach: f32) -> Option<&'a TextRun> {
+    let tolerance = (anchor.rect.height() as f32 * reach).round() as i32;
     runs.iter()
         .filter(|r| r.rect.y0 > anchor.rect.y1)
         .filter(|r| (r.rect.x0 - anchor.rect.x0).abs() <= tolerance)
@@ -461,7 +495,11 @@ mod tests {
         word(&mut image, (400, 60), 4, (6, 10), 2, [200, 200, 200]);
         let runs = text_runs(&image, Rect::new(0, 0, 599, 119), &profile);
         let label_run = runs.iter().find(|r| r.rect == label).expect("label");
-        assert_eq!(run_below(label_run, &runs).map(|r| r.rect), Some(value));
+        assert_eq!(
+            run_below(label_run, &runs, 1.0).map(|r| r.rect),
+            Some(value)
+        );
+        assert_eq!(run_below(label_run, &runs, 0.0).map(|r| r.rect), None);
     }
 
     #[test]
@@ -522,6 +560,57 @@ mod tests {
         );
         // On a panel's terms the wall and the stripe would be ink.
         assert!(text_runs(&image, Rect::new(0, 0, 399, 99), &coords.lettering).len() > 1);
+    }
+
+    #[test]
+    fn pieces_of_one_phrase_that_overlap_merge_only_when_asked() {
+        let mut profile = bundled_profile().text;
+        let mut image = blank(300, 60, [8, 11, 11]);
+        // Three pieces of one phrase: the second joins the first and
+        // reaches past where the third, lying under it, begins; so in
+        // reading order the third finds the run already beyond it.
+        fill(&mut image, Rect::new(20, 18, 70, 29), [150, 150, 150]);
+        fill(&mut image, Rect::new(74, 18, 100, 21), [150, 150, 150]);
+        fill(&mut image, Rect::new(85, 25, 95, 29), [150, 150, 150]);
+        let area = Rect::new(0, 0, 299, 59);
+        let apart = text_runs(&image, area, &profile);
+        assert_eq!(apart.len(), 2, "{apart:?}");
+        profile.merge_pieces = true;
+        let merged = text_runs(&image, area, &profile);
+        assert_eq!(
+            merged.iter().map(|r| r.rect).collect::<Vec<_>>(),
+            vec![Rect::new(20, 18, 100, 29)]
+        );
+    }
+
+    #[test]
+    fn a_framed_picture_is_one_tall_drawn_group_and_letters_are_their_own() {
+        let profile = bundled_profile();
+        let mut image = blank(300, 80, [8, 11, 11]);
+        // A dim frame with a bright picture inside, then a word.
+        let frame = Rect::new(10, 10, 50, 50);
+        fill(&mut image, frame, [33, 36, 36]);
+        fill(&mut image, frame.padded(-1), [8, 11, 11]);
+        fill(&mut image, Rect::new(20, 20, 40, 40), [140, 220, 230]);
+        let word = Rect::new(60, 25, 90, 35);
+        fill(&mut image, word, [230, 230, 230]);
+        let groups = drawn_groups(
+            &image,
+            Rect::new(0, 0, 299, 79),
+            profile.chrome.panel_rgb,
+            profile.chrome.panel_tolerance,
+            &profile.text,
+        );
+        // The frame is one group as tall as itself, and what lies within
+        // it stays there; the word's letters are a group of their own.
+        assert!(
+            groups.contains(&frame) && groups.contains(&word),
+            "{groups:?}"
+        );
+        assert!(groups
+            .iter()
+            .filter(|g| **g != word)
+            .all(|g| frame.intersect(g) == Some(*g)));
     }
 
     #[test]

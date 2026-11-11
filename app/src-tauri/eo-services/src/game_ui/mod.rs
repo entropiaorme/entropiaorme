@@ -12,6 +12,7 @@ pub mod geometry;
 pub mod locate;
 pub mod profile;
 pub mod radar;
+pub mod sale_queue;
 pub mod seams;
 pub mod skills;
 pub mod table;

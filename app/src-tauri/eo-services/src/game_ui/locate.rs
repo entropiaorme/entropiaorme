@@ -19,6 +19,7 @@ use super::field::{
 };
 use super::geometry::Rect;
 use super::profile::UiProfile;
+use super::sale_queue::SaleQueueProfile;
 use super::skills::SkillsTableProfile;
 use super::text::{text_runs, TextRun};
 use super::window::{find_windows, FoundWindow, Side};
@@ -34,6 +35,9 @@ pub struct WindowProfile {
     /// The skills table, for the window that shows one.
     #[serde(default)]
     pub skills_table: Option<SkillsTableProfile>,
+    /// The sell queue, for the auction's sell window.
+    #[serde(default)]
+    pub sale_queue: Option<SaleQueueProfile>,
 }
 
 /// Where titles are looked for and how strictly they must match.

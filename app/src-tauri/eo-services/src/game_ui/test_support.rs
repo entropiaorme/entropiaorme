@@ -124,26 +124,135 @@ pub fn draw_window(image: &mut BgrImage, rect: Rect) {
 /// other piece has, with a stand-in recogniser that reads a crop as the
 /// text whose colour covers most of it. A reader's geometry is exercised
 /// this way without a real recogniser, and a test decides exactly what
-/// each piece of ink reads as.
+/// each piece of ink reads as. A piece drawn dim, or a crop a reader has
+/// brightened, still reads as its text: the recogniser knows a colour by
+/// the proportions of its channels, which scaling keeps. The palette's
+/// colours are saturated (no channel more than a fifth of the brightest),
+/// so their proportions are never those of any colour the drawers use for
+/// frames, rules, boxes or pictures, nor of one another (see
+/// [`DRAWN_CHROME`] and the tests below); a few near-grey colours stand
+/// for lettering the client draws unlit.
 pub struct Lettering {
     pub image: BgrImage,
     palette: Vec<([u8; 3], String)>,
+    unlit: usize,
 }
+
+/// The `i`th saturated colour: the brightest channel 250, the next one of
+/// eight levels, the dimmest one of three, in every arrangement.
+fn palette_colour(i: usize) -> [u8; 3] {
+    const MIDDLE: [u8; 8] = [60, 85, 110, 135, 160, 185, 210, 235];
+    const DIMMEST: [u8; 3] = [0, 25, 50];
+    const ARRANGEMENTS: [[usize; 3]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    assert!(i < 144, "the drawing has used every distinct colour");
+    let [top, middle, dimmest] = ARRANGEMENTS[i / 24];
+    let mut rgb = [0u8; 3];
+    rgb[top] = 250;
+    rgb[middle] = MIDDLE[(i / 3) % 8];
+    rgb[dimmest] = DIMMEST[i % 3];
+    rgb
+}
+
+/// Near-grey colours for lettering the client draws unlit: a little
+/// blue, too little to count as lit, and in proportions no frame, rule or
+/// box colour has.
+const UNLIT: [[u8; 3]; 3] = [[165, 180, 200], [180, 165, 200], [190, 175, 200]];
+
+/// Every colour the drawers use for anything but lettering.
+pub const DRAWN_CHROME: [[u8; 3]; 21] = [
+    [8, 11, 11],
+    [45, 49, 49],
+    [76, 82, 84],
+    [255, 200, 90],
+    SKILLS_SCENE,
+    RULE,
+    DIVIDER,
+    ICON,
+    THUMB,
+    BOX_LIVE,
+    BOX_LOCKED,
+    ARROW_LIVE,
+    ARROW_LOCKED,
+    PICTURE,
+    PICTURE_FRAME,
+    TAG_LIT,
+    TAG_UNLIT,
+    SIDE_ICON,
+    [24, 24, 24],
+    [250, 250, 250],
+    [200, 200, 200],
+];
 
 impl Lettering {
     pub fn new(image: BgrImage) -> Self {
         Self {
             image,
             palette: Vec::new(),
+            unlit: 0,
         }
     }
 
     /// Draw a block of ink filling `rect` that reads as `text`.
     pub fn text(&mut self, rect: Rect, text: &str) {
-        let i = self.palette.len() as u8;
-        let rgb = [250 - i * 3, 120 + (i % 7) * 15, 130 + (i % 5) * 20];
+        let rgb = self.colour(text);
         fill(&mut self.image, rect, rgb);
+    }
+
+    /// The next colour of the palette, kept for `text`.
+    fn colour(&mut self, text: &str) -> [u8; 3] {
+        let rgb = palette_colour(self.palette.len() - self.unlit);
         self.palette.push((rgb, text.to_string()));
+        rgb
+    }
+
+    /// The same, drawn no brighter than `peak` in its brightest channel:
+    /// lettering the client greys or sets dim.
+    pub fn text_at(&mut self, rect: Rect, text: &str, peak: u8) {
+        self.blocks(&[rect], text, peak);
+    }
+
+    /// Draw lettering the client leaves unlit (grey) filling `rect`.
+    pub fn text_unlit(&mut self, rect: Rect, text: &str) {
+        let rgb = UNLIT[self.unlit];
+        self.unlit += 1;
+        self.palette.push((rgb, text.to_string()));
+        fill(&mut self.image, rect, rgb);
+    }
+
+    /// Draw several blocks in one colour at `peak`, reading together as
+    /// `text`: a phrase whose glyphs stand apart.
+    pub fn blocks(&mut self, rects: &[Rect], text: &str, peak: u8) {
+        let rgb = dimmed(self.colour(text), peak);
+        for rect in rects {
+            fill(&mut self.image, *rect, rgb);
+        }
+    }
+
+    /// Draw `text` filling `rect` word by word, one block per word as
+    /// wide as its share of the letters, the words `gap` pixels apart, at
+    /// `peak`. Each word is its own colour and reads as itself, as the
+    /// recogniser reads a word cropped on its own.
+    pub fn words(&mut self, rect: Rect, text: &str, gap: i32, peak: u8) {
+        let words: Vec<&str> = text.split(' ').collect();
+        let letters: usize = words.iter().map(|w| w.chars().count()).sum();
+        let room = rect.width() - gap * (words.len() as i32 - 1);
+        let mut x = rect.x0;
+        for (k, word) in words.iter().enumerate() {
+            let w = if k + 1 == words.len() {
+                rect.x1 - x + 1
+            } else {
+                (room * word.chars().count() as i32 / letters.max(1) as i32).max(1)
+            };
+            self.text_at(Rect::new(x, rect.y0, x + w - 1, rect.y1), word, peak);
+            x += w + gap;
+        }
     }
 
     /// Draw a figure `h` tall with its top-left at `at`, its ink as wide
@@ -164,13 +273,31 @@ impl Lettering {
         rect
     }
 
+    /// Draw a figure as [`Lettering::figure`] does, no brighter than
+    /// `peak`.
+    pub fn figure_at(
+        &mut self,
+        at: (i32, i32),
+        h: i32,
+        drawn: &str,
+        reads: &str,
+        numerals: &NumeralMetrics,
+        peak: u8,
+    ) -> Rect {
+        let units = expected_width(drawn, numerals).expect("a figure the metrics cover");
+        let w = (units * h as f32).round() as i32;
+        let rect = Rect::new(at.0, at.1, at.0 + w - 1, at.1 + h - 1);
+        self.text_at(rect, reads, peak);
+        rect
+    }
+
     pub fn recogniser(&self) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
         let palette = self.palette.clone();
         move |crop: &BgrImage| {
             let mut counts: Vec<usize> = vec![0; palette.len()];
             for px in crop.data.chunks(3) {
                 let rgb = [px[2], px[1], px[0]];
-                if let Some(i) = palette.iter().position(|(c, _)| *c == rgb) {
+                if let Some(i) = palette.iter().position(|(c, _)| scaled_from(rgb, *c)) {
                     counts[i] += 1;
                 }
             }
@@ -181,6 +308,28 @@ impl Lettering {
             Some((text, 0.99))
         }
     }
+}
+
+/// `rgb` scaled so its brightest channel is `peak`.
+fn dimmed(rgb: [u8; 3], peak: u8) -> [u8; 3] {
+    let top = rgb.iter().copied().max().unwrap_or(1).max(1) as f32;
+    rgb.map(|c| (c as f32 * peak as f32 / top).round() as u8)
+}
+
+/// Whether `pixel` has `colour`'s proportions, each channel over the
+/// brightest, to within what rounding a scaled colour leaves; dark pixels
+/// are never matched, their proportions being too coarse to tell colours
+/// apart.
+fn scaled_from(pixel: [u8; 3], colour: [u8; 3]) -> bool {
+    let top = colour.iter().copied().max().unwrap_or(0) as f32;
+    let seen = pixel.iter().copied().max().unwrap_or(0) as f32;
+    if top == 0.0 || seen < 40.0 {
+        return false;
+    }
+    pixel
+        .iter()
+        .zip(colour)
+        .all(|(p, c)| (*p as f32 / seen - c as f32 / top).abs() <= 0.02)
 }
 
 // A drawn skills window, its SKILLS tab showing. Each piece of text is
@@ -774,5 +923,491 @@ impl RadarScene {
         fill(&mut self.image, rect.padded(1), SHADOW);
         let tint = self.tint(PALE_GREEN, text);
         self.glyphs((rect.x0, rect.x1), rect.y0, rect.height(), chars, tint);
+    }
+}
+
+// A drawn auction sell window: the inventory list on the left, and the
+// sell queue's ruled table beside it, each value drawn as a block of ink
+// in its own colour (see [`Lettering`]) at the brightness the client
+// draws it: spinners' values bright or greyed, the figures under them
+// and their helpers dim, the buyout's tag lit while a buyout is set.
+
+/// One queued row as drawn: each spinner's value and whether it is
+/// greyed.
+#[derive(Debug, Clone)]
+pub struct SaleRowDrawing {
+    pub name: &'static str,
+    pub tt: &'static str,
+    pub quantity: (&'static str, bool),
+    /// The stack size printed under an editable quantity.
+    pub stack: &'static str,
+    pub opening_bid: (&'static str, bool),
+    /// The figure under the opening bid's spinner.
+    pub bid_figure: &'static str,
+    pub buyout: (&'static str, bool),
+    /// Whether the buyout's tag is lit.
+    pub buyout_lit: bool,
+    /// The figure under the buyout's spinner, where the client prints
+    /// one.
+    pub buyout_figure: Option<&'static str>,
+    pub days: &'static str,
+    /// The range printed under the days.
+    pub days_range: &'static str,
+    pub fee: &'static str,
+    /// The markup headline.
+    pub markup: &'static str,
+}
+
+/// Where the drawn sell window's pieces go.
+#[derive(Debug, Clone)]
+pub struct SaleLayout {
+    pub window: Rect,
+    /// The heading's text over the queue, and the count it ends with,
+    /// drawn as the count's own glyphs between brackets.
+    pub heading: (&'static str, &'static str),
+    pub rows: Vec<SaleRowDrawing>,
+    /// The last row cut short by the bottom of the view by this many
+    /// pixels.
+    pub cut_last: Option<i32>,
+    /// The names the inventory list shows, with their counts.
+    pub inventory: Vec<(&'static str, &'static str)>,
+    /// How bright a greyed spinner's value is drawn.
+    pub locked_peak: u8,
+    /// How bright an editable spinner's value is drawn.
+    pub editable_peak: u8,
+    /// The column dividers left undrawn, by their place among the
+    /// columns' edges (1 is the one after the name column).
+    pub hidden_dividers: Vec<usize>,
+    /// The price toggle showing markup, not PED.
+    pub markup_mode: bool,
+}
+
+/// The drawn queue's row height, and its header's.
+pub const SALE_ROW_PITCH: i32 = 112;
+pub const SALE_HEADER_HEIGHT: i32 = 30;
+
+/// The drawn queue's columns: heading and width, left to right.
+pub const SALE_COLUMNS: [(&str, i32); 8] = [
+    ("NAME", 300),
+    ("QUANTITY", 80),
+    ("OPENING BID", 110),
+    ("BUYOUT", 140),
+    ("DAYS", 56),
+    ("FEE", 70),
+    ("MARKUP", 156),
+    ("", 102),
+];
+
+const BOX_LIVE: [u8; 3] = [74, 74, 74];
+const BOX_LOCKED: [u8; 3] = [24, 27, 27];
+const ARROW_LIVE: [u8; 3] = [115, 115, 115];
+const ARROW_LOCKED: [u8; 3] = [32, 32, 32];
+const PICTURE: [u8; 3] = [140, 220, 230];
+const PICTURE_FRAME: [u8; 3] = [33, 36, 36];
+const TAG_LIT: [u8; 3] = [112, 185, 59];
+const TAG_UNLIT: [u8; 3] = [131, 142, 143];
+const SIDE_ICON: [u8; 3] = [150, 150, 150];
+
+/// The scene a drawn sell window sits on.
+pub fn sale_scene() -> BgrImage {
+    blank(1400, 840, SKILLS_SCENE)
+}
+
+/// A sell window drawn on a fresh scene, with its own lettering.
+pub fn sale_window(layout: &SaleLayout) -> Lettering {
+    let mut d = Lettering::new(sale_scene());
+    draw_sale_window(&mut d, layout);
+    d
+}
+
+/// The sell queue's numerals, as the bundled profile measures them.
+pub fn sale_numerals() -> NumeralMetrics {
+    bundled_profile().windows["auction_sell"]
+        .sale_queue
+        .clone()
+        .expect("the bundled profile describes the sell queue")
+        .numerals
+}
+
+/// The left edges of the drawn queue's columns, and the table's right
+/// edge.
+pub fn sale_column_edges(window: Rect) -> Vec<i32> {
+    let mut x = window.x0 + 330;
+    let mut edges = vec![x];
+    for (_, width) in SALE_COLUMNS {
+        x += width;
+        edges.push(x);
+    }
+    edges
+}
+
+/// The top row of the drawn queue's row `k`.
+pub fn sale_row_top(window: Rect, k: usize) -> i32 {
+    window.y0 + 110 + SALE_HEADER_HEIGHT + 2 + k as i32 * (SALE_ROW_PITCH + 1)
+}
+
+/// Draw a box's outline.
+fn outline(image: &mut BgrImage, r: Rect, rgb: [u8; 3]) {
+    fill(image, Rect::new(r.x0, r.y0, r.x1, r.y0), rgb);
+    fill(image, Rect::new(r.x0, r.y1, r.x1, r.y1), rgb);
+    fill(image, Rect::new(r.x0, r.y0, r.x0, r.y1), rgb);
+    fill(image, Rect::new(r.x1, r.y0, r.x1, r.y1), rgb);
+}
+
+/// Draw a spinner `2 * half + 1` wide centred on `cx` in the row whose
+/// top is `top`: its arrows' boxes above and below the value's, the
+/// value bright or greyed; returns the value box's outline.
+fn draw_spinner(
+    d: &mut Lettering,
+    (cx, half): (i32, i32),
+    top: i32,
+    (value, locked): (&str, bool),
+    layout: &SaleLayout,
+) -> Rect {
+    let frame = if locked { BOX_LOCKED } else { BOX_LIVE };
+    let arrow = if locked { ARROW_LOCKED } else { ARROW_LIVE };
+    let up = Rect::new(cx - half, top + 15, cx + half, top + 30);
+    let value_box = Rect::new(cx - half, top + 33, cx + half, top + 64);
+    let down = Rect::new(cx - half, top + 64, cx + half, top + 78);
+    for r in [up, value_box, down] {
+        outline(&mut d.image, r, frame);
+    }
+    fill(
+        &mut d.image,
+        Rect::new(cx - 3, top + 21, cx + 3, top + 23),
+        arrow,
+    );
+    fill(
+        &mut d.image,
+        Rect::new(cx - 3, top + 70, cx + 3, top + 72),
+        arrow,
+    );
+    let numerals = sale_numerals();
+    let width = (expected_width(value, &numerals).expect("a number") * 10.0).round() as i32;
+    let peak = if locked {
+        layout.locked_peak
+    } else {
+        layout.editable_peak
+    };
+    d.figure_at(
+        (cx - width / 2, top + 44),
+        10,
+        value,
+        value,
+        &numerals,
+        peak,
+    );
+    value_box
+}
+
+/// Draw a dim figure centred under a spinner on `cx`.
+fn draw_figure_under(d: &mut Lettering, cx: i32, top: i32, text: &str) {
+    let numerals = sale_numerals();
+    match expected_width(text, &numerals) {
+        Some(units) => {
+            let width = (units * 8.0).round() as i32;
+            d.figure_at((cx - width / 2, top + 88), 8, text, text, &numerals, 120);
+        }
+        None => {
+            let width = 6 * text.chars().count() as i32;
+            d.text_at(
+                Rect::new(
+                    cx - width / 2,
+                    top + 88,
+                    cx - width / 2 + width - 1,
+                    top + 95,
+                ),
+                text,
+                120,
+            );
+        }
+    }
+}
+
+/// Draw a sell window into `d`'s image.
+pub fn draw_sale_window(d: &mut Lettering, layout: &SaleLayout) {
+    let w = layout.window;
+    draw_window(&mut d.image, w);
+    d.text(
+        Rect::new(w.x0 + 80, w.y0 + 22, w.x0 + 330, w.y0 + 33),
+        "AUCTION / SELL",
+    );
+    let numerals = sale_numerals();
+    let edges = sale_column_edges(w);
+    let (left, right) = (edges[0], *edges.last().expect("edges"));
+    // The heading: its words, then the count between brackets taller
+    // than the digits, all one phrase.
+    let (heading, count) = layout.heading;
+    let y = w.y0 + 70;
+    let label = Rect::new(left + 30, y, left + 30 + 7 * heading.len() as i32, y + 9);
+    // As wide as the client's numerals make the bracketed count, at
+    // the brackets' height.
+    let span =
+        (expected_width(&format!("({count})"), &numerals).expect("a count") * 12.0).round() as i32;
+    let open = Rect::new(label.x1 + 5, y - 1, label.x1 + 6, y + 10);
+    let close = Rect::new(open.x0 + span - 2, y - 1, open.x0 + span - 1, y + 10);
+    let number = Rect::new(open.x1 + 2, y, close.x0 - 2, y + 9);
+    d.blocks(
+        &[label, open, number, close],
+        &format!("{heading} ({count})"),
+        250,
+    );
+    // The price toggle at the top right: the mode in force is lit.
+    let ped = Rect::new(right - 150, y, right - 126, y + 9);
+    let markup = Rect::new(right - 110, y, right - 64, y + 9);
+    if layout.markup_mode {
+        d.text_unlit(ped, "PED");
+        d.text(markup, "Markup");
+    } else {
+        d.text(ped, "PED");
+        d.text_unlit(markup, "Markup");
+    }
+    // The inventory list: each name in the list's smaller type.
+    for (j, (name, count)) in layout.inventory.iter().enumerate() {
+        let y = w.y0 + 160 + 28 * j as i32;
+        let width = 6 * name.chars().count() as i32;
+        d.text(Rect::new(w.x0 + 30, y, w.x0 + 30 + width - 1, y + 9), name);
+        let digits = (expected_width(count, &numerals).expect("a count") * 10.0).round() as i32;
+        d.text(Rect::new(w.x0 + 260, y, w.x0 + 259 + digits, y + 9), count);
+    }
+    let rule = |d: &mut Lettering, y: i32| fill(&mut d.image, Rect::new(left, y, right, y), RULE);
+    let header_top = w.y0 + 110;
+    rule(d, header_top);
+    rule(d, header_top + SALE_HEADER_HEIGHT + 1);
+    for (k, (heading, _)) in SALE_COLUMNS.iter().enumerate() {
+        if heading.is_empty() {
+            continue;
+        }
+        let width = 8 * heading.chars().count() as i32;
+        let x0 = if k == 0 {
+            edges[k] + 8
+        } else {
+            (edges[k] + edges[k + 1]) / 2 - width / 2
+        };
+        d.text(
+            Rect::new(x0, header_top + 11, x0 + width - 1, header_top + 19),
+            heading,
+        );
+    }
+    let mut bottom = header_top + SALE_HEADER_HEIGHT + 1;
+    for (k, row) in layout.rows.iter().enumerate() {
+        let top = sale_row_top(w, k);
+        let centre = |c: usize| (edges[c] + edges[c + 1]) / 2;
+        // The name cell: a picture in its dim frame, then the name over
+        // the TT value.
+        let x0 = edges[0] + 1;
+        let frame = Rect::new(x0 + 8, top + 37, x0 + 48, top + 77);
+        outline(&mut d.image, frame, PICTURE_FRAME);
+        fill(
+            &mut d.image,
+            Rect::new(x0 + 14, top + 42, x0 + 42, top + 72),
+            PICTURE,
+        );
+        let width = 7 * row.name.chars().count() as i32;
+        d.words(
+            Rect::new(x0 + 60, top + 42, x0 + 60 + width - 1, top + 52),
+            row.name,
+            4,
+            232,
+        );
+        d.figure_at((x0 + 60, top + 63), 8, row.tt, row.tt, &numerals, 230);
+        draw_spinner(d, (centre(1), 32), top, row.quantity, layout);
+        if !row.quantity.1 {
+            draw_figure_under(d, centre(1), top, row.stack);
+        }
+        let bid = draw_spinner(d, (centre(2), 32), top, row.opening_bid, layout);
+        d.text_at(
+            Rect::new(bid.x1 + 4, top + 45, bid.x1 + 16, top + 52),
+            "0-9",
+            120,
+        );
+        draw_figure_under(d, centre(2), top, row.bid_figure);
+        let buyout = draw_spinner(d, (centre(3), 32), top, row.buyout, layout);
+        d.text_at(
+            Rect::new(buyout.x1 + 4, top + 45, buyout.x1 + 16, top + 52),
+            "0-9",
+            120,
+        );
+        outline(
+            &mut d.image,
+            Rect::new(buyout.x1 + 22, top + 44, buyout.x1 + 32, top + 54),
+            if row.buyout_lit { TAG_LIT } else { TAG_UNLIT },
+        );
+        draw_figure_under(d, centre(3), top, row.buyout_figure.unwrap_or("-"));
+        draw_spinner(d, (centre(4), 18), top, (row.days, false), layout);
+        draw_figure_under(d, centre(4), top, row.days_range);
+        let fee_width =
+            (expected_width(row.fee, &numerals).expect("an amount") * 9.0).round() as i32;
+        d.figure_at(
+            (centre(5) - fee_width / 2, top + 50),
+            9,
+            row.fee,
+            row.fee,
+            &numerals,
+            201,
+        );
+        let head_width =
+            (expected_width(row.markup, &numerals).expect("a markup") * 10.0).round() as i32;
+        d.figure_at(
+            (centre(6) - head_width / 2, top + 15),
+            10,
+            row.markup,
+            row.markup,
+            &numerals,
+            234,
+        );
+        for (j, stat) in ["D N/A", "W N/A", "M +141.00 1"].iter().enumerate() {
+            let y = top + 32 + 12 * j as i32;
+            d.text_at(
+                Rect::new(centre(6) - 45, y, centre(6) + 45, y + 7),
+                stat,
+                198,
+            );
+        }
+        for j in 0..3 {
+            let y = top + 15 + 30 * j;
+            fill(
+                &mut d.image,
+                Rect::new(centre(7) - 5, y, centre(7) + 5, y + 10),
+                SIDE_ICON,
+            );
+        }
+        let last = k + 1 == layout.rows.len();
+        match layout.cut_last {
+            Some(cut) if last => {
+                // The view ends inside the row: below the pane's edge
+                // nothing of it is drawn.
+                let edge = top + SALE_ROW_PITCH - cut;
+                fill(
+                    &mut d.image,
+                    Rect::new(left, edge, right, w.y1 - 4),
+                    [8, 11, 11],
+                );
+                rule(d, edge);
+                bottom = edge;
+            }
+            _ => {
+                rule(d, top + SALE_ROW_PITCH);
+                bottom = top + SALE_ROW_PITCH;
+            }
+        }
+    }
+    for (k, x) in edges.iter().enumerate().take(edges.len() - 1).skip(1) {
+        if layout.hidden_dividers.contains(&k) {
+            continue;
+        }
+        fill(
+            &mut d.image,
+            Rect::new(*x, header_top + 1, *x, bottom - 1),
+            DIVIDER,
+        );
+    }
+}
+
+/// Three queued rows the way the client shows them: an item whose markup
+/// is stated in PED, its buyout set; a stack whose markup is a
+/// percentage, its buyout switched off; and a single item with its
+/// quantity greyed and its buyout switched off. The inventory list shows
+/// none of them.
+pub fn standard_sale_layout() -> SaleLayout {
+    SaleLayout {
+        window: Rect::new(20, 20, 1380, 800),
+        heading: ("Sell Queue", "3"),
+        rows: vec![
+            SaleRowDrawing {
+                name: "Electric Attack Nanochip 3",
+                tt: "11.52 PED",
+                quantity: ("1", true),
+                stack: "",
+                opening_bid: ("162", false),
+                bid_figure: "TT+150.47 PED",
+                buyout: ("172", false),
+                buyout_lit: true,
+                buyout_figure: Some("TT+160.47 PED"),
+                days: "7",
+                days_range: "1-7",
+                fee: "7.33 PED",
+                markup: "TT+160.47 PED",
+            },
+            SaleRowDrawing {
+                name: "Output Amplifier Component",
+                tt: "20.80 PED",
+                quantity: ("52", false),
+                stack: "/ 52",
+                opening_bid: ("42", false),
+                bid_figure: "201.92%",
+                buyout: ("0", true),
+                buyout_lit: false,
+                buyout_figure: None,
+                days: "7",
+                days_range: "1-7",
+                fee: "1.54 PED",
+                markup: "201.92%",
+            },
+            SaleRowDrawing {
+                name: "Skyripper Loyalist (L)",
+                tt: "24.54 PED",
+                quantity: ("1", true),
+                stack: "",
+                opening_bid: ("30", false),
+                bid_figure: "122.25%",
+                buyout: ("30", true),
+                buyout_lit: false,
+                buyout_figure: None,
+                days: "7",
+                days_range: "1-7",
+                fee: "0.77 PED",
+                markup: "122.25%",
+            },
+        ],
+        cut_last: None,
+        inventory: vec![
+            ("Animal Hide", "2"),
+            ("Entropia Unreal Token", "20"),
+            ("Mind Essence", "454733"),
+        ],
+        locked_peak: 66,
+        editable_peak: 232,
+        hidden_dividers: Vec::new(),
+        markup_mode: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No palette colour, drawn at any brightness the drawers use or
+    /// brightened back as a reader does, reads as another palette colour,
+    /// and no colour the drawers use for anything but lettering (as drawn,
+    /// or brightened) reads as any palette colour.
+    #[test]
+    fn the_palette_cannot_be_mistaken_under_scaling() {
+        let palette: Vec<[u8; 3]> = (0..144).map(palette_colour).chain(UNLIT).collect();
+        let scale = |rgb: [u8; 3], k: f32| rgb.map(|c| (c as f32 * k).round().min(255.0) as u8);
+        for (i, colour) in palette.iter().enumerate() {
+            for peak in [40u8, 66, 120, 198, 232, 250] {
+                let drawn = dimmed(*colour, peak);
+                let seen = drawn.iter().copied().max().unwrap_or(1) as f32;
+                for shown in [drawn, scale(drawn, 232.0 / seen)] {
+                    assert!(scaled_from(shown, *colour), "{colour:?} at {peak}");
+                    for (j, other) in palette.iter().enumerate() {
+                        assert!(
+                            i == j || !scaled_from(shown, *other),
+                            "{colour:?} at {peak} reads as {other:?}"
+                        );
+                    }
+                }
+            }
+        }
+        for chrome in DRAWN_CHROME {
+            for k in [1.0f32, 1.5, 3.5, 9.0] {
+                let shown = scale(chrome, k);
+                assert!(
+                    palette.iter().all(|c| !scaled_from(shown, *c)),
+                    "{chrome:?} scaled by {k} reads as lettering"
+                );
+            }
+        }
     }
 }

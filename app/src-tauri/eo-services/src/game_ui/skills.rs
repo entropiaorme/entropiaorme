@@ -31,7 +31,9 @@ use super::field::{first_label, label_key, read_run, Recogniser, Remembering};
 use super::geometry::{chroma, Pixels, Rect};
 use super::locate::{locate, ReadError};
 use super::profile::UiProfile;
-use super::table::{carries_across, column_rules, row_rules, rule_extent, Panel};
+use super::table::{
+    carries_across, column_rules, row_rules, rule_extent, table_shape, Band, Panel,
+};
 use super::text::{ink_groups, run_right_of, text_runs, TextRun};
 use super::validate::{pager, parse, width_agrees, Grammar};
 use super::window::Side;
@@ -484,59 +486,6 @@ pub fn parse_total(text: &str, labels: &[String], label_score: f64) -> Option<To
 fn parse_integer(text: &str) -> Option<u64> {
     let parsed = parse(Grammar::Integer, text)?;
     parsed.text.parse().ok()
-}
-
-/// One band of the table between two consecutive rule lines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Band {
-    pub top: i32,
-    pub bottom: i32,
-    /// Whether the table's column dividers cross it: a band of the
-    /// table, not of a pane below it.
-    pub ruled: bool,
-}
-
-impl Band {
-    fn height(&self) -> i32 {
-        self.bottom - self.top + 1
-    }
-}
-
-/// The table's rows below the header, each with whether it is its full
-/// height, and the row height they were measured against.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TableShape {
-    pub rows: Vec<(Band, bool)>,
-    pub pitch: i32,
-}
-
-/// Sort the bands under the header into rows. The rows are the ruled
-/// bands from the header down. Every row but the last lies between two
-/// row rules, so those give the row's height; the last is bounded by
-/// whatever ends the view (another row's rule, a pane, the window's
-/// edge), so it is full when at least that tall, and short when the view
-/// cuts it. A lone row is measured against itself: the caller's check
-/// that its lettering sits on its middle is what catches one cut short.
-/// Whether the list carries on beyond the view is not the rows' to say:
-/// a view can end exactly on a row's rule with more rows below it, which
-/// only the scrollbar shows.
-pub(crate) fn table_shape(below_header: &[Band], row_slack: f32) -> TableShape {
-    let rows: Vec<Band> = below_header
-        .iter()
-        .take_while(|band| band.ruled)
-        .copied()
-        .collect();
-    let pitch = match rows.split_last() {
-        Some((last, [])) => last.height(),
-        Some((_, ruled_both_sides)) => ruled_both_sides.iter().map(Band::height).max().unwrap_or(0),
-        None => 0,
-    };
-    let least = pitch as f32 * (1.0 - row_slack);
-    let rows = rows
-        .iter()
-        .map(|band| (*band, band.height() as f32 >= least))
-        .collect();
-    TableShape { rows, pitch }
 }
 
 /// What the table's scrollbar shows.
@@ -1634,60 +1583,6 @@ mod tests {
         assert_eq!(total("Total: 19825g"), None);
         assert_eq!(total("1 / 13"), None);
         assert_eq!(total("ALL CATEGORIES"), None);
-    }
-
-    fn band(top: i32, bottom: i32, ruled: bool) -> Band {
-        Band { top, bottom, ruled }
-    }
-
-    fn fits(shape: &TableShape) -> Vec<bool> {
-        shape.rows.iter().map(|(_, full)| *full).collect()
-    }
-
-    #[test]
-    fn rows_ruled_on_both_sides_set_the_row_height() {
-        let below = [
-            band(100, 156, true),
-            band(158, 214, true),
-            band(216, 271, true),
-            band(273, 500, false),
-        ];
-        let shape = table_shape(&below, 0.05);
-        assert_eq!(shape.pitch, 57);
-        assert_eq!(fits(&shape), vec![true, true, true]);
-    }
-
-    #[test]
-    fn a_row_cut_by_the_bottom_of_the_view_is_not_full() {
-        let below = [
-            band(100, 156, true),
-            band(158, 214, true),
-            band(216, 240, true),
-            band(242, 400, false),
-        ];
-        assert_eq!(fits(&table_shape(&below, 0.05)), vec![true, true, false]);
-    }
-
-    #[test]
-    fn a_last_row_that_the_view_ends_below_is_still_full() {
-        let below = [
-            band(100, 155, true),
-            band(159, 213, true),
-            band(215, 271, true),
-            band(273, 332, true),
-            band(334, 500, false),
-        ];
-        assert!(fits(&table_shape(&below, 0.05)).iter().all(|f| *f));
-    }
-
-    #[test]
-    fn panes_below_the_table_are_not_rows() {
-        let below = [
-            band(100, 156, true),
-            band(158, 214, false),
-            band(216, 272, true),
-        ];
-        assert_eq!(table_shape(&below, 0.05).rows.len(), 1);
     }
 
     fn scrollbar_strip(bars: &[Rect]) -> (BgrImage, Rect) {

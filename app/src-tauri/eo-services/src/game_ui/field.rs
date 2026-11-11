@@ -107,8 +107,14 @@ pub struct FieldProfile {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReadProfile {
     /// Margin added around a run before it is recognised, as a
-    /// fraction of the run's height.
+    /// fraction of the run's height,
     pub crop_margin: f32,
+    /// and never less than this many pixels: a short run's share of its
+    /// height would leave the recogniser no border round the glyphs.
+    pub min_crop_margin: i32,
+    /// A value under its label starts within this many of the label's
+    /// heights of the label's left edge.
+    pub below_reach: f32,
     /// Lowest similarity (0 to 100) at which a run reads as a label.
     pub label_score: f64,
     /// A run that could hold a label is this many times as wide as it is
@@ -158,6 +164,11 @@ pub fn label_key(text: &str) -> Vec<char> {
         .collect()
 }
 
+/// The margin a run of `height` is cropped with before recognition.
+pub fn crop_margin(height: i32, read: &ReadProfile) -> i32 {
+    ((height as f32 * read.crop_margin).round() as i32).max(read.min_crop_margin)
+}
+
 /// Recognise one run, cropped with the profile's margin.
 pub fn read_run(
     image: &BgrImage,
@@ -165,8 +176,35 @@ pub fn read_run(
     read: &ReadProfile,
     recogniser: &dyn Recogniser,
 ) -> Option<(String, f64)> {
-    let margin = ((run.height() as f32 * read.crop_margin).round() as i32).max(2);
+    let margin = crop_margin(run.height(), read);
     recogniser.read(&crop(image, run.padded(margin)))
+}
+
+/// Recognise one run cropped as [`read_run`] does, with every column of
+/// the crop outside `keep` (its first and last column, in the frame's
+/// coordinates) painted `fill`: one word of a phrase read on its own,
+/// without the margin taking in its neighbours' letters.
+pub fn read_isolated(
+    image: &BgrImage,
+    run: Rect,
+    keep: (i32, i32),
+    fill: [u8; 3],
+    read: &ReadProfile,
+    recogniser: &dyn Recogniser,
+) -> Option<(String, f64)> {
+    let area = run.padded(crop_margin(run.height(), read));
+    let mut piece = crop(image, area);
+    let x0 = area.x0.max(0);
+    for y in 0..piece.h {
+        for x in 0..piece.w {
+            let fx = x0 + x as i32;
+            if fx < keep.0 || fx > keep.1 {
+                let i = (y * piece.w + x) * 3;
+                piece.data[i..i + 3].copy_from_slice(&[fill[2], fill[1], fill[0]]);
+            }
+        }
+    }
+    recogniser.read(&piece)
 }
 
 /// Whether `run` is about as long as a label with key `want`: runs that
@@ -247,7 +285,7 @@ pub fn read_field_in(
         .ok_or(FieldError::LabelNotFound)?;
     let value = match field.value {
         ValueSide::RightOf => run_right_of(label, runs),
-        ValueSide::Below => run_below(label, runs),
+        ValueSide::Below => run_below(label, runs, read.below_reach),
     }
     .ok_or(FieldError::ValueNotFound)?;
     let (raw, confidence) =
@@ -268,6 +306,33 @@ pub fn read_field_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_isolated_word_is_read_without_its_neighbours() {
+        use crate::game_ui::test_support::{blank, bundled_profile, fill};
+        let read = bundled_profile().read;
+        let mut image = blank(200, 40, [8, 11, 11]);
+        fill(&mut image, Rect::new(20, 10, 60, 24), [200, 200, 200]);
+        fill(&mut image, Rect::new(64, 10, 100, 24), [100, 200, 200]);
+        let seen = std::sync::Mutex::new(Vec::new());
+        let recogniser = |crop: &BgrImage| {
+            let has = |rgb: [u8; 3]| crop.data.chunks(3).any(|p| p == [rgb[2], rgb[1], rgb[0]]);
+            seen.lock()
+                .unwrap()
+                .push((has([200, 200, 200]), has([100, 200, 200])));
+            Some((String::new(), 1.0))
+        };
+        read_isolated(
+            &image,
+            Rect::new(20, 10, 60, 24),
+            (19, 62),
+            [8, 11, 11],
+            &read,
+            &recogniser,
+        );
+        read_run(&image, Rect::new(20, 10, 60, 24), &read, &recogniser);
+        assert_eq!(*seen.lock().unwrap(), vec![(true, false), (true, true)]);
+    }
 
     #[test]
     fn a_remembered_crop_is_answered_once_and_another_crop_afresh() {

@@ -1181,7 +1181,7 @@ mod tests {
                 "readAt": "2026-11-03T19:42:07",
                 "drafts": [{
                     "draftId": "3-0",
-                    "itemName": {"text": "Electric Attack Nanochip 3", "check": false},
+                    "itemName": {"text": "Electric Attack Nanochip 3", "found": "itemData"},
                     "ttValue": figure,
                     "quantity": figure,
                     "startingBid": figure,

@@ -797,57 +797,6 @@ async fn compose_with(
         read_text: frame_reader(ocr_engine.clone()),
     }));
 
-    // Coordinate capture: the maps feature's two-point calibration flow
-    // plus the one-shot coordinate scan, composed over a screen-rectangle
-    // capture and the shared recogniser, plus the cursor-position lookup and the config-owned capture rectangle. The
-    // region provider and the frame reader are each one narrow closure on
-    // purpose: an automatic UI locator or a specialised digit recogniser
-    // replaces its closure without touching the scan path.
-    let coord_capture = {
-        use eo_services::coord_capture::{CoordCaptureProviders, CoordCaptureService};
-        let region_reader = {
-            let config = producers.config_service_handle();
-            let reader = config.lock().expect("config service").reader();
-            move || reader.current().map_coord_region
-        };
-        let persist_config = producers.config_service_handle();
-        let coord_engine = ocr_engine.clone();
-        // Every scan drops its last frame + recogniser answers under the
-        // data dir's debug/ (tiny, overwritten, local-only): the standing
-        // instrument for diagnosing a readout that will not read.
-        let coord_debug_dir = data_dir.join("debug");
-        CoordCaptureService::new(CoordCaptureProviders {
-            cursor_position: Arc::new(eu_window::cursor_position),
-            region: Arc::new(region_reader),
-            capture_region: Arc::new(capture_region_bgr),
-            read_text: Arc::new(move |frame: &BgrImage| {
-                coord_engine
-                    .as_ref()?
-                    .recognize_bgr(&frame.data, frame.h, frame.w)
-                    .ok()
-            }),
-            persist_region: Arc::new(move |region| {
-                let mut updates = serde_json::Map::new();
-                updates.insert(
-                    "map_coord_region".to_string(),
-                    serde_json::to_value(region).map_err(|err| err.to_string())?,
-                );
-                persist_config
-                    .lock()
-                    .map_err(|_| "config service lock poisoned".to_string())?
-                    .update(&updates)
-                    .map(|_| ())
-                    .map_err(|err| err.to_string())
-            }),
-            debug_dir: Arc::new(move || Some(coord_debug_dir.clone())),
-        })
-    };
-    let coord_confirm = eo_services::coord_capture::CoordConfirmListener::new(
-        coord_capture.clone(),
-        Some(producers.keystroke_source_handle()),
-    );
-    coord_capture.attach_confirm_listener(&coord_confirm);
-
     // The planet-map bundle is optional: a missing or broken bundle stands
     // the maps surface down (an empty catalogue) with a logged reason,
     // never declines composition.
@@ -863,6 +812,73 @@ async fn compose_with(
             None
         }
     };
+
+    // Coordinate capture: the player's position read from under the radar
+    // wherever it is in the game window, through the same capture seam,
+    // interface profile and engine as the other readers. The hand-drawn
+    // region (the two-point calibration, persisted in config) is read only
+    // when the radar cannot be found.
+    let coord_capture = {
+        use eo_services::coord_capture::{CoordCaptureProviders, CoordCaptureService};
+        let region_reader = {
+            let config = producers.config_service_handle();
+            let reader = config.lock().expect("config service").reader();
+            move || reader.current().map_coord_region
+        };
+        let persist_config = producers.config_service_handle();
+        // A failed read leaves its crop and what was read there under the
+        // data dir's debug/ (tiny, overwritten, local-only): the standing
+        // instrument for diagnosing coordinates that will not read. A clean
+        // read leaves nothing.
+        let coord_debug_dir = data_dir.join("debug");
+        CoordCaptureService::new(
+            CoordCaptureProviders {
+                frame: game_ui.frame.clone(),
+                profile: game_ui.profile.clone(),
+                read_text: frame_reader(ocr_engine.clone()),
+                // The names a radar may print, from the bundled maps: each
+                // map's name and the game's own name for its planet.
+                planets: planet_maps
+                    .as_ref()
+                    .map(|store| {
+                        store
+                            .records()
+                            .iter()
+                            .map(|record| eo_services::coord_capture::KnownPlanet {
+                                name: record.name.clone(),
+                                printed: std::iter::once(record.name.clone())
+                                    .chain(record.technical_name.clone())
+                                    .collect(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                cursor_position: Arc::new(eu_window::cursor_position),
+                region: Arc::new(region_reader),
+                capture_region: Arc::new(capture_region_bgr),
+                persist_region: Arc::new(move |region| {
+                    let mut updates = serde_json::Map::new();
+                    updates.insert(
+                        "map_coord_region".to_string(),
+                        serde_json::to_value(region).map_err(|err| err.to_string())?,
+                    );
+                    persist_config
+                        .lock()
+                        .map_err(|_| "config service lock poisoned".to_string())?
+                        .update(&updates)
+                        .map(|_| ())
+                        .map_err(|err| err.to_string())
+                }),
+                debug_dir: Arc::new(move || Some(coord_debug_dir.clone())),
+            },
+            clock.clone(),
+        )
+    };
+    let coord_confirm = eo_services::coord_capture::CoordConfirmListener::new(
+        coord_capture.clone(),
+        Some(producers.keystroke_source_handle()),
+    );
+    coord_capture.attach_confirm_listener(&coord_confirm);
 
     let navigation = {
         let bus = producers.bus_handle();
@@ -887,21 +903,22 @@ async fn compose_with(
                 .calibration
                 .as_ref()?
                 .bounds;
-            Some(eo_services::coord_capture::CoordBounds {
-                lon_min: bounds.lon_min,
-                lon_max: bounds.lon_max,
-                lat_min: bounds.lat_min,
-                lat_max: bounds.lat_max,
+            Some(eo_services::game_ui::radar::CoordinateBounds {
+                lon: (bounds.lon_min, bounds.lon_max),
+                lat: (bounds.lat_min, bounds.lat_max),
             })
         });
         let service = eo_services::navigation::NavigationService::new(
             db.clone(),
             clock.clone(),
-            coord_capture.clone(),
-            bounds,
-            changed,
-            Some(producers.keystroke_source_handle()),
-            navigation_focus,
+            eo_services::navigation::NavigationProviders {
+                coord_capture: coord_capture.clone(),
+                bounds,
+                changed,
+                input: Some(producers.keystroke_source_handle()),
+                focus: navigation_focus,
+                settings: eo_services::navigation::NavigationSettings::default(),
+            },
         )
         .await;
         let radar_confirm = service.attach_radar_confirm_listener(
@@ -3046,7 +3063,7 @@ mod tests {
         let clock: Arc<dyn Clock> = Arc::new(MockClock::new(None, 0.0));
         let scan = SkillScanService::new(
             SkillScanProviders {
-                frame: Arc::new(|| {
+                frame: Arc::new(|_| {
                     Err(eo_services::game_ui::seams::FrameUnavailable::WindowNotFound)
                 }),
                 profile: load_ui_profile(&resource_root(&repo_snapshot()).join(UI_PROFILE_FILE)),

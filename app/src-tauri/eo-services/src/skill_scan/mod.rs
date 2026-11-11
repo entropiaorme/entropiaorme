@@ -47,7 +47,7 @@ use crate::clock::Clock;
 use crate::event_bus::EventBus;
 use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::profile::UiProfile;
-use crate::game_ui::seams::{FrameReader, FrameUnavailable, GameWindowFrame};
+use crate::game_ui::seams::{FrameArea, FrameReader, FrameUnavailable, GameWindowFrame};
 use crate::game_ui::skills::{
     read_skills_page, Admission, SkillVocabulary, SkillsSweep, SkillsTableProfile, SweepResult,
 };
@@ -107,7 +107,7 @@ pub struct SkillScanProviders {
 impl Default for SkillScanProviders {
     fn default() -> Self {
         Self {
-            frame: Arc::new(|| Err(FrameUnavailable::WindowNotFound)),
+            frame: Arc::new(|_| Err(FrameUnavailable::WindowNotFound)),
             profile: None,
             read_text: None,
             vocabulary: SkillVocabulary::default(),
@@ -655,8 +655,8 @@ impl SkillScanService {
 
     /// Capture the game window, read the page showing, and offer it.
     fn look(&self, reader: &Reader, looking: &mut Looking) -> Outcome {
-        let frame = match (self.providers.frame)() {
-            Ok(frame) => frame,
+        let frame = match (self.providers.frame)(FrameArea::Whole) {
+            Ok(frame) => frame.image,
             Err(unavailable) => {
                 return match frame_hint(unavailable) {
                     Ok(hint) => Outcome::Seen(Some(hint)),

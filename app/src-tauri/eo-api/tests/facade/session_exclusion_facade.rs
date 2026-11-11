@@ -1016,6 +1016,8 @@ const OTHER_COMMANDS: &[&str] = &[
     "radar_calibration_cancel",
     "radar_calibration_status",
     "radar_geometry",
+    "navigation_resume_position",
+    "radar_guidance",
 ];
 
 /// Every command on the typed surface is classified exactly once, so a new

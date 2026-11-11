@@ -6,6 +6,9 @@ const mocked = vi.hoisted(() => ({
 	scanCoordinates: vi.fn(),
 	snapshot: vi.fn(),
 	inputStatus: vi.fn(),
+	updatePosition: vi.fn(),
+	guidance: vi.fn(),
+	resume: vi.fn(),
 	emit: vi.fn(),
 }));
 
@@ -19,31 +22,28 @@ vi.mock('$lib/api', () => ({
 	endNavigation: vi.fn(),
 	getInputStatus: mocked.inputStatus,
 	getNavigationSnapshot: mocked.snapshot,
+	getRadarGuidance: mocked.guidance,
 	hideNavigationOverlays: vi.fn(),
+	showNavigationOverlays: vi.fn(),
 	markNavigationVisited: vi.fn(),
 	resolveNavigationHarvest: vi.fn(),
 	scanMapCoordinates: mocked.scanCoordinates,
 	skipNavigationStop: vi.fn(),
 	startNavigation: mocked.startNavigation,
 	undoNavigationStop: vi.fn(),
-	updateNavigationPosition: vi.fn(),
+	updateNavigationPosition: mocked.updatePosition,
+	resumeNavigationPosition: mocked.resume,
 }));
 vi.mock('./cartographyOverlay.svelte', () => ({
 	acceptCartographyContextBroadcast: (value: unknown) => value,
-	cartographyScanFailureMessage: vi.fn(() => 'scan failed'),
 }));
 
-import { createNavigationHudController } from './navigationHudController.svelte';
+import { createNavigationHudController, guidanceNote } from './navigationHudController.svelte';
 
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocked.beginSelection.mockResolvedValue(undefined);
-	mocked.scanCoordinates.mockResolvedValue({
-		status: 'read',
-		lon: 100,
-		lat: 200,
-		altitude: null,
-	});
+	mocked.scanCoordinates.mockResolvedValue({ kind: 'read', lon: 100, lat: 200, source: 'radar' });
 	mocked.startNavigation.mockResolvedValue({ status: 'active', stops: [] });
 	mocked.snapshot.mockResolvedValue(null);
 	mocked.inputStatus.mockResolvedValue({
@@ -167,5 +167,165 @@ describe('navigation HUD visit mode', () => {
 
 		expect(controller.badge).toBe('cut');
 		controller.dispose();
+	});
+});
+
+describe('capturing the route start', () => {
+	it('takes only a read position, and says why a refusal gave none', async () => {
+		mocked.scanCoordinates.mockResolvedValue({
+			kind: 'refused',
+			refusal: { reason: 'radarNotFound', lon: null, lat: null },
+		});
+		const controller = createNavigationHudController();
+		controller.applyContext({ planet: 'Calypso', mapViewId: null });
+		await controller.captureStart();
+		expect(controller.start).toBeNull();
+		expect(controller.feedback).toBe('The radar is not on the screen.');
+		expect(controller.canStart).toBe(false);
+	});
+
+	it('drops a read that lands after the planet changed', async () => {
+		let land: (value: unknown) => void = () => {};
+		mocked.scanCoordinates.mockReturnValue(new Promise((resolve) => (land = resolve)));
+		const controller = createNavigationHudController();
+		controller.applyContext({ planet: 'Calypso', mapViewId: null });
+		const capturing = controller.captureStart();
+		controller.applyContext({ planet: 'Arkadia', mapViewId: null });
+		land({ kind: 'read', lon: 100, lat: 200, source: 'radar' });
+		await capturing;
+		expect(controller.start).toBeNull();
+	});
+});
+
+describe('the position poll', () => {
+	const refused = (reason: string, lon: string | null = null) => ({
+		status: 'notRead',
+		run: null,
+		refusal: { reason, lon, lat: null },
+		stopped: null,
+	});
+
+	it('says why it cannot read only once the same failure has held for two polls', async () => {
+		const controller = createNavigationHudController();
+		controller.applyContext({ planet: 'Calypso', mapViewId: null });
+		mocked.updatePosition.mockResolvedValue(refused('notRead', 'covered'));
+		await controller.pollPosition();
+		expect(controller.note).toBeNull();
+		// A different failure starts the count again.
+		mocked.updatePosition.mockResolvedValue(refused('radarNotFound'));
+		await controller.pollPosition();
+		expect(controller.note).toBeNull();
+		await controller.pollPosition();
+		expect(controller.note).toBe('The radar is not on the screen.');
+		mocked.updatePosition.mockResolvedValue({
+			status: 'updated',
+			run: { status: 'active', stops: [], positionAgeS: 0 },
+			refusal: null,
+			stopped: null,
+		});
+		await controller.pollPosition();
+		expect(controller.note).toBeNull();
+	});
+
+	it('stops when the backend stops it, says why, and resumes on request', async () => {
+		const controller = createNavigationHudController();
+		mocked.updatePosition.mockResolvedValue({
+			status: 'pollStopped',
+			run: null,
+			refusal: null,
+			stopped: 'captureNotAllowed',
+		});
+		await controller.pollPosition();
+		expect(controller.note).toBe('Screen capture was not allowed, so position updates stopped.');
+		expect(controller.pollStopped).toBe(true);
+		await controller.pollPosition();
+		await controller.pollPosition();
+		expect(mocked.updatePosition).toHaveBeenCalledOnce();
+
+		mocked.resume.mockResolvedValue(undefined);
+		await controller.resumePolling();
+		expect(mocked.resume).toHaveBeenCalledOnce();
+		expect(controller.pollStopped).toBe(false);
+		expect(controller.note).toBeNull();
+	});
+
+	it('takes one read at a time', async () => {
+		let land: (value: unknown) => void = () => {};
+		mocked.updatePosition.mockReturnValue(new Promise((resolve) => (land = resolve)));
+		const controller = createNavigationHudController();
+		const first = controller.pollPosition();
+		await controller.pollPosition();
+		land({ status: 'jumpRefused', run: null, refusal: null, stopped: null });
+		await first;
+		expect(mocked.updatePosition).toHaveBeenCalledOnce();
+	});
+
+	it('does not steer from a position grown old', async () => {
+		vi.useFakeTimers();
+		try {
+			const controller = createNavigationHudController();
+			mocked.updatePosition.mockResolvedValue({
+				status: 'updated',
+				run: { status: 'active', stops: [], positionAgeS: 0 },
+				refusal: null,
+				stopped: null,
+			});
+			await controller.pollPosition();
+			expect(controller.positionCurrent).toBe(true);
+			expect(controller.note).toBeNull();
+			// Ten seconds on with no new position, at a one-second poll.
+			vi.advanceTimersByTime(10_000);
+			controller.tick();
+			expect(controller.positionCurrent).toBe(false);
+			expect(controller.note).toBe('Your position is not current.');
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
+describe('the radar guidance note', () => {
+	const placed = (
+		scaleMissing: 'labelsUnread' | 'noRings' | 'noReader' | null,
+		source: 'found' | 'calibrated' = 'found',
+	) =>
+		({
+			kind: 'placed',
+			centreX: 0,
+			centreY: 0,
+			radiusPx: 113,
+			clearRightX: 130,
+			source,
+			scale: scaleMissing ? null : { metresPerPixel: 1.9, edgeRangeM: 219 },
+			scaleMissing,
+			labelStrip: { from: 0.1, to: 1, halfHeight: 0.1 },
+		}) as const;
+
+	it('asks for ring distances only when the rings were found without them', () => {
+		expect(guidanceNote(placed('labelsUnread'))).toBe(
+			"Show ring distances in the game's interface options to see distances on the radar.",
+		);
+		expect(guidanceNote(placed('noRings'))).toBe(
+			"The radar's rings could not be seen, so distances are not shown on it.",
+		);
+		expect(guidanceNote(placed('noReader'))).toBe(
+			'Distances on the radar need the text recogniser, which is not available.',
+		);
+		expect(guidanceNote(placed(null))).toBeNull();
+		expect(guidanceNote(placed(null, 'calibrated'))).toBeNull();
+	});
+
+	it('says why guidance has no placement or stopped', () => {
+		expect(guidanceNote({ kind: 'lost', reason: 'radarNotFound' })).toBe(
+			'The radar is not on the screen.',
+		);
+		expect(guidanceNote({ kind: 'off', stopped: 'captureNotAllowed' })).toBe(
+			'Screen capture was not allowed, so radar guidance stopped.',
+		);
+		expect(guidanceNote({ kind: 'off', stopped: 'failed' })).toBe(
+			'Radar guidance stopped unexpectedly.',
+		);
+		expect(guidanceNote({ kind: 'off', stopped: null })).toBeNull();
+		expect(guidanceNote({ kind: 'searching' })).toBeNull();
 	});
 });

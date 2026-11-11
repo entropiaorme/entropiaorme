@@ -9,7 +9,11 @@ import * as commands from './commands.gen';
 
 export type {
 	CoordCalibrationStatus,
+	CoordReadSource,
+	CoordRefusal,
+	CoordScanRefusal,
 	CoordScanResult,
+	CoordValueRefusal,
 	MapPin,
 	MapPinInput,
 	MapPinPatch,
@@ -27,8 +31,15 @@ export type {
 	PlanetMap,
 	PlanetMapBounds,
 	PlanetMapCalibration,
+	PositionPollStop,
 	RadarCalibrationStatus,
 	RadarGeometry,
+	RadarGuidance,
+	RadarGuidanceLoss,
+	RadarGuidanceStop,
+	RadarLabelStrip,
+	RadarScale,
+	RadarScaleMissing,
 } from './commands.gen';
 
 export const getPlanetMaps = commands.planetMapsList;
@@ -62,9 +73,12 @@ export const skipNavigationStop = commands.navigationSkip;
 export const resolveNavigationHarvest = commands.navigationResolveHarvest;
 export const undoNavigationStop = commands.navigationUndo;
 export const endNavigation = commands.navigationEnd;
+/** Have the position poll read again after it stopped. */
+export const resumeNavigationPosition = commands.navigationResumePosition;
 export const startRadarCalibration = commands.radarCalibrationStart;
 export const cancelRadarCalibration = commands.radarCalibrationCancel;
 /** Take the current radar point at the cursor, as an Enter press does. */
 export const confirmRadarCalibration = commands.radarCalibrationConfirm;
 export const getRadarCalibrationStatus = commands.radarCalibrationStatus;
 export const getRadarGeometry = commands.radarGeometry;
+export const getRadarGuidance = commands.radarGuidance;

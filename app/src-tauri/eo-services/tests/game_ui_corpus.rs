@@ -22,8 +22,9 @@ use eo_services::game_ui::geometry::BgrImage;
 use eo_services::game_ui::locate::{read_window_field, ReadError};
 use eo_services::game_ui::profile::UiProfile;
 use eo_services::game_ui::radar::{
-    find_radar, read_coordinates, ring_scale, CoordError, CoordinateBounds,
+    find_radar, read_coordinates, read_planet_label, ring_scale, CoordError, CoordinateBounds,
 };
+use eo_services::game_ui::seams::GameFrame;
 use eo_services::game_ui::skills::{
     nearest_skill, read_skills_page, Admission, Checksum, NameReading, RowName, SkillRow,
     SkillVocabulary, SkillsError, SkillsPage, SkillsSweep, SkillsTableProfile,
@@ -275,7 +276,8 @@ fn replay_terminal(terminal: Terminal, surface: &str, label_key: &str) -> Option
         let image = corpus.frame(&name);
         let read = reader(engine.clone());
         let service = RepairOcrService::new(RepairProviders {
-            frame: Arc::new(move || Ok(image.clone())),
+            // The terminal reads ask for the whole window.
+            frame: Arc::new(move |_| Ok(GameFrame::whole(image.clone(), (0, 0)))),
             profile: Some(profile.clone()),
             read_text: Some(Arc::new(read)),
         });
@@ -1017,6 +1019,18 @@ fn calypso() -> CoordinateBounds {
     }
 }
 
+/// Every name the bundled planet maps give a planet, as the radar may print
+/// it: each map's name and the game's own name for it.
+fn planet_names() -> Vec<String> {
+    let store = PlanetMapStore::new(&resources().join("maps")).expect("the bundled maps load");
+    let mut names: Vec<String> = Vec::new();
+    for record in store.records() {
+        names.push(record.name.clone());
+        names.extend(record.technical_name.clone());
+    }
+    names
+}
+
 /// The frames to replay for coordinates in shard `shard`.
 fn coordinate_frames(corpus: &Corpus, shard: usize) -> Vec<(String, &Value)> {
     corpus
@@ -1035,12 +1049,28 @@ fn replay_coordinates_shard(shard: usize) {
     let profile = profile();
     let bounds = calypso();
     let mut tally = Tally::default();
+    let mut planet = Tally::default();
+    let names = planet_names();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut covered = 0;
     let refusals = coord_refusals();
     let mut mismatched = Vec::new();
     for (name, labels) in coordinate_frames(&corpus, shard) {
         let image = corpus.frame(&name);
         let got = read_coordinates(&image, &profile, &bounds, &read);
+        // Every frame was captured on Calypso: the name above the radar
+        // reads as Calypso or as nothing, never as another planet.
+        if let Ok(found) = &got {
+            match read_planet_label(&image, &found.radar, &profile, &names, &read) {
+                Some(planet_name) if planet_name == "Calypso" => planet.exact += 1,
+                Some(other) => planet
+                    .wrong
+                    .push(format!("{name}: the radar's planet read as {other:?}")),
+                None => planet
+                    .refused
+                    .push(format!("{name}: the planet's name did not read")),
+            }
+        }
         if labels.get("coords").is_none_or(Value::is_null) {
             // The radar is hidden: under a maximised window in this corpus.
             match &got {
@@ -1093,6 +1123,7 @@ fn replay_coordinates_shard(shard: usize) {
     }
     println!("coordinates shard {shard}: {covered} covered values refused as they must be");
     tally.report(&format!("coordinates, shard {shard}"));
+    planet.report(&format!("planet name, shard {shard}"));
     let unexcused: Vec<&String> = tally
         .refused
         .iter()

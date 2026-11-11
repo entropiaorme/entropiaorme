@@ -20,9 +20,15 @@ use crate::settings::double_option;
 use crate::Nullable;
 use crate::{Api, ApiError};
 
+use eo_services::coord_capture::{
+    CoordReading, CoordRefusal as ServiceCoordRefusal, ReadSource, Trigger, ValueRefusal,
+};
+use eo_services::game_ui::radar::CoordinateBounds;
 use eo_services::navigation::{
-    NavigationError, NavigationRun as ServiceNavigationRun, PositionUpdate, RadarCalibrationPhase,
-    RunStatus as ServiceRunStatus, StopStatus as ServiceStopStatus,
+    GuidanceLoss, GuidanceStop, NavigationError, NavigationRun as ServiceNavigationRun,
+    PlacementSource, PollStop, PositionUpdate, RadarCalibrationPhase,
+    RadarGuidance as ServiceGuidance, RunStatus as ServiceRunStatus, ScaleMissing,
+    StopStatus as ServiceStopStatus,
 };
 
 /// A map's coordinate window in game units: the plausibility gate for
@@ -108,14 +114,15 @@ pub enum NavigationStopStatus {
     Skipped,
 }
 
-/// A harvest detected beyond the arrival radius, awaiting the player's confirm
-/// or dismiss in the overlay. Names the proposed (active) tree and how far the
-/// harvest read was from it.
+/// A harvest awaiting the player's confirm or dismiss in the overlay: one
+/// beyond the arrival radius, or one whose position did not read. Names the
+/// proposed (active) tree and how far the harvest was read to be from it;
+/// `distance` is null when no position was read for the harvest.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingHarvest {
     pub name: String,
-    pub distance: f64,
+    pub distance: Nullable<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -146,6 +153,10 @@ pub struct NavigationRun {
     pub current_lon: f64,
     pub current_lat: f64,
     pub last_position_at: Nullable<f64>,
+    /// How many seconds ago the route's position was read, on a clock no
+    /// change of the wall clock disturbs; null when no position has been
+    /// read for the route. Steering from an old position is misleading.
+    pub position_age_s: Nullable<f64>,
     pub hop_count: i64,
     /// Trees are recorded visited on the game's interact key rather than
     /// detected from harvests.
@@ -164,20 +175,42 @@ pub enum NavigationPositionStatus {
     Updated,
     NoActiveRun,
     Paused,
-    NoRegion,
-    CaptureFailed,
-    EngineUnavailable,
-    Unreadable,
-    Implausible,
+    /// The position was not read; `refusal` says why.
+    NotRead,
+    /// The position read is further from the route's last than the game
+    /// can carry a player between the two readings; nothing was recorded.
+    JumpRefused,
+    /// The route ended or changed while the position was read; the
+    /// reading was dropped.
+    Superseded,
+    /// The position poll is not reading; `stopped` says why.
+    PollStopped,
     Ambiguous,
     OutOfTolerance,
 }
 
+/// Why the position poll is not reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PositionPollStop {
+    /// The route overlays are not showing.
+    OverlaysHidden,
+    /// Every read was refused for a while; the player resumes it.
+    NotReading,
+    /// Screen capture was not allowed; the player tries again.
+    CaptureNotAllowed,
+}
+
+/// One position verb's answer. `refusal` is set exactly when `status` is
+/// `notRead`, `stopped` exactly when it is `pollStopped`; no refusal
+/// carries a coordinate.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NavigationPositionResult {
     pub status: NavigationPositionStatus,
     pub run: Nullable<NavigationRun>,
+    pub refusal: Nullable<CoordRefusal>,
+    pub stopped: Nullable<PositionPollStop>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
@@ -205,7 +238,7 @@ impl Api {
         navigation
             .snapshot()
             .await
-            .map(|run| run.map(navigation_to_dto).into())
+            .map(|run| run.map(|run| self.run_dto(run)).into())
             .map_err(db_error)
     }
 
@@ -230,7 +263,7 @@ impl Api {
                 visit_on_key,
             )
             .await
-            .map(navigation_to_dto)
+            .map(|run| self.run_dto(run))
             .map_err(navigation_error)
     }
 
@@ -238,7 +271,7 @@ impl Api {
         self.navigation()?
             .update_position()
             .await
-            .map(position_to_dto)
+            .map(|update| self.position_dto(update))
             .map_err(navigation_error)
     }
 
@@ -249,7 +282,7 @@ impl Api {
         self.navigation()?
             .mark_visited(force)
             .await
-            .map(position_to_dto)
+            .map(|update| self.position_dto(update))
             .map_err(navigation_error)
     }
 
@@ -257,7 +290,7 @@ impl Api {
         self.navigation()?
             .skip()
             .await
-            .map(navigation_to_dto)
+            .map(|run| self.run_dto(run))
             .map_err(navigation_error)
     }
 
@@ -268,7 +301,7 @@ impl Api {
         self.navigation()?
             .resolve_harvest(confirm)
             .await
-            .map(navigation_to_dto)
+            .map(|run| self.run_dto(run))
             .map_err(navigation_error)
     }
 
@@ -276,12 +309,52 @@ impl Api {
         self.navigation()?
             .undo()
             .await
-            .map(navigation_to_dto)
+            .map(|run| self.run_dto(run))
             .map_err(navigation_error)
     }
 
     pub async fn navigation_end(&self) -> Result<(), ApiError> {
         self.navigation()?.end().await.map_err(navigation_error)
+    }
+
+    /// The player asks the position poll to read again: after it stopped
+    /// with every read refused, or with screen capture not allowed (which
+    /// may now ask the desktop's consent once more).
+    pub fn navigation_resume_position(&self) -> Result<(), ApiError> {
+        self.navigation()?.resume_polling();
+        Ok(())
+    }
+
+    /// The route overlays have been shown or taken away (the shell does,
+    /// as it shows and hides them): the poll and guidance serve only
+    /// overlays someone can see.
+    pub fn navigation_set_overlays_shown(&self, shown: bool) -> Result<(), ApiError> {
+        self.navigation()?.set_overlays_shown(shown);
+        Ok(())
+    }
+
+    /// Whether the route overlays are showing.
+    pub fn navigation_overlays_shown(&self) -> bool {
+        self.navigation
+            .as_ref()
+            .is_some_and(|navigation| navigation.overlays_shown())
+    }
+
+    fn run_dto(&self, run: ServiceNavigationRun) -> NavigationRun {
+        let age = self
+            .navigation
+            .as_ref()
+            .and_then(|navigation| navigation.position_age(run.id));
+        navigation_to_dto(run, age)
+    }
+
+    fn position_dto(&self, update: PositionUpdate) -> NavigationPositionResult {
+        let age = |run: &ServiceNavigationRun| {
+            self.navigation
+                .as_ref()
+                .and_then(|navigation| navigation.position_age(run.id))
+        };
+        position_to_dto(update, age)
     }
 
     pub fn radar_calibration_start(&self) -> Result<RadarCalibrationStatus, ApiError> {
@@ -335,7 +408,7 @@ impl Api {
     }
 }
 
-fn navigation_to_dto(run: ServiceNavigationRun) -> NavigationRun {
+fn navigation_to_dto(run: ServiceNavigationRun, position_age_s: Option<f64>) -> NavigationRun {
     let (distance_to_active, bearing_degrees) = run.active_stop().map_or((None, None), |active| {
         let dx = active.lon - run.current_lon;
         let dy = active.lat - run.current_lat;
@@ -360,6 +433,7 @@ fn navigation_to_dto(run: ServiceNavigationRun) -> NavigationRun {
         current_lon: run.current_lon,
         current_lat: run.current_lat,
         last_position_at: run.last_position_at.into(),
+        position_age_s: position_age_s.into(),
         hop_count: run.hop_count,
         visit_on_key: run.visit_on_key,
         updated_at: run.updated_at,
@@ -369,7 +443,7 @@ fn navigation_to_dto(run: ServiceNavigationRun) -> NavigationRun {
             .pending_harvest
             .map(|pending| PendingHarvest {
                 name: pending.name,
-                distance: pending.observed_distance,
+                distance: pending.observed.map(|observed| observed.distance).into(),
             })
             .into(),
         stops: run
@@ -396,16 +470,30 @@ fn navigation_to_dto(run: ServiceNavigationRun) -> NavigationRun {
     }
 }
 
-fn position_to_dto(update: PositionUpdate) -> NavigationPositionResult {
+fn position_to_dto(
+    update: PositionUpdate,
+    age: impl Fn(&ServiceNavigationRun) -> Option<f64>,
+) -> NavigationPositionResult {
+    let mut refusal = None;
+    let mut stopped = None;
     let (status, run) = match update {
         PositionUpdate::Updated(run) => (NavigationPositionStatus::Updated, Some(run)),
         PositionUpdate::NoActiveRun => (NavigationPositionStatus::NoActiveRun, None),
         PositionUpdate::Paused(run) => (NavigationPositionStatus::Paused, Some(run)),
-        PositionUpdate::NoRegion => (NavigationPositionStatus::NoRegion, None),
-        PositionUpdate::CaptureFailed => (NavigationPositionStatus::CaptureFailed, None),
-        PositionUpdate::EngineUnavailable => (NavigationPositionStatus::EngineUnavailable, None),
-        PositionUpdate::Unreadable => (NavigationPositionStatus::Unreadable, None),
-        PositionUpdate::Implausible => (NavigationPositionStatus::Implausible, None),
+        PositionUpdate::NotRead(why) => {
+            refusal = Some(CoordRefusal::from(why));
+            (NavigationPositionStatus::NotRead, None)
+        }
+        PositionUpdate::JumpRefused => (NavigationPositionStatus::JumpRefused, None),
+        PositionUpdate::Superseded => (NavigationPositionStatus::Superseded, None),
+        PositionUpdate::PollStopped(why) => {
+            stopped = Some(match why {
+                PollStop::OverlaysHidden => PositionPollStop::OverlaysHidden,
+                PollStop::NotReading => PositionPollStop::NotReading,
+                PollStop::CaptureNotAllowed => PositionPollStop::CaptureNotAllowed,
+            });
+            (NavigationPositionStatus::PollStopped, None)
+        }
         PositionUpdate::Ambiguous(run) => (NavigationPositionStatus::Ambiguous, Some(run)),
         PositionUpdate::OutOfTolerance(run) => {
             (NavigationPositionStatus::OutOfTolerance, Some(run))
@@ -413,7 +501,14 @@ fn position_to_dto(update: PositionUpdate) -> NavigationPositionResult {
     };
     NavigationPositionResult {
         status,
-        run: run.map(navigation_to_dto).into(),
+        run: run
+            .map(|run| {
+                let age = age(&run);
+                navigation_to_dto(run, age)
+            })
+            .into(),
+        refusal: refusal.into(),
+        stopped: stopped.into(),
     }
 }
 
@@ -1052,85 +1147,143 @@ pub struct CoordRegionDto {
     pub h: i64,
 }
 
-/// The closed vocabulary of a coordinate scan's outcome.
+/// What the coordinates were read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub enum CoordScanStatus {
-    Read,
-    NoRegion,
-    CaptureFailed,
-    EngineUnavailable,
-    Unreadable,
-    Implausible,
+pub enum CoordReadSource {
+    /// Under the radar, found in the game window.
+    Radar,
+    /// The hand-drawn region, because the radar was not found.
+    Region,
 }
 
-/// One coordinate scan's answer: `status` names the outcome precisely
-/// (a wrong read never masquerades as a position), and the extras ride
-/// where the outcome carries them (the `CaptureResult` convention):
-/// coordinates on `read` and `implausible`, the raw capture text only
-/// on `unreadable` (where the UI shows it); a successful read's text is
-/// its digits, so the parsed coordinates already carry everything and
-/// the boundary hands the webview no more screen text than it needs.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+/// Why no position was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct CoordScanResult {
-    pub status: CoordScanStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lon: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lat: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
+pub enum CoordScanRefusal {
+    /// No recogniser or interface profile is available.
+    ReaderUnavailable,
+    /// The planet's coordinates are not known, so nothing could be checked
+    /// against them.
+    PlanetUnknown,
+    GameWindowNotFound,
+    GameWindowOffScreen,
+    CaptureFailed,
+    /// Screen capture was not allowed.
+    CaptureNotAllowed,
+    /// No radar is on the screen, and no region has been drawn by hand.
+    RadarNotFound,
+    /// The radar names another planet than the one the read is for.
+    OtherPlanet,
+    /// At least one value was refused; `lon` and `lat` say why.
+    NotRead,
 }
 
-impl From<eo_services::coord_capture::CoordScanOutcome> for CoordScanResult {
-    fn from(outcome: eo_services::coord_capture::CoordScanOutcome) -> Self {
-        use eo_services::coord_capture::CoordScanOutcome as O;
-        let empty = |status: CoordScanStatus| CoordScanResult {
-            status,
-            lon: None,
-            lat: None,
-            raw_text: None,
-            confidence: None,
+/// Why one value was not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CoordValueRefusal {
+    /// It is printed off the screen.
+    OffScreen,
+    /// A window of the game covers it.
+    Covered,
+    /// It is not shown.
+    NotFound,
+    /// It did not read cleanly.
+    Unclear,
+    /// It lies outside the planet's coordinates.
+    OutOfBounds,
+}
+
+/// Why a position was not read: the reason, and for `notRead`, each
+/// refused value's own reason (null for a value that read, whose number
+/// is not kept). It carries no coordinate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordRefusal {
+    pub reason: CoordScanRefusal,
+    pub lon: Nullable<CoordValueRefusal>,
+    pub lat: Nullable<CoordValueRefusal>,
+}
+
+impl From<ValueRefusal> for CoordValueRefusal {
+    fn from(refusal: ValueRefusal) -> Self {
+        match refusal {
+            ValueRefusal::OffScreen => Self::OffScreen,
+            ValueRefusal::Covered => Self::Covered,
+            ValueRefusal::NotFound => Self::NotFound,
+            ValueRefusal::Unclear => Self::Unclear,
+            ValueRefusal::OutOfBounds => Self::OutOfBounds,
+        }
+    }
+}
+
+impl From<ServiceCoordRefusal> for CoordRefusal {
+    fn from(refusal: ServiceCoordRefusal) -> Self {
+        let only = |reason| CoordRefusal {
+            reason,
+            lon: None.into(),
+            lat: None.into(),
         };
-        match outcome {
-            O::Read(read) => CoordScanResult {
-                lon: Some(read.lon),
-                lat: Some(read.lat),
-                confidence: Some(read.confidence),
-                ..empty(CoordScanStatus::Read)
-            },
-            O::NoRegion => empty(CoordScanStatus::NoRegion),
-            O::CaptureFailed => empty(CoordScanStatus::CaptureFailed),
-            O::EngineUnavailable => empty(CoordScanStatus::EngineUnavailable),
-            O::Unreadable {
-                raw_text,
-                confidence,
-            } => CoordScanResult {
-                raw_text: Some(raw_text),
-                confidence: Some(confidence),
-                ..empty(CoordScanStatus::Unreadable)
-            },
-            O::Implausible { lon, lat, .. } => CoordScanResult {
-                lon: Some(lon),
-                lat: Some(lat),
-                ..empty(CoordScanStatus::Implausible)
+        match refusal {
+            ServiceCoordRefusal::ReaderUnavailable => only(CoordScanRefusal::ReaderUnavailable),
+            ServiceCoordRefusal::PlanetUnknown => only(CoordScanRefusal::PlanetUnknown),
+            ServiceCoordRefusal::GameWindowNotFound => only(CoordScanRefusal::GameWindowNotFound),
+            ServiceCoordRefusal::GameWindowOffScreen => only(CoordScanRefusal::GameWindowOffScreen),
+            ServiceCoordRefusal::CaptureFailed => only(CoordScanRefusal::CaptureFailed),
+            ServiceCoordRefusal::CaptureNotAllowed => only(CoordScanRefusal::CaptureNotAllowed),
+            ServiceCoordRefusal::RadarNotFound => only(CoordScanRefusal::RadarNotFound),
+            ServiceCoordRefusal::OtherPlanet => only(CoordScanRefusal::OtherPlanet),
+            ServiceCoordRefusal::NotRead { lon, lat } => CoordRefusal {
+                reason: CoordScanRefusal::NotRead,
+                lon: lon.map(CoordValueRefusal::from).into(),
+                lat: lat.map(CoordValueRefusal::from).into(),
             },
         }
     }
 }
 
-/// The calibration surface's assembled state: the flow phase, the
-/// persisted region (null until a calibration completed), and the
-/// validation read echoed after the last completion.
+/// One coordinate scan's answer: both values exactly as the screen
+/// showed them, or why there are none. A refusal carries no coordinate,
+/// so nothing downstream can mistake it for one.
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CoordScanResult {
+    Read {
+        lon: i64,
+        lat: i64,
+        source: CoordReadSource,
+    },
+    Refused {
+        refusal: CoordRefusal,
+    },
+}
+
+impl From<Result<CoordReading, ServiceCoordRefusal>> for CoordScanResult {
+    fn from(read: Result<CoordReading, ServiceCoordRefusal>) -> Self {
+        match read {
+            Ok(read) => Self::Read {
+                lon: i64::from(read.lon),
+                lat: i64::from(read.lat),
+                source: match read.source {
+                    ReadSource::Radar => CoordReadSource::Radar,
+                    ReadSource::Region => CoordReadSource::Region,
+                },
+            },
+            Err(refusal) => Self::Refused {
+                refusal: refusal.into(),
+            },
+        }
+    }
+}
+
+/// The hand-drawn region's calibration flow: its phase, and the region
+/// (null until one has been drawn).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CoordCalibrationStatus {
     pub phase: CoordCalibrationPhase,
     pub region: Nullable<CoordRegionDto>,
-    pub last_validation: Nullable<CoordScanResult>,
 }
 
 impl Api {
@@ -1157,11 +1310,10 @@ impl Api {
                     h: region.h,
                 })
                 .into(),
-            last_validation: service.last_validation().map(CoordScanResult::from).into(),
         }
     }
 
-    /// Begin the two-point capture calibration; Enter arms with it.
+    /// Begin the two-point region calibration; Enter arms with it.
     pub fn maps_calibration_start(&self) -> Result<CoordCalibrationStatus, ApiError> {
         let service = self.coord_capture()?;
         service.calibration_start();
@@ -1192,28 +1344,222 @@ impl Api {
         Ok(self.coord_status(service))
     }
 
-    /// One coordinate scan, gated against the named planet's calibrated
-    /// map bounds when it has them.
-    pub fn maps_scan_coordinates(
-        &self,
-        planet: Option<String>,
-    ) -> Result<CoordScanResult, ApiError> {
+    /// The player's position on `planet`, each value checked against the
+    /// planet's coordinates; a planet without known coordinates is
+    /// refused without capturing anything.
+    pub fn maps_scan_coordinates(&self, planet: String) -> Result<CoordScanResult, ApiError> {
         let service = self.coord_capture()?;
-        let bounds = planet
-            .as_deref()
-            .and_then(|name| {
-                self.planet_maps
-                    .as_ref()
-                    .and_then(|store| store.record(name))
-                    .and_then(|record| record.calibration.as_ref())
-            })
-            .map(|cal| eo_services::coord_capture::CoordBounds {
-                lon_min: cal.bounds.lon_min,
-                lon_max: cal.bounds.lon_max,
-                lat_min: cal.bounds.lat_min,
-                lat_max: cal.bounds.lat_max,
-            });
-        Ok(service.scan(bounds).into())
+        Ok(service
+            .scan(&planet, self.planet_bounds(&planet), Trigger::Player)
+            .into())
+    }
+
+    /// A calibrated planet's coordinates, as the readers check them.
+    fn planet_bounds(&self, planet: &str) -> Option<CoordinateBounds> {
+        let bounds = self
+            .planet_maps
+            .as_ref()?
+            .record(planet)?
+            .calibration
+            .as_ref()?
+            .bounds;
+        Some(CoordinateBounds {
+            lon: (bounds.lon_min, bounds.lon_max),
+            lat: (bounds.lat_min, bounds.lat_max),
+        })
+    }
+}
+
+// ── Radar guidance ──────────────────────────────────────────────────
+
+/// Why radar guidance stopped by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RadarGuidanceStop {
+    /// Screen capture was not allowed; guidance does not ask again by
+    /// itself.
+    CaptureNotAllowed,
+    /// The radar was not on the screen for a while.
+    RadarNotSeen,
+    /// The radar cannot be placed: no interface profile, no hand
+    /// calibration.
+    ReaderUnavailable,
+    /// Looking for the radar failed unexpectedly.
+    Failed,
+}
+
+/// Why a placement has no scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RadarScaleMissing {
+    /// The rings are there but their distances did not read: the game
+    /// can hide them.
+    LabelsUnread,
+    /// No rings were found to measure.
+    NoRings,
+    /// No text recogniser is available to read the distances.
+    NoReader,
+}
+
+/// Where the radar's ring distances are printed, in shares of the radius
+/// along the line from the centre to the right edge: nothing drawn over
+/// the radar may enter it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RadarLabelStrip {
+    pub from: f64,
+    pub to: f64,
+    pub half_height: f64,
+}
+
+/// Why running guidance has no placement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RadarGuidanceLoss {
+    RadarNotFound,
+    GameWindowNotFound,
+    GameWindowOffScreen,
+    CaptureFailed,
+}
+
+/// Where a placement came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RadarPlacementSource {
+    /// The radar was found on the screen.
+    Found,
+    /// The player's hand calibration, the radar not being found.
+    Calibrated,
+}
+
+/// The radar's scale, read from its ring distances.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RadarScale {
+    pub metres_per_pixel: f64,
+    /// How far the radar's edge is from the player, in metres.
+    pub edge_range_m: f64,
+}
+
+/// Radar guidance, as the overlays show it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RadarGuidance {
+    /// Not running; when it stopped by itself, why.
+    Off {
+        stopped: Nullable<RadarGuidanceStop>,
+    },
+    /// Running, its first look not yet in.
+    Searching,
+    /// The radar's place on the screen, in physical pixels.
+    #[serde(rename_all = "camelCase")]
+    Placed {
+        centre_x: f64,
+        centre_y: f64,
+        radius_px: f64,
+        /// The screen column right of which a window beside the radar
+        /// covers neither the radar nor the coordinates under it.
+        clear_right_x: f64,
+        source: RadarPlacementSource,
+        /// Null when the ring distances are hidden or did not read, or the
+        /// placement is the hand calibration's: the overlay then shows
+        /// direction only.
+        scale: Nullable<RadarScale>,
+        /// Why there is no scale, once two looks agree; null otherwise.
+        scale_missing: Nullable<RadarScaleMissing>,
+        /// Null without an interface profile.
+        label_strip: Nullable<RadarLabelStrip>,
+    },
+    Lost {
+        reason: RadarGuidanceLoss,
+    },
+}
+
+impl From<ServiceGuidance> for RadarGuidance {
+    fn from(guidance: ServiceGuidance) -> Self {
+        match guidance {
+            ServiceGuidance::Off { stopped } => Self::Off {
+                stopped: stopped
+                    .map(|stop| match stop {
+                        GuidanceStop::CaptureNotAllowed => RadarGuidanceStop::CaptureNotAllowed,
+                        GuidanceStop::RadarNotSeen => RadarGuidanceStop::RadarNotSeen,
+                        GuidanceStop::ReaderUnavailable => RadarGuidanceStop::ReaderUnavailable,
+                        GuidanceStop::Failed => RadarGuidanceStop::Failed,
+                    })
+                    .into(),
+            },
+            ServiceGuidance::Searching => Self::Searching,
+            ServiceGuidance::Placed(placement) => Self::Placed {
+                centre_x: placement.centre_x,
+                centre_y: placement.centre_y,
+                radius_px: placement.radius_px,
+                clear_right_x: placement.clear_right_x,
+                source: match placement.source {
+                    PlacementSource::Found => RadarPlacementSource::Found,
+                    PlacementSource::Calibrated => RadarPlacementSource::Calibrated,
+                },
+                scale: placement
+                    .scale
+                    .map(|scale| RadarScale {
+                        metres_per_pixel: scale.metres_per_pixel,
+                        edge_range_m: scale.edge_range_m,
+                    })
+                    .into(),
+                scale_missing: placement
+                    .scale_missing
+                    .map(|missing| match missing {
+                        ScaleMissing::LabelsUnread => RadarScaleMissing::LabelsUnread,
+                        ScaleMissing::NoRings => RadarScaleMissing::NoRings,
+                        ScaleMissing::NoReader => RadarScaleMissing::NoReader,
+                    })
+                    .into(),
+                label_strip: placement
+                    .label_strip
+                    .map(|strip| RadarLabelStrip {
+                        from: strip.from,
+                        to: strip.to,
+                        half_height: strip.half_height,
+                    })
+                    .into(),
+            },
+            ServiceGuidance::Lost(loss) => Self::Lost {
+                reason: match loss {
+                    GuidanceLoss::RadarNotFound => RadarGuidanceLoss::RadarNotFound,
+                    GuidanceLoss::GameWindowNotFound => RadarGuidanceLoss::GameWindowNotFound,
+                    GuidanceLoss::GameWindowOffScreen => RadarGuidanceLoss::GameWindowOffScreen,
+                    GuidanceLoss::CaptureFailed => RadarGuidanceLoss::CaptureFailed,
+                },
+            },
+        }
+    }
+}
+
+impl Api {
+    /// Where radar guidance stands.
+    pub fn radar_guidance(&self) -> Result<RadarGuidance, ApiError> {
+        Ok(self.navigation()?.radar_guidance().into())
+    }
+
+    /// Start radar guidance for the live route (the shell does, as it
+    /// shows the overlays); answers the status after the first look.
+    /// Guidance stops with the overlays (`navigation_set_overlays_shown`).
+    pub async fn radar_guidance_start(&self) -> Result<RadarGuidance, ApiError> {
+        Ok(self.navigation()?.guidance_start().await.into())
+    }
+
+    /// Stop radar guidance and wait briefly for its worker, at app exit.
+    pub fn radar_guidance_shutdown(&self) {
+        if let Some(navigation) = self.navigation.as_ref() {
+            navigation.guidance_shutdown();
+        }
+    }
+
+    /// The sink told whenever radar guidance's status changes: the shell's
+    /// placement of the overlays.
+    pub fn set_radar_guidance_changed(&self, sink: Arc<dyn Fn() + Send + Sync>) {
+        if let Some(navigation) = self.navigation.as_ref() {
+            navigation.set_guidance_changed(sink);
+        }
     }
 }
 
@@ -1394,5 +1740,164 @@ fn to_dto(record: &eo_services::planet_maps::PlanetMapRecord) -> PlanetMap {
                 },
             })
             .into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_scan_refusal_reaches_the_wire_by_name_and_without_a_coordinate() {
+        for (refusal, reason) in [
+            (ServiceCoordRefusal::ReaderUnavailable, "readerUnavailable"),
+            (ServiceCoordRefusal::PlanetUnknown, "planetUnknown"),
+            (
+                ServiceCoordRefusal::GameWindowNotFound,
+                "gameWindowNotFound",
+            ),
+            (
+                ServiceCoordRefusal::GameWindowOffScreen,
+                "gameWindowOffScreen",
+            ),
+            (ServiceCoordRefusal::CaptureFailed, "captureFailed"),
+            (ServiceCoordRefusal::CaptureNotAllowed, "captureNotAllowed"),
+            (ServiceCoordRefusal::RadarNotFound, "radarNotFound"),
+            (ServiceCoordRefusal::OtherPlanet, "otherPlanet"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(CoordScanResult::from(Err(refusal))).unwrap(),
+                serde_json::json!({
+                    "kind": "refused",
+                    "refusal": {"reason": reason, "lon": null, "lat": null},
+                }),
+                "{refusal:?}"
+            );
+        }
+        for (value, name) in [
+            (ValueRefusal::OffScreen, "offScreen"),
+            (ValueRefusal::Covered, "covered"),
+            (ValueRefusal::NotFound, "notFound"),
+            (ValueRefusal::Unclear, "unclear"),
+            (ValueRefusal::OutOfBounds, "outOfBounds"),
+        ] {
+            let refused = ServiceCoordRefusal::NotRead {
+                lon: None,
+                lat: Some(value),
+            };
+            assert_eq!(
+                serde_json::to_value(CoordScanResult::from(Err(refused))).unwrap(),
+                serde_json::json!({
+                    "kind": "refused",
+                    "refusal": {"reason": "notRead", "lon": null, "lat": name},
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_position_refusal_rides_beside_no_run() {
+        let result = position_to_dto(
+            PositionUpdate::NotRead(ServiceCoordRefusal::NotRead {
+                lon: Some(ValueRefusal::Covered),
+                lat: None,
+            }),
+            |_| None,
+        );
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({
+                "status": "notRead",
+                "run": null,
+                "refusal": {"reason": "notRead", "lon": "covered", "lat": null},
+                "stopped": null,
+            })
+        );
+        for (update, status) in [
+            (PositionUpdate::JumpRefused, "jumpRefused"),
+            (PositionUpdate::Superseded, "superseded"),
+            (PositionUpdate::NoActiveRun, "noActiveRun"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(position_to_dto(update, |_| None)).unwrap(),
+                serde_json::json!({"status": status, "run": null, "refusal": null, "stopped": null})
+            );
+        }
+        for (why, name) in [
+            (PollStop::OverlaysHidden, "overlaysHidden"),
+            (PollStop::NotReading, "notReading"),
+            (PollStop::CaptureNotAllowed, "captureNotAllowed"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(position_to_dto(PositionUpdate::PollStopped(why), |_| None))
+                    .unwrap(),
+                serde_json::json!({"status": "pollStopped", "run": null, "refusal": null, "stopped": name})
+            );
+        }
+    }
+
+    #[test]
+    fn every_guidance_state_reaches_the_wire() {
+        use eo_services::navigation::RadarPlacement;
+        for (guidance, wire) in [
+            (
+                ServiceGuidance::Off {
+                    stopped: Some(GuidanceStop::CaptureNotAllowed),
+                },
+                serde_json::json!({"kind": "off", "stopped": "captureNotAllowed"}),
+            ),
+            (
+                ServiceGuidance::Off {
+                    stopped: Some(GuidanceStop::RadarNotSeen),
+                },
+                serde_json::json!({"kind": "off", "stopped": "radarNotSeen"}),
+            ),
+            (
+                ServiceGuidance::Searching,
+                serde_json::json!({"kind": "searching"}),
+            ),
+            (
+                ServiceGuidance::Lost(GuidanceLoss::RadarNotFound),
+                serde_json::json!({"kind": "lost", "reason": "radarNotFound"}),
+            ),
+            (
+                ServiceGuidance::Placed(RadarPlacement {
+                    centre_x: 100.0,
+                    centre_y: 200.0,
+                    radius_px: 113.0,
+                    clear_right_x: 230.0,
+                    source: PlacementSource::Found,
+                    scale: None,
+                    scale_missing: Some(ScaleMissing::LabelsUnread),
+                    label_strip: Some(eo_services::coord_capture::LabelStrip {
+                        from: 0.1,
+                        to: 1.0,
+                        half_height: 0.1,
+                    }),
+                }),
+                serde_json::json!({
+                    "kind": "placed",
+                    "centreX": 100.0,
+                    "centreY": 200.0,
+                    "radiusPx": 113.0,
+                    "clearRightX": 230.0,
+                    "source": "found",
+                    "scale": null,
+                    "scaleMissing": "labelsUnread",
+                    "labelStrip": {"from": 0.1, "to": 1.0, "halfHeight": 0.1},
+                }),
+            ),
+            (
+                ServiceGuidance::Off {
+                    stopped: Some(GuidanceStop::Failed),
+                },
+                serde_json::json!({"kind": "off", "stopped": "failed"}),
+            ),
+        ] {
+            assert_eq!(
+                serde_json::to_value(RadarGuidance::from(guidance)).unwrap(),
+                wire
+            );
+        }
     }
 }

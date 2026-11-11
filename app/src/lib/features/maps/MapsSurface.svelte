@@ -292,7 +292,7 @@
 	mapViewId={model.selectedViewId}
 	onsubmit={controller.submitPinForm}
 />
-<CalibrationModal bind:open={calibrationOpen} />
+<CalibrationModal bind:open={calibrationOpen} planet={model.selected?.calibration ? model.selected.name : null} />
 <RadarCalibrationModal bind:open={radarCalibrationOpen} oncomplete={() => {
 	if (navigation) void showNavigationOverlays();
 }} />

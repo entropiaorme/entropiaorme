@@ -53,6 +53,33 @@ pub struct RadarProfile {
     pub rings: RingProfile,
     /// The coordinates printed under the disc.
     pub coordinates: CoordinatesProfile,
+    /// The planet's name printed above the disc.
+    pub planet: PlanetLabelProfile,
+    /// A reader that found the radar captures only round it next time:
+    /// the disc, the coordinates under it and the name above it, with
+    /// this much more on every side, as a share of the radius.
+    pub neighbourhood_margin: f64,
+}
+
+/// The planet's name, printed over the scene centred above the disc.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlanetLabelProfile {
+    /// The band holding the name, from and to, in shares of the disc's
+    /// radius above the disc's highest point.
+    pub band: [f64; 2],
+    /// How far the band reaches either side of the disc's centre, as a
+    /// share of the radius.
+    pub reach: f64,
+    /// The name is centred over the disc: its middle lies within this
+    /// share of the radius of the disc's centre.
+    pub centred: f64,
+    /// Rows above and below the lettering that a window may not reach
+    /// into.
+    pub guard_rows: i32,
+    /// How the lettering's strokes group into runs.
+    pub lettering: TextProfile,
+    /// How the lettering is told from the scene behind it.
+    pub stroke: StrokeProfile,
 }
 
 /// The map disc, its rim and the player's dot.
@@ -243,6 +270,26 @@ pub struct Radar {
 }
 
 impl Radar {
+    /// Everything a reader of the radar looks at: the disc and its rim,
+    /// the band under it where the coordinates are printed, and the band
+    /// above it where the planet's name is, with the profile's margin.
+    pub fn neighbourhood(&self, profile: &RadarProfile) -> Rect {
+        let r = self.radius;
+        let side = r
+            * (1.0
+                + profile
+                    .coordinates
+                    .band_reach
+                    .max(profile.planet.reach - 1.0));
+        let margin = profile.neighbourhood_margin * r;
+        Rect::new(
+            (self.x - side - margin).floor() as i32,
+            (self.y - r - profile.planet.band[1] * r - margin).floor() as i32,
+            (self.x + side + margin).ceil() as i32,
+            (self.y + r + profile.coordinates.band[1] * r + margin).ceil() as i32,
+        )
+    }
+
     /// The disc's bounding rectangle.
     pub fn disc(&self) -> Rect {
         Rect::new(
@@ -783,6 +830,82 @@ pub fn ring_scale(
     })
 }
 
+/// Whether `radar` shows its range rings: rings stand out round its
+/// centre, whether or not their distances are printed or read. A scale
+/// that did not read from rings that are there means their labels did
+/// not read (the client can hide them); no rings at all is another
+/// matter.
+pub fn rings_found(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> bool {
+    let windows: Vec<Rect> = find_windows(image, &profile.chrome)
+        .into_iter()
+        .map(|w| w.rect)
+        .collect();
+    ring_radii(image, radar, &windows, &profile.radar.rings).is_some_and(|radii| !radii.is_empty())
+}
+
+/// The planet's name printed above `radar`, when it reads as exactly one
+/// of `names` (compared without regard to case or repeated spaces); the
+/// name is answered as `names` spells it. `None` when the name is not in
+/// view, is covered or cut, or reads as anything else: a name that did
+/// not read says nothing about where the player is.
+///
+/// The name is centred above the disc, the one piece of lettering there
+/// near the disc's middle; it must lie wholly inside its band, clear of
+/// any window.
+pub fn read_planet_label(
+    image: &BgrImage,
+    radar: &Radar,
+    profile: &UiProfile,
+    names: &[&str],
+    recogniser: &dyn Recogniser,
+) -> Option<String> {
+    let label = &profile.radar.planet;
+    let r = radar.radius;
+    let top = radar.y - r;
+    let band = Rect::new(
+        (radar.x - label.reach * r).floor() as i32,
+        (top - label.band[1] * r).floor() as i32,
+        (radar.x + label.reach * r).ceil() as i32,
+        (top - label.band[0] * r).ceil() as i32,
+    )
+    .intersect(&Rect::new(0, 0, image.width() - 1, image.height() - 1))?;
+    let windows: Vec<Rect> = find_windows(image, &profile.chrome)
+        .into_iter()
+        .map(|w| w.rect)
+        .collect();
+    let runs = scenery_runs(image, band, &label.lettering, &label.stroke, &windows);
+    let mut centred = runs.iter().filter(|run| {
+        let middle = (run.rect.x0 + run.rect.x1) as f64 / 2.0;
+        (middle - radar.x).abs() <= label.centred * r
+    });
+    let run = centred.next()?;
+    if centred.next().is_some() {
+        return None;
+    }
+    let rect = run.rect;
+    // Lettering at the band's edge may be cut, and a cut name can read as
+    // a shorter name that is also a planet's.
+    if rect.x0 <= band.x0 || rect.y0 <= band.y0 || rect.x1 >= band.x1 || rect.y1 >= band.y1 {
+        return None;
+    }
+    let guard = rect.padded(label.guard_rows);
+    if windows.iter().any(|w| w.intersect(&guard).is_some()) {
+        return None;
+    }
+    let (raw, _) = read_run(image, rect, &profile.read, recogniser)?;
+    let spoken = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let read = spoken(&raw);
+    names
+        .iter()
+        .find(|name| spoken(name) == read)
+        .map(|name| name.to_string())
+}
+
 /// The range of coordinates a value may have: those of the planet the
 /// player is on, which the caller knows from the map selected. Each pair
 /// is `(least, most)`, inclusive.
@@ -1143,123 +1266,10 @@ pub fn read_coordinates(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game_ui::test_support::{blank, bundled_profile, draw_window, fill, put, Lcg};
-
-    const MAP: [u8; 3] = [59, 146, 55];
-    const RING: [u8; 3] = [111, 171, 131];
-    const RIM: [u8; 3] = [28, 30, 29];
-    const BEVEL: [u8; 3] = [92, 92, 92];
-    const DOT: [u8; 3] = [250, 255, 251];
-
-    /// Scenery: a dull, uneven ground with nothing green or white in it.
-    fn scenery(w: usize, h: usize, seed: u64) -> BgrImage {
-        let mut rng = Lcg(seed);
-        let mut image = blank(w, h, [0, 0, 0]);
-        for y in 0..h as i32 {
-            for x in 0..w as i32 {
-                let v = rng.range(-25, 25);
-                let base = [130 + v, 112 + v, 90 + v / 2];
-                put(&mut image, x, y, base.map(|c| c as u8));
-            }
-        }
-        image
-    }
-
-    fn within(x: i32, y: i32, (cx, cy): (f64, f64), r: f64) -> bool {
-        let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
-        dx * dx + dy * dy < r * r
-    }
-
-    /// Draw a radar the way the client does: the green map, its range
-    /// rings, a dark line and some mobs across the map, the player's dot,
-    /// and a dark rim with round buttons set into it. `centre` is the
-    /// pixel the dot is drawn on; `rings` are radii in pixels.
-    fn draw_radar(image: &mut BgrImage, centre: (i32, i32), radius: i32, rings: &[f64], dot: bool) {
-        let (cx, cy) = (centre.0 as f64 + 0.5, centre.1 as f64 + 0.5);
-        let r = radius as f64;
-        let rim = (r * 0.12).max(8.0);
-        let reach = (r + rim).ceil() as i32 + 1;
-        for y in centre.1 - reach..=centre.1 + reach {
-            for x in centre.0 - reach..=centre.0 + reach {
-                let d = ((x as f64 + 0.5 - cx).powi(2) + (y as f64 + 0.5 - cy).powi(2)).sqrt();
-                if d < r {
-                    let ring = rings.iter().any(|ring| (d - ring).abs() < 0.5);
-                    put(image, x, y, if ring { RING } else { MAP });
-                } else if d < r + rim {
-                    let bevel = (d - r - rim / 2.0).abs() < 1.0;
-                    put(image, x, y, if bevel { BEVEL } else { RIM });
-                }
-            }
-        }
-        // A dark contour line across the map, and a cluster of mobs.
-        for k in -(radius * 3 / 4)..(radius * 3 / 4) {
-            for t in 0..2 {
-                put(
-                    image,
-                    centre.0 + k,
-                    centre.1 + radius / 3 + k / 4 + t,
-                    [30, 46, 28],
-                );
-            }
-        }
-        for (mx, my) in [
-            (radius / 4, -radius / 3),
-            (radius / 5, -radius / 4),
-            (-radius / 2, radius / 6),
-        ] {
-            fill(
-                image,
-                Rect::new(
-                    centre.0 + mx,
-                    centre.1 + my,
-                    centre.0 + mx + 4,
-                    centre.1 + my + 4,
-                ),
-                [220, 30, 30],
-            );
-        }
-        // Buttons straddling the rim on the upper left and lower right.
-        for degrees in [200.0f64, 215.0, 230.0, 245.0, 30.0, 45.0] {
-            let a = degrees.to_radians();
-            let (bx, by) = (
-                cx + (r + rim / 2.0) * a.cos(),
-                cy + (r + rim / 2.0) * a.sin(),
-            );
-            let br = rim * 0.9;
-            for y in (by - br) as i32..=(by + br) as i32 {
-                for x in (bx - br) as i32..=(bx + br) as i32 {
-                    if within(x, y, (bx, by), br) {
-                        put(
-                            image,
-                            x,
-                            y,
-                            if within(x, y, (bx, by), br * 0.5) {
-                                [235, 235, 235]
-                            } else {
-                                [12, 12, 12]
-                            },
-                        );
-                    }
-                }
-            }
-        }
-        if dot {
-            let s = (radius / 40).max(1);
-            fill(
-                image,
-                Rect::new(
-                    centre.0 - s / 2,
-                    centre.1 - s / 2,
-                    centre.0 - s / 2 + s,
-                    centre.1 - s / 2 + s,
-                ),
-                DOT,
-            );
-        }
-    }
-
-    /// The rings the client draws at the default zoom.
-    const RINGS: [f64; 3] = [26.0, 52.0, 103.0];
+    use crate::game_ui::test_support::{
+        blank, bundled_profile, draw_radar, draw_window, fill, put, scenery, within, Printed,
+        RadarScene, DOT, HEIGHT, MAP, PITCH, RIM, RINGS, RING_LABELS, SHADOW,
+    };
 
     fn assert_found(found: Option<Radar>, centre: (i32, i32), radius: i32) {
         let found = found.unwrap_or_else(|| panic!("no radar found at {centre:?} radius {radius}"));
@@ -1395,187 +1405,11 @@ mod tests {
         assert_eq!(find_dot(&image, (f64::NAN, 100.0), 80.0, &dot), None);
     }
 
-    // Lettering. Each piece is drawn as white glyph outlines on its own
-    // dark shadow, the way the client sets lettering over the scene and
-    // its ring distances over the map, each in a faint tint of its own.
-    // The stand-in recogniser reads a crop as the texts whose tints it
-    // holds, left to right, so lettering that touches reads as the client's
-    // does: `50 m100 m`.
-
-    struct Scene {
-        image: BgrImage,
-        palette: Vec<([u8; 3], String)>,
-    }
-
-    impl Scene {
-        fn new(seed: u64) -> Self {
-            Self {
-                image: scenery(1280, 760, seed),
-                palette: Vec::new(),
-            }
-        }
-
-        fn tint(&mut self, base: [u8; 3], text: &str) -> [u8; 3] {
-            let i = self.palette.len() as u8;
-            let tint = [base[0] - i * 2, base[1], base[2] - i];
-            self.palette.push((tint, text.to_string()));
-            tint
-        }
-
-        /// Glyph outlines filling columns `x0..=x1`, `glyph` wide, from
-        /// `y0`, `height` tall, the first at `x0` and the last ending at
-        /// `x1`; nothing is drawn when `x1 < x0`.
-        fn glyphs(
-            &mut self,
-            (x0, x1): (i32, i32),
-            y0: i32,
-            height: i32,
-            count: i32,
-            tint: [u8; 3],
-        ) {
-            if x1 < x0 || count < 1 {
-                return;
-            }
-            let glyph = if count == 1 {
-                x1 - x0 + 1
-            } else {
-                ((x1 - x0 + 1) - 2 * (count - 1)) / count
-            };
-            for k in 0..count {
-                let gx = if k == count - 1 {
-                    x1 - glyph + 1
-                } else {
-                    x0 + k * ((x1 - x0 + 1 - glyph) / (count - 1).max(1))
-                };
-                let y1 = y0 + height - 1;
-                for x in gx..gx + glyph {
-                    put(&mut self.image, x, y0, tint);
-                    put(&mut self.image, x, y1, tint);
-                }
-                for y in y0..=y1 {
-                    put(&mut self.image, gx, y, tint);
-                    put(&mut self.image, gx + glyph - 1, y, tint);
-                }
-            }
-        }
-
-        fn recogniser(&self) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
-            let palette = self.palette.clone();
-            move |crop: &BgrImage| {
-                let mut seen: Vec<(usize, f64, usize)> = Vec::new();
-                for (i, px) in crop.data.chunks(3).enumerate() {
-                    let rgb = [px[2], px[1], px[0]];
-                    if let Some(k) = palette.iter().position(|(c, _)| *c == rgb) {
-                        let x = (i % crop.w) as f64;
-                        match seen.iter_mut().find(|s| s.0 == k) {
-                            Some(s) => {
-                                s.1 += x;
-                                s.2 += 1;
-                            }
-                            None => seen.push((k, x, 1)),
-                        }
-                    }
-                }
-                seen.sort_by(|a, b| (a.1 / a.2 as f64).total_cmp(&(b.1 / b.2 as f64)));
-                let text: String = seen.iter().map(|s| palette[s.0].1.clone()).collect();
-                Some((text, 0.99))
-            }
-        }
-    }
-
-    const WHITE: [u8; 3] = [255, 255, 250];
-    const PALE_GREEN: [u8; 3] = [196, 240, 200];
-    const SHADOW: [u8; 3] = [22, 30, 22];
-
-    /// The digit pitch of the drawn coordinates, and the lettering's height.
-    const PITCH: i32 = 8;
-    const HEIGHT: i32 = 11;
-
-    /// How a coordinate's lettering is drawn: the label's ink, the space,
-    /// and `digits` digit glyphs at `pitch`, the last ending two columns
-    /// short of a whole pitch as the client's do.
-    #[derive(Clone, Copy)]
-    struct Lettering {
-        pitch: i32,
-        digits: i32,
-        space: bool,
-    }
-
-    impl Lettering {
-        fn of(digits: i32) -> Self {
-            Self {
-                pitch: PITCH,
-                digits,
-                space: true,
-            }
-        }
-
-        fn widths(&self, value: &CoordinateProfile) -> (i32, i32, i32) {
-            let p = self.pitch as f64;
-            let label = (value.label_pitches * p).round() as i32;
-            let space = if self.space {
-                (value.space_pitches * p).round() as i32
-            } else {
-                0
-            };
-            let digits = if self.digits > 0 {
-                self.digits * self.pitch - 2
-            } else {
-                0
-            };
-            (label, space, digits)
-        }
-    }
-
-    impl Scene {
-        /// Draw a value's lettering with its left end at `x0`, read as
-        /// `text`; returns its rectangle.
-        fn value(
-            &mut self,
-            x0: i32,
-            y0: i32,
-            value: &CoordinateProfile,
-            drawn: Lettering,
-            text: &str,
-        ) -> Rect {
-            let (label, space, digits) = drawn.widths(value);
-            let x1 = x0 + label + space + digits - 1;
-            let rect = Rect::new(x0, y0, x1, y0 + HEIGHT - 1);
-            fill(&mut self.image, rect.padded(1), SHADOW);
-            let tint = self.tint(WHITE, text);
-            self.glyphs((x0, x0 + label - 1), y0, HEIGHT, 3, tint);
-            let d0 = x0 + label + space;
-            for k in 0..drawn.digits {
-                let gx = d0 + k * drawn.pitch;
-                self.glyphs((gx, gx + drawn.pitch - 3), y0, HEIGHT, 1, tint);
-            }
-            rect
-        }
-
-        /// The width of a value's lettering as drawn.
-        fn width_of(value: &CoordinateProfile, drawn: Lettering) -> i32 {
-            let (label, space, digits) = drawn.widths(value);
-            label + space + digits
-        }
-
-        /// A ring's distance label, centred over the ring where it crosses
-        /// the line to the disc's right edge.
-        fn ring_label(&mut self, centre: (i32, i32), radius: f64, text: &str) {
-            let chars = text.chars().count() as i32;
-            let width = chars * 6 - 2;
-            let x0 = centre.0 + radius.round() as i32 - width / 2;
-            let rect = Rect::new(x0, centre.1 - 3, x0 + width - 1, centre.1 + 3);
-            fill(&mut self.image, rect.padded(1), SHADOW);
-            let tint = self.tint(PALE_GREEN, text);
-            self.glyphs((rect.x0, rect.x1), rect.y0, rect.height(), chars, tint);
-        }
-    }
-
     // Ring scale.
 
     fn scale_of(radius: i32, rings: &[f64], labels: &[&str]) -> Option<RingScale> {
         let profile = bundled_profile();
-        let mut scene = Scene::new(radius as u64 + 50);
+        let mut scene = RadarScene::new(radius as u64 + 50);
         let centre = (640, 380);
         draw_radar(&mut scene.image, centre, radius, rings, true);
         for (ring, label) in rings.iter().zip(labels) {
@@ -1585,7 +1419,7 @@ mod tests {
         ring_scale(&scene.image, &radar, &profile, &scene.recogniser())
     }
 
-    const LABELS: [&str; 3] = ["50 m", "100 m", "200 m"];
+    const LABELS: [&str; 3] = RING_LABELS;
 
     #[test]
     fn the_rings_and_their_distances_give_one_scale_whatever_the_radars_size() {
@@ -1664,7 +1498,7 @@ mod tests {
     #[test]
     fn a_window_over_part_of_the_map_is_left_out_of_the_rings() {
         let profile = bundled_profile();
-        let mut scene = Scene::new(77);
+        let mut scene = RadarScene::new(77);
         let (centre, radius) = ((640, 380), 113);
         draw_radar(&mut scene.image, centre, radius, &RINGS, true);
         for (ring, label) in RINGS.iter().zip(LABELS) {
@@ -1685,7 +1519,7 @@ mod tests {
     fn a_profile_without_a_brightness_floor_gives_no_scale_rather_than_nonsense() {
         let mut profile = bundled_profile();
         profile.radar.rings.prominence = 0.0;
-        let mut scene = Scene::new(78);
+        let mut scene = RadarScene::new(78);
         draw_radar(&mut scene.image, (640, 380), 113, &RINGS, true);
         for (ring, label) in RINGS.iter().zip(LABELS) {
             scene.ring_label((640, 380), *ring, label);
@@ -1728,40 +1562,19 @@ mod tests {
         lat: (0, 999_999),
     };
 
-    /// A radar with its coordinates printed under it: `lon` and `lat` are
-    /// what the recogniser reads, each drawn as `Lettering` says, or not
-    /// drawn when `None`.
-    fn scene_with(
-        centre: (i32, i32),
-        radius: i32,
-        lon: Option<(&str, Lettering)>,
-        lat: Option<(&str, Lettering)>,
-    ) -> Scene {
-        let coords = bundled_profile().radar.coordinates;
-        let mut scene = Scene::new(radius as u64 + 99);
-        draw_radar(&mut scene.image, centre, radius, &RINGS, true);
-        let top = centre.1 + radius + (radius as f64 * 0.27) as i32;
-        if let Some((text, drawn)) = lon {
-            scene.value(centre.0 - radius, top, &coords.lon, drawn, text);
-        }
-        if let Some((text, drawn)) = lat {
-            let right = centre.0 + radius - (0.6 * drawn.pitch as f64).round() as i32;
-            let width = Scene::width_of(&coords.lat, drawn);
-            scene.value(right - width + 1, top, &coords.lat, drawn, text);
-        }
-        scene
-    }
-
-    fn scene_with_coordinates(centre: (i32, i32), radius: i32, lon: &str, lat: &str) -> Scene {
-        scene_with(
+    fn scene_with_coordinates(centre: (i32, i32), radius: i32, lon: &str, lat: &str) -> RadarScene {
+        RadarScene::with_coordinates(
             centre,
             radius,
-            Some((lon, Lettering::of(5))),
-            Some((lat, Lettering::of(5))),
+            Some((lon, Printed::of(5))),
+            Some((lat, Printed::of(5))),
         )
     }
 
-    fn read_within(scene: &Scene, bounds: &CoordinateBounds) -> Result<Coordinates, CoordError> {
+    fn read_within(
+        scene: &RadarScene,
+        bounds: &CoordinateBounds,
+    ) -> Result<Coordinates, CoordError> {
         read_coordinates(
             &scene.image,
             &bundled_profile(),
@@ -1770,7 +1583,7 @@ mod tests {
         )
     }
 
-    fn read(scene: &Scene) -> Result<Coordinates, CoordError> {
+    fn read(scene: &RadarScene) -> Result<Coordinates, CoordError> {
         read_within(scene, &ANYWHERE)
     }
 
@@ -1801,12 +1614,14 @@ mod tests {
         // The other value is not on screen, so only each value's own
         // width can tell.
         for (lon, want) in [("LON 6773", "LON 6773"), ("LON 677399", "LON 677399")] {
-            let scene = scene_with((900, 200), 113, Some((lon, Lettering::of(5))), None);
+            let scene =
+                RadarScene::with_coordinates((900, 200), 113, Some((lon, Printed::of(5))), None);
             let got = read(&scene).expect("the radar is found");
             assert_eq!(got.lon, Err(CoordError::WrongWidth { raw: want.into() }));
             assert_eq!(got.lat, Err(CoordError::NotFound));
         }
-        let scene = scene_with((900, 200), 169, None, Some(("LAT 8774", Lettering::of(5))));
+        let scene =
+            RadarScene::with_coordinates((900, 200), 169, None, Some(("LAT 8774", Printed::of(5))));
         let got = read(&scene).expect("the radar is found");
         assert_eq!(
             got.lat,
@@ -1819,7 +1634,12 @@ mod tests {
     #[test]
     fn a_whole_reading_of_cut_lettering_is_refused() {
         // Lettering with only four digits in view, read as five.
-        let scene = scene_with((900, 200), 113, Some(("LON 67739", Lettering::of(4))), None);
+        let scene = RadarScene::with_coordinates(
+            (900, 200),
+            113,
+            Some(("LON 67739", Printed::of(4))),
+            None,
+        );
         let got = read(&scene).expect("the radar is found");
         assert_eq!(
             got.lon,
@@ -1831,11 +1651,11 @@ mod tests {
         // that show, its end is a digit short of the edge.
         let coords = bundled_profile().radar.coordinates;
         let (centre, radius) = ((900, 200), 113);
-        let mut scene = Scene::new(5);
+        let mut scene = RadarScene::new(5);
         draw_radar(&mut scene.image, centre, radius, &RINGS, true);
-        let drawn = Lettering::of(4);
+        let drawn = Printed::of(4);
         let right = centre.0 + radius - (0.6 * PITCH as f64).round() as i32 - PITCH;
-        let width = Scene::width_of(&coords.lat, drawn);
+        let width = RadarScene::width_of(&coords.lat, drawn);
         scene.value(
             right - width + 1,
             centre.1 + radius + 30,
@@ -1854,11 +1674,16 @@ mod tests {
 
     #[test]
     fn lettering_widened_by_the_scene_is_refused() {
-        let mut scene = scene_with((900, 200), 113, Some(("LON 67739", Lettering::of(5))), None);
+        let mut scene = RadarScene::with_coordinates(
+            (900, 200),
+            113,
+            Some(("LON 67739", Printed::of(5))),
+            None,
+        );
         // A pale speck with shadow just past the last digit joins the run.
         let coords = bundled_profile().radar.coordinates;
         let top = 200 + 113 + 30;
-        let end = 900 - 113 + Scene::width_of(&coords.lon, Lettering::of(5));
+        let end = 900 - 113 + RadarScene::width_of(&coords.lon, Printed::of(5));
         fill(
             &mut scene.image,
             Rect::new(end + 2, top + 2, end + 7, top + 8),
@@ -1880,11 +1705,11 @@ mod tests {
 
     #[test]
     fn a_label_run_into_its_digits_is_not_measured() {
-        let drawn = Lettering {
+        let drawn = Printed {
             space: false,
-            ..Lettering::of(5)
+            ..Printed::of(5)
         };
-        let scene = scene_with((900, 200), 113, Some(("LON 67739", drawn)), None);
+        let scene = RadarScene::with_coordinates((900, 200), 113, Some(("LON 67739", drawn)), None);
         let got = read(&scene).expect("the radar is found");
         assert_eq!(
             got.lon,
@@ -1898,11 +1723,11 @@ mod tests {
     fn a_value_outside_the_planets_coordinates_is_refused() {
         // Lettering cut short by something that is not a window: four
         // digits drawn and read, consistent with each other.
-        let scene = scene_with(
+        let scene = RadarScene::with_coordinates(
             (900, 200),
             113,
-            Some(("LON 6773", Lettering::of(4))),
-            Some(("LAT 87740", Lettering::of(5))),
+            Some(("LON 6773", Printed::of(4))),
+            Some(("LAT 87740", Printed::of(5))),
         );
         let planet = CoordinateBounds {
             lon: (16384, 90112),
@@ -1925,14 +1750,14 @@ mod tests {
     fn values_drawn_in_two_sizes_disagree_with_each_other() {
         // Each is as wide as its own label says, but the client prints
         // both in one font.
-        let big = Lettering {
+        let big = Printed {
             pitch: 10,
-            ..Lettering::of(5)
+            ..Printed::of(5)
         };
-        let scene = scene_with(
+        let scene = RadarScene::with_coordinates(
             (900, 200),
             169,
-            Some(("LON 67739", Lettering::of(5))),
+            Some(("LON 67739", Printed::of(5))),
             Some(("LAT 87740", big)),
         );
         let got = read(&scene).expect("the radar is found");
@@ -2037,24 +1862,24 @@ mod tests {
         let top = centre.1 + radius + 30;
         // Nothing printed; then lettering two heights in from the disc's
         // edge; then lettering running into the other half of the band.
-        let mut nothing = Scene::new(1);
+        let mut nothing = RadarScene::new(1);
         draw_radar(&mut nothing.image, centre, radius, &RINGS, true);
-        let mut shifted = Scene::new(2);
+        let mut shifted = RadarScene::new(2);
         draw_radar(&mut shifted.image, centre, radius, &RINGS, true);
         shifted.value(
             centre.0 - radius + 2 * HEIGHT,
             top,
             &coords.lon,
-            Lettering::of(5),
+            Printed::of(5),
             "LON 67739",
         );
-        let mut long = Scene::new(3);
+        let mut long = RadarScene::new(3);
         draw_radar(&mut long.image, centre, radius, &RINGS, true);
         long.value(
             centre.0 - radius,
             top,
             &coords.lon,
-            Lettering::of(14),
+            Printed::of(14),
             "LON 67739",
         );
         for (scene, want) in [
@@ -2068,7 +1893,7 @@ mod tests {
 
     #[test]
     fn without_a_radar_or_a_recogniser_nothing_is_read() {
-        let scene = Scene::new(4);
+        let scene = RadarScene::new(4);
         assert_eq!(read(&scene), Err(CoordError::RadarNotFound));
         let scene = scene_with_coordinates((900, 200), 113, "LON 67739", "LAT 87740");
         let none = |_: &BgrImage| -> Option<(String, f64)> { None };
@@ -2076,5 +1901,63 @@ mod tests {
             read_coordinates(&scene.image, &bundled_profile(), &ANYWHERE, &none),
             Err(CoordError::NoRecogniser)
         );
+    }
+
+    // The planet's name.
+
+    const PLANETS: [&str; 3] = ["Calypso", "Arkadia", "Arkadia Moon"];
+
+    fn label_scene(text: Option<&str>) -> (RadarScene, Radar) {
+        let (centre, radius) = ((640, 380), 113);
+        let mut scene = RadarScene::new(31);
+        scene.radar(centre, radius, &RINGS);
+        if let Some(text) = text {
+            scene.planet_label(centre, radius, text);
+        }
+        let radar = find_radar(&scene.image, &bundled_profile()).expect("the radar is found");
+        (scene, radar)
+    }
+
+    fn label_of(scene: &RadarScene, radar: &Radar) -> Option<String> {
+        read_planet_label(
+            &scene.image,
+            radar,
+            &bundled_profile(),
+            &PLANETS,
+            &scene.recogniser(),
+        )
+    }
+
+    #[test]
+    fn the_planets_name_above_the_radar_reads_as_the_planet_listed() {
+        let (scene, radar) = label_scene(Some("CALYPSO"));
+        assert_eq!(label_of(&scene, &radar), Some("Calypso".to_string()));
+        let (scene, radar) = label_scene(Some("Arkadia  Moon"));
+        assert_eq!(label_of(&scene, &radar), Some("Arkadia Moon".to_string()));
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_planet_or_not_shown_reads_as_nothing() {
+        for text in [None, Some("Calyps0"), Some("Caly"), Some("Monria")] {
+            let (scene, radar) = label_scene(text);
+            assert_eq!(label_of(&scene, &radar), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_under_a_window_reads_as_nothing() {
+        let (mut scene, radar) = label_scene(Some("Calypso"));
+        draw_window(&mut scene.image, Rect::new(300, 100, 650, 250));
+        assert_eq!(label_of(&scene, &radar), None);
+    }
+
+    #[test]
+    fn rings_are_told_from_their_labels() {
+        let (scene, radar) = label_scene(None);
+        assert!(rings_found(&scene.image, &radar, &bundled_profile()));
+        let mut plain = RadarScene::new(32);
+        plain.radar((640, 380), 113, &[]);
+        let radar = find_radar(&plain.image, &bundled_profile()).expect("the radar is found");
+        assert!(!rings_found(&plain.image, &radar, &bundled_profile()));
     }
 }

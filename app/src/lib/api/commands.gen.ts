@@ -852,14 +852,28 @@ export interface ConversionOutputLine {
 export type CoordCalibrationPhase = 'idle' | 'awaitTopLeft' | 'awaitBottomRight';
 
 /**
- * The calibration surface's assembled state: the flow phase, the
- * persisted region (null until a calibration completed), and the
- * validation read echoed after the last completion.
+ * The hand-drawn region's calibration flow: its phase, and the region
+ * (null until one has been drawn).
  */
 export interface CoordCalibrationStatus {
 	phase: CoordCalibrationPhase;
 	region: CoordRegionDto | null;
-	lastValidation: CoordScanResult | null;
+}
+
+/**
+ * What the coordinates were read from.
+ */
+export type CoordReadSource = 'radar' | 'region';
+
+/**
+ * Why a position was not read: the reason, and for `notRead`, each
+ * refused value's own reason (null for a value that read, whose number
+ * is not kept). It carries no coordinate.
+ */
+export interface CoordRefusal {
+	reason: CoordScanRefusal;
+	lon: CoordValueRefusal | null;
+	lat: CoordValueRefusal | null;
 }
 
 /**
@@ -873,26 +887,29 @@ export interface CoordRegionDto {
 }
 
 /**
- * One coordinate scan's answer: `status` names the outcome precisely
- * (a wrong read never masquerades as a position), and the extras ride
- * where the outcome carries them (the `CaptureResult` convention):
- * coordinates on `read` and `implausible`, the raw capture text only
- * on `unreadable` (where the UI shows it); a successful read's text is
- * its digits, so the parsed coordinates already carry everything and
- * the boundary hands the webview no more screen text than it needs.
+ * Why no position was read.
  */
-export interface CoordScanResult {
-	status: CoordScanStatus;
-	lon?: number | null;
-	lat?: number | null;
-	rawText?: string | null;
-	confidence?: number | null;
-}
+export type CoordScanRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'readerUnavailable' | 'planetUnknown' | 'captureNotAllowed' | 'radarNotFound' | 'otherPlanet' | 'notRead';
 
 /**
- * The closed vocabulary of a coordinate scan's outcome.
+ * One coordinate scan's answer: both values exactly as the screen
+ * showed them, or why there are none. A refusal carries no coordinate,
+ * so nothing downstream can mistake it for one.
  */
-export type CoordScanStatus = 'read' | 'noRegion' | 'captureFailed' | 'engineUnavailable' | 'unreadable' | 'implausible';
+export type CoordScanResult = {
+		lon: number;
+		lat: number;
+		source: CoordReadSource;
+		kind: 'read';
+	} | {
+		refusal: CoordRefusal;
+		kind: 'refused';
+	};
+
+/**
+ * Why one value was not read.
+ */
+export type CoordValueRefusal = 'offScreen' | 'covered' | 'notFound' | 'unclear' | 'outOfBounds';
 
 /**
  * The session-detail cost split.
@@ -2322,12 +2339,19 @@ export interface NameComparison {
 	lootRate: number;
 }
 
+/**
+ * One position verb's answer. `refusal` is set exactly when `status` is
+ * `notRead`, `stopped` exactly when it is `pollStopped`; no refusal
+ * carries a coordinate.
+ */
 export interface NavigationPositionResult {
 	status: NavigationPositionStatus;
 	run: NavigationRun | null;
+	refusal: CoordRefusal | null;
+	stopped: PositionPollStop | null;
 }
 
-export type NavigationPositionStatus = 'updated' | 'noActiveRun' | 'paused' | 'noRegion' | 'captureFailed' | 'engineUnavailable' | 'unreadable' | 'implausible' | 'ambiguous' | 'outOfTolerance';
+export type NavigationPositionStatus = 'updated' | 'noActiveRun' | 'paused' | 'ambiguous' | 'outOfTolerance' | 'notRead' | 'jumpRefused' | 'superseded' | 'pollStopped';
 
 export interface NavigationRun {
 	id: number;
@@ -2340,6 +2364,8 @@ export interface NavigationRun {
 	currentLon: number;
 	currentLat: number;
 	lastPositionAt: number | null;
+	/** How many seconds ago the route's position was read, on a clock no change of the wall clock disturbs; null when no position has been read for the route. Steering from an old position is misleading. */
+	positionAgeS: number | null;
 	hopCount: number;
 	/** Trees are recorded visited on the game's interact key rather than detected from harvests. */
 	visitOnKey: boolean;
@@ -2474,13 +2500,14 @@ export interface PathOptimizerResult {
 }
 
 /**
- * A harvest detected beyond the arrival radius, awaiting the player's confirm
- * or dismiss in the overlay. Names the proposed (active) tree and how far the
- * harvest read was from it.
+ * A harvest awaiting the player's confirm or dismiss in the overlay: one
+ * beyond the arrival radius, or one whose position did not read. Names the
+ * proposed (active) tree and how far the harvest was read to be from it;
+ * `distance` is null when no position was read for the harvest.
  */
 export interface PendingHarvest {
 	name: string;
-	distance: number;
+	distance: number | null;
 }
 
 /**
@@ -2567,6 +2594,11 @@ export interface PlanetMapCalibration {
 	unitsPerPixelY: number;
 	bounds: PlanetMapBounds;
 }
+
+/**
+ * Why the position poll is not reading.
+ */
+export type PositionPollStop = 'overlaysHidden' | 'notReading' | 'captureNotAllowed';
 
 /**
  * A completed player-to-player trade. Unlike an auction listing, its price
@@ -3056,6 +3088,73 @@ export interface RadarGeometry {
 	radiusPx: number;
 	displayScale: number;
 }
+
+/**
+ * Radar guidance, as the overlays show it.
+ */
+export type RadarGuidance = {
+		stopped: RadarGuidanceStop | null;
+		kind: 'off';
+	} | {
+		kind: 'searching';
+	} | {
+		centreX: number;
+		centreY: number;
+		radiusPx: number;
+		/** The screen column right of which a window beside the radar covers neither the radar nor the coordinates under it. */
+		clearRightX: number;
+		source: RadarPlacementSource;
+		/** Null when the ring distances are hidden or did not read, or the placement is the hand calibration's: the overlay then shows direction only. */
+		scale: RadarScale | null;
+		/** Why there is no scale, once two looks agree; null otherwise. */
+		scaleMissing: RadarScaleMissing | null;
+		/** Null without an interface profile. */
+		labelStrip: RadarLabelStrip | null;
+		kind: 'placed';
+	} | {
+		reason: RadarGuidanceLoss;
+		kind: 'lost';
+	};
+
+/**
+ * Why running guidance has no placement.
+ */
+export type RadarGuidanceLoss = 'radarNotFound' | 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed';
+
+/**
+ * Why radar guidance stopped by itself.
+ */
+export type RadarGuidanceStop = 'captureNotAllowed' | 'radarNotSeen' | 'readerUnavailable' | 'failed';
+
+/**
+ * Where the radar's ring distances are printed, in shares of the radius
+ * along the line from the centre to the right edge: nothing drawn over
+ * the radar may enter it.
+ */
+export interface RadarLabelStrip {
+	from: number;
+	to: number;
+	halfHeight: number;
+}
+
+/**
+ * Where a placement came from.
+ */
+export type RadarPlacementSource = 'found' | 'calibrated';
+
+/**
+ * The radar's scale, read from its ring distances.
+ */
+export interface RadarScale {
+	metresPerPixel: number;
+	/** How far the radar's edge is from the player, in metres. */
+	edgeRangeM: number;
+}
+
+/**
+ * Why a placement has no scale.
+ */
+export type RadarScaleMissing = 'labelsUnread' | 'noRings' | 'noReader';
 
 export interface RealisedDefinitionMarkup {
 	definitionId: number;
@@ -5395,7 +5494,15 @@ export async function mapsCalibrationStatus(): Promise<CoordCalibrationStatus> {
 	return invokeCommand('maps_calibration_status', {});
 }
 
-export async function mapsScanCoordinates(planet: string | null): Promise<CoordScanResult> {
+export async function mapsScanCoordinates(planet: string): Promise<{
+		lon: number;
+		lat: number;
+		source: CoordReadSource;
+		kind: 'read';
+	} | {
+		refusal: CoordRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('maps_scan_coordinates', { planet });
 }
 
@@ -5449,4 +5556,34 @@ export async function radarCalibrationStatus(): Promise<RadarCalibrationStatus> 
 
 export async function radarGeometry(): Promise<RadarGeometry | null> {
 	return invokeCommand('radar_geometry', {});
+}
+
+export async function navigationResumePosition(): Promise<void> {
+	return invokeCommand('navigation_resume_position', {});
+}
+
+export async function radarGuidance(): Promise<{
+		stopped: RadarGuidanceStop | null;
+		kind: 'off';
+	} | {
+		kind: 'searching';
+	} | {
+		centreX: number;
+		centreY: number;
+		radiusPx: number;
+		/** The screen column right of which a window beside the radar covers neither the radar nor the coordinates under it. */
+		clearRightX: number;
+		source: RadarPlacementSource;
+		/** Null when the ring distances are hidden or did not read, or the placement is the hand calibration's: the overlay then shows direction only. */
+		scale: RadarScale | null;
+		/** Why there is no scale, once two looks agree; null otherwise. */
+		scaleMissing: RadarScaleMissing | null;
+		/** Null without an interface profile. */
+		labelStrip: RadarLabelStrip | null;
+		kind: 'placed';
+	} | {
+		reason: RadarGuidanceLoss;
+		kind: 'lost';
+	}> {
+	return invokeCommand('radar_guidance', {});
 }

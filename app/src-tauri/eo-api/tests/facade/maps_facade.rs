@@ -1,19 +1,29 @@
 //! Behavioural pins for the maps family over the typed facade: the
 //! bundled catalogue read (with and without the bundle composed), the
 //! pin CRUD roundtrip with its DTO wire shape, the map-bounds gate on
-//! create and move, the patch's double-option null semantics, and the
-//! not-found / bad-request legs.
+//! create and move, the patch's double-option null semantics, the
+//! not-found / bad-request legs, and the coordinate reads, the position
+//! poll and radar guidance in their wire shapes.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use eo_api::maps::{MapPinInput, MapPinPatch};
+use eo_api::maps::{MapPinInput, MapPinPatch, PinConfigInput};
 use eo_api::{Api, ApiError};
-use eo_services::clock::RealClock;
-use eo_services::coord_capture::{CoordCaptureProviders, CoordCaptureService, CoordRegion};
+use eo_services::clock::{Clock, MockClock, RealClock};
+use eo_services::coord_capture::{
+    CoordCaptureProviders, CoordCaptureService, CoordRegion, KnownPlanet,
+};
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
-use eo_services::game_ui::geometry::BgrImage;
+use eo_services::game_ui::geometry::{BgrImage, Rect};
+use eo_services::game_ui::radar::CoordinateBounds;
+use eo_services::game_ui::seams::FrameReader;
+use eo_services::game_ui::test_support::{
+    blank, bundled_profile, draw_window, window_frame, Printed, RadarScene, RINGS, RING_LABELS,
+};
+use eo_services::navigation::{NavigationProviders, NavigationService, NavigationSettings};
 use eo_services::planet_maps::PlanetMapStore;
 
 use crate::common;
@@ -27,50 +37,127 @@ fn bundled_maps_dir() -> PathBuf {
         .join("maps")
 }
 
-/// A coordinate-capture service whose seams read a fixed OCR text.
-fn coord_service(text: &'static str) -> Arc<CoordCaptureService> {
-    CoordCaptureService::new(CoordCaptureProviders {
-        cursor_position: Arc::new(|| Some((0, 0))),
-        region: Arc::new(|| {
-            Some(CoordRegion {
-                x: 0,
-                y: 0,
-                w: 120,
-                h: 24,
-            })
-        }),
-        capture_region: Arc::new(|_, _, _, _| {
-            Some(BgrImage {
-                data: vec![0; 12],
-                h: 2,
-                w: 2,
-            })
-        }),
-        // The split per-half reads answer empty (no digit runs), so the
-        // scan falls through to the whole-strip single-line read, which
-        // is where these tests inject their text. The halves are one
-        // column wide; the whole strip is two.
-        read_text: Arc::new(move |img| {
-            if img.w == 1 {
-                return Some((String::new(), 0.9));
-            }
-            Some((text.to_string(), 0.9))
-        }),
-        persist_region: Arc::new(|_| Ok(())),
-        debug_dir: Arc::new(|| None),
-    })
+/// A stand-in game window: what it shows, how its lettering reads, and
+/// what the hand-drawn region's two halves read when one is drawn.
+struct Screen {
+    shown: Mutex<(BgrImage, FrameReader)>,
+    region: Mutex<Option<(String, String)>>,
+}
+
+impl Screen {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            shown: Mutex::new((
+                blank(64, 48, [120, 110, 90]),
+                Arc::new(|_: &BgrImage| Some((String::new(), 0.9))),
+            )),
+            region: Mutex::new(None),
+        })
+    }
+
+    fn show(&self, scene: &RadarScene) {
+        *self.shown.lock().unwrap() = (scene.image.clone(), Arc::new(scene.recogniser()));
+    }
+
+    /// A two-column strip whose columns carry the bytes the region's
+    /// reader tells its halves apart by.
+    fn strip() -> BgrImage {
+        BgrImage {
+            data: [vec![1u8; 3], vec![2u8; 3], vec![1u8; 3], vec![2u8; 3]].concat(),
+            h: 2,
+            w: 2,
+        }
+    }
+
+    fn capture(self: &Arc<Self>, clock: Arc<dyn Clock>) -> Arc<CoordCaptureService> {
+        let (window, reading, halves, drawn) =
+            (self.clone(), self.clone(), self.clone(), self.clone());
+        CoordCaptureService::new(
+            CoordCaptureProviders {
+                frame: Arc::new(move |area| {
+                    let image = window.shown.lock().unwrap().0.clone();
+                    window_frame(&image, (0, 0), area)
+                }),
+                profile: Some(Arc::new(bundled_profile())),
+                planets: ["Calypso", "Monria"]
+                    .map(|name| KnownPlanet {
+                        name: name.to_string(),
+                        printed: vec![name.to_string()],
+                    })
+                    .to_vec(),
+                read_text: Some(Arc::new(move |crop: &BgrImage| {
+                    if crop.w == 1 && matches!(crop.data.first(), Some(1 | 2)) {
+                        let region = halves.region.lock().unwrap().clone()?;
+                        let text = if crop.data[0] == 1 {
+                            region.0
+                        } else {
+                            region.1
+                        };
+                        return Some((text, 0.9));
+                    }
+                    let reader = reading.shown.lock().unwrap().1.clone();
+                    reader(crop)
+                })),
+                cursor_position: Arc::new(|| Some((0, 0))),
+                region: Arc::new(move || {
+                    drawn.region.lock().unwrap().as_ref().map(|_| CoordRegion {
+                        x: 0,
+                        y: 0,
+                        w: 120,
+                        h: 24,
+                    })
+                }),
+                capture_region: Arc::new(|_, _, _, _| Some(Screen::strip())),
+                ..CoordCaptureProviders::default()
+            },
+            clock,
+        )
+    }
+}
+
+/// A radar with both values printed under it.
+fn radar_with(lon: &str, lat: &str) -> RadarScene {
+    RadarScene::with_coordinates(
+        (900, 200),
+        113,
+        Some((lon, Printed::of(5))),
+        Some((lat, Printed::of(5))),
+    )
+}
+
+/// A coordinate-capture service over a screen showing `scene`.
+fn coord_service(scene: &RadarScene) -> Arc<CoordCaptureService> {
+    let screen = Screen::new();
+    screen.show(scene);
+    screen.capture(Arc::new(RealClock::new()))
 }
 
 /// The composed facade over a fresh migrated database and an empty
 /// catalogue snapshot, with or without the planet-map bundle.
 async fn maps_api(dir: &Path, with_bundle: bool, coord: Option<Arc<CoordCaptureService>>) -> Api {
-    let snapshot = dir.join("snapshot");
-    std::fs::create_dir_all(&snapshot).unwrap();
+    let (db, data_dir) = open_db(dir).await;
+    maps_api_over(dir, db, data_dir, with_bundle, coord, None).await
+}
+
+async fn open_db(dir: &Path) -> (Db, PathBuf) {
     let data_dir = dir.join("data");
     std::fs::create_dir_all(&data_dir).unwrap();
     let db = Db::open(&data_dir.join("entropia_orme.db"))
         .await
         .expect("migrated database");
+    (db, data_dir)
+}
+
+async fn maps_api_over(
+    dir: &Path,
+    db: Db,
+    data_dir: PathBuf,
+    with_bundle: bool,
+    coord: Option<Arc<CoordCaptureService>>,
+    navigation: Option<Arc<NavigationService>>,
+) -> Api {
+    let snapshot = dir.join("snapshot");
+    std::fs::create_dir_all(&snapshot).unwrap();
     let game_data = Arc::new(GameDataStore::new(&snapshot).expect("empty game-data store"));
     let clock = Arc::new(RealClock::new());
     let planet_maps = with_bundle
@@ -93,7 +180,7 @@ async fn maps_api(dir: &Path, with_bundle: bool, coord: Option<Arc<CoordCaptureS
         handles.quests.clone(),
         planet_maps,
         coord,
-        None,
+        navigation,
     )
 }
 
@@ -376,56 +463,121 @@ async fn validation_and_not_found_legs_answer_typed_errors() {
         .is_empty());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_coordinate_scan_gates_against_the_selected_planet() {
-    let dir = tempfile::tempdir().unwrap();
-    let api = maps_api(dir.path(), true, Some(coord_service("61234, 75456"))).await;
-
-    // A clean read inside Calypso's bounds, in its wire shape.
-    let wire = serde_json::to_value(
-        api.maps_scan_coordinates(Some("Calypso".to_string()))
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(wire["status"], "read");
-    assert_eq!(wire["lon"], 61234);
-    assert_eq!(wire["lat"], 75456);
-    // The readout carries no altitude, so the wire shape has no such field.
-    assert!(wire.get("altitude").is_none());
-    // The successful read's coordinates carry everything; the raw
-    // capture text stays server-side (it only rides the unreadable leg).
-    assert!(wire.get("rawText").is_none());
-
-    // The same read is implausible against a small instance's window.
-    let wire = serde_json::to_value(
-        api.maps_scan_coordinates(Some("Monria".to_string()))
-            .unwrap(),
-    )
-    .unwrap();
-    assert_eq!(wire["status"], "implausible");
-
-    // No planet named: the raw read answers ungated.
-    let wire = serde_json::to_value(api.maps_scan_coordinates(None).unwrap()).unwrap();
-    assert_eq!(wire["status"], "read");
+fn scan(api: &Api, planet: &str) -> serde_json::Value {
+    serde_json::to_value(api.maps_scan_coordinates(planet.to_string()).unwrap()).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_unreadable_capture_answers_its_typed_status() {
+async fn a_position_read_under_the_radar_reaches_the_wire_with_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
-    let api = maps_api(dir.path(), true, Some(coord_service("loading..."))).await;
-    let wire = serde_json::to_value(api.maps_scan_coordinates(None).unwrap()).unwrap();
-    assert_eq!(wire["status"], "unreadable");
-    assert_eq!(wire["rawText"], "loading...");
+    let scene = radar_with("LON 67739", "LAT 87740");
+    let api = maps_api(dir.path(), true, Some(coord_service(&scene))).await;
+    assert_eq!(
+        scan(&api, "Calypso"),
+        serde_json::json!({"kind": "read", "lon": 67739, "lat": 87740, "source": "radar"})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refusal_reaches_the_wire_with_each_values_reason_and_no_coordinate() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut scene = RadarScene::with_coordinates(
+        (900, 200),
+        169,
+        Some(("LON 68520", Printed::of(5))),
+        Some(("LAT 87611", Printed::of(5))),
+    );
+    draw_window(&mut scene.image, Rect::new(300, 40, 900 - 169 + 80, 650));
+    let api = maps_api(dir.path(), true, Some(coord_service(&scene))).await;
+    assert_eq!(
+        scan(&api, "Calypso"),
+        serde_json::json!({
+            "kind": "refused",
+            "refusal": {"reason": "notRead", "lon": "covered", "lat": null},
+        })
+    );
+
+    // Values that read, but lie outside the planet named.
+    let scene = radar_with("LON 67739", "LAT 87740");
+    let api = maps_api(&dir.path().join("other"), true, Some(coord_service(&scene))).await;
+    assert_eq!(
+        scan(&api, "Monria"),
+        serde_json::json!({
+            "kind": "refused",
+            "refusal": {"reason": "notRead", "lon": "outOfBounds", "lat": "outOfBounds"},
+        })
+    );
+    // A planet whose coordinates are not known reads nothing.
+    for planet in ["Thule", "Nowhere"] {
+        assert_eq!(
+            scan(&api, planet),
+            serde_json::json!({
+                "kind": "refused",
+                "refusal": {"reason": "planetUnknown", "lon": null, "lat": null},
+            })
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_radar_naming_another_planet_is_refused_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut scene = radar_with("LON 67739", "LAT 87740");
+    scene.planet_label((900, 200), 113, "Monria");
+    let api = maps_api(dir.path(), true, Some(coord_service(&scene))).await;
+    assert_eq!(
+        scan(&api, "Calypso"),
+        serde_json::json!({
+            "kind": "refused",
+            "refusal": {"reason": "otherPlanet", "lon": null, "lat": null},
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_the_radar_only_a_hand_drawn_region_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let screen = Screen::new();
+    let api = maps_api(
+        dir.path(),
+        true,
+        Some(screen.capture(Arc::new(RealClock::new()))),
+    )
+    .await;
+    assert_eq!(
+        scan(&api, "Calypso"),
+        serde_json::json!({
+            "kind": "refused",
+            "refusal": {"reason": "radarNotFound", "lon": null, "lat": null},
+        })
+    );
+    *screen.region.lock().unwrap() = Some(("LON 61234".into(), "LAT 75456".into()));
+    assert_eq!(
+        scan(&api, "Calypso"),
+        serde_json::json!({"kind": "read", "lon": 61234, "lat": 75456, "source": "region"})
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_calibration_verbs_walk_the_flow_and_report_status() {
     let dir = tempfile::tempdir().unwrap();
-    let api = maps_api(dir.path(), true, Some(coord_service("61234, 75456"))).await;
+    let screen = Screen::new();
+    *screen.region.lock().unwrap() = Some(("LON 61234".into(), "LAT 75456".into()));
+    let api = maps_api(
+        dir.path(),
+        true,
+        Some(screen.capture(Arc::new(RealClock::new()))),
+    )
+    .await;
 
     let status = serde_json::to_value(api.maps_calibration_status().unwrap()).unwrap();
-    assert_eq!(status["phase"], "idle");
-    assert!(status["region"].is_object());
+    assert_eq!(
+        status,
+        serde_json::json!({
+            "phase": "idle",
+            "region": {"x": 0, "y": 0, "w": 120, "h": 24},
+        })
+    );
 
     let started = serde_json::to_value(api.maps_calibration_start().unwrap()).unwrap();
     assert_eq!(started["phase"], "awaitTopLeft");
@@ -450,5 +602,197 @@ async fn a_facade_without_capture_seams_reports_unavailable() {
     let dir = tempfile::tempdir().unwrap();
     let api = maps_api(dir.path(), false, None).await;
     assert!(api.maps_calibration_status().is_err());
-    assert!(api.maps_scan_coordinates(None).is_err());
+    assert!(api.maps_scan_coordinates("Calypso".to_string()).is_err());
+    assert!(api.radar_guidance().is_err());
+}
+
+/// The facade with route navigation over `screen`, on a clock the test
+/// moves, and a tree pin on Calypso to route to.
+async fn navigation_api(
+    dir: &Path,
+    screen: &Arc<Screen>,
+) -> (Api, Arc<MockClock>, Arc<NavigationService>) {
+    let (db, data_dir) = open_db(dir).await;
+    let clock = Arc::new(MockClock::new(None, 0.0));
+    let shared: Arc<dyn Clock> = clock.clone();
+    let capture = screen.capture(shared.clone());
+    let navigation = NavigationService::new(
+        db.clone(),
+        shared,
+        NavigationProviders {
+            coord_capture: capture.clone(),
+            bounds: Arc::new(|_| {
+                Some(CoordinateBounds {
+                    lon: (16384, 90112),
+                    lat: (24576, 98304),
+                })
+            }),
+            changed: Arc::new(|| {}),
+            input: None,
+            focus: None,
+            settings: NavigationSettings {
+                guidance_interval: Duration::from_secs(3600),
+                ..NavigationSettings::default()
+            },
+        },
+    )
+    .await;
+    let api = maps_api_over(
+        dir,
+        db,
+        data_dir,
+        true,
+        Some(capture),
+        Some(navigation.clone()),
+    )
+    .await;
+    let tree = api
+        .pin_config_create(PinConfigInput {
+            planet: "Calypso".to_string(),
+            map_view_id: None,
+            label: "Tree".to_string(),
+            category: "special".to_string(),
+            special_kind: Some("tree".to_string()),
+            icon: "tree".to_string(),
+            radius_m: None,
+            colour: "#22c55e".to_string(),
+            cooldown_colour: Some("#f59e0b".to_string()),
+        })
+        .await
+        .unwrap();
+    api.map_pin_create(MapPinInput {
+        pin_config_id: Some(tree.id),
+        ..calypso_pin()
+    })
+    .await
+    .unwrap();
+    (api, clock, navigation)
+}
+
+async fn poll(api: &Api) -> serde_json::Value {
+    serde_json::to_value(api.navigation_update_position().await.unwrap()).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_position_poll_carries_a_position_only_when_it_was_accepted() {
+    let dir = tempfile::tempdir().unwrap();
+    let screen = Screen::new();
+    let (api, clock, _navigation) = navigation_api(dir.path(), &screen).await;
+    api.navigation_start("Calypso".to_string(), None, 61000.0, 75000.0, None, false)
+        .await
+        .unwrap();
+
+    // With the route overlays away, the poll reads nothing.
+    assert_eq!(
+        poll(&api).await,
+        serde_json::json!({
+            "status": "pollStopped",
+            "run": null,
+            "refusal": null,
+            "stopped": "overlaysHidden",
+        })
+    );
+    api.navigation_set_overlays_shown(true).unwrap();
+
+    clock.advance(1.0).unwrap();
+    assert_eq!(
+        poll(&api).await,
+        serde_json::json!({
+            "status": "notRead",
+            "run": null,
+            "refusal": {"reason": "radarNotFound", "lon": null, "lat": null},
+            "stopped": null,
+        })
+    );
+
+    *screen.region.lock().unwrap() = Some(("L0N 61050".into(), "LAT 75000".into()));
+    clock.advance(1.0).unwrap();
+    assert_eq!(
+        poll(&api).await,
+        serde_json::json!({
+            "status": "notRead",
+            "run": null,
+            "refusal": {"reason": "notRead", "lon": "unclear", "lat": null},
+            "stopped": null,
+        })
+    );
+
+    // The route's start was typed, not read: its first reading needs the
+    // next one's agreement.
+    *screen.region.lock().unwrap() = Some(("LON 61050".into(), "LAT 75000".into()));
+    clock.advance(1.0).unwrap();
+    assert_eq!(poll(&api).await["status"], "jumpRefused");
+    clock.advance(1.0).unwrap();
+    let updated = poll(&api).await;
+    assert_eq!(updated["status"], "updated");
+    assert_eq!(updated["refusal"], serde_json::Value::Null);
+    assert_eq!(updated["run"]["currentLon"], 61050.0);
+    assert_eq!(updated["run"]["currentLat"], 75000.0);
+    assert_eq!(updated["run"]["positionAgeS"], 0.0);
+
+    *screen.region.lock().unwrap() = Some(("LON 71050".into(), "LAT 75000".into()));
+    clock.advance(1.0).unwrap();
+    assert_eq!(
+        poll(&api).await,
+        serde_json::json!({"status": "jumpRefused", "run": null, "refusal": null, "stopped": null})
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn radar_guidance_reaches_the_wire_with_its_placement_and_scale() {
+    let dir = tempfile::tempdir().unwrap();
+    let screen = Screen::new();
+    let (api, _clock, navigation) = navigation_api(dir.path(), &screen).await;
+    assert_eq!(
+        serde_json::to_value(api.radar_guidance().unwrap()).unwrap(),
+        serde_json::json!({"kind": "off", "stopped": null})
+    );
+    api.navigation_start("Calypso".to_string(), None, 61000.0, 75000.0, None, false)
+        .await
+        .unwrap();
+    let mut scene = RadarScene::sized(1100, 700, 7);
+    scene.radar((400, 300), 113, &RINGS);
+    scene.ring_labels((400, 300), &RINGS, &RING_LABELS);
+    screen.show(&scene);
+    api.navigation_set_overlays_shown(true).unwrap();
+    let looks = navigation.guidance_looks();
+    api.radar_guidance_start().await.unwrap();
+    tokio::task::block_in_place(|| {
+        assert!(navigation.wait_for_guidance_looks(looks + 1, Duration::from_secs(120)));
+    });
+    let placed = serde_json::to_value(api.radar_guidance().unwrap()).unwrap();
+    assert_eq!(placed["kind"], "placed", "{placed}");
+    let number = |key: &str| placed[key].as_f64().unwrap();
+    assert_eq!(placed["source"], "found");
+    assert!((number("centreX") - 400.0).abs() <= 1.5, "{placed}");
+    assert!((number("centreY") - 300.0).abs() <= 1.5, "{placed}");
+    assert!((number("radiusPx") - 113.0).abs() <= 1.5, "{placed}");
+    assert!(number("clearRightX") > number("centreX") + number("radiusPx"));
+    let metres_per_pixel = placed["scale"]["metresPerPixel"].as_f64().unwrap();
+    assert!(
+        (metres_per_pixel / (200.0 / 103.0) - 1.0).abs() < 0.01,
+        "{placed}"
+    );
+    assert_eq!(placed["scaleMissing"], serde_json::Value::Null);
+    let profile = bundled_profile();
+    assert_eq!(
+        placed["labelStrip"],
+        serde_json::json!({
+            "from": profile.radar.rings.span[0],
+            "to": 1.0,
+            "halfHeight": profile.radar.rings.label_reach,
+        })
+    );
+    let edge = placed["scale"]["edgeRangeM"].as_f64().unwrap();
+    assert!(
+        (edge / (number("radiusPx") * metres_per_pixel) - 1.0).abs() < 1e-9,
+        "{placed}"
+    );
+
+    // Ending the route ends guidance.
+    api.navigation_end().await.unwrap();
+    assert_eq!(
+        serde_json::to_value(api.radar_guidance().unwrap()).unwrap(),
+        serde_json::json!({"kind": "off", "stopped": null})
+    );
 }

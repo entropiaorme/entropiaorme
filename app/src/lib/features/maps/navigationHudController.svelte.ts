@@ -9,15 +9,21 @@
 
 import {
 	beginNavigationAreaSelection,
+	type CoordRefusal,
 	endNavigation,
 	getInputStatus,
 	getNavigationSnapshot,
+	getRadarGuidance,
 	hideNavigationOverlays,
 	markNavigationVisited,
-	type NavigationPositionStatus,
+	type NavigationPositionResult,
 	type NavigationRun,
+	type PositionPollStop,
+	type RadarGuidance,
 	resolveNavigationHarvest,
+	resumeNavigationPosition,
 	scanMapCoordinates,
+	showNavigationOverlays,
 	skipNavigationStop,
 	startNavigation,
 	undoNavigationStop,
@@ -25,34 +31,104 @@ import {
 } from '$lib/api';
 import { getPreference, setPreference } from '$lib/preferences';
 import { describeError } from '$lib/view/errorState';
-import {
-	acceptCartographyContextBroadcast,
-	cartographyScanFailureMessage,
-} from './cartographyOverlay.svelte';
-import { formatGamePoint, type GamePoint } from './coords';
+import { acceptCartographyContextBroadcast } from './cartographyOverlay.svelte';
+import { coordRefusalMessage, scannedPoint } from './coordinateRead';
+import type { GamePoint } from './coords';
+import { positionIsCurrent } from './radarGuidance';
 import {
 	acceptRouteAreaSelectionCancellation,
 	acceptRouteAreaSelectionResult,
 	resetRouteAreaSelection,
 } from './routeAreaSelection';
 
-function statusFeedback(status: NavigationPositionStatus): string {
-	switch (status) {
+function statusFeedback(result: NavigationPositionResult, planet: string): string {
+	switch (result.status) {
 		case 'updated':
 			return 'Position updated.';
 		case 'noActiveRun':
 			return 'No active route.';
-		case 'noRegion':
-			return 'Calibrate coordinate capture first.';
+		case 'notRead':
+			return result.refusal
+				? coordRefusalMessage(result.refusal, planet)
+				: 'The position could not be read.';
+		case 'superseded':
+			return 'The route changed while your position was read.';
+		case 'jumpRefused':
+			return 'Your position did not confirm; try again in a moment.';
 		case 'ambiguous':
 			return 'Several route points are within range.';
-		case 'unreadable':
-			return 'The coordinates could not be read.';
-		case 'implausible':
-			return 'That reading looked implausible.';
 		default:
 			return 'The position could not be read.';
 	}
+}
+
+/**
+ * The one line the HUD says about radar guidance, or null when there is
+ * nothing to say: the radar is placed and its distances are read.
+ */
+export function guidanceNote(guidance: RadarGuidance | null): string | null {
+	if (!guidance) return null;
+	switch (guidance.kind) {
+		case 'placed':
+			switch (guidance.scaleMissing) {
+				case 'labelsUnread':
+					return "Show ring distances in the game's interface options to see distances on the radar.";
+				case 'noRings':
+					return "The radar's rings could not be seen, so distances are not shown on it.";
+				case 'noReader':
+					return 'Distances on the radar need the text recogniser, which is not available.';
+				default:
+					return null;
+			}
+		case 'lost':
+			switch (guidance.reason) {
+				case 'radarNotFound':
+					return 'The radar is not on the screen.';
+				case 'gameWindowNotFound':
+					return 'The game window was not found.';
+				case 'gameWindowOffScreen':
+					return 'The game window is off the screen that can be captured.';
+				case 'captureFailed':
+					return 'The screen could not be captured.';
+			}
+			return null;
+		case 'off':
+			switch (guidance.stopped) {
+				case 'captureNotAllowed':
+					return 'Screen capture was not allowed, so radar guidance stopped.';
+				case 'radarNotSeen':
+					return 'The radar was off the screen for a while, so radar guidance stopped.';
+				case 'readerUnavailable':
+					return 'Radar guidance is unavailable on this installation.';
+				case 'failed':
+					return 'Radar guidance stopped unexpectedly.';
+				default:
+					return null;
+			}
+		default:
+			return null;
+	}
+}
+
+// The poll says why it could not read only once the same failure has held
+// for two polls in a row, so a passing window does not flicker a message.
+const POLL_REFUSALS_BEFORE_NOTE = 2;
+
+/** Why the poll stopped, in the player's terms. */
+function pollStopNote(stop: PositionPollStop): string | null {
+	switch (stop) {
+		case 'captureNotAllowed':
+			return 'Screen capture was not allowed, so position updates stopped.';
+		case 'notReading':
+			return 'Your position has not read for a while, so position updates stopped.';
+		case 'overlaysHidden':
+			return null;
+	}
+}
+
+/** One refusal, for telling whether two polls failed the same way. */
+function refusalKey(refusal: CoordRefusal): string {
+	return `${refusal.reason}:${refusal.lon ?? ''}:${refusal.lat ?? ''}`;
 }
 
 export function createNavigationHudController() {
@@ -82,6 +158,23 @@ export function createNavigationHudController() {
 	// Set when a manual Visited lands outside the arrival tolerance: the visit
 	// is held until the user confirms a forced record.
 	let pendingVisit = $state<{ name: string; distance: number } | null>(null);
+	// Radar guidance as the backend last reported it.
+	let guidance = $state<RadarGuidance | null>(null);
+	// The position poll: one read at a time. The backend decides whether it
+	// may read; when it has stopped (every read refused for a while, or
+	// screen capture not allowed) the HUD says why and offers to resume.
+	let polling = false;
+	let pollStop = $state<PositionPollStop | null>(null);
+	let lastRefusal: string | null = null;
+	let pollRefusals = 0;
+	let pollNote = $state<string | null>(null);
+	// When the run last arrived, and the clock the position's age is
+	// measured against: a position too old is not steered from.
+	let runReceivedAt = $state(0);
+	let now = $state(Date.now());
+	// Each start-position capture's number: a read that lands after another
+	// was asked for, or after the planet or map changed, is dropped.
+	let captureRequest = 0;
 
 	const active = $derived(run?.stops.find((stop) => stop.status === 'active') ?? null);
 	// A harvest was detected beyond the arrival radius; the overlay asks whether
@@ -136,11 +229,42 @@ export function createNavigationHudController() {
 		}
 	}
 
+	function adoptRun(next: NavigationRun | null) {
+		run = next;
+		runReceivedAt = Date.now();
+	}
+
+	/** The position's age moves on while no new one arrives. */
+	function tick() {
+		now = Date.now();
+	}
+
+	async function refreshGuidance() {
+		try {
+			guidance = await getRadarGuidance();
+		} catch {
+			// The next guidance change re-reads it.
+		}
+	}
+
+	// Guidance stopped (the radar off the screen, capture not allowed, or a
+	// failure): the player asks it to look again, which may ask the
+	// desktop's consent to capture once more.
+	async function lookForRadarAgain() {
+		try {
+			await resumeNavigationPosition();
+			forgetPollState();
+			await showNavigationOverlays();
+		} finally {
+			await refreshGuidance();
+		}
+	}
+
 	async function hydrate() {
 		try {
 			const next = await getNavigationSnapshot();
 			if (next && run) applyCutFeedback(run, next);
-			run = next;
+			adoptRun(next);
 			// No run means the setup panel is shown; the overlay only hides on an
 			// explicit close, not whenever a route ends.
 		} catch {
@@ -160,6 +284,8 @@ export function createNavigationHudController() {
 
 	function applyContext(payload: unknown) {
 		const context = acceptCartographyContextBroadcast(payload);
+		// A start captured on another planet is not a start on this one.
+		if (context.planet !== planet) start = null;
 		planet = context.planet;
 		mapViewId = context.mapViewId;
 	}
@@ -176,39 +302,72 @@ export function createNavigationHudController() {
 
 	// The position poll runs the observe-only path on a fixed interval while a
 	// route is live, so the radar dot and bearing track the player. It records
-	// no visit and stays quiet on a transient read failure.
+	// no visit, takes one read at a time, and says why it cannot read only once
+	// the reason has held for two polls. When screen capture is not allowed it
+	// stops, rather than asking the player for consent on every tick.
 	async function pollPosition() {
-		if (busy) return;
+		if (busy || polling || pollStop) return;
+		polling = true;
 		try {
 			const result = await updateNavigationPosition();
-			if (result.run) run = result.run;
+			if (result.run) adoptRun(result.run);
+			if (result.status === 'updated') {
+				pollRefusals = 0;
+				lastRefusal = null;
+				pollNote = null;
+			} else if (result.status === 'pollStopped' && result.stopped) {
+				pollStop = result.stopped;
+				pollNote = pollStopNote(result.stopped);
+			} else if (result.status === 'notRead' && result.refusal) {
+				const key = refusalKey(result.refusal);
+				pollRefusals = key === lastRefusal ? pollRefusals + 1 : 1;
+				lastRefusal = key;
+				if (pollRefusals >= POLL_REFUSALS_BEFORE_NOTE) {
+					pollNote = coordRefusalMessage(result.refusal, run?.planet ?? planet ?? 'this planet');
+				}
+			}
 		} catch {
-			// A transient scan failure is silent here; the next tick retries.
+			// A transient failure is silent here; the next tick retries.
+		} finally {
+			polling = false;
 		}
 	}
 
-	// Capture the current in-game coordinates as the route start. A reading that
-	// OCRs cleanly but falls outside the planet's map bounds ('implausible') still
-	// carries usable numbers, so it seeds the route with a note rather than being
-	// discarded as a failure.
+	function forgetPollState() {
+		pollStop = null;
+		pollRefusals = 0;
+		lastRefusal = null;
+		pollNote = null;
+	}
+
+	// The player asks the poll to read again: the backend lets it, and a
+	// capture may ask the desktop's consent once more.
+	async function resumePolling() {
+		try {
+			await resumeNavigationPosition();
+			forgetPollState();
+		} catch {
+			pollNote = 'Position updates could not be resumed.';
+		}
+	}
+
+	// Capture the current in-game coordinates as the route start. Only a read
+	// position seeds the route; a refusal says why and carries no number.
 	async function captureStart() {
 		if (busy || !planet) return;
 		busy = true;
 		feedback = null;
+		const request = ++captureRequest;
+		const forPlanet = planet;
+		const forMap = mapViewId;
 		try {
-			const result = await scanMapCoordinates(planet);
-			if (
-				(result.status === 'read' || result.status === 'implausible') &&
-				result.lon != null &&
-				result.lat != null
-			) {
-				start = { lon: result.lon, lat: result.lat };
-				feedback =
-					result.status === 'implausible'
-						? `Captured ${formatGamePoint(start)} (reads outside ${planet}).`
-						: null;
-			} else {
-				feedback = cartographyScanFailureMessage(result.status, planet);
+			const result = await scanMapCoordinates(forPlanet);
+			if (request !== captureRequest || planet !== forPlanet || mapViewId !== forMap) return;
+			const point = scannedPoint(result);
+			if (point) {
+				start = point;
+			} else if (result.kind === 'refused') {
+				feedback = coordRefusalMessage(result.refusal, forPlanet);
 			}
 		} catch (cause) {
 			feedback = describeError(cause, 'The current position could not be captured');
@@ -266,7 +425,7 @@ export function createNavigationHudController() {
 		busy = true;
 		feedback = null;
 		try {
-			run = await startNavigation(
+			const started = await startNavigation(
 				planet,
 				mapViewId,
 				start.lon,
@@ -274,9 +433,11 @@ export function createNavigationHudController() {
 				selectedPinIds,
 				visitOnKey && !keyless,
 			);
+			adoptRun(started);
 			start = null;
 			selectedPinIds = null;
 			resetRouteAreaSelection();
+			forgetPollState();
 			// The main surface repositions the HUD and radar around the live route.
 		} catch (cause) {
 			feedback = describeError(cause, 'The route could not be created');
@@ -301,7 +462,7 @@ export function createNavigationHudController() {
 		feedback = null;
 		pendingVisit = null;
 		try {
-			run = await action();
+			adoptRun(await action());
 		} catch {
 			feedback = 'The route could not be updated.';
 		} finally {
@@ -318,15 +479,18 @@ export function createNavigationHudController() {
 		const target = active?.name ?? 'this tree';
 		try {
 			const result = await markNavigationVisited(force);
-			if (result.run) run = result.run;
+			if (result.run) adoptRun(result.run);
 			if (result.status === 'updated') {
 				pendingVisit = null;
 				signalBadge('visited');
+				// The player read the screen themselves: the poll may read again.
+				forgetPollState();
 			} else if (result.status === 'outOfTolerance') {
 				pendingVisit = { name: target, distance: result.run?.distanceToActive ?? 0 };
+				forgetPollState();
 			} else {
 				pendingVisit = null;
-				feedback = statusFeedback(result.status);
+				feedback = statusFeedback(result, run?.planet ?? planet ?? 'this planet');
 			}
 		} catch {
 			feedback = 'The visit could not be recorded.';
@@ -344,7 +508,7 @@ export function createNavigationHudController() {
 		feedback = null;
 		pendingVisit = null;
 		try {
-			run = await resolveNavigationHarvest(confirm);
+			adoptRun(await resolveNavigationHarvest(confirm));
 			feedback = null;
 			if (confirm) signalBadge('cut');
 		} catch {
@@ -430,7 +594,44 @@ export function createNavigationHudController() {
 		get selectedTreeCount() {
 			return selectedPinIds?.length ?? null;
 		},
+		get guidance() {
+			return guidance;
+		},
+		/** Whether the route's position is recent enough to steer from. */
+		get positionCurrent() {
+			return (
+				run != null && positionIsCurrent(run.positionAgeS, runReceivedAt, now, updateIntervalSec)
+			);
+		},
+		/** The poll stopped and can be resumed by the player. */
+		get pollStopped() {
+			return pollStop === 'notReading' || pollStop === 'captureNotAllowed';
+		},
+		/** The quiet status line: feedback first, then the poll, then guidance. */
+		get note() {
+			return (
+				feedback ??
+				pollNote ??
+				(run?.status === 'active' &&
+				!positionIsCurrent(run.positionAgeS, runReceivedAt, now, updateIntervalSec)
+					? 'Your position is not current.'
+					: null) ??
+				guidanceNote(guidance)
+			);
+		},
+		/** Guidance stopped by itself, so the player may ask it to look again. */
+		get guidanceStopped() {
+			return (
+				guidance?.kind === 'off' &&
+				guidance.stopped != null &&
+				guidance.stopped !== 'readerUnavailable'
+			);
+		},
 		hydrate,
+		tick,
+		resumePolling,
+		refreshGuidance,
+		lookForRadarAgain,
 		loadPrefs,
 		applyContext,
 		setVisitOnKey,

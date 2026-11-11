@@ -403,7 +403,7 @@ async fn a_repair_scan_refusal_reaches_the_wire_without_a_figure() {
         (FrameUnavailable::WindowNotFound, None, "readerUnavailable"),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let providers = terminals_over(Arc::new(move || Err(frame)), profile);
+        let providers = terminals_over(Arc::new(move |_| Err(frame)), profile);
         for read in terminal_reads(dir.path(), providers).await {
             assert_eq!(
                 read,
@@ -423,7 +423,12 @@ async fn a_game_window_without_the_terminal_is_refused_as_not_open() {
         h: 300,
         w: 400,
     };
-    let providers = terminals_over(Arc::new(move || Ok(scene.clone())), Some(bundled_profile()));
+    let providers = terminals_over(
+        Arc::new(move |area| {
+            eo_services::game_ui::test_support::window_frame(&scene, (0, 0), area)
+        }),
+        Some(bundled_profile()),
+    );
     for read in terminal_reads(dir.path(), providers).await {
         assert_eq!(
             read,

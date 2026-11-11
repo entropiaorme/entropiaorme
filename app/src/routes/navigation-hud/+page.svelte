@@ -8,6 +8,7 @@
 	import { pinGlyph } from '$lib/features/maps/pinIcons';
 	import { CARTOGRAPHY_OVERLAY_CHANGED_EVENT } from '$lib/features/maps/cartographyOverlay.svelte';
 	import { createNavigationHudController } from '$lib/features/maps/navigationHudController.svelte';
+	import { RADAR_GUIDANCE_CHANGED_EVENT } from '$lib/features/maps/radarGuidance';
 	import {
 		ROUTE_AREA_SELECTION_CANCELLED_EVENT,
 		ROUTE_AREA_SELECTION_RESULT_EVENT,
@@ -23,9 +24,14 @@
 		let unlistenContext: (() => void) | undefined;
 		let unlistenAreaResult: (() => void) | undefined;
 		let unlistenAreaCancelled: (() => void) | undefined;
+		let unlistenGuidance: (() => void) | undefined;
 		void c.hydrate();
 		void c.loadPrefs();
+		void c.refreshGuidance();
 		void listen('navigation:updated', c.hydrate).then((stop) => (unlisten = stop));
+		void listen(RADAR_GUIDANCE_CHANGED_EVENT, c.refreshGuidance).then(
+			(stop) => (unlistenGuidance = stop),
+		);
 		void listen(CARTOGRAPHY_OVERLAY_CHANGED_EVENT, (event) => c.applyContext(event.payload)).then(
 			(stop) => (unlistenContext = stop),
 		);
@@ -41,6 +47,7 @@
 			unlistenContext?.();
 			unlistenAreaResult?.();
 			unlistenAreaCancelled?.();
+			unlistenGuidance?.();
 			disconnectSizeSync();
 			c.dispose();
 		};
@@ -53,6 +60,13 @@
 		if (c.run?.status !== 'active') return;
 		const period = Math.max(1, c.updateIntervalSec) * 1000;
 		return useVisiblePoll(() => c.pollPosition(), { intervalMs: period, immediate: false });
+	});
+
+	// A position ages while no new one arrives; past a few poll intervals it
+	// is not steered from.
+	$effect(() => {
+		if (c.run?.status !== 'active') return;
+		return useVisiblePoll(() => c.tick(), { intervalMs: 1000, immediate: false });
 	});
 
 	function drag(event: PointerEvent) {
@@ -99,14 +113,14 @@
 						{:else if c.badge === 'visited'}
 							<span class="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">Visited</span>
 						{:else}
-							<span class="text-[10px] tabular-nums text-sky-300">{c.run.distanceToActive?.toFixed(1) ?? '-'} m</span>
+							<span class="text-[10px] tabular-nums text-sky-300">{c.positionCurrent && c.run.distanceToActive != null ? `${c.run.distanceToActive.toFixed(1)} m` : '- m'}</span>
 						{/if}
 					</div>
 				{/if}
 			</div>
 			{#if c.pendingHarvest}
 				<div class="mb-2 rounded-md border border-emerald-300/30 bg-emerald-300/10 p-2">
-					<p class="text-[10px] text-emerald-200">Harvest {c.pendingHarvest.distance.toFixed(1)} m from {c.pendingHarvest.name}. Cutting this tree?</p>
+					<p class="text-[10px] text-emerald-200">{c.pendingHarvest.distance != null ? `Harvest ${c.pendingHarvest.distance.toFixed(1)} m from ${c.pendingHarvest.name}.` : `Harvest at ${c.pendingHarvest.name}? Your position did not read.`} Cutting this tree?</p>
 					<div class="mt-1.5 grid grid-cols-2 gap-1.5">
 						<button class="hud-btn primary" disabled={c.busy} onclick={() => c.resolveHarvest(true)}>Yes, mark cut</button>
 						<button class="hud-btn" disabled={c.busy} onclick={() => c.resolveHarvest(false)}>Not this one</button>
@@ -171,11 +185,19 @@
 					<span class="text-[10px] text-white/55">s</span>
 				</label>
 				<button class="hud-btn primary w-full" disabled={!c.canStart} onclick={c.beginRoute}>Start route</button>
+				<p class="text-[10px] text-white/40">Radar guidance needs the game's radar locked north-up.</p>
 			</div>
 		{:else}
 			<p class="py-4 text-xs text-white/55">Open a planet map in the app to plan a route.</p>
 		{/if}
-		<div class="h-4 pt-1"><p class="truncate text-[9px] text-orange-300/85" role="status">{c.feedback ?? ''}</p></div>
+		<div class="flex h-4 items-center gap-2 pt-1">
+			<p class="min-w-0 flex-1 truncate text-[9px] text-orange-300/85" role="status" title={c.note ?? undefined}>{c.note ?? ''}</p>
+			{#if c.run?.status === 'active' && c.pollStopped}
+				<button class="shrink-0 text-[9px] text-sky-300 hover:underline" onclick={c.resumePolling}>Resume</button>
+			{:else if c.run?.status === 'active' && c.guidanceStopped}
+				<button class="shrink-0 text-[9px] text-sky-300 hover:underline" onclick={c.lookForRadarAgain}>Look again</button>
+			{/if}
+		</div>
 	</div>
 </div>
 

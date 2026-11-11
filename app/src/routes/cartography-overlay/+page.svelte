@@ -8,6 +8,7 @@
 	import {
 		cartographyOverlay,
 		createConfirmedPin,
+		isCurrentContext,
 		scanAndDropPin,
 		type PinDropOutcome,
 	} from '$lib/features/maps/cartographyOverlay.svelte';
@@ -76,6 +77,12 @@
 	async function createDuplicate() {
 		const pending = pendingDuplicate;
 		if (!pending || busy) return;
+		// The duplicate was found for the map shown when it was read.
+		if (!isCurrentContext(pending.input.planet, pending.input.mapViewId ?? null)) {
+			pendingDuplicate = null;
+			flash('The map changed; nothing was pinned.');
+			return;
+		}
 		busy = true;
 		try {
 			await createConfirmedPin(pending.input);

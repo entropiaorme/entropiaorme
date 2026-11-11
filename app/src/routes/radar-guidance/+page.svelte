@@ -1,56 +1,97 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { listen } from '@tauri-apps/api/event';
-	import { getCurrentWindow } from '@tauri-apps/api/window';
-	import { getNavigationSnapshot, getRadarGeometry, type NavigationRun } from '$lib/api';
+	import {
+		getNavigationSnapshot,
+		getRadarGuidance,
+		type NavigationRun,
+		type RadarGuidance,
+	} from '$lib/api';
+	import { getPreference } from '$lib/preferences';
+	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
+	import {
+		DOT_RADIUS,
+		guidanceMarks,
+		positionIsCurrent,
+		RADAR_GUIDANCE_CHANGED_EVENT,
+	} from '$lib/features/maps/radarGuidance';
 
-	// The in-game radar edge is 150 game units (metres) from the player at its
-	// centre, so a tree within that range has a true position on the radar, not
-	// just a direction. EDGE is that range in the 0..100 SVG space, kept a hair
-	// inside the window so an at-range dot stays fully visible.
-	const RADAR_RANGE_M = 150;
-	const EDGE = 47;
-
+	// The window is laid over the radar by the shell, which also takes it off
+	// the screen whenever guidance has no placement; this only draws.
 	let run = $state<NavigationRun | null>(null);
-	const angle = $derived(((run?.bearingDegrees ?? 0) * Math.PI) / 180);
-	const x2 = $derived(50 + Math.sin(angle) * EDGE);
-	const y2 = $derived(50 - Math.cos(angle) * EDGE);
-	// Within range the dot sits at the tree's scaled distance; beyond it, only
-	// the bearing line points the way.
-	const distance = $derived(run?.distanceToActive ?? null);
-	const inRange = $derived(distance != null && distance <= RADAR_RANGE_M);
-	const dotRadius = $derived(inRange && distance != null ? (distance / RADAR_RANGE_M) * EDGE : 0);
-	const dotX = $derived(50 + Math.sin(angle) * dotRadius);
-	const dotY = $derived(50 - Math.cos(angle) * dotRadius);
-	// The line stops at the dot when the tree is in range; only a beyond-range
-	// tree draws the full line to the radar edge.
-	const lineX = $derived(inRange ? dotX : x2);
-	const lineY = $derived(inRange ? dotY : y2);
+	let receivedAt = $state(0);
+	let now = $state(Date.now());
+	let pollIntervalS = $state(1);
+	let guidance = $state<RadarGuidance | null>(null);
+	const placed = $derived(guidance?.kind === 'placed' ? guidance : null);
+	// Steering stops when the position is too old to steer from.
+	const current = $derived(
+		run != null && positionIsCurrent(run.positionAgeS, receivedAt, now, pollIntervalS),
+	);
+	const marks = $derived(
+		placed && current && run?.bearingDegrees != null
+			? guidanceMarks(
+					run.bearingDegrees,
+					run.distanceToActive,
+					placed.scale?.edgeRangeM ?? null,
+					placed.labelStrip,
+				)
+			: null,
+	);
 
-	async function hydrate() {
-		const [nextRun, geometry] = await Promise.all([getNavigationSnapshot(), getRadarGeometry()]);
-		run = nextRun;
-		if (!nextRun || !geometry) void getCurrentWindow().hide();
+	async function hydrateRun() {
+		try {
+			const next = await getNavigationSnapshot();
+			run = next;
+			receivedAt = Date.now();
+		} catch {
+			// The next route change re-reads it.
+		}
+	}
+
+	async function hydrateGuidance() {
+		try {
+			guidance = await getRadarGuidance();
+		} catch {
+			// The next guidance change re-reads it.
+		}
 	}
 
 	onMount(() => {
-		let unlisten: (() => void) | undefined;
-		void hydrate().catch(() => getCurrentWindow().hide());
-		void listen('navigation:updated', () => void hydrate()).then((stop) => (unlisten = stop));
-		return () => unlisten?.();
+		const unlisten: Array<() => void> = [];
+		let mounted = true;
+		const keep = (stop: () => void) => (mounted ? unlisten.push(stop) : stop());
+		void hydrateRun();
+		void hydrateGuidance();
+		void getPreference('navUpdateIntervalSec', 1).then((seconds) => (pollIntervalS = seconds));
+		void listen('navigation:updated', () => void hydrateRun()).then(keep);
+		void listen(RADAR_GUIDANCE_CHANGED_EVENT, () => void hydrateGuidance()).then(keep);
+		// The position ages while no new one arrives.
+		const stopClock = useVisiblePoll(
+			() => {
+				now = Date.now();
+			},
+			{ intervalMs: 1000, immediate: false },
+		);
+		return () => {
+			mounted = false;
+			stopClock();
+			for (const stop of unlisten) stop();
+		};
 	});
 </script>
 
-{#if run?.status === 'active' && run.bearingDegrees != null}
+{#if run?.status === 'active' && marks}
 	<svg viewBox="0 0 100 100" class="block h-full w-full overflow-visible" aria-hidden="true">
 		<defs>
 			<filter id="glow"><feGaussianBlur stdDeviation="1.2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
 		</defs>
-		<line x1="50" y1="50" x2={lineX} y2={lineY} stroke="rgba(125,211,252,.9)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" />
-		{#if inRange}
-			<circle cx={dotX} cy={dotY} r="3.5" fill="rgba(125,211,252,.95)" filter="url(#glow)" />
+		{#each marks.segments as segment, index (index)}
+			<line x1={segment.from.x} y1={segment.from.y} x2={segment.to.x} y2={segment.to.y} stroke="rgba(125,211,252,.9)" stroke-width="2" stroke-linecap="round" filter="url(#glow)" />
+		{/each}
+		{#if marks.dot}
+			<circle cx={marks.dot.x} cy={marks.dot.y} r={DOT_RADIUS} fill="rgba(125,211,252,.95)" filter="url(#glow)" />
 		{/if}
-		<circle cx="50" cy="50" r="2" fill="rgba(255,255,255,.7)" />
 	</svg>
 {/if}
 

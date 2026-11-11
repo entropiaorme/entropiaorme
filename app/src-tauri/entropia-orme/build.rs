@@ -44,7 +44,7 @@ fn main() {
     permissions.push_str(
         "]\n\n[[permission]]\n\
          identifier = \"radar-guidance-commands\"\n\
-         description = \"Allows the click-through radar renderer's two read commands.\"\n\
+         description = \"Allows the click-through radar renderer's read commands.\"\n\
          commands.allow = [\n",
     );
     for command in RADAR_GUIDANCE_COMMANDS {

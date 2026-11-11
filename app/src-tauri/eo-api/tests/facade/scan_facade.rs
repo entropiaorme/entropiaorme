@@ -19,7 +19,7 @@ use eo_services::game_ui::geometry::BgrImage;
 use eo_services::game_ui::seams::{FrameUnavailable, GameWindowFrame};
 use eo_services::game_ui::test_support::{
     bundled_profile, draw_skills_window, skills_drawing_vocabulary, skills_scene,
-    standard_skills_layout, Lettering, SkillsLayout,
+    standard_skills_layout, window_frame, Lettering, SkillsLayout,
 };
 use eo_services::scan_completion::ScannedLevel;
 use eo_services::skill_scan::{SkillScanProviders, SkillScanService};
@@ -85,7 +85,7 @@ impl Window {
 
     fn frame(self: &Arc<Self>) -> GameWindowFrame {
         let window = self.clone();
-        Arc::new(move || {
+        Arc::new(move |area| {
             window.captures.fetch_add(1, Ordering::SeqCst);
             let mut allowed = window.allowed.lock().unwrap();
             while *allowed == Some(0) {
@@ -101,6 +101,7 @@ impl Window {
                 .unwrap()
                 .clone()
                 .ok_or(FrameUnavailable::WindowNotFound)
+                .and_then(|image| window_frame(&image, (0, 0), area))
         })
     }
 }

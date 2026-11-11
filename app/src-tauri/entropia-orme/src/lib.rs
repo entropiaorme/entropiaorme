@@ -14,6 +14,7 @@ mod updater;
 
 use std::sync::Mutex;
 
+use eo_api::maps::RadarGuidance;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 /// Whether `(x, y)` lies on a live monitor with enough margin that the
@@ -103,48 +104,103 @@ fn toggle_cartography_overlay(app: tauri::AppHandle) {
     }
 }
 
+/// The radar guidance overlay's window label.
+const RADAR_GUIDANCE: &str = "radar-guidance";
+/// The route HUD's window label.
+const NAVIGATION_HUD: &str = "navigation-hud";
+/// Told to the guidance overlays whenever radar guidance's status moves, so
+/// they re-read it. Window orchestration stays in the shell; the event
+/// carries nothing and does not enter the domain-event spine.
+const RADAR_GUIDANCE_CHANGED: &str = "radar-guidance-changed";
+
+/// Show the route HUD and start radar guidance: the radar overlay is placed
+/// over the radar when guidance finds it, and the HUD beside the radar,
+/// clear of the coordinates printed under it, or at its anchor when the
+/// radar is not placed.
 #[tauri::command]
 async fn show_navigation_overlays(app: tauri::AppHandle) {
-    let geometry = match commands::facade(&app) {
-        Ok(facade) => facade.radar_geometry().await.ok().and_then(|value| value.0),
-        Err(_) => None,
+    let Ok(facade) = commands::facade(&app) else {
+        return;
     };
-    if let Some(radar) = app.get_webview_window("radar-guidance") {
-        if let Some(geometry) = geometry {
-            let diameter = (geometry.radius_px * 2.0).round().max(16.0) as u32;
-            let x = (geometry.centre_x as f64 - geometry.radius_px).round() as i32;
-            let y = (geometry.centre_y as f64 - geometry.radius_px).round() as i32;
-            let _ = radar.set_size(tauri::PhysicalSize::new(diameter, diameter));
-            let _ = radar.set_position(tauri::PhysicalPosition::new(x, y));
-            let _ = radar.show();
-            // GTK does not allocate the hidden pre-spawned window's native
-            // surface until its first map. Tao's Linux hit-test path expects
-            // that surface to exist, so click-through must be enabled only
-            // after show maps it; doing this while hidden panics inside Tao.
-            let _ = radar.set_ignore_cursor_events(true);
+    let _ = facade.navigation_set_overlays_shown(true);
+    let _ = facade.radar_guidance_start().await;
+    // Shown on the main thread against the state as it is then: the
+    // overlays may have been taken away while the first look was out, and
+    // then they stay away.
+    let shell = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if !facade.navigation_overlays_shown() {
+            return;
         }
-    }
-    if let Some(hud) = app.get_webview_window("navigation-hud") {
-        let position = geometry
-            .map(|geometry| {
-                tauri::PhysicalPosition::new(
-                    (geometry.centre_x as f64 + geometry.radius_px + 12.0).round() as i32,
-                    (geometry.centre_y as f64 - geometry.radius_px).round() as i32,
-                )
-            })
+        let guidance = facade.radar_guidance().ok();
+        place_radar_overlay(&shell, guidance);
+        if let Some(hud) = shell.get_webview_window(NAVIGATION_HUD) {
+            let position = match guidance {
+                Some(RadarGuidance::Placed {
+                    centre_y,
+                    radius_px,
+                    clear_right_x,
+                    ..
+                }) => Some(tauri::PhysicalPosition::new(
+                    (clear_right_x + 12.0).round() as i32,
+                    (centre_y - radius_px).round() as i32,
+                )),
+                _ => None,
+            }
             .filter(|position| position_on_a_monitor(&hud, position.x, position.y))
             .unwrap_or_else(|| monitor_anchor(&hud, (60, 250)));
-        let _ = hud.set_position(position);
-        let _ = hud.show();
-    }
+            let _ = hud.set_position(position);
+            let _ = hud.show();
+        }
+    });
 }
 
+/// Place the radar overlay over the radar as guidance last placed it, or
+/// take it off the screen when guidance has no placement.
+fn place_radar_overlay(app: &tauri::AppHandle, guidance: Option<RadarGuidance>) {
+    let Some(radar) = app.get_webview_window(RADAR_GUIDANCE) else {
+        return;
+    };
+    let Some(RadarGuidance::Placed {
+        centre_x,
+        centre_y,
+        radius_px,
+        ..
+    }) = guidance
+    else {
+        let _ = radar.hide();
+        return;
+    };
+    let diameter = (radius_px * 2.0).round().max(16.0) as u32;
+    let x = (centre_x - radius_px).round() as i32;
+    let y = (centre_y - radius_px).round() as i32;
+    let _ = radar.set_size(tauri::PhysicalSize::new(diameter, diameter));
+    let _ = radar.set_position(tauri::PhysicalPosition::new(x, y));
+    let _ = radar.show();
+    // GTK does not allocate the hidden pre-spawned window's native
+    // surface until its first map. Tao's Linux hit-test path expects
+    // that surface to exist, so click-through must be enabled only
+    // after show maps it; doing this while hidden panics inside Tao.
+    let _ = radar.set_ignore_cursor_events(true);
+}
+
+/// Take both route overlays off the screen and stop radar guidance with
+/// them, so nothing captures the screen for overlays no one can see.
 #[tauri::command]
 fn hide_navigation_overlays(app: tauri::AppHandle) {
-    for label in ["navigation-hud", "radar-guidance"] {
+    for label in [NAVIGATION_HUD, RADAR_GUIDANCE] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
         }
+    }
+    navigation_overlays_gone(&app);
+}
+
+/// The route overlays have gone, by whatever route: radar guidance stops,
+/// and the position poll reads nothing until they show again.
+fn navigation_overlays_gone(app: &tauri::AppHandle) {
+    if let Ok(facade) = commands::facade(app) {
+        let _ = facade.navigation_set_overlays_shown(false);
     }
 }
 
@@ -468,10 +524,20 @@ pub fn run() {
                     scan_overlay_gone(window.app_handle());
                     let _ = window.hide();
                 }
+                // The route overlays are spawned once too: the system's
+                // close takes both off the screen and stops radar guidance,
+                // just as the HUD's own close does.
+                if [NAVIGATION_HUD, RADAR_GUIDANCE].contains(&window.label()) {
+                    api.prevent_close();
+                    hide_navigation_overlays(window.app_handle().clone());
+                }
             }
             if let WindowEvent::Destroyed = event {
                 if window.label() == SCAN_OVERLAY {
                     scan_overlay_gone(window.app_handle());
+                }
+                if [NAVIGATION_HUD, RADAR_GUIDANCE].contains(&window.label()) {
+                    navigation_overlays_gone(window.app_handle());
                 }
             }
         })
@@ -513,6 +579,11 @@ pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
         state.coord_confirm.stop();
         state.radar_confirm.stop();
         state.skill_scan.shutdown();
+    }
+    // Radar guidance stops and its worker is waited for, briefly, so the
+    // closing app is not capturing the screen behind it.
+    if let Ok(facade) = commands::facade(app) {
+        facade.radar_guidance_shutdown();
     }
 
     // With the producers stopped (no writes in flight), refresh the database's
@@ -680,6 +751,30 @@ fn install_native_services(app: &tauri::AppHandle, composed: composition::Compos
     let exit_radar_confirm = composed.radar_confirm.clone();
     // The typed-command facade, published to its managed slot below.
     let composed_api = composed.api.clone();
+    // Radar guidance places its overlay as its status moves. The sink holds
+    // the facade weakly: the facade holds the sink.
+    let guidance_app = app.clone();
+    let guidance_api = std::sync::Arc::downgrade(&composed.api);
+    composed
+        .api
+        .set_radar_guidance_changed(std::sync::Arc::new(move || {
+            // Applied on the main thread against the status as it is then,
+            // so a hide that lands between the change and the placement is
+            // never undone by a placement read before it.
+            let app = guidance_app.clone();
+            let api = guidance_api.clone();
+            let _ = guidance_app.run_on_main_thread(move || {
+                let Some(api) = api.upgrade() else {
+                    return;
+                };
+                let guidance = api
+                    .navigation_overlays_shown()
+                    .then(|| api.radar_guidance().ok())
+                    .flatten();
+                place_radar_overlay(&app, guidance);
+                let _ = app.emit(RADAR_GUIDANCE_CHANGED, ());
+            });
+        }));
     // The composed database handle, held so the exit seam can run the
     // once-per-lifecycle `PRAGMA optimize` on close.
     let shutdown_db = composed.db.clone();
@@ -1127,6 +1222,9 @@ mod tests {
                 "navigation_resolve_harvest",
                 "navigation_undo",
                 "navigation_end",
+                "navigation_resume_position",
+                "radar_guidance",
+                "show_navigation_overlays",
                 "hide_navigation_overlays",
                 "set_window_hit_region",
                 "substrate_ready",

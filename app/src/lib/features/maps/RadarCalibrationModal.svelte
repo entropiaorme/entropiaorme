@@ -32,7 +32,7 @@
 		try {
 			phase = await startRadarCalibration();
 		} catch {
-			error = 'Radar calibration is unavailable on this installation.';
+			error = 'Setting the radar is unavailable on this installation.';
 		}
 	}
 
@@ -57,7 +57,7 @@
 	});
 </script>
 
-<Modal bind:open title="Calibrate radar guidance">
+<Modal bind:open title="Set the radar by hand">
 	<div class="space-y-4 text-sm text-text-secondary">
 		{#if error}
 			<p>{error}</p>
@@ -66,9 +66,9 @@
 		{:else if phase === 'awaitNorthEdge'}
 			<p class="text-text">Step 2 of 2: hover the top edge of the radar circle at north, then press <kbd class="rounded border border-border bg-surface px-1">Enter</kbd>.</p>
 		{:else if completed}
-			<p class="text-text">Radar guidance is calibrated.</p>
+			<p class="text-text">The radar is set. It is used whenever the radar is not found on the screen.</p>
 		{:else}
-			<p>Preparing calibration…</p>
+			<p>Preparing…</p>
 		{/if}
 		{#if !completed && (phase === 'awaitCentre' || phase === 'awaitNorthEdge')}
 			<p>Or start the capture and hover there before it ends.</p>

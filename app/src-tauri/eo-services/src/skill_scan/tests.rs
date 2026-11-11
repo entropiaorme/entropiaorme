@@ -15,7 +15,7 @@ use crate::clock::MockClock;
 use crate::game_ui::geometry::Rect;
 use crate::game_ui::test_support::{
     bundled_profile, draw_skills_window, draw_window, skills_drawing_vocabulary, skills_scene,
-    standard_skills_layout, Lettering, SkillsLayout, SKILLS_ROW_PITCH,
+    standard_skills_layout, window_frame, Lettering, SkillsLayout, SKILLS_ROW_PITCH,
 };
 
 /// What the stand-in game window shows.
@@ -94,7 +94,7 @@ impl Screen {
 
     fn frame(self: &Arc<Self>) -> GameWindowFrame {
         let screen = self.clone();
-        Arc::new(move || {
+        Arc::new(move |area| {
             screen.captures.fetch_add(1, Ordering::SeqCst);
             let now = screen.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
             screen.most_at_once.fetch_max(now, Ordering::SeqCst);
@@ -107,7 +107,7 @@ impl Screen {
             }
             drop(held);
             let shown = match &*screen.showing.lock().unwrap() {
-                Showing::Frame(frame) => Ok(frame.clone()),
+                Showing::Frame(frame) => window_frame(frame, (0, 0), area),
                 Showing::Nothing(why) => Err(*why),
             };
             screen.in_flight.fetch_sub(1, Ordering::SeqCst);

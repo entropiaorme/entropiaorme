@@ -97,7 +97,7 @@ describe('maps surface', () => {
 			render(MapsSurface, { target: panel });
 
 			await fireEvent.click(await screen.findByRole('button', { name: 'Setup' }));
-			await fireEvent.click(screen.getByRole('menuitem', { name: 'Calibrate radar guidance' }));
+			await fireEvent.click(screen.getByRole('menuitem', { name: 'Set the radar by hand' }));
 
 			const dialog = await screen.findByRole('dialog');
 			expect(panel.contains(dialog)).toBe(false);

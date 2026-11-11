@@ -16,7 +16,7 @@ use crate::game_ui::field::{FieldError, Remembering};
 use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::locate::{read_window_field, ReadError};
 use crate::game_ui::profile::UiProfile;
-use crate::game_ui::seams::{FrameReader, FrameUnavailable, GameWindowFrame};
+use crate::game_ui::seams::{FrameArea, FrameReader, FrameUnavailable, GameWindowFrame};
 use crate::game_ui::validate::without_unit;
 
 /// The terminals a figure is read from.
@@ -137,7 +137,7 @@ pub struct RepairProviders {
 impl Default for RepairProviders {
     fn default() -> Self {
         Self {
-            frame: Arc::new(|| Err(FrameUnavailable::WindowNotFound)),
+            frame: Arc::new(|_| Err(FrameUnavailable::WindowNotFound)),
             profile: None,
             read_text: None,
         }
@@ -175,7 +175,7 @@ impl RepairOcrService {
         else {
             return Err(TerminalRefusal::ReaderUnavailable);
         };
-        let frame = (self.providers.frame)()?;
+        let frame = (self.providers.frame)(FrameArea::Whole)?.image;
 
         // A crop the recogniser fails on reads as nothing: a title that
         // reads as nothing identifies no terminal, a figure that reads as
@@ -207,7 +207,9 @@ impl RepairOcrService {
 mod tests {
     use super::*;
     use crate::game_ui::geometry::Rect;
-    use crate::game_ui::test_support::{blank, bundled_profile, draw_window, Lettering};
+    use crate::game_ui::test_support::{
+        blank, bundled_profile, draw_window, window_frame, Lettering,
+    };
 
     const SCENE: [u8; 3] = [120, 110, 90];
     const FIGURE_HEIGHT: i32 = 14;
@@ -251,7 +253,7 @@ mod tests {
     ) -> RepairOcrService {
         let image = frame.image.clone();
         RepairOcrService::new(RepairProviders {
-            frame: Arc::new(move || Ok(image.clone())),
+            frame: Arc::new(move |area| window_frame(&image, (0, 0), area)),
             profile: Some(profile()),
             read_text: Some(Arc::new(read_text)),
         })
@@ -321,7 +323,7 @@ mod tests {
         ] {
             let counter = recognised.clone();
             let service = RepairOcrService::new(RepairProviders {
-                frame: Arc::new(move || Err(unavailable)),
+                frame: Arc::new(move |_| Err(unavailable)),
                 profile: Some(profile()),
                 read_text: Some(Arc::new(move |_| {
                     counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -383,9 +385,9 @@ mod tests {
         let capturing = |captured: &Arc<std::sync::atomic::AtomicUsize>| -> GameWindowFrame {
             let counter = captured.clone();
             let image = frame.image.clone();
-            Arc::new(move || {
+            Arc::new(move |area| {
                 counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(image.clone())
+                window_frame(&image, (0, 0), area)
             })
         };
         let no_profile = RepairOcrService::new(RepairProviders {

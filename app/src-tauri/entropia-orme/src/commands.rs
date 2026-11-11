@@ -46,7 +46,7 @@ use eo_api::loadout_comparison::{LoadoutComparison, SetupPick};
 use eo_api::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
-    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry,
+    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry, RadarGuidance,
 };
 use eo_api::market::{
     MarketAuctionPacketThreshold, MarketCommitResult, MarketHarvestData, MarketHistoryPoint,
@@ -1754,7 +1754,7 @@ pub async fn maps_calibration_status(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn maps_scan_coordinates(
     app: tauri::AppHandle,
-    planet: Option<String>,
+    planet: String,
 ) -> Result<CoordScanResult, ApiError> {
     let api = facade(&app)?;
     tokio::task::spawn_blocking(move || api.maps_scan_coordinates(planet))
@@ -1858,6 +1858,16 @@ pub async fn radar_calibration_status(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn radar_geometry(app: tauri::AppHandle) -> Result<Nullable<RadarGeometry>, ApiError> {
     facade(&app)?.radar_geometry().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn navigation_resume_position(app: tauri::AppHandle) -> Result<(), ApiError> {
+    facade(&app)?.navigation_resume_position()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn radar_guidance(app: tauri::AppHandle) -> Result<RadarGuidance, ApiError> {
+    facade(&app)?.radar_guidance()
 }
 
 #[cfg(test)]

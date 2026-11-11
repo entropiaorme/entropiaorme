@@ -8,8 +8,7 @@
 //! handle the missing-window case. The sale window's region composes
 //! these lookups with the pure geometry in `scan_presets`.
 
-use crate::game_ui::geometry::BgrImage;
-use crate::game_ui::seams::FrameUnavailable;
+use crate::game_ui::seams::{FrameArea, FrameUnavailable, GameFrame};
 use crate::scan_presets::{compute_region, ScanPresets};
 use crate::screen_capture::{capturable_area, capture_region_bgr, start_capture};
 
@@ -41,9 +40,23 @@ pub fn get_window_geometry(handle: WindowHandle) -> Option<(i64, i64, i64, i64)>
 /// the lookup and the measurement, or has no area) counts as not found.
 ///
 /// [`GameWindowFrame`]: crate::game_ui::seams::GameWindowFrame
-pub fn capture_game_window() -> Result<BgrImage, FrameUnavailable> {
+pub fn capture_game_window(area: FrameArea) -> Result<GameFrame, FrameUnavailable> {
     let handle = find_game_window().ok_or(FrameUnavailable::WindowNotFound)?;
-    let client = get_window_geometry(handle).ok_or(FrameUnavailable::WindowNotFound)?;
+    let window = get_window_geometry(handle).ok_or(FrameUnavailable::WindowNotFound)?;
+    // A part of the window is captured as far as it lies inside it.
+    let client = match area {
+        FrameArea::Whole => window,
+        FrameArea::Part(part) => capturable_part(
+            (
+                window.0 + part.x0 as i64,
+                window.1 + part.y0 as i64,
+                part.width() as i64,
+                part.height() as i64,
+            ),
+            window,
+        )
+        .ok_or(FrameUnavailable::OutsideCapturableArea)?,
+    };
     // Asked once, before the area and the pixels, each of which would
     // otherwise try a failed start again and ask for consent twice.
     if !start_capture() {
@@ -55,7 +68,13 @@ pub fn capture_game_window() -> Result<BgrImage, FrameUnavailable> {
         }
         None => client,
     };
-    capture_region_bgr(x, y, w, h).ok_or(FrameUnavailable::CaptureFailed)
+    capture_region_bgr(x, y, w, h)
+        .map(|image| GameFrame {
+            image,
+            origin: (x, y),
+            offset: (x - window.0, y - window.1),
+        })
+        .ok_or(FrameUnavailable::CaptureFailed)
 }
 
 /// The part of `window` that lies inside `area`, both given as

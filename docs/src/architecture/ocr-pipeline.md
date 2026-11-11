@@ -54,7 +54,7 @@ Five consumers share the recogniser:
 | Repair-cost read | The whole game window, searched for the Repair Terminal and its labelled cost | The cost exactly as shown, or a typed refusal |
 | Trade Terminal value read | The whole game window, searched for the Trade Terminal and its labelled total | The total exactly as shown, or a typed refusal, for a limited-set observation |
 | Sale-window read | One calibrated auction panel sliced into independently validated fields | A reviewable listing draft |
-| Map-coordinate read | A calibrated radar readout strip, split into its two halves | Parsed longitude and latitude |
+| Map-coordinate read | The whole game window, searched for the radar and the coordinates printed under it | Longitude and latitude exactly as shown, or a typed refusal per value |
 
 This page focuses on the skill scan; the repair-cost and Trade Terminal reads
 (`app/src-tauri/eo-services/src/repair_ocr.rs`) reuses the same recogniser
@@ -62,12 +62,16 @@ for a single on-demand number and is summarised under
 [The shared repair and Trade Terminal reads](#the-shared-repair-and-trade-terminal-reads). The auction reader
 (`app/src-tauri/eo-services/src/sale_window_ocr.rs`) is described under
 [The auction sale-window read](#the-auction-sale-window-read). The coordinate
-reader (`app/src-tauri/eo-services/src/coord_capture.rs`) captures one strip
-holding both values (`LON` on its left half, `LAT` on its right), splits it at
-the dead space between them rather than at a fixed midpoint so an unpadded value
-cannot be cut in two, and reads each half for its trailing digit run. Explicit
-grammar and per-planet bounds checks then keep an unreadable or implausible
-result from silently becoming a map pin.
+reader (`app/src-tauri/eo-services/src/coord_capture.rs`) finds the radar in
+the whole game window (`game_ui/radar.rs`) and reads `LON` and `LAT` under it,
+each checked by grammar, by the width of its own lettering and by the planet's
+bounds; a position is answered only when both read, and a refusal carries no
+number. The planet's name printed above the radar is read too, and a position
+under a radar naming another planet is refused. Once the radar is found, the
+next read captures only its neighbourhood. A rectangle the player draws by hand is read instead only when the
+radar cannot be found, under the same grammar and bounds. The same module
+finds the radar for the route guidance overlays, with the map's scale read
+from the distances printed on its rings.
 
 ## The stages in order
 

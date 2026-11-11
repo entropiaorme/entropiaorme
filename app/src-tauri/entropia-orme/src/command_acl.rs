@@ -230,6 +230,8 @@ macro_rules! app_command_surface {
             radar_calibration_cancel,
             radar_calibration_status,
             radar_geometry,
+            navigation_resume_position,
+            radar_guidance,
             ],
             shell: [
             toggle_overlay,
@@ -321,6 +323,9 @@ pub const NAVIGATION_COMMANDS: &[&str] = &[
     "navigation_resolve_harvest",
     "navigation_undo",
     "navigation_end",
+    "navigation_resume_position",
+    "radar_guidance",
+    "show_navigation_overlays",
     "hide_navigation_overlays",
     "set_window_hit_region",
     "substrate_ready",
@@ -328,4 +333,4 @@ pub const NAVIGATION_COMMANDS: &[&str] = &[
 
 #[allow(dead_code)]
 pub const RADAR_GUIDANCE_COMMANDS: &[&str] =
-    &["navigation_snapshot", "radar_geometry", "substrate_ready"];
+    &["navigation_snapshot", "radar_guidance", "substrate_ready"];

@@ -48,7 +48,7 @@ use crate::loadout_comparison::{LoadoutComparison, SetupPick};
 use crate::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
-    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry,
+    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry, RadarGuidance,
 };
 use crate::market::{
     MarketAuctionPacketThreshold, MarketCommitResult, MarketHarvestData, MarketHistoryPoint,
@@ -1983,7 +1983,7 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "maps_scan_coordinates",
             args: vec![ArgSpec {
                 name: "planet",
-                schema: schema(schema_for!(Option<String>)),
+                schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(CoordScanResult))),
         },
@@ -2082,6 +2082,16 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "radar_geometry",
             args: Vec::new(),
             returns: Some(schema(schema_for!(Nullable<RadarGeometry>))),
+        },
+        CommandSpec {
+            name: "navigation_resume_position",
+            args: Vec::new(),
+            returns: None,
+        },
+        CommandSpec {
+            name: "radar_guidance",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(RadarGuidance))),
         },
     ]
 }

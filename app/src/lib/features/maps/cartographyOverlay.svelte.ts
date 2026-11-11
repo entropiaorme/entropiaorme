@@ -8,6 +8,7 @@ import {
 	type PinConfig,
 	scanMapCoordinates,
 } from '$lib/api';
+import { coordRefusalMessage, scannedPoint } from './coordinateRead';
 
 /**
  * The cartography overlay's shared state: the current planet/map-view context
@@ -97,29 +98,24 @@ export function acceptCartographyContextBroadcast(value: unknown): CartographyCo
 	return context;
 }
 
-export function cartographyScanFailureMessage(
-	status: CoordScanResult['status'],
-	planet: string,
-): string {
-	const messages: Partial<Record<CoordScanResult['status'], string>> = {
-		noRegion: 'Calibrate capture in Maps first.',
-		captureFailed: 'Screen capture failed.',
-		engineUnavailable: 'Text recognition is unavailable.',
-		unreadable: 'Coordinates could not be read.',
-		implausible: `The readout is outside ${planet}.`,
-	};
-	return messages[status] ?? 'Coordinate scan failed.';
-}
-
 export type PinDropOutcome =
 	| { kind: 'placed'; label: string }
 	| { kind: 'duplicate'; input: MapPinInput; existingName: string; distance: number; label: string }
 	| { kind: 'error'; message: string };
 
+/** Whether the overlay still shows the planet and map a drop was started for. */
+export function isCurrentContext(planet: string, mapViewId: number | null): boolean {
+	return context.planet === planet && context.mapViewId === mapViewId;
+}
+
+const MOVED_ON = 'The map changed while your position was read; nothing was pinned.';
+
 /**
  * Scan the current coordinates and drop a pin for a palette configuration.
  * Reports a nearby existing pin (for the caller to confirm) or a typed failure
- * rather than throwing on the expected legs.
+ * rather than throwing on the expected legs. A read that lands after the
+ * overlay has moved to another planet or map pins nothing: it was read for
+ * the one before.
  */
 export async function scanAndDropPin(
 	config: PinConfig,
@@ -128,14 +124,20 @@ export async function scanAndDropPin(
 ): Promise<PinDropOutcome> {
 	const { planet, mapViewId } = context;
 	if (!planet || !calibratedPlanets.includes(planet)) {
-		return { kind: 'error', message: 'Choose a calibrated planet in Maps first.' };
+		return { kind: 'error', message: 'Choose a planet with coordinates in Maps first.' };
 	}
 	const result = await scanMapCoordinates(planet);
+	if (!isCurrentContext(planet, mapViewId)) return { kind: 'error', message: MOVED_ON };
 	const input = cartographyPinInput(planet, mapViewId, config, result);
 	if (!input) {
-		return { kind: 'error', message: cartographyScanFailureMessage(result.status, planet) };
+		const message =
+			result.kind === 'refused'
+				? coordRefusalMessage(result.refusal, planet)
+				: 'Coordinate scan failed.';
+		return { kind: 'error', message };
 	}
 	const nearby = await getNearbyMapPin(planet, mapViewId, input.lon, input.lat);
+	if (!isCurrentContext(planet, mapViewId)) return { kind: 'error', message: MOVED_ON };
 	if (nearby) {
 		return {
 			kind: 'duplicate',
@@ -163,11 +165,12 @@ export function cartographyPinInput(
 	config: PinConfig,
 	result: CoordScanResult,
 ): MapPinInput | null {
-	if (result.status !== 'read' || result.lon == null || result.lat == null) return null;
+	const point = scannedPoint(result);
+	if (!point) return null;
 	return {
 		planet,
-		lon: result.lon,
-		lat: result.lat,
+		lon: point.lon,
+		lat: point.lat,
 		// The readout no longer shows an altitude, so a scanned pin has none.
 		altitude: null,
 		name: config.label,

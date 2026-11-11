@@ -2,10 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PinConfig } from '$lib/api';
 
 const getPinConfigs = vi.fn();
+const scanMapCoordinates = vi.fn();
+const getNearbyMapPin = vi.fn();
+const createMapPin = vi.fn();
 const emit = vi.fn();
 
 vi.mock('$lib/api', () => ({
 	getPinConfigs: (...args: unknown[]) => getPinConfigs(...args),
+	scanMapCoordinates: (...args: unknown[]) => scanMapCoordinates(...args),
+	getNearbyMapPin: (...args: unknown[]) => getNearbyMapPin(...args),
+	createMapPin: (...args: unknown[]) => createMapPin(...args),
 }));
 vi.mock('@tauri-apps/api/event', () => ({
 	emit: (...args: unknown[]) => emit(...args),
@@ -39,6 +45,9 @@ function treeConfig(overrides: Partial<PinConfig> = {}): PinConfig {
 
 beforeEach(() => {
 	getPinConfigs.mockReset().mockResolvedValue([]);
+	scanMapCoordinates.mockReset();
+	getNearbyMapPin.mockReset().mockResolvedValue(null);
+	createMapPin.mockReset().mockResolvedValue({});
 	emit.mockReset().mockResolvedValue(undefined);
 });
 
@@ -97,10 +106,10 @@ describe('cartographyPinInput', () => {
 		const { cartographyPinInput } = await loadModule();
 		expect(
 			cartographyPinInput('Arkadia', 42, treeConfig({ id: 9 }), {
-				status: 'read',
+				kind: 'read',
 				lon: 61_234,
 				lat: 75_456,
-				rawText: 'LON 61234 | LAT 75456',
+				source: 'radar',
 			}),
 		).toEqual({
 			planet: 'Arkadia',
@@ -126,20 +135,64 @@ describe('cartographyPinInput', () => {
 			'Arkadia',
 			null,
 			treeConfig({ category: 'generic', specialKind: null, icon: '📍' }),
-			{ status: 'read', lon: 100, lat: 200, rawText: null },
+			{ kind: 'read', lon: 10_100, lat: 10_200, source: 'region' },
 		);
 		expect(input?.kind).toBe('marker');
 	});
 
-	it('refuses a read result without both coordinates', async () => {
+	it('refuses a refused scan, which carries no coordinates', async () => {
 		const { cartographyPinInput } = await loadModule();
 		expect(
 			cartographyPinInput('Arkadia', null, treeConfig(), {
-				status: 'read',
-				lon: null,
-				lat: 75_456,
-				rawText: null,
+				kind: 'refused',
+				refusal: { reason: 'notRead', lon: 'covered', lat: null },
 			}),
 		).toBeNull();
+	});
+});
+
+describe('scanAndDropPin', () => {
+	it('pins what was read, on the map it was read for', async () => {
+		scanMapCoordinates.mockResolvedValue({
+			kind: 'read',
+			lon: 20_000,
+			lat: 21_000,
+			source: 'radar',
+		});
+		const { acceptCartographyContextBroadcast, scanAndDropPin } = await loadModule();
+		const context = acceptCartographyContextBroadcast({ planet: 'Arkadia', mapViewId: 3 });
+		const outcome = await scanAndDropPin(treeConfig(), context, ['Arkadia']);
+		expect(outcome).toEqual({ kind: 'placed', label: 'Tree' });
+		expect(createMapPin).toHaveBeenCalledWith(
+			expect.objectContaining({ planet: 'Arkadia', mapViewId: 3, lon: 20_000, lat: 21_000 }),
+		);
+	});
+
+	it('says why a refused read pinned nothing', async () => {
+		scanMapCoordinates.mockResolvedValue({
+			kind: 'refused',
+			refusal: { reason: 'notRead', lon: null, lat: 'covered' },
+		});
+		const { acceptCartographyContextBroadcast, scanAndDropPin } = await loadModule();
+		const context = acceptCartographyContextBroadcast({ planet: 'Arkadia', mapViewId: null });
+		expect(await scanAndDropPin(treeConfig(), context, ['Arkadia'])).toEqual({
+			kind: 'error',
+			message: 'The coordinates are covered by another window.',
+		});
+		expect(createMapPin).not.toHaveBeenCalled();
+	});
+
+	it('drops a read that lands after another planet was opened', async () => {
+		let land: (value: unknown) => void = () => {};
+		scanMapCoordinates.mockReturnValue(new Promise((resolve) => (land = resolve)));
+		const { acceptCartographyContextBroadcast, scanAndDropPin } = await loadModule();
+		const context = acceptCartographyContextBroadcast({ planet: 'Arkadia', mapViewId: null });
+		const dropping = scanAndDropPin(treeConfig(), context, ['Arkadia', 'Calypso']);
+		acceptCartographyContextBroadcast({ planet: 'Calypso', mapViewId: null });
+		land({ kind: 'read', lon: 20_000, lat: 21_000, source: 'radar' });
+		const outcome = await dropping;
+		expect(outcome.kind).toBe('error');
+		expect(getNearbyMapPin).not.toHaveBeenCalled();
+		expect(createMapPin).not.toHaveBeenCalled();
 	});
 });

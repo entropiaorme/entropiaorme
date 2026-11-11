@@ -413,6 +413,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "session summary expected loot",
         sql: include_str!("../../migrations/0075_session_summary_expected_loot.sql"),
     },
+    Migration {
+        version: 76,
+        description: "map pin visit position read",
+        sql: include_str!("../../migrations/0076_map_pin_visit_position_read.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -496,6 +501,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "9974AC892A37B44AF7A21761415EB2FE708D40AC31F9B8AC2D540E0680BC6E7D3A1825A2FC85E9D86C76A85E582A6778",
     "E471B342FB13687AF089AB2BE05D9C4824F09CE7D28569E7999126EB7DFCE16A75051AB51A9A8D1728DC448CDD8CEE71",
     "FB6D2BC7321B45C377E491EB1C4FF3F32909AF5AFB24ACC6FC000C83843EFCBA530281532C624B857E9BF9E913349147",
+    "EEA71873C59A8366EC676EE0ED68992AA63EE56B5919B9FD9048E9C8FB9F635948F2A23592244DDD35B5A4E9CD6E2200",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as

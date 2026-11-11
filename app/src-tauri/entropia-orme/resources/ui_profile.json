@@ -324,6 +324,33 @@
       "digit_trim": 0.2,
       "ruler_tolerance": 0.4,
       "pair_tolerance": 0.05
-    }
+    },
+    "planet": {
+      "band": [
+        0.08,
+        0.36
+      ],
+      "reach": 0.6,
+      "centred": 0.15,
+      "guard_rows": 1,
+      "lettering": {
+        "min_ink": 170,
+        "glyph_gap": 1,
+        "join_factor": 1.0,
+        "max_colour_distance": 110,
+        "line_slack": 0.3334,
+        "run_height": [
+          6,
+          40
+        ],
+        "min_ink_pixels": 30
+      },
+      "stroke": {
+        "max_chroma": 40,
+        "reach": 2,
+        "contrast": 50
+      }
+    },
+    "neighbourhood_margin": 0.25
   }
 }

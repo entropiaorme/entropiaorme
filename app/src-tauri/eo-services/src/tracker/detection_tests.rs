@@ -276,6 +276,28 @@ impl Hunt {
             }],
             total_ped: self.kills as f64 / 10.0,
         }));
+        self.await_kills();
+    }
+
+    /// Wait until the tracker has recorded every kill reported so far. A
+    /// report travels by the bus and a look by the watcher's own channel:
+    /// without this, looks sent after a kill could reach the tracker
+    /// before it, in an order no hunt produces.
+    fn await_kills(&self) {
+        let reported = self.kills;
+        for _ in 0..10_000 {
+            let recorded = self.rig.probe(&self.tracker, |actor| {
+                actor
+                    .session
+                    .active()
+                    .map_or(0, |active| active.session.kills.len())
+            });
+            if recorded >= reported {
+                return;
+            }
+            std::thread::yield_now();
+        }
+        panic!("the tracker never recorded kill {reported}");
     }
 
     /// Let every look sent so far reach the tracker.

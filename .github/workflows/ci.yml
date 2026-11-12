@@ -293,7 +293,7 @@ jobs:
           tool: cargo-nextest
       - name: Run workspace tests
         timeout-minutes: 20
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --no-fail-fast
       # nextest does NOT run doctests; keep them on a dedicated cargo-test leg so
       # doctest coverage is not silently dropped by the migration.
       - name: Run workspace doctests
@@ -335,7 +335,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Run the backend-member tests (nextest)
-        run: cargo nextest run -p eo-wire -p eo-services -p eo-api
+        run: cargo nextest run -p eo-wire -p eo-services -p eo-api --no-fail-fast
       # The X11 keystroke observer and screen capturer proved against a live
       # (virtual) X server: the tests named `*_on_a_live_x_server` are ignored
       # by default because they need a display, and run here under Xvfb with

@@ -90,8 +90,10 @@ pub(crate) struct KillDetection {
 
 impl KillDetection {
     /// The answer for `pending`, from the history's stamp. The grade is
-    /// the stamp's own, never raised.
-    fn of(pending: &PendingKill, session_id: &str, stamp: MobStamp) -> Self {
+    /// the stamp's own, never raised. None for the creature being hunted,
+    /// which is not recorded: such a kill keeps its declared stamp, as an
+    /// unnamed one does.
+    fn of(pending: &PendingKill, session_id: &str, stamp: MobStamp) -> Option<Self> {
         let (grade, creature, provisional_key) = match &stamp {
             MobStamp::Named { creature, .. } => (MobDetectionGrade::Named, listed(creature), None),
             MobStamp::Guess { creature, .. } => (MobDetectionGrade::Guess, listed(creature), None),
@@ -113,9 +115,10 @@ impl KillDetection {
                 unlisted(spelling),
                 Some(key.clone()),
             ),
+            MobStamp::Continuity { .. } | MobStamp::ProvisionalContinuity { .. } => return None,
         };
         let evidence = stamp.evidence();
-        Self {
+        Some(Self {
             kill_id: pending.kill_id.clone(),
             session_id: session_id.to_string(),
             grade,
@@ -124,7 +127,7 @@ impl KillDetection {
             read_text: evidence.raw_text.trim().to_string(),
             read_at: evidence.last_read_ms as f64 / 1000.0,
             declared: pending.declared.clone(),
-        }
+        })
     }
 }
 
@@ -343,7 +346,7 @@ impl TrackerActor {
                 KillStamp::NotYet => true,
                 KillStamp::Unnamed(_) => false,
                 KillStamp::Stamped(stamp) => {
-                    answers.push(KillDetection::of(kill, &session_id, stamp));
+                    answers.extend(KillDetection::of(kill, &session_id, stamp));
                     false
                 }
             })

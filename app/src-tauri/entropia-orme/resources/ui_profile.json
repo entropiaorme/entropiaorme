@@ -762,6 +762,9 @@
     "max_fights": 16,
     "spellings": 256,
     "stamped_spellings": 1024,
-    "spelling_texts": 4
+    "spelling_texts": 4,
+    "continuity_kills": 3,
+    "continuity_horizon_ms": 120000,
+    "continuity_run": 10
   }
 }

@@ -824,6 +824,8 @@ const OTHER_COMMANDS: &[&str] = &[
     // statistic.
     "tracking_mob_detections",
     "tracking_mob_detection_settle",
+    "tracking_mob_pin",
+    "tracking_mob_unpin",
     "session_definitions_list",
     "session_definition_create",
     "session_definition_update",

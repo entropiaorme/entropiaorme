@@ -29,7 +29,7 @@ use super::attribution::{HitMargin, WeaponMismatch};
 use super::combat::Accumulator;
 use super::harvest::GuardrailMismatch;
 use super::healing::HealingRuntime;
-use super::mob::DeclaredMob;
+use super::mob::{DeclaredMob, MobSource, MobSourceView};
 use super::time::{instant_to_epoch, local_isoformat, resolve_local};
 use super::weapons::WeaponRuntime;
 use super::{HuntTracker, SessionState, TrackerCommandError};
@@ -128,9 +128,9 @@ pub(super) struct ActiveSession {
     /// their count has raised the warning yet.
     pub(super) undeclared_unpriced: i64,
     pub(super) undeclared_warning_emitted: bool,
-    /// The declared mob that kills take their stamp from (None: no
-    /// declaration; kills stamp "Unknown" with no stamp source).
-    pub(super) declared_mob: Option<DeclaredMob>,
+    /// The session's one source for its kills' creature: the typed
+    /// creature and the pin (see `mob`).
+    pub(super) mob: MobSource,
     /// The session-scoped facets snapshotted at session start.
     pub(super) facets: SessionFacets,
     /// The live interval state: which intervals are open and the context
@@ -156,6 +156,9 @@ pub(super) struct ActiveSession {
     /// The history of the locked plate and the kills waiting on it, while
     /// creature detection runs for this session.
     pub(super) detection: Option<super::detection::SessionDetection>,
+    /// Whether the screen was read when the readouts were last told: a
+    /// change is told once, however it came about.
+    pub(super) reading_told: bool,
 }
 
 impl ActiveSession {
@@ -177,7 +180,7 @@ impl ActiveSession {
             unpriced_no_fit: 0,
             undeclared_unpriced: 0,
             undeclared_warning_emitted: false,
-            declared_mob: None,
+            mob: MobSource::default(),
             facets,
             intervals: IntervalState::default(),
             healing: HealingRuntime::default(),
@@ -192,17 +195,44 @@ impl ActiveSession {
                 robot: 0.0,
             },
             detection: None,
+            reading_told: false,
         }
     }
 
-    /// The mob name a kill stamps or the readout shows: the declared
-    /// mob's display name when it is set AND non-empty (an empty
-    /// declared name behaves as unset, the original's falsy check).
+    /// The name a kill settling now is recorded with (the pin, else the
+    /// typed creature), for tests that follow the source.
+    #[cfg(test)]
     pub(super) fn stamped_mob_name(&self) -> Option<&str> {
-        self.declared_mob
+        self.mob
+            .pin
             .as_ref()
-            .map(|declared| declared.name.as_str())
+            .map(|pin| &pin.mob)
+            .or(self.mob.typed.as_ref())
+            .map(|mob| mob.name.as_str())
             .filter(|name| !name.is_empty())
+    }
+
+    /// The session's mob source as the readouts show it: the pin and the
+    /// typed creature, and, while the screen is read (`reading_screen`, see
+    /// `TrackerActor::reading_screen`), the creature being read and the one
+    /// the latest kills were.
+    pub(super) fn mob_source_view(&self, reading_screen: bool) -> MobSourceView {
+        let screen = self
+            .detection
+            .as_ref()
+            .filter(|_| reading_screen)
+            .map(|d| d.view());
+        MobSourceView {
+            reading_screen,
+            pin: self.mob.pin.clone(),
+            typed: self
+                .mob
+                .typed
+                .clone()
+                .filter(|typed| !typed.name.is_empty()),
+            reading: screen.as_ref().and_then(|view| view.reading.clone()),
+            continuity: screen.and_then(|view| view.continuity),
+        }
     }
 }
 
@@ -257,7 +287,7 @@ pub(super) struct SessionAggregate {
     pub(super) multiplier_count: i64,
     pub(super) multiplier_history: Vec<f64>,
     pub(super) cumulative_net: Vec<f64>,
-    pub(super) mob_name: Option<String>,
+    pub(super) mob_source: MobSourceView,
     pub(super) session_name: Option<String>,
     pub(super) definition_id: Option<i64>,
     pub(super) track_protection_costs: bool,
@@ -512,7 +542,7 @@ impl TrackerActor {
             multiplier_count,
             multiplier_history,
             cumulative_net,
-            mob_name: active.stamped_mob_name().map(str::to_string),
+            mob_source: active.mob_source_view(self.reading_screen()),
             session_name: active.facets.name.clone(),
             definition_id: active.facets.definition_id,
             track_protection_costs: active.facets.track_protection_costs,
@@ -566,7 +596,7 @@ impl TrackerActor {
         facets: SessionFacets,
     ) {
         let mut active = ActiveSession::new(session, facets);
-        active.declared_mob = declared_mob;
+        active.mob.typed = declared_mob;
         self.session = SessionState::Active(Box::new(active));
         self.publish_status();
     }
@@ -794,10 +824,11 @@ impl TrackerActor {
             .weapons
             .load_carried(providers.equipment.carried_weapons());
 
-        // Sync the declared mob with the live config (the declare and
+        // Sync the typed creature with the live config (the declare and
         // release commands write the config first, so this also covers
-        // a settings-page edit landing mid-session).
-        active.declared_mob = providers
+        // a settings-page edit landing mid-session). A pin is the
+        // session's own and stands.
+        active.mob.typed = providers
             .config
             .manual_mob()
             .map(|(species, maturity)| DeclaredMob::from_parts(species, maturity));
@@ -948,10 +979,10 @@ impl TrackerActor {
             tracing::info!(target: "eo::tracker", "weapon declared at session start from the held weapon");
         }
 
-        // Seed the declared mob from the configured declaration, when
+        // Seed the typed creature from the configured declaration, when
         // one is set (the same seeding the declare command performs).
         if let Some((species, maturity)) = self.providers.config.manual_mob() {
-            active.declared_mob = Some(DeclaredMob::from_parts(species, maturity));
+            active.mob.typed = Some(DeclaredMob::from_parts(species, maturity));
         }
 
         self.session = SessionState::Active(Box::new(active));
@@ -965,6 +996,8 @@ impl TrackerActor {
         self.subscribe_handlers();
         self.publish_status();
         self.start_detection();
+        // The session's start tells the readouts; this only notes it.
+        self.reading_changed();
 
         self.bus
             .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
@@ -1300,7 +1333,7 @@ impl HuntTracker {
             multiplier_count: aggregated.multiplier_count,
             multiplier_history: aggregated.multiplier_history,
             cumulative_net_history: aggregated.cumulative_net,
-            current_mob: aggregated.mob_name.clone(),
+            mob_source: aggregated.mob_source.clone(),
             session_name: aggregated.session_name.clone(),
             definition_id: aggregated.definition_id,
             track_protection_costs: aggregated.track_protection_costs,

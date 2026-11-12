@@ -71,6 +71,8 @@ pub struct Kill {
     /// Where the mob stamp came from; None when the kill recorded with
     /// no declaration in force (the stamp is "Unknown").
     pub mob_stamp_source: Option<crate::tracker::MobStampSource>,
+    /// How the kill's creature was named; None when nothing named it.
+    pub mob_route: Option<crate::tracker::MobRoute>,
     /// Epoch seconds (UTC, fractional seconds preserved): when the
     /// loot arrived. The representation deliberately differs from the
     /// session's calendar fields below because the original carries
@@ -227,7 +229,9 @@ pub struct ActiveSessionView {
     pub multiplier_count: i64,
     pub multiplier_history: Vec<f64>,
     pub cumulative_net_history: Vec<f64>,
-    pub current_mob: Option<String>,
+    /// The session's mob source: the pin, the typed creature, and what
+    /// the screen reads.
+    pub mob_source: crate::tracker::MobSourceView,
     /// The session's designated name facet, when one was set.
     pub session_name: Option<String>,
     /// The session definition this session is an instance of, as

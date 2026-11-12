@@ -1176,6 +1176,11 @@ impl MobHistory {
         self.shown(&identity(basis), basis)
     }
 
+    /// The profile the history votes by.
+    pub fn profile(&self) -> &MobHistoryProfile {
+        &self.profile
+    }
+
     /// The creature the latest pulse's locked plate names strictly (a known
     /// creature read whole or nearly, or an unfamiliar name by its key and
     /// spelling); `None` when nothing was locked, or the name did not read,

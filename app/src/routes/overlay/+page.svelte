@@ -12,6 +12,8 @@
 		setSessionConfig,
 		getManualMobSuggestions,
 		lockManualMob,
+		pinMob,
+		unpinMob,
 		getActivityOptions,
 		activateActivity,
 		deactivateActivity,
@@ -20,7 +22,6 @@
 		type TrackingLive,
 		type TrackingStatus,
 		type TrackingSnapshot,
-		type ManualMobSuggestion,
 		type WeaponMismatchDecision
 	} from '$lib/api';
 	import { untrack } from 'svelte';
@@ -29,9 +30,11 @@
 	import { createPostSessionFlow } from '$lib/features/tracking/postSession.svelte';
 	import { createSessionFacets } from '$lib/features/tracking/sessionFacets.svelte';
 	import { createActivitiesModel } from '$lib/features/tracking/activitiesModel.svelte';
+	import { createMobSourceModel } from '$lib/features/tracking/mobSourceModel.svelte';
+	import { createMobEntry } from '$lib/features/tracking/mobEntry.svelte';
+	import { inDevelopment } from '$lib/inDevelopment';
 	import { createOverlayNotices } from '$lib/features/tracking/overlayNotices.svelte';
 	import { createOverlayArmourCostModel } from '$lib/features/protection/overlayArmourCostModel.svelte';
-	import { createTypeahead } from '$lib/view/typeahead.svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { PhysicalPosition } from '@tauri-apps/api/dpi';
 	import { listen } from '@tauri-apps/api/event';
@@ -52,7 +55,6 @@
 		buildQuestHandInMenuState,
 		buildDefinitionMenuState,
 		computeMenuHeight,
-		computeMenuWidth,
 		menuRowCount,
 		type OverlayMenuKind,
 		type OverlayMenuSelection,
@@ -88,8 +90,6 @@
 
 	let overlayRoot: HTMLDivElement | null = $state(null);
 	let overlayMenuKind = $state<OverlayMenuKind | null>(null);
-	let mobInput: HTMLInputElement | null = $state(null);
-	let mobInputFocused = $state(false);
 	let decidingWeapon = $state(false);
 	let data = $state<TrackingLive>({ status: 'idle' });
 	let status = $state<TrackingStatus | null>(null);
@@ -104,16 +104,8 @@
 	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
 	// for the client-side elapsed tick. null when no active session is timed.
 	let sessionStartedAtMs = $state<number | null>(null);
-	let releasing = $state(false);
 	let starting = $state(false);
 
-	let mobQuery = $state('');
-	// The mob lookup's error channel, shared between the typeahead (search
-	// failures, mirrored in by the presenter effect below) and the declare
-	// action.
-	let mobError = $state<string | null>(null);
-	let selectingMob = $state(false);
-	let mobCloseTimer: ReturnType<typeof setTimeout> | undefined;
 
 
 	// The two satellite popovers this window drives. The failure messages keep
@@ -182,6 +174,30 @@
 		selectDefinition: (id) => selectDefinition(id)
 	});
 
+	// The mob source: what the strip shows of it, and the writes that steer it.
+	const mobSource = createMobSourceModel({
+		view: () => data.mobSource ?? null,
+		enabled: () => inDevelopment.visible,
+		pin: pinMob,
+		unpin: unpinMob,
+		setTyped: lockManualMob,
+		clearTyped: releaseMob,
+		refresh: () => snapshot.hydrate()
+	});
+	$effect(() => () => mobSource.destroy());
+	// Its typed entry: the catalogue typeahead and the suggestion menu.
+	const mobEntry = createMobEntry({
+		source: mobSource,
+		available: () => data.status === 'active' || data.status === 'idle',
+		search: getManualMobSuggestions,
+		menu: {
+			show: (anchor, state) => showOverlayMenu('mob', anchor, state),
+			hide: hideOverlayMenu,
+			isOpen: () => overlayMenuKind === 'mob',
+			isFocused: () => menuWindow.isFocused()
+		}
+	});
+
 	// Activities owns offered/standing transitions; the strip reads live chips.
 	const activities = createActivitiesModel({
 		readOptions: getActivityOptions,
@@ -207,11 +223,6 @@
 		await getCurrentWindow().startDragging();
 	}
 
-	function clearMobCloseTimer() {
-		if (!mobCloseTimer) return;
-		clearTimeout(mobCloseTimer);
-		mobCloseTimer = undefined;
-	}
 
 
 	function describeOverlayMenuError(error: unknown) {
@@ -231,26 +242,6 @@
 		afterSync: () => armourCost.scheduleAnchorSync()
 	});
 
-	function buildMobMenuState(anchorWidth: number): OverlayMenuState | null {
-		const trimmedQuery = mobQuery.trim();
-		const shouldShow = mobLoading || !!mobError || mobSuggestions.length > 0 || !!trimmedQuery;
-		if (!shouldShow) return null;
-
-		const labels = mobLoading
-			? ['Searching...']
-			: mobError
-				? [mobError]
-				: (mobSuggestions.length > 0 ? mobSuggestions.map((option) => option.display) : ['No matches']);
-
-		return {
-			kind: 'mob',
-			width: computeMenuWidth(anchorWidth, labels, 28),
-			query: trimmedQuery,
-			loading: mobLoading,
-			error: mobError,
-			mobSuggestions
-		};
-	}
 
 	async function showOverlayMenu(
 		kind: OverlayMenuKind,
@@ -280,25 +271,11 @@
 	}
 
 	async function hideOverlayMenu() {
-		if (overlayMenuKind === 'mob') {
-			clearMobCloseTimer();
-		}
+		if (overlayMenuKind === 'mob') mobEntry.clearCloseTimer();
 		overlayMenuKind = null;
 		await menuWindow.hide();
 	}
 
-	async function openMobMenu() {
-		if (!mobInput) return;
-		const state = buildMobMenuState(mobInput.getBoundingClientRect().width);
-		if (!state) return;
-		await showOverlayMenu('mob', mobInput, state);
-	}
-
-	async function closeMobMenu() {
-		clearMobCloseTimer();
-		if (overlayMenuKind !== 'mob') return;
-		await hideOverlayMenu();
-	}
 
 	/** Open the session picker off its chip: fetch the authored
 	 * definitions fresh (the dashboard authors them; the overlay must
@@ -510,6 +487,7 @@
 				if (overlayMenuKind !== 'questHandIn') {
 					void hideOverlayMenu();
 				}
+				mobSource.close();
 				void armourCost.hide();
 			}
 		};
@@ -657,7 +635,7 @@
 				}
 
 				overlayMenuKind = null;
-				await handleSelectMob({
+				await mobEntry.select({
 					display: event.payload.maturity
 						? `${event.payload.species} ${event.payload.maturity}`.trim()
 						: event.payload.species,
@@ -669,12 +647,12 @@
 			unlistenClosed = await listen(OVERLAY_MENU_CLOSED_EVENT, async () => {
 				if (disposed) return;
 				overlayMenuKind = null;
-				clearMobCloseTimer();
+				mobEntry.clearCloseTimer();
 			});
 
 			unlistenInteract = await listen(OVERLAY_MENU_INTERACT_EVENT, async () => {
 				if (disposed) return;
-				if (overlayMenuKind === 'mob') clearMobCloseTimer();
+				if (overlayMenuKind === 'mob') mobEntry.clearCloseTimer();
 			});
 		})();
 
@@ -731,7 +709,7 @@
 			sessionDefinitionId: snap.sessionDefinitionId,
 			trackProtectionCosts: snap.trackProtectionCosts,
 			skillBoostPercent: snap.skillBoostPercent,
-			currentMob: snap.currentMob,
+			mobSource: snap.mobSource,
 			currentTool: snap.currentTool,
 			currentToolKind: snap.currentToolKind,
 			currentActivity: snap.currentActivity,
@@ -765,72 +743,9 @@
 	notices.follow(() => facets.facetError);
 	notices.follow(() => activities.error);
 	notices.follow(() => armourCost.error);
+	notices.follow(() => mobSource.error);
 	$effect(() => () => notices.destroy());
 
-	const showManualInput = $derived(
-		(data.status === 'active' || data.status === 'idle') && !data.currentMob
-	);
-	// The declared-mob typeahead (the one remaining free-text facet; the
-	// session is picked from the authored definitions instead).
-	// Search failures are mapped to the overlay's established wording
-	// before the typeahead records them.
-	const mobTypeahead = createTypeahead<ManualMobSuggestion>({
-		search: async (query) => {
-			try {
-				return await getManualMobSuggestions(query);
-			} catch (error) {
-				throw new Error(error instanceof ApiError ? error.message : 'Mob lookup failed');
-			}
-		},
-		debounceMs: 120,
-		minLength: 1
-	});
-	const mobSuggestions = $derived(mobTypeahead.results);
-	const mobLoading = $derived(mobTypeahead.loading);
-
-	// Drive each typeahead from its input state. Hiding the input or
-	// emptying the query suspends the search and closes that menu, keeping
-	// the typed text.
-	$effect(() => {
-		if (!showManualInput) {
-			mobTypeahead.cancel();
-			void closeMobMenu();
-			return;
-		}
-
-		mobTypeahead.query = mobQuery;
-		if (!mobQuery.trim()) {
-			mobTypeahead.cancel();
-			void closeMobMenu();
-			return;
-		}
-
-		mobTypeahead.refresh();
-	});
-
-	// Present the search lifecycle in the menu window: mirror the typeahead's
-	// settled error into the shared channel and re-sync the menu at each
-	// transition (the loading flip, a results publication, an error) while the
-	// input is focused or the menu already open. Only the lifecycle is
-	// tracked; the gate reads are untracked so a bare focus change cannot
-	// re-open a menu with nothing new to show.
-	$effect(() => {
-		void mobTypeahead.loading;
-		void mobTypeahead.results;
-		mobError = mobTypeahead.error;
-		untrack(() => {
-			if (!showManualInput || !mobQuery.trim()) return;
-			if (mobInputFocused || overlayMenuKind === 'mob') {
-				void openMobMenu();
-			}
-		});
-	});
-
-	$effect(() => {
-		return () => {
-			mobTypeahead.destroy();
-		};
-	});
 
 	// Keep the boost buffer in step with its persisted facet while the
 	// user is not editing it (an idle overlay re-read, a session start
@@ -857,73 +772,6 @@
 		starting = false;
 	}
 
-	async function handleReleaseMob() {
-		releasing = true;
-		try {
-			await releaseMob();
-			mobQuery = '';
-			mobTypeahead.cancel();
-			await closeMobMenu();
-			mobError = null;
-			await snapshot.hydrate();
-		} catch { /* ignore */ }
-		releasing = false;
-	}
-
-	function handleMobFocus() {
-		clearMobCloseTimer();
-		mobInputFocused = true;
-		if (mobQuery.trim() && (mobSuggestions.length > 0 || mobLoading || !!mobError)) {
-			void openMobMenu();
-		}
-	}
-
-	function handleMobBlur() {
-		mobInputFocused = false;
-		clearMobCloseTimer();
-		mobCloseTimer = setTimeout(() => {
-			mobCloseTimer = undefined;
-			void (async () => {
-				// The pointer landing on a suggestion moves focus into the
-				// menu window, which blurs the input: that is a pick in
-				// progress, not a dismissal. Asking the window settles it
-				// without racing the menu's own interaction signal.
-				if (await menuWindow.isFocused()) return;
-				await closeMobMenu();
-			})();
-		}, 120);
-	}
-
-	async function handleMobKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') {
-			await closeMobMenu();
-			return;
-		}
-		if (event.key !== 'Enter') return;
-
-		// Only a catalogue mob can be declared, so Enter takes the top
-		// match rather than inventing a name the catalogue cannot resolve.
-		if (mobSuggestions.length > 0) {
-			event.preventDefault();
-			await handleSelectMob(mobSuggestions[0]);
-		}
-	}
-
-	async function handleSelectMob(option: ManualMobSuggestion) {
-		clearMobCloseTimer();
-		selectingMob = true;
-		mobError = null;
-		try {
-			await lockManualMob(option.species, option.maturity);
-			mobQuery = '';
-			mobTypeahead.cancel();
-			await closeMobMenu();
-			await snapshot.hydrate();
-		} catch (error) {
-			mobError = error instanceof ApiError ? error.message : 'Failed to declare mob';
-		}
-		selectingMob = false;
-	}
 </script>
 
 <!-- Kept: mousedown is the frameless overlay window's drag handle (pointer-only by nature); the controls inside are native buttons. -->
@@ -938,8 +786,9 @@
 			looterBasis: liveMarkupSettings.looterBasis,
 		}}
 		{toggling}
-		{releasing}
-		{selectingMob}
+		releasing={mobEntry.releasing}
+		selectingMob={mobEntry.selecting}
+		{mobSource}
 		{decidingWeapon}
 		armourCostOpen={armourCost.open}
 		definitionMenuOpen={overlayMenuKind === 'definition'}
@@ -948,15 +797,15 @@
 		savingBoost={facets.savingBoost}
 		savingActivity={activities.saving}
 		activitiesMenuOpen={overlayMenuKind === 'activities' || overlayMenuKind === 'questHandIn'}
-		bind:mobQuery
-		bind:mobInput
+		bind:mobQuery={mobEntry.query}
+		bind:mobInput={mobEntry.input}
 		bind:boostDraft={facets.boostDraft}
 		onStart={handleStart}
 		onStop={flow.requestStop}
-		onReleaseMob={handleReleaseMob}
-		onMobFocus={handleMobFocus}
-		onMobBlur={handleMobBlur}
-		onMobKeydown={handleMobKeydown}
+		onReleaseMob={mobEntry.release}
+		onMobFocus={mobEntry.focus}
+		onMobBlur={mobEntry.blur}
+		onMobKeydown={mobEntry.keydown}
 		onDefinitionTrigger={toggleDefinitionMenu}
 		onBoostCommit={facets.commitBoost}
 		onActivitiesTrigger={toggleActivitiesMenu}

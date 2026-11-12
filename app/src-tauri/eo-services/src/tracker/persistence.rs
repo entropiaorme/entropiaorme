@@ -79,12 +79,14 @@ impl TrackerActor {
         }
     }
     /// Write a finalised kill to the database: the kill row, its weapon
-    /// phases, its loot items, and the stored weapon evidence of its shots,
-    /// under one commit.
+    /// phases, its loot items, the stored weapon evidence of its shots, and
+    /// (for a kill pinned to a creature on no list) the answer kept for the
+    /// review, under one commit.
     pub(super) async fn persist_kill(
         &self,
         kill: &Kill,
         evidence: Vec<super::weapon_evidence::ShotEvidence>,
+        carried: Option<Box<super::detection::KillDetection>>,
     ) {
         let kill = kill.clone();
         let result = self
@@ -94,10 +96,10 @@ impl TrackerActor {
                 tx.execute(
                     "INSERT OR REPLACE INTO kills \
                      (id, loot_source_id, session_id, mob_name, mob_species, mob_maturity, \
-                      mob_stamp_source, timestamp, shots_fired, damage_dealt, damage_taken, \
-                      critical_hits, cost_ped, enhancer_cost, \
+                      mob_stamp_source, mob_route, timestamp, shots_fired, damage_dealt, \
+                      damage_taken, critical_hits, cost_ped, enhancer_cost, \
                       loot_total_ped, is_global, is_hof, context_id) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     rusqlite::params![
                         kill.id,
                         kill.loot_source_id,
@@ -106,6 +108,7 @@ impl TrackerActor {
                         kill.mob_species,
                         kill.mob_maturity,
                         kill.mob_stamp_source.map(|source| source.as_str()),
+                        kill.mob_route.map(|route| route.as_str()),
                         kill.timestamp,
                         kill.shots_fired,
                         kill.damage_dealt,
@@ -138,6 +141,9 @@ impl TrackerActor {
                 }
                 for row in &evidence {
                     row.insert(&tx, Some(&kill.id))?;
+                }
+                if let Some(answer) = &carried {
+                    super::detection::write_detection(&tx, answer)?;
                 }
                 tx.commit()?;
                 Ok(())

@@ -172,6 +172,8 @@ macro_rules! app_command_surface {
             tracking_declare_equipment,
             tracking_release_mob,
             tracking_manual_mob_lock,
+            tracking_mob_pin,
+            tracking_mob_unpin,
             tracking_session_config,
             tracking_activity_options,
             tracking_activity_activate,

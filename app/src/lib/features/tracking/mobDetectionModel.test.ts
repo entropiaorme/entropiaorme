@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MobDetectionGroup, MobDetectionReview } from '$lib/api';
 import {
+	continuityLine,
 	describeCertainty,
 	describeGrade,
 	describeSettled,
 	groupKey,
+	isContinuity,
 	isSuggestion,
 	isUnlisted,
 	killCount,
@@ -71,6 +73,14 @@ describe('the words the review uses', () => {
 		expect(isSuggestion('guess')).toBe(false);
 		expect(isUnlisted('provisional_guess')).toBe(true);
 		expect(isUnlisted('named')).toBe(false);
+		expect(describeGrade('continuity')).toBe('From the kills before');
+		expect(isSuggestion('continuity')).toBe(false);
+		expect(isUnlisted('provisional_continuity')).toBe(true);
+		expect(isUnlisted('continuity')).toBe(false);
+		expect(isContinuity('provisional_continuity')).toBe(true);
+		expect(isContinuity('named')).toBe(false);
+		expect(continuityLine(1)).toBe('1 kill assigned on continuity');
+		expect(continuityLine(4)).toBe('4 kills assigned on continuity');
 		expect(killCount(1)).toBe('1 kill');
 		expect(killCount(3)).toBe('3 kills');
 	});

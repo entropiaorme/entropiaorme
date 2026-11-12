@@ -25,7 +25,25 @@ export function describeGrade(grade: MobDetectionGrade): string {
 		case 'latest_read':
 		case 'provisional_latest_read':
 			return 'Suggested: the last creature read before the kill';
+		case 'continuity':
+		case 'provisional_continuity':
+			return 'From the kills before';
+		case 'provisional_pinned':
+			return 'Pinned, not in the creature list';
 	}
+}
+
+/** Kills given the creature being hunted, where the screen could not settle
+ * them: listed quietly, after the groups that ask for checking. */
+export function isContinuity(grade: MobDetectionGrade): boolean {
+	return grade === 'continuity' || grade === 'provisional_continuity';
+}
+
+/** The one quiet line a continuity group shows, with what its kills are
+ * recorded as once that is another creature (a correction). */
+export function continuityLine(count: number, creature?: string, current?: string | null): string {
+	const line = `${killCount(count)} assigned on continuity`;
+	return current && current !== creature ? `${line}; recorded as ${current}` : line;
 }
 
 /** A suggestion the kills did not take: they kept the declared mob. */
@@ -36,7 +54,11 @@ export function isSuggestion(grade: MobDetectionGrade): boolean {
 /** A creature on no list, by the spelling the screen read. */
 export function isUnlisted(grade: MobDetectionGrade): boolean {
 	return (
-		grade === 'provisional' || grade === 'provisional_guess' || grade === 'provisional_latest_read'
+		grade === 'provisional' ||
+		grade === 'provisional_guess' ||
+		grade === 'provisional_latest_read' ||
+		grade === 'provisional_continuity' ||
+		grade === 'provisional_pinned'
 	);
 }
 

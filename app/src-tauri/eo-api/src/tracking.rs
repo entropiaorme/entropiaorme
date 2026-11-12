@@ -68,7 +68,7 @@ const SNAPSHOT_FIELDS: [&str; 58] = [
     "sessionDefinitionId",
     "trackProtectionCosts",
     "skillBoostPercent",
-    "currentMob",
+    "mobSource",
     "currentTool",
     "currentToolKind",
     "currentActivity",
@@ -777,8 +777,11 @@ pub struct TrackingSnapshot {
     /// sourcing as the session name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_boost_percent: Option<i64>,
+    /// The session's one source for its kills' creature: the typed
+    /// creature (idle: the one the next session starts with), the pin, and
+    /// what the screen reads.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_mob: Option<String>,
+    pub mob_source: Option<crate::mob_detection::MobSourceView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_tool: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1983,6 +1986,11 @@ async fn lifetime_stats(
     }))
 }
 
+/// The mob source as the snapshot's JSON carries it.
+fn mob_source_value(view: crate::mob_detection::MobSourceView) -> Result<Value, ApiError> {
+    serde_json::to_value(view).map_err(ApiError::internal("mob source shaping"))
+}
+
 /// Assemble the projected snapshot value from the tracker readout, the
 /// resolved config, and the hotbar listener's running state.
 pub(crate) async fn build_snapshot_value(
@@ -2100,7 +2108,9 @@ pub(crate) async fn build_snapshot_value(
                 "sessionDefinitionId": definition_value(idle_definition_id),
                 "trackProtectionCosts": idle_track_protection_costs,
                 "skillBoostPercent": boost_value(config.declared_skill_boost_percent),
-                "currentMob": declared_mob_label(config),
+                "mobSource": mob_source_value(crate::mob_detection::MobSourceView::idle(
+                    declared_mob(config),
+                ))?,
                 "activities": activities,
                 "lifetime": lifetime,
                 "recentEvents": [],
@@ -2205,7 +2215,7 @@ pub(crate) async fn build_snapshot_value(
                 "sessionDefinitionId": definition_value(active.definition_id),
                 "trackProtectionCosts": active.track_protection_costs,
                 "skillBoostPercent": boost_value(active.skill_boost_percent),
-                "currentMob": active.current_mob.clone(),
+                "mobSource": mob_source_value(active.mob_source.clone().into())?,
                 "recentEvents": recent_events,
                 "warnings": warnings,
             });

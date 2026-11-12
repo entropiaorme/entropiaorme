@@ -478,6 +478,7 @@ fn a_detector_bound_late_serves_once_bound() {
             watch.stop();
             true
         }),
+        Arc::new(|_: &str| {}),
     );
     rig.finish();
     assert_eq!(rig.seen.lock().unwrap().len(), 1);
@@ -642,4 +643,56 @@ fn a_capture_slower_than_its_slack_is_a_gap() {
     rig.start("s1", 2);
     rig.finish();
     assert_eq!(rig.offsets(start), [0, 2_000]);
+}
+
+/// Starts `session` on `rig`, recording each session a self-ended watch
+/// tells of.
+fn start_reporting(rig: &Rig, session: &str) -> Arc<Mutex<Vec<String>>> {
+    let told = Arc::new(Mutex::new(Vec::new()));
+    let tell = told.clone();
+    rig.watch.start_reporting_end(
+        session,
+        Arc::new(|_| true),
+        Arc::new(move |session_id: &str| tell.lock().unwrap().push(session_id.to_string())),
+    );
+    told
+}
+
+#[test]
+fn a_watch_that_ends_by_itself_says_so_once_and_one_stopped_says_nothing() {
+    // Refused at its first look.
+    let refused = rig_with(
+        Arc::new(|_, _| Err(FrameUnavailable::CaptureNotStarted)),
+        driven(),
+        None,
+        MobCatalogue::default(),
+    );
+    let told = start_reporting(&refused, "s1");
+    refused.finish();
+    assert_eq!(*told.lock().unwrap(), ["s1"]);
+
+    // Detection found off where the capture happens.
+    let off = rig_with(
+        Arc::new(|_, _| blank_frame()),
+        driven(),
+        None,
+        MobCatalogue::default(),
+    );
+    off.enabled.store(false, Ordering::SeqCst);
+    let told = start_reporting(&off, "s2");
+    off.finish();
+    assert_eq!(*told.lock().unwrap(), ["s2"]);
+
+    // Stopped by its owner while waiting: nothing is told.
+    let blocking: WaitMaker = Box::new(|_, _| Arc::new(|_, stopped| stopped.recv().is_ok()));
+    let stopped = rig_with(
+        Arc::new(|_, _| blank_frame()),
+        blocking,
+        None,
+        MobCatalogue::default(),
+    );
+    let told = start_reporting(&stopped, "s3");
+    stopped.watch.stop();
+    stopped.finish();
+    assert!(told.lock().unwrap().is_empty());
 }

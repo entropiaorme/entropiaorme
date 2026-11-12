@@ -15,8 +15,9 @@ use crate::bus_events::{
 use crate::game_ui::mob_history::{MobHistory, Sighting};
 use crate::game_ui::mob_names::{resolve, CatalogueMob, MobCatalogue, Resolved};
 use crate::game_ui::test_support::bundled_profile;
-use crate::mob_watch::{MobDetector, MobPulse, PulseSink};
+use crate::mob_watch::{MobDetector, MobPulse, PulseSink, WatchEnded};
 use crate::time::clock_epoch_ms;
+use crate::tracker::{DeclaredMob, MobSourceView, Pin, PinnedBy, TrackerCommandError};
 
 /// The configuration a detection test runs under: the declared mob and
 /// the detection setting, switchable mid-session.
@@ -78,6 +79,8 @@ impl EquipmentLibrary for PricedShots {
 #[derive(Default)]
 struct ScriptedWatcher {
     sink: Mutex<Option<(String, PulseSink)>>,
+    /// How the tracker asked to be told the watch ended by itself.
+    ended: Mutex<Option<WatchEnded>>,
     starts: Mutex<Vec<String>>,
     stops: Mutex<usize>,
     permits: Mutex<usize>,
@@ -89,7 +92,8 @@ impl MobDetector for ScriptedWatcher {
         Some(MobHistory::new(profile.mob_history, profile.mob_names))
     }
 
-    fn start(&self, session_id: &str, sink: PulseSink) {
+    fn start(&self, session_id: &str, sink: PulseSink, ended: WatchEnded) {
+        *self.ended.lock().unwrap() = Some(ended);
         self.starts.lock().unwrap().push(session_id.to_string());
         *self.sink.lock().unwrap() = Some((session_id.to_string(), sink));
     }
@@ -97,6 +101,14 @@ impl MobDetector for ScriptedWatcher {
     fn stop(&self) {
         *self.stops.lock().unwrap() += 1;
         *self.sink.lock().unwrap() = None;
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        self.sink
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(watched, _)| watched == session_id)
     }
 
     fn permit_capture(&self) {
@@ -116,9 +128,18 @@ struct Hunt {
     /// The script's time the clock has been moved to.
     now_ms: i64,
     kills: usize,
+    /// When set, each look is followed by a read of what the overlay shows,
+    /// counting how often it changed.
+    follow_view: Option<(MobSourceView, usize)>,
 }
 
 fn hunt(detection: bool) -> Hunt {
+    hunt_with(detection, None)
+}
+
+/// A hunt whose tracker looks through `detector` instead of the scripted
+/// watcher (which then sees nothing).
+fn hunt_with(detection: bool, detector: Option<Arc<dyn MobDetector>>) -> Hunt {
     let rig = rig();
     let watcher = Arc::new(ScriptedWatcher::default());
     let detection = Arc::new(Mutex::new(detection));
@@ -127,7 +148,7 @@ fn hunt(detection: bool) -> Hunt {
             declared: Some(("Atrox".into(), "Young".into())),
             detection: detection.clone(),
         }),
-        detector: watcher.clone(),
+        detector: detector.unwrap_or_else(|| watcher.clone()),
         equipment: Arc::new(PricedShots),
         ..Providers::default()
     });
@@ -157,6 +178,7 @@ fn hunt(detection: bool) -> Hunt {
         base_ms,
         now_ms: 0,
         kills: 0,
+        follow_view: None,
     }
 }
 
@@ -207,6 +229,15 @@ impl Hunt {
             }),
             "the tracker took the look"
         );
+        if self.follow_view.is_some() {
+            let view = self.view();
+            if let Some((last, changes)) = self.follow_view.as_mut() {
+                if *last != view {
+                    *last = view;
+                    *changes += 1;
+                }
+            }
+        }
     }
 
     /// A kill whose line was stamped with the second `logged` falls in and
@@ -263,6 +294,73 @@ impl Hunt {
                 Ok(rows)
             }))
             .unwrap()
+    }
+
+    /// Each kill's name and route, in order.
+    fn routes(&self) -> Vec<(String, Option<String>)> {
+        self.settle();
+        self.rig
+            .wait(self.rig.db.with_reader(|conn| {
+                let mut stmt = conn
+                    .prepare("SELECT mob_name, mob_route FROM kills ORDER BY timestamp, rowid")?;
+                let rows = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            }))
+            .unwrap()
+    }
+
+    /// The kills given the creature being hunted: the creature and the
+    /// stamp each was recorded with.
+    fn continued(&self) -> Vec<(String, String)> {
+        self.settle();
+        self.rig
+            .wait(self.rig.db.with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT c.mob_name, c.declared_name FROM kill_mob_carried c \
+                     JOIN kills k ON k.id = c.kill_id ORDER BY k.timestamp, k.rowid",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            }))
+            .unwrap()
+    }
+
+    /// The session's mob source as the readouts show it.
+    fn view(&self) -> MobSourceView {
+        self.settle();
+        self.rig.probe(&self.tracker, |actor| {
+            let reading = actor.reading_screen();
+            actor
+                .session
+                .active()
+                .map(|active| active.mob_source_view(reading))
+                .expect("a session")
+        })
+    }
+
+    /// A kill nothing was read round: looks with nothing locked from
+    /// `from`, the death, and more such looks. Returns when the next look
+    /// is due.
+    /// The running session's id.
+    fn view_session(&self) -> String {
+        self.rig.probe(&self.tracker, |actor| {
+            actor
+                .session
+                .active()
+                .map(|active| active.session.id.clone())
+                .expect("a session")
+        })
+    }
+
+    fn quiet_kill(&mut self, from: i64) -> i64 {
+        let at = self.idle(from, 3);
+        let death = at - 500;
+        self.kill(death / 1000 * 1000, Some(death + 700));
+        self.idle(at + 1_000, 6)
     }
 
     fn kept(&self) -> Vec<(String, String, String)> {
@@ -561,6 +659,7 @@ fn a_failure_inside_the_history_ends_detection_and_the_session_carries_on() {
 fn the_stop_sums_the_session_from_its_detected_stamps() {
     let mut hunt = hunt(true);
     let session = hunt.start();
+    hunt.follow_view = Some((hunt.view(), 0));
     let updates = Arc::new(Mutex::new(0usize));
     let counted = updates.clone();
     hunt.rig.bus.add_tap(move |event| {
@@ -584,9 +683,13 @@ fn the_stop_sums_the_session_from_its_detected_stamps() {
     hunt.kill(t / 1000 * 1000, None);
     hunt.idle(t + 1_000, 2);
     hunt.settle();
+    // Each change to what the overlay shows of the screen tells the
+    // readout to re-read, and so does each re-stamp, once.
+    let view_changes = hunt.follow_view.as_ref().map_or(0, |(_, changes)| *changes);
+    assert!(view_changes > 0, "the reading came and went");
     assert_eq!(
         *updates.lock().unwrap(),
-        3,
+        3 + view_changes,
         "each re-stamp tells the readout to re-read"
     );
     hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
@@ -680,4 +783,487 @@ fn the_names_read_resolve_as_the_script_means() {
         resolve("Gloomrot", Some(4), &hunt.catalogue, &names),
         Resolved::New { .. }
     ));
+}
+
+fn mob(species: &str, maturity: &str) -> DeclaredMob {
+    DeclaredMob::from_parts(species.into(), maturity.into())
+}
+
+fn route(name: &str, route: Option<&str>) -> (String, Option<String>) {
+    (name.to_string(), route.map(str::to_string))
+}
+
+#[test]
+fn each_kill_is_named_by_the_screen_then_continuity_then_the_backstop_then_nothing() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    let mut t = 0;
+    // 1 to 3: the screen reads each kill's own creature clearly.
+    for _ in 0..3 {
+        t = hunt.fight(t, &["Daikiba Mature"; 4], 9);
+        t = hunt.idle(t, 6);
+    }
+    // 4: nothing is read round the kill, and the backstop is set: the
+    //    creature being hunted still wins over it.
+    t = hunt.quiet_kill(t);
+    // 5: long after, continuity no longer applies: the backstop.
+    t = hunt.idle(t, 125);
+    t = hunt.quiet_kill(t);
+    // 6: with no backstop either, nothing names the kill.
+    assert_eq!(
+        hunt.rig.wait(hunt.tracker.release_declared_mob()),
+        Some("Young Atrox".to_string())
+    );
+    hunt.quiet_kill(t);
+
+    assert_eq!(
+        hunt.routes(),
+        [
+            route("Mature Daikiba", Some("named")),
+            route("Mature Daikiba", Some("named")),
+            route("Mature Daikiba", Some("named")),
+            route("Mature Daikiba", Some("continuity")),
+            route("Young Atrox", Some("backstop")),
+            route("Unknown", None),
+        ]
+    );
+    let stamps = hunt.stamps();
+    // The continuity kill is detected, but carries no grade or text read:
+    // its evidence was an earlier kill's.
+    assert_eq!(
+        stamps[3],
+        (s("Mature Daikiba").unwrap(), s("detected"), None, None)
+    );
+    assert_eq!(
+        stamps[4],
+        (s("Young Atrox").unwrap(), s("declared"), None, None)
+    );
+    assert_eq!(stamps[5], (s("Unknown").unwrap(), None, None, None));
+    // The screen's answers are kept with what was read; the continuity
+    // kill apart, with the stamp it was recorded with.
+    assert_eq!(hunt.kept().len(), 3);
+    assert_eq!(
+        hunt.continued(),
+        [("Mature Daikiba".to_string(), "Young Atrox".to_string())]
+    );
+}
+
+#[test]
+fn a_pin_from_the_screen_or_by_typing_names_every_kill_until_it_is_released() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    for k in 0..3 {
+        hunt.look(k * 1_000, Some(("Atrox Old", 12, 1.0 - 0.1 * k as f64)));
+    }
+    let view = hunt.view();
+    assert!(view.reading_screen);
+    assert_eq!(view.reading, Some(mob("Atrox", "Old")));
+    assert_eq!(view.typed, Some(mob("Atrox", "Young")));
+    assert_eq!(view.pin, None);
+
+    // A pin of a creature other than the one read is refused, and changes
+    // nothing: the screen read on.
+    assert!(matches!(
+        hunt.rig
+            .wait(hunt.tracker.pin_shown(mob("Daikiba", "Mature"))),
+        Err(TrackerCommandError::ReadingChanged)
+    ));
+    assert_eq!(*hunt.watcher.stops.lock().unwrap(), 0);
+
+    // Pin what is read: the watch stops at once.
+    assert_eq!(
+        hunt.rig.wait(hunt.tracker.pin_shown(mob("Atrox", "Old"))),
+        Ok(mob("Atrox", "Old"))
+    );
+    assert_eq!(*hunt.watcher.stops.lock().unwrap(), 1);
+    assert!(hunt.watcher.sink.lock().unwrap().is_none());
+    let view = hunt.view();
+    assert!(!view.reading_screen);
+    assert_eq!(view.reading, None);
+    assert_eq!(
+        view.pin,
+        Some(Pin {
+            mob: mob("Atrox", "Old"),
+            by: PinnedBy::Read,
+            provisional_key: None,
+        })
+    );
+    // A kill takes the pin at once, and is no detection.
+    hunt.kill(5_000, Some(5_600));
+    // While pinned there is no reading to pin from.
+    assert!(matches!(
+        hunt.rig.wait(hunt.tracker.pin_shown(mob("Atrox", "Old"))),
+        Err(TrackerCommandError::NotReadingScreen)
+    ));
+    // A settings change leaves the pin, and the watch, as they are.
+    hunt.rig.wait(hunt.tracker.reload_config());
+    assert_eq!(hunt.watcher.starts.lock().unwrap().len(), 1);
+
+    // Pin by typing replaces it.
+    hunt.rig
+        .wait(hunt.tracker.pin_typed(mob("Daikiba", "Mature")))
+        .unwrap();
+    hunt.kill(8_000, Some(8_600));
+    assert_eq!(hunt.watcher.starts.lock().unwrap().len(), 1);
+
+    // Release: the screen is read again, from a fresh history.
+    assert_eq!(hunt.rig.wait(hunt.tracker.unpin()), Ok(true));
+    assert_eq!(hunt.watcher.starts.lock().unwrap().len(), 2);
+    assert!(hunt.view().reading_screen);
+    hunt.quiet_kill(10_000);
+    // A second release has nothing to release.
+    assert_eq!(hunt.rig.wait(hunt.tracker.unpin()), Ok(false));
+    assert_eq!(hunt.watcher.starts.lock().unwrap().len(), 2);
+
+    assert_eq!(
+        hunt.routes(),
+        [
+            route("Old Atrox", Some("pinned_read")),
+            route("Mature Daikiba", Some("pinned_typed")),
+            route("Young Atrox", Some("backstop")),
+        ]
+    );
+    let stamps = hunt.stamps();
+    for stamp in &stamps[..2] {
+        assert_eq!(stamp.1, s("declared"), "a pin is the player's word");
+    }
+    assert!(hunt.kept().is_empty() && hunt.continued().is_empty());
+}
+
+#[test]
+fn the_view_holds_a_moments_unclear_reading_and_withholds_a_contradicted_continuity() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    let updates = Arc::new(Mutex::new(0usize));
+    let counted = updates.clone();
+    hunt.rig.bus.add_tap(move |event| {
+        if let BusEvent::TrackingSessionUpdated(update) = event {
+            if update.payload.reason == eo_wire::domain_events::TrackingReason::Updated {
+                *counted.lock().unwrap() += 1;
+            }
+        }
+    });
+    let mut t = 0;
+    for _ in 0..3 {
+        t = hunt.fight(t, &["Daikiba Mature"; 4], 9);
+        t = hunt.idle(t, 8);
+    }
+    // Nothing read now; the latest kills were all one creature.
+    let view = hunt.view();
+    assert_eq!(view.reading, None);
+    assert_eq!(view.continuity, Some(mob("Daikiba", "Mature")));
+    let before = *updates.lock().unwrap();
+
+    // Another creature read: the continuity creature is not shown beside
+    // it, and the readout was told once.
+    hunt.look(t, Some(("Atrox Old", 12, 1.0)));
+    let view = hunt.view();
+    assert_eq!(view.reading, Some(mob("Atrox", "Old")));
+    assert_eq!(view.continuity, None);
+    assert_eq!(*updates.lock().unwrap(), before + 1);
+    // A moment with nothing read keeps it, and tells nothing.
+    hunt.look(t + 1_000, None);
+    hunt.look(t + 2_000, None);
+    assert_eq!(hunt.view().reading, Some(mob("Atrox", "Old")));
+    assert_eq!(*updates.lock().unwrap(), before + 1);
+    // Unread for longer than a reading joins its fight: it is let go.
+    hunt.idle(t + 3_000, 6);
+    let view = hunt.view();
+    assert_eq!(view.reading, None);
+    assert_eq!(view.continuity, Some(mob("Daikiba", "Mature")));
+    assert_eq!(*updates.lock().unwrap(), before + 2);
+
+    // The same creature read again: both are shown.
+    hunt.look(t + 10_000, Some(("Daikiba Mature", 9, 1.0)));
+    let view = hunt.view();
+    assert_eq!(view.reading, Some(mob("Daikiba", "Mature")));
+    assert_eq!(view.continuity, Some(mob("Daikiba", "Mature")));
+}
+
+#[test]
+fn without_detection_the_typed_creature_is_pinned_by_typing() {
+    let mut hunt = hunt(false);
+    hunt.start();
+    hunt.kill(1_000, Some(1_600));
+    assert_eq!(
+        hunt.rig.wait(hunt.tracker.release_declared_mob()),
+        Some("Young Atrox".to_string())
+    );
+    hunt.kill(3_000, Some(3_600));
+    assert_eq!(
+        hunt.routes(),
+        [
+            route("Young Atrox", Some("pinned_typed")),
+            route("Unknown", None)
+        ]
+    );
+    let view = hunt.view();
+    assert!(!view.reading_screen);
+    assert_eq!((view.reading, view.continuity), (None, None));
+}
+
+impl Hunt {
+    /// Count the readouts' invalidations from now on.
+    fn count_updates(&self) -> Arc<Mutex<usize>> {
+        let updates = Arc::new(Mutex::new(0usize));
+        let counted = updates.clone();
+        self.rig.bus.add_tap(move |event| {
+            if let BusEvent::TrackingSessionUpdated(update) = event {
+                if update.payload.reason == eo_wire::domain_events::TrackingReason::Updated {
+                    *counted.lock().unwrap() += 1;
+                }
+            }
+        });
+        updates
+    }
+}
+
+#[test]
+fn a_watch_that_ends_by_itself_leaves_the_typed_creature_pinned_and_says_so_once() {
+    let mut hunt = hunt(true);
+    let session = hunt.start();
+    assert!(hunt.view().reading_screen);
+    let updates = hunt.count_updates();
+    // The desktop stopped capture: the watch ends without the tracker
+    // asking, and tells it so.
+    let ended = hunt.watcher.ended.lock().unwrap().clone().expect("asked");
+    *hunt.watcher.sink.lock().unwrap() = None;
+    ended(&session);
+    let view = hunt.view();
+    assert!(!view.reading_screen);
+    assert_eq!((view.reading, view.continuity), (None, None));
+    assert_eq!(*updates.lock().unwrap(), 1, "the readouts are told once");
+    let detecting = hunt.rig.probe(&hunt.tracker, |actor| {
+        actor
+            .session
+            .active()
+            .map(|active| active.detection.is_some())
+    });
+    assert_eq!(detecting, Some(false), "detection ends with its watch");
+    // Told again (a late or repeated message): nothing more.
+    ended(&session);
+    hunt.settle();
+    assert_eq!(*updates.lock().unwrap(), 1);
+    assert!(matches!(
+        hunt.rig.wait(hunt.tracker.pin_shown(mob("Atrox", "Young"))),
+        Err(TrackerCommandError::NotReadingScreen)
+    ));
+    hunt.kill(2_000, Some(2_600));
+    assert_eq!(
+        hunt.routes(),
+        [route("Young Atrox", Some("pinned_typed"))],
+        "no detecting state: the typed creature is the player's word"
+    );
+}
+
+#[test]
+fn turning_detection_off_or_on_mid_session_tells_the_readouts_once_each() {
+    let hunt = hunt(true);
+    hunt.start();
+    let updates = hunt.count_updates();
+    *hunt.detection.lock().unwrap() = false;
+    hunt.rig.wait(hunt.tracker.reload_config());
+    assert_eq!(*updates.lock().unwrap(), 1);
+    assert!(!hunt.view().reading_screen);
+    // A settings change that leaves it off tells nothing.
+    hunt.rig.wait(hunt.tracker.reload_config());
+    assert_eq!(*updates.lock().unwrap(), 1);
+    *hunt.detection.lock().unwrap() = true;
+    hunt.rig.wait(hunt.tracker.reload_config());
+    assert_eq!(*updates.lock().unwrap(), 2);
+    assert!(hunt.view().reading_screen);
+}
+
+#[test]
+fn a_pin_stands_whether_detection_is_on_or_off_until_it_is_released_or_replaced() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    hunt.rig
+        .wait(hunt.tracker.pin_typed(mob("Daikiba", "Mature")))
+        .unwrap();
+    // Detection turned off: the pin stands.
+    *hunt.detection.lock().unwrap() = false;
+    hunt.rig.wait(hunt.tracker.reload_config());
+    hunt.kill(1_000, Some(1_600));
+    let view = hunt.view();
+    assert!(!view.reading_screen);
+    assert_eq!(view.pin.map(|pin| pin.mob), Some(mob("Daikiba", "Mature")));
+    // Released: the typed creature names kills, as the declared mob did.
+    assert_eq!(hunt.rig.wait(hunt.tracker.unpin()), Ok(true));
+    hunt.kill(3_000, Some(3_600));
+    // Pinned again, then a creature typed: it replaces the pin, never sits
+    // as a backstop behind it.
+    hunt.rig
+        .wait(hunt.tracker.pin_typed(mob("Daikiba", "Mature")))
+        .unwrap();
+    hunt.rig
+        .wait(hunt.tracker.set_declared_mob("Old Atrox", "Atrox", "Old"))
+        .unwrap();
+    let view = hunt.view();
+    assert_eq!(
+        view.pin,
+        Some(Pin {
+            mob: mob("Atrox", "Old"),
+            by: PinnedBy::Typed,
+            provisional_key: None,
+        })
+    );
+    // Detection on again: the pin still stands, and nothing is watched.
+    *hunt.detection.lock().unwrap() = true;
+    hunt.rig.wait(hunt.tracker.reload_config());
+    assert_eq!(hunt.watcher.starts.lock().unwrap().len(), 1);
+    hunt.kill(5_000, Some(5_600));
+    assert_eq!(
+        hunt.routes(),
+        [
+            route("Mature Daikiba", Some("pinned_typed")),
+            route("Young Atrox", Some("pinned_typed")),
+            route("Old Atrox", Some("pinned_typed")),
+        ]
+    );
+}
+
+#[test]
+fn a_creature_on_no_list_pinned_from_the_screen_is_kept_for_the_review() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    for k in 0..3 {
+        hunt.look(k * 1_000, Some(("Gloomrat", 4, 1.0 - 0.1 * k as f64)));
+    }
+    let shown = mob("Gloomrat", "");
+    assert_eq!(hunt.view().reading, Some(shown.clone()));
+    hunt.rig.wait(hunt.tracker.pin_shown(shown)).unwrap();
+    let key = hunt
+        .view()
+        .pin
+        .and_then(|pin| pin.provisional_key)
+        .expect("the session's key for it");
+    hunt.kill(5_000, Some(5_600));
+    assert_eq!(hunt.routes(), [route("Gloomrat", Some("pinned_read"))]);
+    let kept: Vec<(String, String, Option<String>, String)> = hunt
+        .rig
+        .wait(hunt.rig.db.with_reader(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT grade, mob_name, provisional_key, declared_name FROM kill_mob_carried",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        }))
+        .unwrap();
+    assert_eq!(
+        kept,
+        [(
+            "provisional_pinned".to_string(),
+            "Gloomrat".to_string(),
+            Some(key),
+            "Young Atrox".to_string()
+        )]
+    );
+    // The kill itself stays the player's word.
+    assert_eq!(hunt.stamps()[0].1, s("declared"));
+}
+
+/// A wait the test grants looks through, driven entirely by the test: each
+/// credit (granted before the look) lets one look be taken; with none left
+/// it waits only for the watch to be stopped, and then ends.
+fn granted_wait(credits: Arc<Mutex<usize>>) -> crate::mob_watch::PulseWait {
+    Arc::new(move |_due, stopped: &std::sync::mpsc::Receiver<()>| {
+        {
+            let mut left = credits.lock().unwrap();
+            if *left > 0 {
+                *left -= 1;
+                return true;
+            }
+        }
+        // Nothing is ever sent: this returns when the watch's sender is
+        // dropped, that is when it is stopped.
+        stopped.recv().is_ok()
+    })
+}
+
+#[test]
+fn nothing_is_captured_while_a_creature_is_pinned_and_capture_resumes_on_release() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use crate::clock::MockClock;
+    use crate::game_ui::seams::GameFrame;
+    use crate::game_ui::test_support::blank;
+    use crate::mob_watch::{CatalogueCell, MobWatch, MobWatchProviders};
+
+    // Every wait for a worker below is bounded only so that a fault fails
+    // the test instead of hanging it; what is asserted never depends on
+    // timing.
+    const BOUND: Duration = Duration::from_secs(60);
+    let captures = Arc::new(AtomicUsize::new(0));
+    let (shot, shots) = std::sync::mpsc::channel::<()>();
+    let shot = Mutex::new(shot);
+    // Two looks granted for the first watch, before it starts.
+    let credits = Arc::new(Mutex::new(2usize));
+    let counted = captures.clone();
+    let watch = MobWatch::new(
+        MobWatchProviders {
+            frame: Arc::new(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let _ = shot.lock().unwrap().send(());
+                Ok(GameFrame::whole(blank(64, 48, [20, 20, 20]), (0, 0)))
+            }),
+            enabled: Arc::new(|| true),
+            profile: Some(Arc::new(bundled_profile())),
+            read_text: Some(Arc::new(|_| None)),
+            catalogue: Arc::new(CatalogueCell::default()),
+            wait: Some(granted_wait(credits.clone())),
+            ..MobWatchProviders::default()
+        },
+        Arc::new(MockClock::new(None, 100.0)),
+    );
+    let detector: Arc<dyn MobDetector> = Arc::new(watch.clone());
+    let mut hunt = hunt_with(true, Some(detector));
+    hunt.start();
+    // The worker takes exactly its two looks, then waits to be stopped.
+    for _ in 0..2 {
+        shots.recv().expect("the watch captures while detecting");
+    }
+    assert_eq!(watch.watching(), Some(hunt.view_session()));
+
+    // Pinned: the watch ends, and its worker with it.
+    hunt.rig
+        .wait(hunt.tracker.pin_typed(mob("Atrox", "Old")))
+        .unwrap();
+    assert!(watch.wait_for_workers(BOUND));
+    assert_eq!(watch.watching(), None);
+    assert_eq!(captures.load(Ordering::SeqCst), 2);
+    // Looks granted while pinned are never taken: no worker is there to
+    // take them. A kill, and the setting turned off and on, start none.
+    *credits.lock().unwrap() = 3;
+    hunt.kill(5_000, Some(5_600));
+    *hunt.detection.lock().unwrap() = false;
+    hunt.rig.wait(hunt.tracker.reload_config());
+    *hunt.detection.lock().unwrap() = true;
+    hunt.rig.wait(hunt.tracker.reload_config());
+    hunt.settle();
+    assert_eq!(watch.watching(), None);
+    assert!(watch.wait_for_workers(Duration::ZERO), "no worker runs");
+    assert_eq!(*credits.lock().unwrap(), 3, "no look was taken");
+    assert_eq!(
+        captures.load(Ordering::SeqCst),
+        2,
+        "zero captures between pin and release"
+    );
+
+    // Released: the watch resumes and takes the looks granted to it.
+    assert_eq!(hunt.rig.wait(hunt.tracker.unpin()), Ok(true));
+    for _ in 0..3 {
+        shots.recv().expect("the watch resumes after release");
+    }
+    assert_eq!(captures.load(Ordering::SeqCst), 5);
+    assert_eq!(hunt.routes(), [route("Old Atrox", Some("pinned_typed"))]);
+
+    hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
+    assert!(watch.wait_for_workers(BOUND));
+    assert_eq!(captures.load(Ordering::SeqCst), 5);
 }

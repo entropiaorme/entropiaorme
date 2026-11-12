@@ -1843,10 +1843,11 @@ mod tests {
         // + the ledger's session-attribution index
         // + the listing field sources' table
         // + kill mob detection's 2 tables and session index
+        // + kill mob routes' carried table and session index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 240);
+        assert_eq!(master.len(), 242);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

@@ -9,6 +9,7 @@ import type {
 	ActivitySummary,
 	HarvestGuardrailAlert,
 	HealingStatus,
+	MobSourceView,
 	NotableEventCategory,
 	NotableEventType,
 	RecentEvent,
@@ -52,7 +53,10 @@ export interface TrackingLive {
 	sessionDefinitionId?: string | null;
 	trackProtectionCosts?: boolean | null;
 	skillBoostPercent?: number | null;
-	currentMob?: string | null;
+	/** The session's one source for its kills' creature: the typed
+	 * creature (idle: the one the next session starts with), the pin, and
+	 * what the screen reads. */
+	mobSource?: MobSourceView | null;
 	currentTool?: string | null;
 	currentToolKind?: 'weapon' | 'healing' | 'consumable' | 'harvesting' | null;
 	/** What the held tool implies the next action records as. */
@@ -93,7 +97,15 @@ export type { HarvestGuardrailAlert, RecentEvent, TrackingSnapshot };
 
 export const startTracking = commands.trackingStart;
 export const stopTracking = commands.trackingStop;
+/** Clear the typed creature (the declared mob; the backstop while the
+ * screen is read). A pin stands. */
 export const releaseMob = commands.trackingReleaseMob;
+/** Pin a creature for the running session: the one shown as read (refused
+ * if the screen no longer shows it) or one typed. Every kill takes it, and
+ * the screen is not read, until it is released. */
+export const pinMob = commands.trackingMobPin;
+/** Release the running session's pin; answers whether one stood. */
+export const unpinMob = commands.trackingMobUnpin;
 /** Declare an equipment item in hand, as its hotbar press would. */
 export const declareEquipment = commands.trackingDeclareEquipment;
 export const deleteSession = commands.trackingSessionDelete;

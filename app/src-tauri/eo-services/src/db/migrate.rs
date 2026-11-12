@@ -428,6 +428,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "kill mob detection",
         sql: include_str!("../../migrations/0078_kill_mob_detection.sql"),
     },
+    Migration {
+        version: 79,
+        description: "kill mob routes",
+        sql: include_str!("../../migrations/0079_kill_mob_routes.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -514,6 +519,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "EEA71873C59A8366EC676EE0ED68992AA63EE56B5919B9FD9048E9C8FB9F635948F2A23592244DDD35B5A4E9CD6E2200",
     "3563B9BB772098EBC5C5B19485EE25EFA0F58CB4DEDD03C77968784CFC1B0E9A2BA74F84EB4AB6924CC06D4C3A6AD342",
     "05FCA82F42CE9F5D4BA4BDECCC5268FEA846E3CBD03CC72EA6356A36270177F6911C0A489ECFC31F6A0AD3082DCCBA34",
+    "838DB4BF28D0A5845768FFC692148AF27430C7AA8B947FB04DD85CFB2FAE851EB8B81AC1CBEAAA89BEEAA6F9AC32F1E1",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -1831,5 +1837,207 @@ mod tests {
             )
             .expect("net read");
         assert!(net.abs() < 1e-9, "{net}");
+    }
+
+    /// Routes join the kills additively: every kill a version-78 database
+    /// holds stays as it was (declared, detected at a grade, or named by
+    /// nothing) with no route, each route round-trips, the vocabulary is
+    /// closed, and the continuity kills keep their own checks.
+    #[test]
+    fn kill_routes_upgrade_keeps_every_kill_and_stays_closed() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..78] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES ('s', 1, 900, 0); \
+                 INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+                  mob_stamp_source, mob_detection_grade, mob_read_text, timestamp, cost_ped, \
+                  enhancer_cost, loot_total_ped) VALUES \
+                 ('declared', 's', 'Young Atrox', 'Atrox', 'Young', 'declared', NULL, NULL, \
+                  10, 1.0, 0.0, 2.0), \
+                 ('detected', 's', 'Old Atrox', 'Atrox', 'Old', 'detected', 'named', \
+                  'Atrox Old', 11, 1.0, 0.0, 2.0), \
+                 ('unknown', 's', 'Unknown', '', '', NULL, NULL, NULL, 12, 1.0, 0.0, 2.0); \
+                 INSERT INTO kill_mob_detections (kill_id, session_id, grade, mob_name, \
+                  mob_species, mob_maturity, read_text, read_at, declared_name, \
+                  declared_species, declared_maturity, declared_source) VALUES \
+                 ('detected', 's', 'named', 'Old Atrox', 'Atrox', 'Old', 'Atrox Old', 11, \
+                  'Young Atrox', 'Atrox', 'Young', 'declared');",
+            )
+            .expect("v78 kills");
+
+        run(&mut connection).expect("v79 upgrade");
+
+        // Each kill: id, name, stamp source, grade, route.
+        type Kept = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let kept: Vec<Kept> = {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT id, mob_name, mob_stamp_source, mob_detection_grade, mob_route \
+                     FROM kills ORDER BY timestamp",
+                )
+                .expect("kill read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .expect("kill rows")
+            .collect::<Result<_, _>>()
+            .expect("kill rows")
+        };
+        let some = |text: &str| Some(text.to_string());
+        assert_eq!(
+            kept,
+            [
+                (
+                    "declared".into(),
+                    "Young Atrox".into(),
+                    some("declared"),
+                    None,
+                    None
+                ),
+                (
+                    "detected".into(),
+                    "Old Atrox".into(),
+                    some("detected"),
+                    some("named"),
+                    None
+                ),
+                ("unknown".into(), "Unknown".into(), None, None, None),
+            ]
+        );
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .expect("integrity");
+        assert_eq!(integrity, "ok");
+        // An old row can take a route as any new one does.
+        connection
+            .execute(
+                "UPDATE kills SET mob_route = 'named' WHERE id = 'detected'",
+                [],
+            )
+            .expect("an old kill takes a route");
+
+        // Every route round-trips; anything else is refused.
+        for (i, route) in crate::tracker::MobRoute::ALL.into_iter().enumerate() {
+            let id = format!("r{i}");
+            connection
+                .execute(
+                    "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+                     mob_route, timestamp, cost_ped, enhancer_cost, loot_total_ped) \
+                     VALUES (?1, 's', 'Young Atrox', 'Atrox', 'Young', ?2, 20, 1.0, 0.0, 2.0)",
+                    rusqlite::params![id, route.as_str()],
+                )
+                .expect("a route is kept");
+            let read: String = connection
+                .query_row(
+                    "SELECT mob_route FROM kills WHERE id = ?",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .expect("route read");
+            assert_eq!(crate::tracker::MobRoute::parse(&read), Some(route));
+        }
+        for refused in ["latest_read", "Backstop", "pinned", ""] {
+            assert!(
+                connection
+                    .execute(
+                        "INSERT INTO kills (id, session_id, mob_name, mob_species, \
+                         mob_maturity, mob_route, timestamp, cost_ped, enhancer_cost, \
+                         loot_total_ped) VALUES ('bad', 's', 'Atrox', 'Atrox', '', ?, 20, \
+                         1.0, 0.0, 2.0)",
+                        rusqlite::params![refused],
+                    )
+                    .is_err(),
+                "{refused:?} is no route"
+            );
+        }
+
+        // A carried kill: a grade, a creature, a recorded stamp to put back,
+        // a key exactly when the creature is on no list, and a settlement
+        // that is whole or absent.
+        for kept in [
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity, declared_source) VALUES \
+             ('r4', 's', 'continuity', 'Old Atrox', 'Atrox', 'Old', NULL, 'Young Atrox', \
+              'Atrox', 'Young', 'declared')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity) VALUES ('r6', 's', 'provisional_pinned', 'Gloomrat', \
+             'Gloomrat', '', 'GLOOMRAT|4|0', 'Unknown', '', '')",
+        ] {
+            connection
+                .execute(kept, [])
+                .expect("a carried kill is kept");
+        }
+        for refused in [
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity) \
+             VALUES ('r5', 's', 'continuity', ' ', '', '', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity) VALUES ('r5', 's', 'provisional_continuity', 'Gloomrat', \
+             'Gloomrat', '', '', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity) \
+             VALUES ('r5', 's', 'provisional_pinned', 'Gloomrat', 'Gloomrat', '', \
+             'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity) VALUES ('r5', 's', 'continuity', 'Atrox', 'Atrox', '', \
+             'ATROX|5|0', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity) \
+             VALUES ('r5', 's', 'named', 'Atrox', 'Atrox', '', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity, \
+             declared_source) VALUES ('r5', 's', 'continuity', 'Atrox', 'Atrox', '', \
+             'Unknown', '', '', 'detected')",
+            "UPDATE kill_mob_carried SET reviewed_at = 5 WHERE kill_id = 'r4'",
+            "UPDATE kill_mob_carried SET reviewed_at = 5, settled_kind = 'listed', \
+             settled_name = 'Atrox' WHERE kill_id = 'r4'",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+        connection
+            .execute(
+                "UPDATE kill_mob_carried SET reviewed_at = 5, settled_kind = 'declared', \
+                 settled_name = 'Young Atrox', settled_species = 'Atrox', \
+                 settled_maturity = 'Young' WHERE kill_id = 'r4'",
+                [],
+            )
+            .expect("a whole settlement is kept");
     }
 }

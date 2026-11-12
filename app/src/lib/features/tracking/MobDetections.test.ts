@@ -96,3 +96,110 @@ describe('the detected creatures section', () => {
 		expect(screen.getByRole('textbox').getAttribute('maxlength')).toBe('64');
 	});
 });
+
+describe('kills given the creature being hunted', () => {
+	const continued = group({
+		group: {
+			grade: 'continuity',
+			creature: { name: 'Old Atrox', species: 'Atrox', maturity: 'Old' },
+			provisionalKey: null,
+		},
+		exampleText: null,
+		currentName: 'Old Atrox',
+		killCount: 3,
+	});
+
+	it('shows one quiet line per creature, after the groups that ask for checking, with nothing to act on', () => {
+		render(MobDetections, { props: { model: model([group(), continued]) } });
+		const rows = screen.getAllByTestId('mob-detection');
+		expect(rows.map((row) => row.dataset.grade)).toEqual(['provisional', 'continuity']);
+		const line = rows[1];
+		expect(line.textContent).toContain('Old Atrox');
+		expect(line.textContent).toContain('3 kills assigned on continuity');
+		// No reading, no settle controls, until the player asks to correct it.
+		expect(line.textContent).not.toContain('Read as');
+		expect(line.querySelector('input')).toBeNull();
+		expect(line.textContent).not.toContain('Use declared mob');
+	});
+
+	it('is corrected by the same one-action settle', async () => {
+		const m = model([continued]);
+		render(MobDetections, { props: { model: m } });
+		const correct = screen.getByRole('button', { name: 'Correct' });
+		expect(correct.getAttribute('aria-expanded')).toBe('false');
+		await fireEvent.click(correct);
+		expect(correct.getAttribute('aria-expanded')).toBe('true');
+		expect(screen.getByLabelText('Creature for 3 kills assigned on continuity')).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+		expect(m.name).toHaveBeenCalledWith(continued);
+		await fireEvent.click(screen.getByRole('button', { name: 'Use declared mob' }));
+		expect(m.restoreDeclared).toHaveBeenCalledWith(continued);
+	});
+});
+
+describe('a group settled to another creature, and an unlisted pin', () => {
+	it('shows a corrected continuity group as recorded now', () => {
+		render(MobDetections, {
+			props: {
+				model: model([
+					group({
+						group: {
+							grade: 'continuity',
+							creature: { name: 'Old Atrox', species: 'Atrox', maturity: 'Old' },
+							provisionalKey: null,
+						},
+						exampleText: null,
+						currentName: 'Mature Daikiba',
+						killCount: 2,
+						reviewed: true,
+					}),
+				]),
+			},
+		});
+		expect(
+			screen.getByText('2 kills assigned on continuity; recorded as Mature Daikiba'),
+		).toBeTruthy();
+	});
+
+	it('does not repeat the creature on an uncorrected continuity line', () => {
+		render(MobDetections, {
+			props: {
+				model: model([
+					group({
+						group: {
+							grade: 'continuity',
+							creature: { name: 'Old Atrox', species: 'Atrox', maturity: 'Old' },
+							provisionalKey: null,
+						},
+						exampleText: null,
+						currentName: 'Old Atrox',
+						killCount: 2,
+					}),
+				]),
+			},
+		});
+		expect(screen.getByText('2 kills assigned on continuity')).toBeTruthy();
+	});
+
+	it('asks to confirm a creature on no list the player pinned', async () => {
+		const pinned = group({
+			group: {
+				grade: 'provisional_pinned',
+				creature: { name: 'Shadowmaw', species: 'Shadowmaw', maturity: '' },
+				provisionalKey: 'SHADOWMAW L7 #2',
+			},
+			exampleText: null,
+			currentName: 'Shadowmaw',
+			killCount: 4,
+		});
+		const m = model([pinned]);
+		render(MobDetections, { props: { model: m } });
+		expect(screen.getByText('Pinned, not in the creature list')).toBeTruthy();
+		expect(
+			screen.getByText(/Pinned from what the screen read; recorded as Shadowmaw/),
+		).toBeTruthy();
+		expect(screen.queryByText(/Read as/)).toBeNull();
+		await fireEvent.click(screen.getByRole('button', { name: 'Keep as a new creature' }));
+		expect(m.name).toHaveBeenCalledWith(pinned);
+	});
+});

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use eo_api::mob_detection::{
     DetectedCreature, MobDetectionGrade, MobDetectionGroupRef, MobDetectionSettleResult,
-    MobDetectionSettled, MobDetectionTarget,
+    MobDetectionSettled, MobDetectionTarget, MobPin, MobPinTarget, MobPinnedBy, MobSourceView,
 };
 use eo_api::settings::SettingsPatch;
 use eo_api::{Api, ApiError};
@@ -19,7 +19,7 @@ use eo_services::game_data_store::GameDataStore;
 use eo_services::game_ui::mob_history::MobHistory;
 use eo_services::game_ui::test_support::bundled_profile;
 use eo_services::mob_review::build_catalogue;
-use eo_services::mob_watch::{CatalogueCell, MobDetector, PulseSink};
+use eo_services::mob_watch::{CatalogueCell, MobDetector, PulseSink, WatchEnded};
 use eo_services::tracker::{HuntTracker, Providers, TrackingConfig};
 
 use crate::common;
@@ -59,6 +59,8 @@ impl TrackingConfig for FileConfig {
 struct RecordingWatcher {
     starts: Mutex<usize>,
     stops: Mutex<usize>,
+    /// The session being watched.
+    watching: Mutex<Option<String>>,
 }
 
 impl MobDetector for RecordingWatcher {
@@ -67,12 +69,18 @@ impl MobDetector for RecordingWatcher {
         Some(MobHistory::new(profile.mob_history, profile.mob_names))
     }
 
-    fn start(&self, _session_id: &str, _sink: PulseSink) {
+    fn start(&self, session_id: &str, _sink: PulseSink, _ended: WatchEnded) {
         *self.starts.lock().unwrap() += 1;
+        *self.watching.lock().unwrap() = Some(session_id.to_string());
     }
 
     fn stop(&self) {
         *self.stops.lock().unwrap() += 1;
+        *self.watching.lock().unwrap() = None;
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        self.watching.lock().unwrap().as_deref() == Some(session_id)
     }
 
     fn permit_capture(&self) {}
@@ -430,4 +438,99 @@ async fn a_running_session_is_not_reviewed() {
         "{refused:?}"
     );
     assert_eq!(stamp(&db, "k1").await.2.as_deref(), Some("detected"));
+}
+
+/// The snapshot's mob source as the overlay reads it.
+async fn mob_source(api: &Api) -> MobSourceView {
+    api.tracking_snapshot()
+        .await
+        .unwrap()
+        .mob_source
+        .expect("the snapshot carries the mob source")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_creature_is_pinned_by_typing_and_released_through_the_facade() {
+    let dir = tempfile::tempdir().unwrap();
+    let watcher = Arc::new(RecordingWatcher::default());
+    let (api, _db, tracker) = detection_api(dir.path(), watcher.clone()).await;
+    let typed = |species: &str, maturity: Option<&str>| MobPinTarget::Typed {
+        species: species.into(),
+        maturity: maturity.map(str::to_string).into(),
+    };
+
+    // Idle: only the creature the next session starts with, and no pin.
+    api.tracking_manual_mob_lock("Atrox".into(), Some("Young".into()))
+        .await
+        .unwrap();
+    let idle = mob_source(&api).await;
+    assert!(!idle.reading_screen);
+    assert_eq!(idle.pin.0, None);
+    assert_eq!(
+        idle.typed.0.map(|creature| creature.name).as_deref(),
+        Some("Young Atrox")
+    );
+    assert!(matches!(
+        api.tracking_mob_pin(typed("Atrox", Some("Old"))).await,
+        Err(ApiError::Conflict { .. })
+    ));
+
+    // Detection on: the session reads the screen, the typed creature its
+    // backstop.
+    api.settings_update(SettingsPatch {
+        mob_detection_enabled: Some(true),
+        ..SettingsPatch::default()
+    })
+    .await
+    .unwrap();
+    tracker.start_session().await.unwrap();
+    let reading = mob_source(&api).await;
+    assert!(reading.reading_screen);
+    assert_eq!(*watcher.starts.lock().unwrap(), 1);
+
+    // Only a listed creature can be typed to pin.
+    assert!(matches!(
+        api.tracking_mob_pin(typed("Gloomrat", None)).await,
+        Err(ApiError::BadRequest { .. })
+    ));
+    // Nothing is read yet: a pin from the screen is refused.
+    assert!(matches!(
+        api.tracking_mob_pin(MobPinTarget::Shown {
+            creature: DetectedCreature {
+                name: "Old Atrox".into(),
+                species: "Atrox".into(),
+                maturity: "Old".into(),
+            },
+        })
+        .await,
+        Err(ApiError::Conflict { .. })
+    ));
+
+    let pinned = api
+        .tracking_mob_pin(typed(" Atrox ", Some("Old")))
+        .await
+        .unwrap();
+    assert_eq!(
+        pinned,
+        MobPin {
+            creature: DetectedCreature {
+                name: "Old Atrox".into(),
+                species: "Atrox".into(),
+                maturity: "Old".into(),
+            },
+            by: MobPinnedBy::Typed,
+        }
+    );
+    assert_eq!(*watcher.stops.lock().unwrap(), 1, "pinned: not read");
+    let view = mob_source(&api).await;
+    assert!(!view.reading_screen);
+    assert_eq!(view.pin.0, Some(pinned));
+    let wire = serde_json::to_value(&view).unwrap();
+    assert_eq!(wire["pin"]["by"], "typed");
+    assert_eq!(wire["readingScreen"], false);
+
+    assert!(api.tracking_mob_unpin().await.unwrap());
+    assert_eq!(*watcher.starts.lock().unwrap(), 2, "released: read again");
+    assert!(!api.tracking_mob_unpin().await.unwrap());
+    assert!(mob_source(&api).await.reading_screen);
 }

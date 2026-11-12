@@ -41,6 +41,17 @@ function liveData(overrides: Partial<TrackingLive> = {}): TrackingLive {
 	return { status: 'idle', ...overrides };
 }
 
+/** The mob source with only a typed creature: the typed mob alone. */
+function typedMob(name: string): NonNullable<TrackingLive['mobSource']> {
+	return {
+		readingScreen: false,
+		pin: null,
+		typed: { name, species: name, maturity: '' },
+		reading: null,
+		continuity: null,
+	};
+}
+
 function activeStatus(overrides: Partial<TrackingStatus> = {}): TrackingStatus {
 	return { status: 'active', ...overrides };
 }
@@ -177,19 +188,19 @@ describe('session facets and declared mob', () => {
 	});
 
 	it('shows the mob input when no mob is declared', () => {
-		render(OverlayStrip, { props: { data: liveData({ currentMob: null }) } });
+		render(OverlayStrip, { props: { data: liveData({ mobSource: null }) } });
 		expect(screen.getByPlaceholderText('Mob...')).toBeTruthy();
 	});
 
 	it('hides the release control when no mob is declared', () => {
-		render(OverlayStrip, { props: { data: liveData({ currentMob: null }) } });
+		render(OverlayStrip, { props: { data: liveData({ mobSource: null }) } });
 		expect(screen.queryByLabelText('Release mob')).toBeNull();
 	});
 
 	it('shows the declared mob with a release control instead of the input', () => {
 		const onReleaseMob = vi.fn();
 		render(OverlayStrip, {
-			props: { data: liveData({ currentMob: 'Atrox Young' }), onReleaseMob },
+			props: { data: liveData({ mobSource: typedMob('Atrox Young') }), onReleaseMob },
 		});
 
 		expect(screen.getByText('Atrox Young')).toBeTruthy();
@@ -201,7 +212,7 @@ describe('session facets and declared mob', () => {
 
 	it('offers the mob control during an active session (declarations move mid-session)', () => {
 		render(OverlayStrip, {
-			props: { data: liveData({ status: 'active', currentMob: null }) },
+			props: { data: liveData({ status: 'active', mobSource: null }) },
 		});
 		expect(screen.getByPlaceholderText('Mob...')).toBeTruthy();
 	});

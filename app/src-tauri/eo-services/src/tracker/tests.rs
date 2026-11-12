@@ -1419,7 +1419,7 @@ fn snapshot_aggregates_and_rounds_the_readout() {
     assert_eq!(family.last_kill_loot, Some(9.0));
     assert_eq!(family.last_kill_multiplier, Some(7.0));
     assert_eq!(active.cumulative_net_history, vec![4.82, 4.79]);
-    assert_eq!(active.current_mob, None);
+    assert_eq!(active.mob_source, crate::tracker::MobSourceView::default());
     // Undeclared: the session is an instance of the protected default
     // and reads with its name.
     assert_eq!(active.session_name.as_deref(), Some("Default Tracking"));
@@ -3906,7 +3906,7 @@ fn reload_config_transitions_manual_mob_and_heal_state() {
     rig.probe(&tracker, |actor| {
         let active = actor.session.active().unwrap();
         assert_eq!(active.stamped_mob_name(), None);
-        assert!(active.declared_mob.is_none());
+        assert!(active.mob.typed.is_none());
     });
 }
 
@@ -4827,7 +4827,7 @@ fn a_blank_configured_name_takes_the_resolved_definition_name() {
         assert_eq!(active.facets.name.as_deref(), Some("Default Tracking"));
         assert_eq!(active.facets.skill_boost_percent, None);
         assert_eq!(active.stamped_mob_name(), None);
-        assert!(active.declared_mob.is_none());
+        assert!(active.mob.typed.is_none());
     });
     rig.wait(blank.stop_session()).unwrap();
 }
@@ -5038,7 +5038,7 @@ fn reload_clears_the_declaration_once_the_config_drops_it() {
     rig.probe(&tracker, |actor| {
         let active = actor.session.active().unwrap();
         assert_eq!(active.stamped_mob_name(), None);
-        assert!(active.declared_mob.is_none());
+        assert!(active.mob.typed.is_none());
     });
 }
 

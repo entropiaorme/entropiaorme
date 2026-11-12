@@ -96,6 +96,8 @@ vi.mock('$lib/api', () => {
 		selectDefinition: vi.fn(),
 		getManualMobSuggestions: seams.getManualMobSuggestions,
 		lockManualMob: vi.fn(),
+		pinMob: vi.fn(),
+		unpinMob: vi.fn(),
 		getActivityOptions: vi.fn(async () => ({
 			definitionId: null,
 			definitionName: null,
@@ -211,7 +213,13 @@ const activeSnapshot = {
 	kill_count: 2,
 	sessionName: 'ARIS Dailies',
 	sessionDefinitionId: '1',
-	currentMob: 'Atrox',
+	mobSource: {
+		readingScreen: false,
+		pin: null,
+		typed: { name: 'Atrox', species: 'Atrox', maturity: '' },
+		reading: null,
+		continuity: null,
+	},
 	currentTool: 'Sollomate Opalo',
 };
 

@@ -8,8 +8,14 @@
 	import OverlayDoses from '$lib/features/consumables/OverlayDoses.svelte';
 	import type { DosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { NO_DATA } from '$lib/utils/format';
+	import MobSourceControl from '$lib/features/tracking/MobSourceControl.svelte';
+	import {
+		createMobSourceModel,
+		type MobSourceModel,
+	} from '$lib/features/tracking/mobSourceModel.svelte';
 
 	const noop = () => {};
+	const settled = async () => {};
 
 	let {
 		data,
@@ -29,6 +35,7 @@
 		dosesMenuOpen = false,
 		equipmentMenuOpen = false,
 		declaringEquipment = false,
+		mobSource = null,
 		mobQuery = $bindable(''),
 		mobInput = $bindable(null),
 		boostDraft = $bindable(''),
@@ -69,6 +76,9 @@
 		/** The equipment picker is open (declare what is in hand). */
 		equipmentMenuOpen?: boolean;
 		declaringEquipment?: boolean;
+		/** The mob control's state and writes; without one the control is
+		 * the typed mob alone. */
+		mobSource?: MobSourceModel | null;
 		mobQuery?: string;
 		mobInput?: HTMLInputElement | null;
 		boostDraft?: string;
@@ -92,12 +102,18 @@
 	let activitiesSection = $state<HTMLDivElement | null>(null);
 
 	const isActive = $derived(data.status === 'active');
-	// The declared mob is the kill-stamp source and may change mid-session,
-	// so its input is available in both states; a standing declaration
-	// shows as a label with a release control beside it.
-	const showManualInput = $derived(
-		(data.status === 'active' || data.status === 'idle') && !data.currentMob
-	);
+	// The mob control's state when the owner gives none: the typed mob
+	// alone, with nothing to write through.
+	const typedOnly = createMobSourceModel({
+		view: () => data.mobSource ?? null,
+		enabled: () => false,
+		pin: settled,
+		unpin: settled,
+		setTyped: settled,
+		clearTyped: settled,
+		refresh: settled,
+	});
+	const mobModel = $derived(mobSource ?? typedOnly);
 	// The session (and the name it writes) is session-grain: picked
 	// before a session, fixed while one runs, corrected afterwards on the
 	// session record. (The boost is the other way round: it stamps each
@@ -327,45 +343,20 @@
 		{/if}
 	</div>
 
-	<!-- Declared mob: the source of each kill's mob stamp, changeable
-		 mid-session (an off-declaration kill still stamps the declared
-		 mob until detection can read the target directly). -->
-	<div
-		class="flex items-center gap-2 shrink-0 border-r border-white/10 pr-3"
-	>
-		<div class="w-32 flex flex-col shrink-0">
-			<span class="facet-label">Mob</span>
-			<div class="flex items-center">
-				{#if showManualInput}
-					<input
-						bind:this={mobInput}
-						class="w-full bg-transparent border-b border-white/10 focus:border-accent text-sm text-white/90 px-1 py-0.5 outline-none placeholder:text-white/20 transition-colors"
-						bind:value={mobQuery}
-						placeholder="Mob..."
-						disabled={selectingMob}
-						onfocus={onMobFocus}
-						onblur={onMobBlur}
-						onkeydown={onMobKeydown}
-					/>
-				{:else if data.currentMob}
-					<div class="text-sm font-medium text-white/90 truncate px-1 w-full">{data.currentMob}</div>
-				{:else}
-					<div class="text-sm font-medium text-white/20 px-1">{NO_DATA}</div>
-				{/if}
-			</div>
-		</div>
-		{#if data.currentMob}
-			<button
-				type="button"
-				class="release-btn shrink-0"
-				aria-label="Release mob"
-				onclick={onReleaseMob}
-				title="Release mob"
-			>
-				{releasing ? '...' : 'x'}
-			</button>
-		{/if}
-	</div>
+	<!-- The session's mob source: what names each kill's creature. -->
+	<MobSourceControl
+		view={data.mobSource ?? null}
+		model={mobModel}
+		inputAvailable={data.status === 'active' || data.status === 'idle'}
+		{selectingMob}
+		{releasing}
+		bind:mobQuery
+		bind:mobInput
+		{onMobFocus}
+		{onMobBlur}
+		{onMobKeydown}
+		{onReleaseMob}
+	/>
 
 	<!-- Weapon section. No own separator; the adjacent armour section
 		 owns the boundary via its left border. -->
@@ -703,31 +694,6 @@
 	}
 	.cue-btn:disabled {
 		opacity: 0.35;
-		cursor: default;
-	}
-
-	.release-btn {
-		width: 18px;
-		height: 18px;
-		border-radius: 4px;
-		border: 1px solid rgba(255, 255, 255, 0.15);
-		background: rgba(255, 255, 255, 0.05);
-		color: rgba(255, 255, 255, 0.4);
-		font-size: 10px;
-		line-height: 1;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		transition: all 150ms ease-out;
-	}
-	.release-btn:hover {
-		background: rgba(255, 255, 255, 0.1);
-		color: rgba(255, 255, 255, 0.7);
-		border-color: rgba(255, 255, 255, 0.25);
-	}
-	.release-btn:disabled {
-		opacity: 0.3;
 		cursor: default;
 	}
 

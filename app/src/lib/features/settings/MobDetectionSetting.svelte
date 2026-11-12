@@ -32,8 +32,9 @@
 		</p>
 		<p class="text-xs text-text-tertiary mt-0.5">
 			While you hunt with the game in front, reads the name over the creature you are locked on to
-			about once a second and records which creature each kill was. Kills it cannot tell keep your
-			declared mob.
+			about once a second and records which creature each kill was. A kill it cannot tell takes
+			the creature you have been hunting, else the mob you typed; pin a creature on the overlay to
+			stop reading.
 		</p>
 		{#if note}
 			<p class="text-xs text-warning mt-1">{note}</p>

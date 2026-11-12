@@ -1,25 +1,36 @@
-//! Creature detection's review after a session: every creature and
-//! suggestion the screen gave the session's kills, grouped by creature and
-//! grade, and the one action that settles a group (name the creature, or
-//! put back the declared mob).
+//! Creature detection across the boundary: the running session's mob
+//! source as the overlay shows and steers it (the creature pinned, read,
+//! carried on from the latest kills, or typed as a backstop; pin and
+//! release), and the review after a session: every creature and suggestion
+//! the screen gave the session's kills, grouped by creature and grade, and
+//! the one action that settles a group (name the creature, or put back the
+//! stamp each kill was recorded with).
 //!
-//! The grade stays a closed vocabulary across the boundary, and a group is
-//! named back by the same typed reference the review lists it under. The
-//! review service owns every check and repair; this facade maps its
-//! outcomes and answers a settlement with the refreshed review.
+//! The grade and the pin's kind stay closed vocabularies across the
+//! boundary, and a group is named back by the same typed reference the
+//! review lists it under. The review service owns every check and repair;
+//! this facade maps its outcomes and answers a settlement with the
+//! refreshed review.
 
 use eo_services::mob_review::{
     DetectedCreature as ServiceCreature, DetectionGroup, DetectionGroupRef, MobReviewError,
     ReviewTarget, SettleOutcome, Settled,
 };
-use eo_services::tracker::MobDetectionGrade as ServiceGrade;
+use eo_services::tracker::{
+    DeclaredMob, MobDetectionGrade as ServiceGrade, MobSourceView as ServiceSourceView,
+    PinnedBy as ServicePinnedBy,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::tracking::tracker_conflict;
 use crate::{Api, ApiError, Nullable};
 
-/// How sure detection was of a creature. The upper four stamped the
-/// kills; the two lowest are suggestions the kills did not take.
+/// How detection named a creature. The upper four are the screen's own
+/// evidence and stamped the kills; the latest-read two are suggestions the
+/// kills did not take; the continuity two are the creature being hunted,
+/// given where the screen could not settle the kills, and stamped them; the
+/// pinned one is an unlisted creature the player pinned from a reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MobDetectionGrade {
@@ -35,6 +46,13 @@ pub enum MobDetectionGrade {
     LatestRead,
     /// The unlisted creature read last before the kill: a suggestion only.
     ProvisionalLatestRead,
+    /// The listed creature the latest kills were.
+    Continuity,
+    /// The unlisted creature the latest kills were.
+    ProvisionalContinuity,
+    /// An unlisted creature the player pinned from what the screen read:
+    /// its spelling still to be confirmed.
+    ProvisionalPinned,
 }
 
 impl From<ServiceGrade> for MobDetectionGrade {
@@ -46,6 +64,9 @@ impl From<ServiceGrade> for MobDetectionGrade {
             ServiceGrade::ProvisionalGuess => Self::ProvisionalGuess,
             ServiceGrade::LatestRead => Self::LatestRead,
             ServiceGrade::ProvisionalLatestRead => Self::ProvisionalLatestRead,
+            ServiceGrade::Continuity => Self::Continuity,
+            ServiceGrade::ProvisionalContinuity => Self::ProvisionalContinuity,
+            ServiceGrade::ProvisionalPinned => Self::ProvisionalPinned,
         }
     }
 }
@@ -59,6 +80,9 @@ impl From<MobDetectionGrade> for ServiceGrade {
             MobDetectionGrade::ProvisionalGuess => Self::ProvisionalGuess,
             MobDetectionGrade::LatestRead => Self::LatestRead,
             MobDetectionGrade::ProvisionalLatestRead => Self::ProvisionalLatestRead,
+            MobDetectionGrade::Continuity => Self::Continuity,
+            MobDetectionGrade::ProvisionalContinuity => Self::ProvisionalContinuity,
+            MobDetectionGrade::ProvisionalPinned => Self::ProvisionalPinned,
         }
     }
 }
@@ -110,8 +134,10 @@ pub struct MobDetectionGroupRef {
 pub struct MobDetectionGroup {
     pub group: MobDetectionGroupRef,
     pub kill_count: i64,
-    /// The text read off the plate most often for the group's kills.
-    pub example_text: String,
+    /// The text read off the plate most often for the group's kills; null
+    /// for the creature being hunted or a pin, which no reading of these
+    /// kills gave.
+    pub example_text: Nullable<String>,
     /// What the group's kills are recorded as now, when they agree.
     pub current_name: Nullable<String>,
     /// The player has settled the group.
@@ -137,7 +163,7 @@ pub enum MobDetectionTarget {
     /// species and maturity, or its species alone), a name confirmed
     /// before, or a new name to keep.
     Creature { name: String },
-    /// The declared mob each kill had.
+    /// The stamp each kill was recorded with.
     Declared,
 }
 
@@ -187,7 +213,7 @@ fn group_view(group: DetectionGroup) -> MobDetectionGroup {
             provisional_key: group.group.provisional_key.into(),
         },
         kill_count: group.kill_count,
-        example_text: group.example_text,
+        example_text: group.example_text.into(),
         current_name: group.current_name.into(),
         reviewed: group.reviewed,
     }
@@ -256,6 +282,159 @@ impl Api {
             settled,
             review: self.tracking_mob_detections(session_id).await?,
         })
+    }
+}
+
+/// How the player pinned a creature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MobPinnedBy {
+    /// The creature the screen was reading.
+    Read,
+    /// A creature the player typed.
+    Typed,
+}
+
+impl From<ServicePinnedBy> for MobPinnedBy {
+    fn from(by: ServicePinnedBy) -> Self {
+        match by {
+            ServicePinnedBy::Read => Self::Read,
+            ServicePinnedBy::Typed => Self::Typed,
+        }
+    }
+}
+
+/// The creature every kill takes while it stands.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MobPin {
+    pub creature: DetectedCreature,
+    pub by: MobPinnedBy,
+}
+
+/// The session's one source for its kills' creature, as the overlay shows
+/// it. Idle, only the typed creature (the one the next session starts
+/// with) is present.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MobSourceView {
+    /// The screen is being read for the running session. Without it there
+    /// is nothing read and nothing carried on from the latest kills, and
+    /// the typed creature names every kill.
+    pub reading_screen: bool,
+    pub pin: Nullable<MobPin>,
+    /// The creature the player typed: while the screen is read, the
+    /// backstop for a kill nothing else names.
+    pub typed: Nullable<DetectedCreature>,
+    /// The creature the screen reads now.
+    pub reading: Nullable<DetectedCreature>,
+    /// The creature the latest kills were, when what is read now does not
+    /// name another.
+    pub continuity: Nullable<DetectedCreature>,
+}
+
+fn creature_view(mob: DeclaredMob) -> DetectedCreature {
+    DetectedCreature {
+        name: mob.name,
+        species: mob.species,
+        maturity: mob.maturity,
+    }
+}
+
+impl From<ServiceSourceView> for MobSourceView {
+    fn from(view: ServiceSourceView) -> Self {
+        Self {
+            reading_screen: view.reading_screen,
+            pin: view
+                .pin
+                .map(|pin| MobPin {
+                    creature: creature_view(pin.mob),
+                    by: pin.by.into(),
+                })
+                .into(),
+            typed: view.typed.map(creature_view).into(),
+            reading: view.reading.map(creature_view).into(),
+            continuity: view.continuity.map(creature_view).into(),
+        }
+    }
+}
+
+impl MobSourceView {
+    /// The view while no session runs: the creature the next session
+    /// starts with, if one is typed.
+    pub fn idle(typed: Option<DeclaredMob>) -> Self {
+        Self {
+            reading_screen: false,
+            pin: None.into(),
+            typed: typed.map(creature_view).into(),
+            reading: None.into(),
+            continuity: None.into(),
+        }
+    }
+}
+
+/// What to pin.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MobPinTarget {
+    /// The creature the overlay showed as read now (or, with nothing read,
+    /// as the one the latest kills were): pinned only if the screen still
+    /// shows it.
+    Shown { creature: DetectedCreature },
+    /// A creature on the list, typed by its species and maturity.
+    Typed {
+        species: String,
+        maturity: Nullable<String>,
+    },
+}
+
+impl Api {
+    /// Pin a creature for the running session: every kill takes it, and the
+    /// screen is not read, until it is released. Answers the pin.
+    pub async fn tracking_mob_pin(&self, target: MobPinTarget) -> Result<MobPin, ApiError> {
+        let pinned = match target {
+            MobPinTarget::Shown { creature } => {
+                let expected = DeclaredMob {
+                    name: creature.name,
+                    species: creature.species,
+                    maturity: creature.maturity,
+                };
+                let mob = self
+                    .tracker
+                    .pin_shown(expected)
+                    .await
+                    .map_err(tracker_conflict)?;
+                MobPin {
+                    creature: creature_view(mob),
+                    by: MobPinnedBy::Read,
+                }
+            }
+            MobPinTarget::Typed { species, maturity } => {
+                let species = species.trim().to_string();
+                let maturity = maturity.0.unwrap_or_default().trim().to_string();
+                if !eo_services::mob_lookup_service::MobLookupService::new(&self.game_data)
+                    .has_mob_name(&species, &maturity)
+                {
+                    return Err(ApiError::bad_request("Mob is not present in the catalogue"));
+                }
+                let mob = DeclaredMob::from_parts(species, maturity);
+                self.tracker
+                    .pin_typed(mob.clone())
+                    .await
+                    .map_err(tracker_conflict)?;
+                MobPin {
+                    creature: creature_view(mob),
+                    by: MobPinnedBy::Typed,
+                }
+            }
+        };
+        Ok(pinned)
+    }
+
+    /// Release the running session's pin: the screen is read again when
+    /// detection is on. Answers whether a pin stood.
+    pub async fn tracking_mob_unpin(&self) -> Result<bool, ApiError> {
+        self.tracker.unpin().await.map_err(tracker_conflict)
     }
 }
 

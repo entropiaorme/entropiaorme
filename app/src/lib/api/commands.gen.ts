@@ -2378,10 +2378,13 @@ export interface MobComparison {
 export type MobDetectionCapture = 'ready' | 'notRunning' | 'refused' | 'unavailable';
 
 /**
- * How sure detection was of a creature. The upper four stamped the
- * kills; the two lowest are suggestions the kills did not take.
+ * How detection named a creature. The upper four are the screen's own
+ * evidence and stamped the kills; the latest-read two are suggestions the
+ * kills did not take; the continuity two are the creature being hunted,
+ * given where the screen could not settle the kills, and stamped them; the
+ * pinned one is an unlisted creature the player pinned from a reading.
  */
-export type MobDetectionGrade = 'named' | 'guess' | 'provisional' | 'provisional_guess' | 'latest_read' | 'provisional_latest_read';
+export type MobDetectionGrade = 'named' | 'guess' | 'provisional' | 'provisional_guess' | 'latest_read' | 'provisional_latest_read' | 'continuity' | 'provisional_continuity' | 'provisional_pinned';
 
 /**
  * One group of the session's detections.
@@ -2389,8 +2392,8 @@ export type MobDetectionGrade = 'named' | 'guess' | 'provisional' | 'provisional
 export interface MobDetectionGroup {
 	group: MobDetectionGroupRef;
 	killCount: number;
-	/** The text read off the plate most often for the group's kills. */
-	exampleText: string;
+	/** The text read off the plate most often for the group's kills; null for the creature being hunted or a pin, which no reading of these kills gave. */
+	exampleText: string | null;
 	/** What the group's kills are recorded as now, when they agree. */
 	currentName: string | null;
 	/** The player has settled the group. */
@@ -2472,6 +2475,48 @@ export interface MobEditResult {
  * (facet-era rows all read as `mob`, the column default).
  */
 export type MobEntryMode = 'mob' | 'tag';
+
+/**
+ * The creature every kill takes while it stands.
+ */
+export interface MobPin {
+	creature: DetectedCreature;
+	by: MobPinnedBy;
+}
+
+/**
+ * What to pin.
+ */
+export type MobPinTarget = {
+		creature: DetectedCreature;
+		kind: 'shown';
+	} | {
+		species: string;
+		maturity: string | null;
+		kind: 'typed';
+	};
+
+/**
+ * How the player pinned a creature.
+ */
+export type MobPinnedBy = 'read' | 'typed';
+
+/**
+ * The session's one source for its kills' creature, as the overlay shows
+ * it. Idle, only the typed creature (the one the next session starts
+ * with) is present.
+ */
+export interface MobSourceView {
+	/** The screen is being read for the running session. Without it there is nothing read and nothing carried on from the latest kills, and the typed creature names every kill. */
+	readingScreen: boolean;
+	pin: MobPin | null;
+	/** The creature the player typed: while the screen is read, the backstop for a kill nothing else names. */
+	typed: DetectedCreature | null;
+	/** The creature the screen reads now. */
+	reading: DetectedCreature | null;
+	/** The creature the latest kills were, when what is read now does not name another. */
+	continuity: DetectedCreature | null;
+}
 
 /**
  * One month of the Overview monthly breakdown.
@@ -4367,7 +4412,8 @@ export interface TrackingSnapshot {
 	trackProtectionCosts?: boolean | null;
 	/** The skill-boost facet (labelled percent), same idle/active sourcing as the session name. */
 	skillBoostPercent?: number | null;
-	currentMob?: string | null;
+	/** The session's one source for its kills' creature: the typed creature (idle: the one the next session starts with), the pin, and what the screen reads. */
+	mobSource?: MobSourceView | null;
 	currentTool?: string | null;
 	currentToolKind?: HeldItemKind | null;
 	/** What the held tool implies the next action is recorded as. */
@@ -5564,6 +5610,21 @@ export async function trackingReleaseMob(): Promise<ReleaseResult> {
 
 export async function trackingManualMobLock(species: string, maturity: string | null): Promise<ManualMobLockResult> {
 	return invokeCommand('tracking_manual_mob_lock', { species, maturity });
+}
+
+export async function trackingMobPin(target: {
+		creature: DetectedCreature;
+		kind: 'shown';
+	} | {
+		species: string;
+		maturity: string | null;
+		kind: 'typed';
+	}): Promise<MobPin> {
+	return invokeCommand('tracking_mob_pin', { target });
+}
+
+export async function trackingMobUnpin(): Promise<boolean> {
+	return invokeCommand('tracking_mob_unpin', {});
 }
 
 export async function trackingSessionConfig(sessionName: string | null, skillBoostPercent: number | null): Promise<SessionConfigResult> {

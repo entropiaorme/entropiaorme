@@ -2,11 +2,13 @@
 //! as.
 //!
 //! Every answer creature detection gave a kill is kept (see the tracker's
-//! `detection`): the creature named and at which grade, the text read,
-//! and the stamp the player's declaration gave the kill. The review lists
-//! them grouped by creature and grade, with how many kills each holds and
-//! an example of what was read, the least certain first, and lets the
-//! player settle a group in one action for all of its kills:
+//! `detection`): the creature named and at which grade, the text read
+//! (none for the creature being hunted, which rests on earlier kills), and
+//! the stamp the kill was recorded with. The review lists them grouped by
+//! creature and grade, with how many kills each holds and an example of
+//! what was read, the least certain first and the kills given the creature
+//! being hunted last, and lets the player settle a group in one action for
+//! all of its kills:
 //!
 //! - name the creature: a listed creature (typed as the list knows it, by
 //!   its species and maturity, or by its species alone); a name the player
@@ -15,7 +17,15 @@
 //!   misspelt is taken as that listed creature, never kept as a new one:
 //!   the reader would drop it anyway, since it would blur the creature it
 //!   is close to;
-//! - or put back the declared mob each kill had.
+//! - or put back the stamp each kill was recorded with (the typed mob, or
+//!   no creature).
+//!
+//! Kills taking a pinned creature are the player's choice, so the review
+//! asks nothing about them, with one exception: a creature on no list
+//! pinned from what the screen read carries the screen's spelling, still
+//! unconfirmed, so its kills are listed as one group to confirm or correct.
+//! (For a pinned kill, putting back the stamp means the one the kill would
+//! have had without the pin.)
 //!
 //! Either way the kills' stamps are then the player's word: the source is
 //! `declared` and the detection grade is cleared, while the answer
@@ -58,8 +68,9 @@ pub struct DetectionGroupRef {
 pub struct DetectionGroup {
     pub group: DetectionGroupRef,
     pub kill_count: i64,
-    /// The text read most often among the group's kills.
-    pub example_text: String,
+    /// The text read most often among the group's kills; none for the
+    /// creature being hunted, which no reading of these kills gave.
+    pub example_text: Option<String>,
     /// What the group's kills are stamped as now, when they all agree.
     pub current_name: Option<String>,
     /// The player has settled every kill of the group.
@@ -162,7 +173,10 @@ impl From<rusqlite::Error> for MobReviewError {
     }
 }
 
-/// The least certain grades first: those are the ones to check.
+/// The least certain grades first: those are the ones to check (a creature
+/// on no list the player pinned has its spelling to confirm, beside the
+/// others on no list). The kills given the creature being hunted come after
+/// every grade the screen gave, as a quiet account rather than a question.
 fn review_order(grade: MobDetectionGrade) -> u8 {
     match grade {
         MobDetectionGrade::ProvisionalLatestRead => 0,
@@ -170,7 +184,10 @@ fn review_order(grade: MobDetectionGrade) -> u8 {
         MobDetectionGrade::ProvisionalGuess => 2,
         MobDetectionGrade::Guess => 3,
         MobDetectionGrade::Provisional => 4,
-        MobDetectionGrade::Named => 5,
+        MobDetectionGrade::ProvisionalPinned => 5,
+        MobDetectionGrade::Named => 6,
+        MobDetectionGrade::ProvisionalContinuity => 7,
+        MobDetectionGrade::Continuity => 8,
     }
 }
 
@@ -427,7 +444,7 @@ fn stamp_of(species: String, maturity: String) -> DetectedCreature {
 /// One kept answer with its kill's stamp now.
 struct Row {
     group: DetectionGroupRef,
-    read_text: String,
+    read_text: Option<String>,
     current: String,
     reviewed: bool,
 }
@@ -447,11 +464,21 @@ fn read_groups(
     let Some(ended) = ended else {
         return Err(MobReviewError::NotFound("Session not found"));
     };
+    // The screen's answers and the kills given a creature nothing read for
+    // them gave (the creature being hunted, or an unlisted pin), in the
+    // order the kills were recorded.
     let mut stmt = conn.prepare(
         "SELECT d.grade, d.mob_name, d.mob_species, d.mob_maturity, d.provisional_key, \
-                d.read_text, COALESCE(k.mob_name, ''), d.reviewed_at IS NOT NULL \
+                d.read_text, COALESCE(k.mob_name, ''), d.reviewed_at IS NOT NULL, \
+                k.timestamp, d.kill_id \
          FROM kill_mob_detections d JOIN kills k ON k.id = d.kill_id \
-         WHERE d.session_id = ? ORDER BY d.read_at, d.kill_id",
+         WHERE d.session_id = ?1 \
+         UNION ALL \
+         SELECT c.grade, c.mob_name, c.mob_species, c.mob_maturity, c.provisional_key, NULL, \
+                COALESCE(k.mob_name, ''), c.reviewed_at IS NOT NULL, k.timestamp, c.kill_id \
+         FROM kill_mob_carried c JOIN kills k ON k.id = c.kill_id \
+         WHERE c.session_id = ?1 \
+         ORDER BY 9, 10",
     )?;
     let rows = stmt
         .query_map(rusqlite::params![session_id], |row| {
@@ -463,7 +490,7 @@ fn read_groups(
                     maturity: row.get(3)?,
                 },
                 row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(5)?,
                 row.get::<_, String>(6)?,
                 row.get::<_, bool>(7)?,
             ))
@@ -474,6 +501,13 @@ fn read_groups(
         let grade = MobDetectionGrade::parse(&grade).ok_or_else(|| {
             MobReviewError::Corrupt(format!("a kept detection has an unknown grade {grade:?}"))
         })?;
+        // A reading belongs to exactly the grades that rest on the kill's
+        // own fight.
+        if read_text.is_some() == grade.carried() {
+            return Err(MobReviewError::Corrupt(format!(
+                "a kept detection at grade {grade:?} disagrees with its reading"
+            )));
+        }
         parsed.push(Row {
             group: DetectionGroupRef {
                 grade,
@@ -494,7 +528,7 @@ fn read_groups(
                     DetectionGroup {
                         group: row.group.clone(),
                         kill_count: 0,
-                        example_text: String::new(),
+                        example_text: None,
                         current_name: Some(row.current.clone()),
                         reviewed: true,
                     },
@@ -509,20 +543,18 @@ fn read_groups(
         if group.current_name.as_deref() != Some(row.current.as_str()) {
             group.current_name = None;
         }
-        match texts.iter_mut().find(|(text, _)| *text == row.read_text) {
-            Some(entry) => entry.1 += 1,
-            None => texts.push((row.read_text, 1)),
+        if let Some(read_text) = row.read_text {
+            match texts.iter_mut().find(|(text, _)| *text == read_text) {
+                Some(entry) => entry.1 += 1,
+                None => texts.push((read_text, 1)),
+            }
         }
     }
     let mut out: Vec<DetectionGroup> = groups
         .into_iter()
         .map(|(mut group, texts)| {
             let most = texts.iter().map(|t| t.1).max().unwrap_or(0);
-            group.example_text = texts
-                .into_iter()
-                .find(|t| t.1 == most)
-                .map(|t| t.0)
-                .unwrap_or_default();
+            group.example_text = texts.into_iter().find(|t| t.1 == most).map(|t| t.0);
             group
         })
         .collect();
@@ -534,6 +566,11 @@ fn read_groups(
     });
     Ok(DetectionReview { ended, groups: out })
 }
+
+/// Where the screen's answers are kept.
+const DETECTIONS_TABLE: &str = "kill_mob_detections";
+/// Where the kills given a creature nothing read for them gave are kept.
+const CARRIED_TABLE: &str = "kill_mob_carried";
 
 /// The refusal for a settlement that would move kills between creatures
 /// after some of the session's hunted loot has left stock.
@@ -566,18 +603,27 @@ fn settle_group(
             )))
         }
     }
-    let mut stmt = tx.prepare(
+    // The group's kills, from the table its grade is kept in: the screen's
+    // answers, or the kills given a creature nothing read for them gave.
+    let table = if group.grade.carried() {
+        CARRIED_TABLE
+    } else {
+        DETECTIONS_TABLE
+    };
+    let sql = format!(
         "SELECT d.kill_id, d.declared_name, d.declared_species, d.declared_maturity, \
                 d.declared_source, COALESCE(k.mob_name, ''), COALESCE(k.mob_species, '') \
-         FROM kill_mob_detections d JOIN kills k ON k.id = d.kill_id \
+         FROM {table} d JOIN kills k ON k.id = d.kill_id \
          WHERE d.session_id = ? AND d.grade = ? AND d.mob_name = ? AND d.mob_species = ? \
-           AND d.mob_maturity = ? AND d.provisional_key IS ?",
-    )?;
+           AND d.mob_maturity = ? AND d.provisional_key IS ?"
+    );
+    let kind = group.grade.as_str();
+    let mut stmt = tx.prepare(&sql)?;
     let kills = stmt
         .query_map(
             rusqlite::params![
                 session_id,
-                group.grade.as_str(),
+                kind,
                 group.creature.name,
                 group.creature.species,
                 group.creature.maturity,
@@ -669,8 +715,10 @@ fn settle_group(
             rusqlite::params![stamp.name, stamp.species, stamp.maturity, source, kill_id],
         )?;
         tx.execute(
-            "UPDATE kill_mob_detections SET reviewed_at = ?, settled_kind = ?, \
-             settled_name = ?, settled_species = ?, settled_maturity = ? WHERE kill_id = ?",
+            &format!(
+                "UPDATE {table} SET reviewed_at = ?, settled_kind = ?, \
+                 settled_name = ?, settled_species = ?, settled_maturity = ? WHERE kill_id = ?"
+            ),
             rusqlite::params![
                 now,
                 kind,

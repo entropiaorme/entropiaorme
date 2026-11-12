@@ -75,6 +75,13 @@ pub struct MobPulse {
 /// that could not be (the tracker is gone) ends the watch.
 pub type PulseSink = Arc<dyn Fn(MobPulse) -> bool + Send + Sync>;
 
+/// Told, with the session it watched for, when a watch ends by itself
+/// (capture refused or stopped, detection found off where the capture
+/// happens, a look failing, its looks no longer deliverable), so whoever
+/// started it knows the screen is no longer read. A watch stopped by its
+/// owner tells nothing.
+pub type WatchEnded = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// A yes-or-no seam the composition root wires in: whether capture is
 /// running, start it (the player's gesture), or whether detection is on.
 pub type Probe = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -143,11 +150,15 @@ pub trait MobDetector: Send + Sync {
     /// A fresh history for a session, when detection can run here (the
     /// interface profile and the recogniser are loaded).
     fn new_history(&self) -> Option<MobHistory>;
-    /// Start looking for `session_id`, handing each look to `sink`. A
-    /// watch already running for another session stops first.
-    fn start(&self, session_id: &str, sink: PulseSink);
+    /// Start looking for `session_id`, handing each look to `sink`, and
+    /// telling `ended` if the watch ends by itself. A watch already running
+    /// for another session stops first.
+    fn start(&self, session_id: &str, sink: PulseSink, ended: WatchEnded);
     /// Stop looking. Returns at once; the worker ends within its look.
     fn stop(&self);
+    /// Whether looks are being taken for `session_id` now: a watch can fail
+    /// to start (capture not running, refused) or end on its own.
+    fn watches(&self, session_id: &str) -> bool;
     /// The player turned detection on: a capture the desktop refused
     /// before may be asked for again.
     fn permit_capture(&self);
@@ -166,9 +177,13 @@ impl MobDetector for NoDetector {
         None
     }
 
-    fn start(&self, _session_id: &str, _sink: PulseSink) {}
+    fn start(&self, _session_id: &str, _sink: PulseSink, _ended: WatchEnded) {}
 
     fn stop(&self) {}
+
+    fn watches(&self, _session_id: &str) -> bool {
+        false
+    }
 
     fn permit_capture(&self) {}
 }
@@ -191,9 +206,9 @@ impl MobDetector for DetectorSlot {
         self.0.get()?.new_history()
     }
 
-    fn start(&self, session_id: &str, sink: PulseSink) {
+    fn start(&self, session_id: &str, sink: PulseSink, ended: WatchEnded) {
         if let Some(detector) = self.0.get() {
-            detector.start(session_id, sink);
+            detector.start(session_id, sink, ended);
         }
     }
 
@@ -201,6 +216,12 @@ impl MobDetector for DetectorSlot {
         if let Some(detector) = self.0.get() {
             detector.stop();
         }
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        self.0
+            .get()
+            .is_some_and(|detector| detector.watches(session_id))
     }
 
     fn permit_capture(&self) {
@@ -260,6 +281,8 @@ impl Default for MobWatchProviders {
 struct Watching {
     watch: u64,
     session_id: String,
+    /// Told if the watch ends by itself.
+    ended: Option<WatchEnded>,
     /// Held only to be dropped: leaving this state disconnects the
     /// worker's receiver, which wakes it from its wait to stop.
     _stop: mpsc::Sender<()>,
@@ -386,6 +409,21 @@ impl MobWatch {
     /// or while capture is not running and the player has not just turned
     /// detection on.
     pub fn start(self: &Arc<Self>, session_id: &str, sink: PulseSink) {
+        self.begin(session_id, sink, None);
+    }
+
+    /// Start watching as [`MobWatch::start`] does, telling `ended` if the
+    /// watch ends by itself.
+    pub fn start_reporting_end(
+        self: &Arc<Self>,
+        session_id: &str,
+        sink: PulseSink,
+        ended: WatchEnded,
+    ) {
+        self.begin(session_id, sink, Some(ended));
+    }
+
+    fn begin(self: &Arc<Self>, session_id: &str, sink: PulseSink, ended: Option<WatchEnded>) {
         let Some(reader) = self.reader() else {
             return;
         };
@@ -428,6 +466,7 @@ impl MobWatch {
         state.watching = Some(Watching {
             watch,
             session_id: session_id.to_string(),
+            ended,
             _stop: stop,
         });
     }
@@ -491,18 +530,33 @@ impl MobWatch {
     /// End `watch` because the desktop refused a capture, if it is still
     /// the one running.
     fn refused(&self, watch: u64) {
-        let mut state = self.lock_state();
-        if state.watching.as_ref().is_some_and(|w| w.watch == watch) {
-            state.watching = None;
-        }
-        state.capture_refused = true;
+        let ended = {
+            let mut state = self.lock_state();
+            state.capture_refused = true;
+            Self::take_ended(&mut state, watch)
+        };
+        Self::tell_ended(ended);
     }
 
     /// End `watch` because a look failed, if it is still the one running.
     fn failed(&self, watch: u64) {
-        let mut state = self.lock_state();
-        if state.watching.as_ref().is_some_and(|w| w.watch == watch) {
-            state.watching = None;
+        let ended = Self::take_ended(&mut self.lock_state(), watch);
+        Self::tell_ended(ended);
+    }
+
+    /// Clear `watch` if it is still the one running, with whom to tell.
+    fn take_ended(state: &mut State, watch: u64) -> Option<(WatchEnded, String)> {
+        if state.watching.as_ref().is_none_or(|w| w.watch != watch) {
+            return None;
+        }
+        let ended = state.watching.take()?;
+        ended.ended.map(|tell| (tell, ended.session_id))
+    }
+
+    /// Tell, outside the state's lock, that a watch ended by itself.
+    fn tell_ended(ended: Option<(WatchEnded, String)>) {
+        if let Some((tell, session_id)) = ended {
+            tell(&session_id);
         }
     }
 
@@ -664,12 +718,16 @@ impl MobDetector for Arc<MobWatch> {
         ))
     }
 
-    fn start(&self, session_id: &str, sink: PulseSink) {
-        MobWatch::start(self, session_id, sink);
+    fn start(&self, session_id: &str, sink: PulseSink, ended: WatchEnded) {
+        MobWatch::start_reporting_end(self, session_id, sink, ended);
     }
 
     fn stop(&self) {
         MobWatch::stop(self);
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        MobWatch::watching(self).as_deref() == Some(session_id)
     }
 
     fn permit_capture(&self) {

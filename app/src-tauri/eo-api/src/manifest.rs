@@ -56,7 +56,8 @@ use crate::market::{
     MarketPastePreview, MarketUnitPriceResult,
 };
 use crate::mob_detection::{
-    MobDetectionGroupRef, MobDetectionReview, MobDetectionSettleResult, MobDetectionTarget,
+    MobDetectionGroupRef, MobDetectionReview, MobDetectionSettleResult, MobDetectionTarget, MobPin,
+    MobPinTarget,
 };
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1513,6 +1514,19 @@ pub fn manifest() -> Vec<CommandSpec> {
                 },
             ],
             returns: Some(schema(schema_for!(ManualMobLockResult))),
+        },
+        CommandSpec {
+            name: "tracking_mob_pin",
+            args: vec![ArgSpec {
+                name: "target",
+                schema: schema(schema_for!(MobPinTarget)),
+            }],
+            returns: Some(schema(schema_for!(MobPin))),
+        },
+        CommandSpec {
+            name: "tracking_mob_unpin",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(bool))),
         },
         CommandSpec {
             name: "tracking_session_config",

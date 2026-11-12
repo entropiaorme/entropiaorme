@@ -631,10 +631,16 @@ pub fn get_session_read(
     let mob_breakdown: Vec<Value> = {
         let mut stmt = conn.prepare(
             "SELECT mob_name, original_mob_name, COUNT(*), \
-                    CASE mob_detection_grade \
-                        WHEN 'guess' THEN 'probable' \
-                        WHEN 'provisional' THEN 'unlisted' \
-                        WHEN 'provisional_guess' THEN 'unlisted_probable' \
+                    CASE \
+                        WHEN mob_detection_grade = 'guess' THEN 'probable' \
+                        WHEN mob_detection_grade = 'provisional' THEN 'unlisted' \
+                        WHEN mob_detection_grade = 'provisional_guess' THEN 'unlisted_probable' \
+                        WHEN mob_stamp_source = 'detected' \
+                             AND mob_route = 'provisional_continuity' THEN 'unlisted' \
+                        WHEN mob_route = 'pinned_read' AND EXISTS ( \
+                             SELECT 1 FROM kill_mob_carried c \
+                             WHERE c.kill_id = kills.id AND c.grade = 'provisional_pinned' \
+                               AND c.reviewed_at IS NULL) THEN 'unlisted' \
                         ELSE 'recorded' END \
              FROM kills \
              WHERE session_id = ? AND mob_name IS NOT NULL \
@@ -647,7 +653,10 @@ pub fn get_session_read(
                 "killCount": row.get::<_, i64>(2)?,
                 // How sure the stamp is: as recorded, or detected only
                 // probably, or under the spelling read for a creature on no
-                // list, which the player has not confirmed yet.
+                // list, which the player has not confirmed yet (detected,
+                // carried on from earlier kills, or pinned from a reading
+                // and not yet settled). A settled kill is the player's word
+                // and reads as recorded.
                 "certainty": row.get::<_, String>(3)?,
             }))
         })?;
@@ -1688,6 +1697,10 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 rusqlite::params![sid],
             )?;
             tx.execute(
+                "DELETE FROM kill_mob_carried WHERE session_id = ?",
+                rusqlite::params![sid],
+            )?;
+            tx.execute(
                 "DELETE FROM kills WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;
@@ -1850,22 +1863,20 @@ pub fn validate_tools(config: &AppConfig) -> (bool, Option<String>) {
     }
 }
 
-/// The idle-state mob label: the standing declaration, exactly as the
-/// active-session label derives it. A declaration outlives the session
-/// that set it, so idle reads the same facet rather than any retired
-/// exclusive-capture value.
-pub fn declared_mob_label(config: &AppConfig) -> Value {
+/// The idle-state typed creature: the standing declaration, exactly as the
+/// session start seeds it. A declaration outlives the session that set it,
+/// so idle reads the same facet rather than any retired exclusive-capture
+/// value. A blank species is no declaration.
+pub fn declared_mob(config: &AppConfig) -> Option<crate::tracker::DeclaredMob> {
     let species = config.manual_mob_species.trim();
     let maturity = config.manual_mob_maturity.trim();
     if species.is_empty() {
-        return Value::Null;
+        return None;
     }
-    let display = if maturity.is_empty() {
-        species.to_string()
-    } else {
-        format!("{maturity} {species}")
-    };
-    Value::String(display)
+    Some(crate::tracker::DeclaredMob::from_parts(
+        species.to_string(),
+        maturity.to_string(),
+    ))
 }
 
 /// `_notable_event_label`: the curated label for known event types, else
@@ -3563,20 +3574,25 @@ mod tests {
 
     #[test]
     #[allow(clippy::field_reassign_with_default)]
-    fn declared_mob_label_reads_the_standing_declaration() {
+    fn declared_mob_reads_the_standing_declaration() {
         let mut config = AppConfig::default();
+        let name = |config: &AppConfig| declared_mob(config).map(|mob| mob.name);
 
         // No declaration at all.
-        assert_eq!(declared_mob_label(&config), Value::Null);
+        assert_eq!(name(&config), None);
 
         // Species with and without maturity, and a whitespace-only species.
         config.manual_mob_species = "Argonaut".to_string();
         config.manual_mob_maturity = "Young".to_string();
-        assert_eq!(declared_mob_label(&config), json!("Young Argonaut"));
+        assert_eq!(name(&config).as_deref(), Some("Young Argonaut"));
+        assert_eq!(
+            declared_mob(&config).map(|mob| (mob.species, mob.maturity)),
+            Some(("Argonaut".to_string(), "Young".to_string()))
+        );
         config.manual_mob_maturity = String::new();
-        assert_eq!(declared_mob_label(&config), json!("Argonaut"));
+        assert_eq!(name(&config).as_deref(), Some("Argonaut"));
         config.manual_mob_species = "  ".to_string();
-        assert_eq!(declared_mob_label(&config), Value::Null);
+        assert_eq!(name(&config), None);
     }
 
     #[test]

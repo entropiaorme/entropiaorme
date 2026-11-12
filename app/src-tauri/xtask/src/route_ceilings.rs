@@ -34,8 +34,8 @@ const CEILINGS: &[(&str, usize)] = &[
     ("app/src/routes/character/CodexTab.svelte", 600),
     ("app/src/routes/settings/+page.svelte", 625),
     ("app/src/routes/analytics/LedgerTab.svelte", 700),
+    ("app/src/routes/overlay/+page.svelte", 850),
     ("app/src/routes/welcome/+page.svelte", 875),
-    ("app/src/routes/overlay/+page.svelte", 1020),
 ];
 
 const SCAN_ROOT: &str = "app/src/routes";
@@ -162,9 +162,9 @@ mod tests {
 
     #[test]
     fn a_mapped_route_is_held_to_its_own_ceiling() {
-        assert!(check_text("app/src/routes/overlay/+page.svelte", &text_of(1000)).is_none());
-        let f = check_text("app/src/routes/overlay/+page.svelte", &text_of(1021)).unwrap();
-        assert_eq!(f.ceiling, 1020);
+        assert!(check_text("app/src/routes/overlay/+page.svelte", &text_of(840)).is_none());
+        let f = check_text("app/src/routes/overlay/+page.svelte", &text_of(851)).unwrap();
+        assert_eq!(f.ceiling, 850);
     }
 
     #[test]

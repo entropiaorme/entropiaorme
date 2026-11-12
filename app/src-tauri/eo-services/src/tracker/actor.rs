@@ -94,6 +94,19 @@ pub(super) enum TrackerMsg {
         reply: oneshot::Sender<Result<bool, DbError>>,
     },
     ReleaseMob(oneshot::Sender<Option<String>>),
+    /// Pin the creature the screen reads, provided it is still the one
+    /// the player saw.
+    PinShown {
+        expected: super::mob::DeclaredMob,
+        reply: oneshot::Sender<Result<super::mob::DeclaredMob, TrackerCommandError>>,
+    },
+    /// Pin a creature the player typed.
+    PinTyped {
+        mob: super::mob::DeclaredMob,
+        reply: oneshot::Sender<Result<(), TrackerCommandError>>,
+    },
+    /// Release the pin; the reply says whether one stood.
+    Unpin(oneshot::Sender<Result<bool, TrackerCommandError>>),
     /// A session's armour cost was set directly (outside a protection
     /// recording, which announces itself on the bus): re-read the running
     /// session's share. The reply says whether the live readout changed.
@@ -114,6 +127,9 @@ pub(super) enum TrackerMsg {
     /// One look of the creature watcher: no reply, since the watcher's
     /// thread never waits on the tracker (see `detection`).
     MobPulse(crate::mob_watch::MobPulse),
+    /// The creature watcher's watch for this session ended by itself: no
+    /// reply, as for a look.
+    WatchEnded(String),
     /// Test-only structural inspection: run a closure against the
     /// actor's owned state (the typestate replaced the lockable state
     /// tests used to peek at).
@@ -292,6 +308,15 @@ impl TrackerActor {
             TrackerMsg::ReleaseMob(reply) => {
                 let _ = reply.send(self.release_declared_mob());
             }
+            TrackerMsg::PinShown { expected, reply } => {
+                let _ = reply.send(self.pin_shown(expected).await);
+            }
+            TrackerMsg::PinTyped { mob, reply } => {
+                let _ = reply.send(self.pin_typed(mob).await);
+            }
+            TrackerMsg::Unpin(reply) => {
+                let _ = reply.send(self.unpin().await);
+            }
             TrackerMsg::RefreshArmour(reply) => {
                 let _ = reply.send(self.refresh_armour().await);
             }
@@ -311,6 +336,7 @@ impl TrackerActor {
             }
             TrackerMsg::DoseWake => {}
             TrackerMsg::MobPulse(pulse) => self.on_mob_pulse(pulse).await,
+            TrackerMsg::WatchEnded(session_id) => self.on_watch_ended(&session_id).await,
             #[cfg(test)]
             TrackerMsg::Inspect(probe) => probe(self),
         }

@@ -59,12 +59,15 @@ pub use attribution::{
 // The recorded session's expected loot reads its armour as the live readout does.
 pub(crate) use cycled::read_session_armour;
 #[cfg(test)]
-pub(crate) use detection::{write_detection, KillDetection, StampedMob};
+pub(crate) use detection::{write_detection, KillDetection, KillReading, StampedMob};
 pub use doses::{DoseError, DoseStart};
 pub use intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec, OpenInterval,
 };
-pub use mob::{DeclaredMob, MobDetectionGrade, MobStampSource};
+pub use mob::{
+    DeclaredMob, MobDetectionGrade, MobRoute, MobSource, MobSourceView, MobStampSource, Pin,
+    PinnedBy,
+};
 pub use providers::{
     CarriedWeaponProfile, DefaultTrackingConfig, EquipmentLibrary, EquipmentProfile, GuardrailTool,
     HarvestGuardrailTools, InertEquipment, Providers, TrackingConfig, TreeSize,
@@ -115,6 +118,16 @@ const HARVEST_YIELD_WINDOW_SECONDS: f64 = 30.0;
 pub enum TrackerCommandError {
     #[error("No active session")]
     NoActiveSession,
+    /// A pin from the screen was asked for while the screen is not read.
+    #[error("The screen is not being read")]
+    NotReadingScreen,
+    /// A pin from the screen was asked for while it reads no creature.
+    #[error("No creature is being read")]
+    NothingRead,
+    /// The creature the screen reads changed after the player asked to
+    /// pin it.
+    #[error("The creature being read has changed; pin it again")]
+    ReadingChanged,
 }
 
 /// The session typestate: everything session-scoped lives inside the
@@ -325,9 +338,33 @@ impl HuntTracker {
         self.call(TrackerMsg::RefreshArmour).await
     }
 
-    /// Clear the declared mob, returning the released name.
+    /// Clear the typed creature (the declared mob), returning the released
+    /// name. A pin stands.
     pub async fn release_declared_mob(&self) -> Option<String> {
         self.call(TrackerMsg::ReleaseMob).await
+    }
+
+    /// Pin the creature the screen reads now (else the one the latest
+    /// kills were), provided it is still `expected`; answers the creature
+    /// pinned. The screen stops being read until the pin is released.
+    pub async fn pin_shown(
+        &self,
+        expected: DeclaredMob,
+    ) -> Result<DeclaredMob, TrackerCommandError> {
+        self.call(|reply| TrackerMsg::PinShown { expected, reply })
+            .await
+    }
+
+    /// Pin a creature the player typed. The screen stops being read until
+    /// the pin is released.
+    pub async fn pin_typed(&self, mob: DeclaredMob) -> Result<(), TrackerCommandError> {
+        self.call(|reply| TrackerMsg::PinTyped { mob, reply }).await
+    }
+
+    /// Release the pin, reading the screen again when detection is on;
+    /// answers whether a pin stood.
+    pub async fn unpin(&self) -> Result<bool, TrackerCommandError> {
+        self.call(TrackerMsg::Unpin).await
     }
 
     /// Start a dose of a consumable by hand (the overlay's or dashboard's

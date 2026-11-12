@@ -54,7 +54,8 @@ use eo_api::market::{
     MarketPastePreview, MarketUnitPriceResult,
 };
 use eo_api::mob_detection::{
-    MobDetectionGroupRef, MobDetectionReview, MobDetectionSettleResult, MobDetectionTarget,
+    MobDetectionGroupRef, MobDetectionReview, MobDetectionSettleResult, MobDetectionTarget, MobPin,
+    MobPinTarget,
 };
 use eo_api::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1365,6 +1366,19 @@ pub async fn tracking_manual_mob_lock(
     facade(&app)?
         .tracking_manual_mob_lock(species, maturity)
         .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_pin(
+    app: tauri::AppHandle,
+    target: MobPinTarget,
+) -> Result<MobPin, ApiError> {
+    facade(&app)?.tracking_mob_pin(target).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_unpin(app: tauri::AppHandle) -> Result<bool, ApiError> {
+    facade(&app)?.tracking_mob_unpin().await
 }
 
 #[tauri::command(rename_all = "snake_case")]

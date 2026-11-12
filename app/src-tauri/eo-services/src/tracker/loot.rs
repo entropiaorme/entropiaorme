@@ -17,7 +17,13 @@ use super::{GLOBAL_CORRELATION_WINDOW_SECONDS, LOOT_DEDUP_WINDOW_SECONDS};
 
 /// Where one loot group lands: a mob kill, or a harvesting swing.
 enum RoutedLoot {
-    Kill(Kill, Vec<super::weapon_evidence::ShotEvidence>),
+    /// A kill, its shot evidence, and the answer kept for the review when it
+    /// was pinned to a creature on no list.
+    Kill(
+        Kill,
+        Vec<super::weapon_evidence::ShotEvidence>,
+        Option<Box<super::detection::KillDetection>>,
+    ),
     Harvest(HarvestEvent),
 }
 
@@ -163,6 +169,9 @@ impl TrackerActor {
         // A kill can be told by creature detection only when its line's
         // logged second and its arrival are both known.
         let mut detection_report: Option<i64> = None;
+        // Read before the session's borrow: whether the screen is being read
+        // decides what a kill's typed creature stands for.
+        let reading_screen = self.reading_screen();
         let (routed, restamps, yield_restamps) = {
             let Self {
                 session,
@@ -294,20 +303,25 @@ impl TrackerActor {
                 active.session.harvests.push(harvest.clone());
                 (RoutedLoot::Harvest(harvest), restamps, yield_restamps)
             } else {
-                // Snapshot the mob stamp from the declaration in force.
-                // No declaration stamps "Unknown" with no source; the
-                // stamp-source discriminant records the provenance so a
-                // future detected stamp reads apart from a declared one.
-                let stamped = active.stamped_mob_name();
-                let mob_stamp_source = stamped
-                    .is_some()
-                    .then_some(crate::tracker::MobStampSource::Declared);
-                let mob_name = stamped.unwrap_or("Unknown").to_string();
-                let (mob_species, mob_maturity) = match &active.declared_mob {
-                    Some(declared) if !declared.name.is_empty() => {
-                        (declared.species.clone(), declared.maturity.clone())
-                    }
-                    _ => (String::new(), String::new()),
+                // Snapshot the mob stamp from the session's mob source: the
+                // pin, else the typed creature (a backstop while the screen
+                // is read, whose answer may re-stamp the kill later). No
+                // creature stamps "Unknown" with no source; the stamp-source
+                // discriminant records the provenance so a detected stamp
+                // reads apart from a declared one, and the route says how
+                // the creature was named.
+                let recorded = active.mob.record(reading_screen);
+                let mob_route = recorded.route;
+                let unlisted_pin = recorded.unlisted_pin;
+                let pinned_mob = recorded.mob.clone();
+                let (mob_name, mob_species, mob_maturity, mob_stamp_source) = match recorded.mob {
+                    Some(mob) => (
+                        mob.name,
+                        mob.species,
+                        mob.maturity,
+                        Some(crate::tracker::MobStampSource::Declared),
+                    ),
+                    None => ("Unknown".to_string(), String::new(), String::new(), None),
                 };
 
                 let session_id = active.session.id.clone();
@@ -323,6 +337,7 @@ impl TrackerActor {
                     mob_species,
                     mob_maturity,
                     mob_stamp_source,
+                    mob_route,
                     timestamp: now_epoch,
                     shots_fired: accumulator.shots_fired,
                     damage_dealt: accumulator.damage_dealt,
@@ -354,18 +369,36 @@ impl TrackerActor {
                 // Append the finalised kill to the session; the list tail
                 // doubles as the original's `_last_kill` alias.
                 active.session.kills.push(kill.clone());
-                (RoutedLoot::Kill(kill, evidence), Vec::new(), Vec::new())
+                let carried = unlisted_pin.zip(pinned_mob).map(|((key, without), mob)| {
+                    Box::new(super::detection::KillDetection::pinned_unlisted(
+                        &kill.id,
+                        &kill.session_id,
+                        &mob,
+                        key,
+                        without,
+                    ))
+                });
+                (
+                    RoutedLoot::Kill(kill, evidence, carried),
+                    Vec::new(),
+                    Vec::new(),
+                )
             }
         };
 
         // The routed record is a detached value by here; the borrow of
         // the live session ended with the block above.
         match routed {
-            RoutedLoot::Kill(kill, evidence) => {
-                self.persist_kill(&kill, evidence).await;
-                let logged_ms = (kill.timestamp * 1000.0).round() as i64;
-                self.await_detection(&kill.id, logged_ms, detection_report)
-                    .await;
+            RoutedLoot::Kill(kill, evidence, carried) => {
+                self.persist_kill(&kill, evidence, carried).await;
+                // Only a kill recorded while the screen was read waits for
+                // its answer: one recorded otherwise took the typed creature
+                // as the player's word.
+                if reading_screen {
+                    let logged_ms = (kill.timestamp * 1000.0).round() as i64;
+                    self.await_detection(&kill.id, logged_ms, detection_report)
+                        .await;
+                }
             }
             RoutedLoot::Harvest(harvest) => {
                 self.persist_harvest(&harvest).await;

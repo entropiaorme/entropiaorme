@@ -1,7 +1,7 @@
 use super::*;
 use crate::clock::MockClock;
 use crate::game_ui::test_support::bundled_profile;
-use crate::tracker::{write_detection, KillDetection, StampedMob};
+use crate::tracker::{write_detection, KillDetection, KillReading, StampedMob};
 
 struct Rig {
     _dir: tempfile::TempDir,
@@ -110,8 +110,10 @@ impl Rig {
             grade,
             creature,
             provisional_key: key.map(str::to_string),
-            read_text: text.into(),
-            read_at: 1500.0,
+            read: (!grade.carried()).then(|| KillReading {
+                text: text.into(),
+                at: 1500.0,
+            }),
             declared: declared.clone(),
         };
         self.runtime
@@ -280,7 +282,7 @@ fn the_review_groups_by_creature_and_grade_the_least_certain_first() {
                 g.group.grade,
                 g.group.creature.name.as_str(),
                 g.kill_count,
-                g.example_text.as_str(),
+                g.example_text.as_deref().unwrap_or_default(),
                 g.current_name.as_deref(),
             )
         })
@@ -740,4 +742,431 @@ fn deleting_a_session_removes_its_detections() {
         rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_detections"),
         0
     );
+}
+
+/// The hunt above, then kills given the creature being hunted (two of a
+/// listed creature, one of a creature on no list) and one kill taking a
+/// pinned creature.
+fn hunt_with_continuity(rig: &Rig) {
+    hunt(rig);
+    for kill in ["k5", "k6"] {
+        rig.kill(
+            "s1",
+            kill,
+            (
+                MobDetectionGrade::Continuity,
+                detected("Old Atrox", "Atrox", "Old"),
+                None,
+                "",
+            ),
+            declared(),
+        );
+    }
+    rig.kill(
+        "s1",
+        "k7",
+        (
+            MobDetectionGrade::ProvisionalContinuity,
+            detected("Gloomrat", "Gloomrat", ""),
+            Some("GLOOMRAT L4 #0"),
+            "",
+        ),
+        stamped("Unknown", "", "", None),
+    );
+    rig.execute(
+        "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+         mob_stamp_source, mob_route, timestamp, cost_ped, loot_total_ped) \
+         VALUES ('k8', 's1', 'Mature Daikiba', 'Daikiba', 'Mature', 'declared', \
+                 'pinned_read', 1600.0, 0.5, 0.4)",
+    );
+}
+
+/// A listed group: grade, creature, kills, the text read, and the stamp now.
+type Listed<'a> = (
+    MobDetectionGrade,
+    &'a str,
+    i64,
+    Option<&'a str>,
+    Option<&'a str>,
+);
+
+#[test]
+fn continuity_kills_are_listed_last_without_a_reading_and_pinned_kills_not_at_all() {
+    let rig = rig();
+    hunt_with_continuity(&rig);
+    let groups = rig.groups("s1");
+    let listed: Vec<Listed<'_>> = groups
+        .iter()
+        .map(|g| {
+            (
+                g.group.grade,
+                g.group.creature.name.as_str(),
+                g.kill_count,
+                g.example_text.as_deref(),
+                g.current_name.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            (
+                MobDetectionGrade::LatestRead,
+                "Mature Daikiba",
+                1,
+                Some("Daikiba Mature"),
+                Some("Unknown")
+            ),
+            (
+                MobDetectionGrade::Provisional,
+                "Gloomrat",
+                2,
+                Some("Gloomrat"),
+                Some("Gloomrat")
+            ),
+            (
+                MobDetectionGrade::Named,
+                "Old Atrox",
+                1,
+                Some("Atrox Old"),
+                Some("Old Atrox")
+            ),
+            // The creature being hunted, after every grade the screen
+            // gave: no text was read for these kills.
+            (
+                MobDetectionGrade::ProvisionalContinuity,
+                "Gloomrat",
+                1,
+                None,
+                Some("Gloomrat")
+            ),
+            (
+                MobDetectionGrade::Continuity,
+                "Old Atrox",
+                2,
+                None,
+                Some("Old Atrox")
+            ),
+        ]
+    );
+    assert_eq!(
+        groups[3].group.provisional_key.as_deref(),
+        Some("GLOOMRAT L4 #0")
+    );
+    // The pinned kill is the player's own choice: no group holds it.
+    let total: i64 = groups.iter().map(|g| g.kill_count).sum();
+    assert_eq!(total, 7);
+    // A continuity kill keeps no reading of its own: its stamp carries no
+    // grade or text, only its route.
+    assert_eq!(
+        rig.stamp("k5"),
+        (
+            "Old Atrox".into(),
+            "Atrox".into(),
+            "Old".into(),
+            some("detected"),
+            None
+        )
+    );
+    assert_eq!(
+        rig.scalar::<String>("SELECT mob_route FROM kills WHERE id = 'k5'"),
+        "continuity"
+    );
+    assert_eq!(
+        rig.scalar::<Option<String>>("SELECT mob_read_text FROM kills WHERE id = 'k5'"),
+        None
+    );
+    assert_eq!(
+        rig.scalar::<String>("SELECT mob_route FROM kills WHERE id = 'k7'"),
+        "provisional_continuity"
+    );
+}
+
+#[test]
+fn a_continuity_group_settles_in_one_action_like_any_other() {
+    let rig = rig();
+    hunt_with_continuity(&rig);
+    let group = DetectionGroupRef {
+        grade: MobDetectionGrade::Continuity,
+        creature: DetectedCreature {
+            name: "Old Atrox".into(),
+            species: "Atrox".into(),
+            maturity: "Old".into(),
+        },
+        provisional_key: None,
+    };
+    // Put back the stamp each kill was recorded with.
+    assert_eq!(
+        rig.settle("s1", &group, ReviewTarget::Declared).unwrap(),
+        Settled::Declared
+    );
+    for kill in ["k5", "k6"] {
+        assert_eq!(
+            rig.stamp(kill),
+            (
+                "Young Atrox".into(),
+                "Atrox".into(),
+                "Young".into(),
+                some("declared"),
+                None
+            )
+        );
+    }
+    assert_eq!(
+        rig.scalar::<i64>(
+            "SELECT COUNT(*) FROM kill_mob_carried \
+             WHERE settled_kind = 'declared' AND reviewed_at IS NOT NULL"
+        ),
+        2
+    );
+    // The route stays as the session gave it; the settlement is kept on
+    // the answer.
+    assert_eq!(
+        rig.scalar::<String>("SELECT mob_route FROM kills WHERE id = 'k6'"),
+        "continuity"
+    );
+    // The group is reviewed and can be settled again, as a named creature.
+    let reviewed = rig.groups("s1");
+    assert!(reviewed.last().unwrap().reviewed);
+    assert_eq!(
+        rig.settle("s1", &group, ReviewTarget::Creature("Daikiba".into()))
+            .unwrap(),
+        Settled::Listed(DetectedCreature {
+            name: "Daikiba".into(),
+            species: "Daikiba".into(),
+            maturity: String::new(),
+        })
+    );
+    assert_eq!(rig.stamp("k5").0, "Daikiba");
+    assert_eq!(
+        rig.scalar::<String>("SELECT settled_kind FROM kill_mob_carried WHERE kill_id = 'k5'"),
+        "listed"
+    );
+    // The unlisted continuity group is told apart by its key and grade: the
+    // listed grade does not reach it.
+    let wrong_grade = DetectionGroupRef {
+        grade: MobDetectionGrade::Continuity,
+        creature: DetectedCreature {
+            name: "Gloomrat".into(),
+            species: "Gloomrat".into(),
+            maturity: String::new(),
+        },
+        provisional_key: Some("GLOOMRAT L4 #0".into()),
+    };
+    assert!(matches!(
+        rig.settle("s1", &wrong_grade, ReviewTarget::Declared),
+        Err(MobReviewError::NotFound(_))
+    ));
+    let unlisted = DetectionGroupRef {
+        grade: MobDetectionGrade::ProvisionalContinuity,
+        ..wrong_grade
+    };
+    assert_eq!(
+        rig.settle("s1", &unlisted, ReviewTarget::Declared).unwrap(),
+        Settled::Declared
+    );
+    assert_eq!(rig.stamp("k7").0, "Unknown");
+    // The pinned kill was never touched.
+    assert_eq!(rig.stamp("k8").0, "Mature Daikiba");
+}
+
+#[test]
+fn deleting_a_session_removes_its_continuity_kills() {
+    let rig = rig();
+    hunt_with_continuity(&rig);
+    rig.runtime
+        .block_on(crate::tracking_reads::delete_session_impl(&rig.db, "s1"))
+        .unwrap();
+    assert_eq!(
+        rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_carried"),
+        0
+    );
+    assert_eq!(rig.scalar::<i64>("SELECT COUNT(*) FROM kills"), 0);
+}
+
+/// Each row of the session's mob breakdown: name, kills, how sure.
+fn breakdown(rig: &Rig) -> Vec<(String, i64, String)> {
+    let detail = rig
+        .runtime
+        .block_on(crate::tracking_reads::get_session_impl(
+            &rig.db, "s1", 5000.0,
+        ))
+        .unwrap()
+        .expect("the session");
+    let mut rows: Vec<(String, i64, String)> = detail["mobBreakdown"]
+        .as_array()
+        .expect("a breakdown")
+        .iter()
+        .map(|row| {
+            (
+                row["currentName"].as_str().unwrap().to_string(),
+                row["killCount"].as_i64().unwrap(),
+                row["certainty"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn an_unlisted_creature_carried_on_reads_as_unlisted_and_merges_with_its_detections() {
+    let rig = rig();
+    hunt_with_continuity(&rig);
+    // Gloomrat: two provisional detections and one continuity kill, all
+    // unconfirmed, are one row; the Old Atrox continuity kills are as
+    // recorded, with the named one.
+    assert_eq!(
+        breakdown(&rig),
+        [
+            ("Gloomrat".to_string(), 3, "unlisted".to_string()),
+            ("Mature Daikiba".to_string(), 1, "recorded".to_string()),
+            ("Old Atrox".to_string(), 3, "recorded".to_string()),
+            ("Unknown".to_string(), 1, "recorded".to_string()),
+        ]
+    );
+    // Settled, the continuity kill is the player's word: recorded.
+    let unlisted = DetectionGroupRef {
+        grade: MobDetectionGrade::ProvisionalContinuity,
+        creature: DetectedCreature {
+            name: "Gloomrat".into(),
+            species: "Gloomrat".into(),
+            maturity: String::new(),
+        },
+        provisional_key: Some("GLOOMRAT L4 #0".into()),
+    };
+    rig.settle("s1", &unlisted, ReviewTarget::Creature("Gloomrat".into()))
+        .unwrap();
+    let rows = breakdown(&rig);
+    assert!(rows.contains(&("Gloomrat".to_string(), 1, "recorded".to_string())));
+    assert!(rows.contains(&("Gloomrat".to_string(), 2, "unlisted".to_string())));
+}
+
+/// A kill pinned to a creature on no list read off the screen (`k9`), and
+/// one pinned to a listed creature (`k8`, from the hunt above).
+fn hunt_with_pins(rig: &Rig) {
+    hunt_with_continuity(rig);
+    rig.kill(
+        "s1",
+        "k9",
+        (
+            MobDetectionGrade::ProvisionalPinned,
+            stamped("Shadowmaw", "Shadowmaw", "", Some(MobStampSource::Declared)),
+            Some("SHADOWMAW L7 #2"),
+            "",
+        ),
+        declared(),
+    );
+    rig.execute(
+        "UPDATE kills SET mob_name = 'Shadowmaw', mob_species = 'Shadowmaw', mob_maturity = '', \
+         mob_stamp_source = 'declared', mob_route = 'pinned_read' WHERE id = 'k9'",
+    );
+}
+
+#[test]
+fn a_pinned_unlisted_creature_is_listed_to_confirm_and_a_pinned_listed_one_is_not() {
+    let rig = rig();
+    hunt_with_pins(&rig);
+    let groups = rig.groups("s1");
+    let pinned: Vec<_> = groups
+        .iter()
+        .filter(|g| g.group.grade == MobDetectionGrade::ProvisionalPinned)
+        .collect();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].group.creature.name, "Shadowmaw");
+    assert_eq!(pinned[0].kill_count, 1);
+    assert_eq!(pinned[0].example_text, None);
+    assert_eq!(
+        pinned[0].group.provisional_key.as_deref(),
+        Some("SHADOWMAW L7 #2")
+    );
+    // Asked about beside the other unlisted names, before the named ones.
+    let grades: Vec<_> = groups.iter().map(|g| g.group.grade).collect();
+    let at = |grade| grades.iter().position(|g| *g == grade).unwrap();
+    assert!(at(MobDetectionGrade::Provisional) < at(MobDetectionGrade::ProvisionalPinned));
+    assert!(at(MobDetectionGrade::ProvisionalPinned) < at(MobDetectionGrade::Named));
+    // The kill pinned to a listed creature is in no group.
+    let total: i64 = groups.iter().map(|g| g.kill_count).sum();
+    assert_eq!(total, 8);
+    // Unconfirmed, the breakdown says so.
+    assert!(breakdown(&rig).contains(&("Shadowmaw".to_string(), 1, "unlisted".to_string())));
+
+    // Confirmed as a new name in one action: kept, and recorded.
+    let group = pinned[0].group.clone();
+    assert_eq!(
+        rig.settle("s1", &group, ReviewTarget::Creature("Shadowmaw".into()))
+            .unwrap(),
+        Settled::NewName(DetectedCreature {
+            name: "Shadowmaw".into(),
+            species: "Shadowmaw".into(),
+            maturity: String::new(),
+        })
+    );
+    assert!(rig.confirmed().contains(&"Shadowmaw".to_string()));
+    assert!(breakdown(&rig).contains(&("Shadowmaw".to_string(), 1, "recorded".to_string())));
+    // Put back instead: the stamp it would have had without the pin.
+    rig.settle("s1", &group, ReviewTarget::Declared).unwrap();
+    assert_eq!(rig.stamp("k9").0, "Young Atrox");
+    assert_eq!(rig.stamp("k8").0, "Mature Daikiba");
+}
+
+#[test]
+fn settling_kills_carried_on_repairs_the_session_figures_and_respects_sold_loot() {
+    let rig = rig();
+    hunt_with_continuity(&rig);
+    rig.runtime
+        .block_on(rig.db.with_writer(|conn| {
+            let tx = conn.transaction()?;
+            crate::session_summary::write_session_summary(&tx, "s1")?;
+            tx.commit()?;
+            Ok(())
+        }))
+        .unwrap();
+    assert_ne!(
+        rig.scalar::<Option<String>>(
+            "SELECT dominant_mob FROM session_summaries WHERE session_id = 's1'"
+        ),
+        some("Gloomrat"),
+        "three Old Atrox, two of them carried on, beside three Gloomrat"
+    );
+    rig.execute(
+        "INSERT INTO daily_rollup_meta (id, rolled_through) VALUES (1, '2100-01-01');
+         DELETE FROM daily_rollups;",
+    );
+    let group = DetectionGroupRef {
+        grade: MobDetectionGrade::Continuity,
+        creature: DetectedCreature {
+            name: "Old Atrox".into(),
+            species: "Atrox".into(),
+            maturity: "Old".into(),
+        },
+        provisional_key: None,
+    };
+    rig.settle("s1", &group, ReviewTarget::Creature("Gloomrat".into()))
+        .unwrap();
+    assert_eq!(
+        rig.scalar::<Option<String>>(
+            "SELECT dominant_mob FROM session_summaries WHERE session_id = 's1'"
+        ),
+        some("Gloomrat"),
+        "rewritten from the settled stamps"
+    );
+    assert!(
+        rig.scalar::<i64>("SELECT COUNT(*) FROM daily_rollups") > 0,
+        "the session's days are rolled up again"
+    );
+
+    // Once hunted loot has left stock, a move to another creature is refused
+    // and nothing changes.
+    rig.execute(
+        "INSERT INTO session_contexts (id, session_id, created_at) VALUES (900, 's1', 1000.0);
+         INSERT INTO stock_movements (item_name, movement_kind, source_kind, mob_species, \
+             quantity, tt_value, occurred_at, created_at, activity_context_id) \
+         VALUES ('Animal Hide', 'listing', 'hunt', 'Gloomrat', -1, 0.4, '2026-01-01', 1.0, 900);",
+    );
+    let refused = rig.settle("s1", &group, ReviewTarget::Declared);
+    assert!(
+        matches!(refused, Err(MobReviewError::Conflict(message)) if message.contains("already been sold or converted")),
+    );
+    assert_eq!(rig.stamp("k5").0, "Gloomrat", "nothing changed");
 }

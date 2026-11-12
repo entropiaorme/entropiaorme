@@ -117,6 +117,23 @@
           "bias": -0.296,
           "tolerance": 0.4
         }
+      },
+      {
+        "marker_height": [
+          26,
+          28
+        ],
+        "numerals": {
+          "min_ink": 110,
+          "body_row_share": 0.25,
+          "digit": 0.866,
+          "one": 0.776,
+          "comma": 0.352,
+          "period": 0.492,
+          "ped_suffix": 3.105,
+          "bias": -0.287,
+          "tolerance": 0.4
+        }
       }
     ]
   },
@@ -208,6 +225,23 @@
               "period": 0.507,
               "ped_suffix": 3.2,
               "bias": -0.296,
+              "tolerance": 0.4
+            }
+          },
+          {
+            "row_pitch": [
+              71,
+              73
+            ],
+            "numerals": {
+              "min_ink": 110,
+              "body_row_share": 0.25,
+              "digit": 0.848,
+              "one": 0.756,
+              "comma": 0.343,
+              "period": 0.479,
+              "ped_suffix": 3.024,
+              "bias": -0.289,
               "tolerance": 0.4
             }
           }

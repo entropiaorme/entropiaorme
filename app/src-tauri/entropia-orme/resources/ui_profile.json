@@ -329,6 +329,55 @@
               "merge_pieces": true
             },
             "word_gap": 0.2
+          },
+          {
+            "header_height": [
+              37,
+              39
+            ],
+            "numerals": {
+              "min_ink": 110,
+              "body_row_share": 0.25,
+              "digit": 0.948,
+              "one": 0.855,
+              "comma": 0.388,
+              "period": 0.542,
+              "ped_suffix": 3.212,
+              "above_tt_prefix": 3.335,
+              "percent": 0.665,
+              "bracket": 0.441,
+              "bias": -0.316,
+              "tolerance": 0.4
+            },
+            "figure_numerals": {
+              "min_ink": 110,
+              "body_row_share": 0.25,
+              "digit": 0.956,
+              "one": 0.862,
+              "comma": 0.391,
+              "period": 0.546,
+              "ped_suffix": 2.92,
+              "above_tt_prefix": 3.362,
+              "percent": 1.309,
+              "bracket": 0.445,
+              "bias": -0.319,
+              "tolerance": 0.4
+            },
+            "figure_lettering": {
+              "min_ink": 55,
+              "glyph_gap": 2,
+              "join_factor": 1.7,
+              "max_colour_distance": 110,
+              "min_colour_ink": 12,
+              "line_slack": 0.3334,
+              "run_height": [
+                5,
+                60
+              ],
+              "min_ink_pixels": 14,
+              "merge_pieces": true
+            },
+            "word_gap": 0.313
           }
         ],
         "cut_reach": 2.0,

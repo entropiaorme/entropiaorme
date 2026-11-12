@@ -4,17 +4,22 @@
 //!
 //! A corpus is a directory of full-screen captures (`frames/*.png`), the
 //! values on them transcribed independently by two people and reconciled
-//! (`labels.json`), and what was measured on each by hand (`manifest.json`:
-//! its windows' rectangles, the locked nameplate's bar, and whether the
-//! frame is held out). Every replay holds a reader to one rule: a value is
-//! read exactly as it was on screen, or it is refused; and each prints a
-//! tally of what was read exactly, what was refused and what was WRONG.
+//! (`labels.json`), and what was measured or decided on each by hand
+//! (`manifest.json`, in the shape [`Manifest`] gives). Every replay holds a
+//! reader to one rule: a value is read exactly as it was on screen, or it
+//! is refused; and each prints a tally of what was read exactly, what was
+//! refused and what was WRONG.
 //!
 //! Real gameplay screens stay out of the public tree, so nothing here
-//! names where a corpus is: the caller says. What is here of the corpus
-//! these replays were written against is what a refusal needs to be
-//! excused: which frame, which refusal, and why.
+//! names where a corpus is, or any of its frames: the caller says where it
+//! is, and everything a replay needs to know about one frame (which
+//! refusals are excused and why, which skills pages show whole, which of
+//! the sell queue's spinners are greyed, which frames particular tests are
+//! pinned to) is the corpus's own manifest data. A frame that needs an
+//! entry the manifest lacks is reported as exactly that, apart from wrong
+//! values, and fails the replay.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -42,6 +47,7 @@ use eo_services::game_ui::window::find_windows;
 use eo_services::ocr_engine::load_bgr_png;
 use eo_services::planet_maps::PlanetMapStore;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders, Terminal, TerminalRefusal};
+use serde::Deserialize;
 use serde_json::Value;
 
 /// The application's bundled resources: the interface profile, the
@@ -51,11 +57,227 @@ pub fn resources() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../entropia-orme/resources")
 }
 
+/// What was measured or decided by hand about a corpus, frame by frame.
+/// An entry this does not know is refused, so a misspelt key cannot
+/// silently excuse nothing.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Manifest {
+    /// Free text for whoever measures next: how the entries were
+    /// measured. No replay reads it.
+    #[serde(default, rename = "note")]
+    _note: Option<String>,
+    /// Every frame, by its name (its file's stem), in the file's order.
+    pub frames: serde_json::Map<String, Value>,
+    /// The frames particular real-capture tests are pinned to.
+    #[serde(default)]
+    pub cases: Option<Cases>,
+}
+
+/// What was measured or decided by hand about one frame.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrameEntry {
+    /// Kept back to test, once, that a tuned profile generalises.
+    pub held_out: bool,
+    /// Every client window in the frame, front to back.
+    pub windows: Vec<WindowEntry>,
+    /// The locked nameplate, for a frame that shows one.
+    #[serde(default)]
+    pub locked_plate: Option<LockedPlateEntry>,
+    /// The skills table, for a frame whose labels carry it.
+    #[serde(default)]
+    pub skills: Option<SkillsEntry>,
+    /// Coordinates the reader is expected to refuse although the labels
+    /// show them.
+    #[serde(default)]
+    pub coords: Option<CoordsEntry>,
+    /// The sell queue, for a frame whose labels carry it.
+    #[serde(default)]
+    pub sale_queue: Option<SaleQueueEntry>,
+}
+
+/// A window's outer rectangle, measured or checked by hand.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowEntry {
+    /// `[x0, y0, x1, y1]`, the window's outermost pixels.
+    pub rect: [i32; 4],
+    /// False for a window with a side hidden, which the locator must
+    /// never report as certain.
+    #[serde(default = "certain")]
+    pub extent_certain: bool,
+    /// Its title, where the measurer noted it.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// How it was measured.
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+fn certain() -> bool {
+    true
+}
+
+/// A refusal the reader must give, by its variant's name (and, for a
+/// refusal that carries the text read, that text), and why the screen
+/// justifies it, as a native crop shows.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Excused {
+    pub refusal: String,
+    #[serde(default)]
+    pub raw: Option<String>,
+    pub why: String,
+}
+
+impl Excused {
+    /// Whether `refusal` is this one: the same variant and, where it
+    /// carries the text read, the same text.
+    fn names<E: std::fmt::Debug>(&self, refusal: &E, raw: Option<&str>) -> bool {
+        variant(refusal) == self.refusal && raw == self.raw.as_deref()
+    }
+}
+
+/// A refusal's variant name, as the manifest gives it.
+fn variant<E: std::fmt::Debug>(refusal: &E) -> String {
+    format!("{refusal:?}")
+        .split([' ', '{', '('])
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The locked nameplate's bar and the fields it is expected to refuse.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LockedPlateEntry {
+    /// The bar's coloured part, `[x0, y0, x1, y1]`, measured by hand.
+    pub bar: [i32; 4],
+    /// Each field (`level`, `name`) the reader must refuse, and why.
+    #[serde(default)]
+    pub refusals: BTreeMap<PlateField, Excused>,
+}
+
+/// The fields of a locked plate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlateField {
+    Level,
+    Name,
+}
+
+/// The skills table of one frame.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillsEntry {
+    /// Whether the page shows whole: every labelled row fully visible and
+    /// no scrollbar thumb shorter than its track. Needed wherever the
+    /// reader reads a page.
+    #[serde(default)]
+    pub whole: Option<bool>,
+    /// The refusal of the whole frame the reader must give, and why.
+    #[serde(default)]
+    pub refusal: Option<Excused>,
+}
+
+/// The coordinates of one frame the reader must refuse.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoordsEntry {
+    #[serde(default)]
+    pub lon: Option<Excused>,
+    #[serde(default)]
+    pub lat: Option<Excused>,
+}
+
+/// The sell queue of one frame.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaleQueueEntry {
+    /// For every labelled row, by its name, the spinners the client draws
+    /// greyed (an empty list where none is). A greyed buyout is a
+    /// switched-off one. Needed for every labelled row: a row is never
+    /// assumed editable.
+    pub greyed: BTreeMap<String, Vec<Spinner>>,
+}
+
+/// The sell queue's spinners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Spinner {
+    Quantity,
+    OpeningBid,
+    Buyout,
+    Days,
+}
+
+impl Spinner {
+    /// The labels' name for the field.
+    fn field(self) -> &'static str {
+        match self {
+            Spinner::Quantity => "quantity",
+            Spinner::OpeningBid => "opening_bid",
+            Spinner::Buyout => "buyout",
+            Spinner::Days => "days",
+        }
+    }
+}
+
+/// The frames particular real-capture tests are pinned to.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cases {
+    /// A skills frame refused because its title is covered, and how many
+    /// of its labelled rows are readable all the same.
+    pub covered_title: CoveredTitle,
+    /// A whole skills page showing a skill the bundled vocabulary lacks.
+    pub vocabulary_lacks: String,
+    /// Two readings of one skills page before and after a skill rose,
+    /// older first, and two consecutive pages.
+    pub rereading: Rereading,
+    /// One sweep of every page of the whole skills list, in page order,
+    /// in one sitting with nothing gained in between.
+    pub sweep: Vec<String>,
+    /// Skills pages holding figures the recogniser drops a repeated digit
+    /// from; among them the figure the failure was first seen on.
+    pub dropped_digits: Vec<String>,
+    /// Radar frames with the distance the disc's edge stands at, as its
+    /// rings' labels give it.
+    pub ring_scale: Vec<RingScale>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoveredTitle {
+    pub frame: String,
+    pub readable_rows: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rereading {
+    pub older: String,
+    pub newer: String,
+    pub consecutive: [String; 2],
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RingScale {
+    pub frame: String,
+    pub edge_m: f64,
+}
+
 /// A corpus of captures, with its labels and its manifest.
 pub struct Corpus {
     dir: PathBuf,
     pub labels: Value,
-    manifest: Value,
+    /// Every frame's manifest entry, in the manifest's order.
+    entries: Vec<(String, FrameEntry)>,
+    /// The frames particular tests are pinned to, if the manifest names
+    /// them.
+    cases: Option<Cases>,
     /// Whether the frames replayed are the held-out ones or the rest.
     held_out: bool,
 }
@@ -66,24 +288,57 @@ impl Corpus {
     /// exist to test, once, that the readers generalise to an interface
     /// scale nothing was tuned on.
     pub fn open(dir: &Path, held_out: bool) -> Result<Corpus, String> {
-        let json = |name: &str| -> Result<Value, String> {
+        let text = |name: &str| -> Result<(PathBuf, String), String> {
             let path = dir.join(name);
             let text =
                 std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+            Ok((path, text))
         };
+        let (path, labels) = text("labels.json")?;
+        let labels: Value =
+            serde_json::from_str(&labels).map_err(|e| format!("{}: {e}", path.display()))?;
+        let (path, manifest) = text("manifest.json")?;
+        let manifest: Manifest =
+            serde_json::from_str(&manifest).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut entries = Vec::with_capacity(manifest.frames.len());
+        for (name, entry) in manifest.frames {
+            let entry: FrameEntry = serde_json::from_value(entry)
+                .map_err(|e| format!("{}: frame {name}: {e}", path.display()))?;
+            entries.push((name, entry));
+        }
         Ok(Corpus {
-            labels: json("labels.json")?,
-            manifest: json("manifest.json")?,
+            labels,
+            entries,
+            cases: manifest.cases,
             dir: dir.to_path_buf(),
             held_out,
         })
     }
 
+    /// One frame's manifest entry; an empty one for a frame the manifest
+    /// does not list, which every replay then reports as missing what it
+    /// needs.
+    pub fn entry(&self, name: &str) -> FrameEntry {
+        self.entries
+            .iter()
+            .find(|(frame, _)| frame == name)
+            .map(|(_, entry)| entry.clone())
+            .unwrap_or_default()
+    }
+
+    /// The frames particular tests are pinned to.
+    pub fn cases(&self) -> Result<&Cases, String> {
+        self.cases
+            .as_ref()
+            .ok_or_else(|| "the manifest names no frames for the pinned tests (`cases`)".into())
+    }
+
     fn replayed(&self, name: &str) -> bool {
-        let held_out = self.manifest["frames"][name]["held_out"]
-            .as_bool()
-            .unwrap_or(false);
+        let held_out = self
+            .entries
+            .iter()
+            .find(|(frame, _)| frame == name)
+            .is_some_and(|(_, entry)| entry.held_out);
         held_out == self.held_out
     }
 
@@ -146,11 +401,23 @@ impl std::fmt::Display for Shard {
 
 /// What a replay came to: how many values read exactly, and everything
 /// that fails it. A wrong value accepted always fails; so does a refusal
-/// the labels do not justify and the replay has no stated reason for.
+/// the labels do not justify and the manifest gives no reason for. What
+/// the corpus lacks for a replay fails it too, reported apart: that is
+/// bookkeeping to do, not a reader's fault.
 #[derive(Debug, Default)]
 pub struct Outcome {
     pub exact: usize,
     pub failures: Vec<String>,
+    /// What the corpus lacks: each frame that needs a manifest entry it
+    /// does not have, and which; or a frame a check needs.
+    pub missing: Vec<String>,
+}
+
+impl Outcome {
+    /// Whether nothing fails the replay.
+    pub fn passed(&self) -> bool {
+        self.failures.is_empty() && self.missing.is_empty()
+    }
 }
 
 /// A labelled field of a window, and the terminal read that answers it:
@@ -196,30 +463,27 @@ pub const TRADE_TOTAL: LabelledField = LabelledField {
 /// certain, and nothing else is found. Needs no recogniser.
 pub fn windows(corpus: &Corpus, profile: &UiProfile, shard: Shard) -> Outcome {
     let chrome = &profile.chrome;
-    let frames = corpus.manifest["frames"].as_object().expect("frames");
     let (mut expected_total, mut matched, mut false_locks, mut refused_ok) = (0, 0, 0, 0);
     let mut failures = Vec::new();
-    for (index, (name, entry)) in frames.iter().enumerate() {
+    for (index, (name, entry)) in corpus.entries.iter().enumerate() {
         if !shard.holds(index) || !corpus.replayed(name) {
             continue;
         }
         let image = corpus.frame(name);
         let found = find_windows(&image, chrome);
-        let expected: Vec<(Rect, bool)> = entry["windows"]
-            .as_array()
-            .expect("windows")
+        let expected: Vec<(Rect, bool, String)> = entry
+            .windows
             .iter()
             .map(|w| {
-                let r: Vec<i32> = w["rect"]
-                    .as_array()
-                    .expect("rect")
-                    .iter()
-                    .map(|v| v.as_i64().expect("a coordinate") as i32)
-                    .collect();
-                (
-                    Rect::new(r[0], r[1], r[2], r[3]),
-                    w["extent_certain"].as_bool().unwrap_or(true),
-                )
+                let [x0, y0, x1, y1] = w.rect;
+                // What the measurer noted of it, to say which window a
+                // failure is about.
+                let noted = [w.title.as_deref(), w.note.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (Rect::new(x0, y0, x1, y1), w.extent_certain, noted)
             })
             .collect();
         let close = |a: &Rect, b: &Rect| {
@@ -228,7 +492,7 @@ pub fn windows(corpus: &Corpus, profile: &UiProfile, shard: Shard) -> Outcome {
                 && (a.x1 - b.x1).abs() <= 2
                 && (a.y1 - b.y1).abs() <= 2
         };
-        for (rect, certain) in &expected {
+        for (rect, certain, noted) in &expected {
             expected_total += 1;
             if *certain {
                 if found
@@ -238,12 +502,12 @@ pub fn windows(corpus: &Corpus, profile: &UiProfile, shard: Shard) -> Outcome {
                     matched += 1;
                 } else {
                     failures.push(format!(
-                        "{name}: expected {rect:?} not found in {:?}",
+                        "{name}: expected {rect:?} ({noted}) not found in {:?}",
                         found.iter().map(|f| f.rect).collect::<Vec<_>>()
                     ));
                 }
             } else if found.iter().any(|f| {
-                f.extent_certain() && !expected.iter().any(|(e, c)| *c && close(&f.rect, e))
+                f.extent_certain() && !expected.iter().any(|(e, c, _)| *c && close(&f.rect, e))
             }) {
                 failures.push(format!(
                     "{name}: a window with a hidden side was reported as certain"
@@ -253,7 +517,7 @@ pub fn windows(corpus: &Corpus, profile: &UiProfile, shard: Shard) -> Outcome {
             }
         }
         for f in found.iter().filter(|f| f.extent_certain()) {
-            if !expected.iter().any(|(e, _)| close(&f.rect, e)) {
+            if !expected.iter().any(|(e, _, _)| close(&f.rect, e)) {
                 false_locks += 1;
                 failures.push(format!("{name}: false window {:?}", f.rect));
             }
@@ -265,7 +529,48 @@ pub fn windows(corpus: &Corpus, profile: &UiProfile, shard: Shard) -> Outcome {
     Outcome {
         exact: matched,
         failures,
+        missing: Vec::new(),
     }
+}
+
+/// Whether the manifest names the frames the pinned tests need, each one
+/// a frame of the corpus: a frame missing from the labels is bookkeeping
+/// to do, as is a manifest that names none. Nothing here is a value read,
+/// so it adds nothing to the count of values read exactly.
+pub fn pinned_frames(corpus: &Corpus) -> Outcome {
+    let mut outcome = Outcome::default();
+    let cases = match corpus.cases() {
+        Ok(cases) => cases,
+        Err(why) => {
+            outcome.missing.push(why);
+            return outcome;
+        }
+    };
+    let mut named: Vec<(&str, &String)> = vec![
+        ("covered_title", &cases.covered_title.frame),
+        ("vocabulary_lacks", &cases.vocabulary_lacks),
+        ("rereading", &cases.rereading.older),
+        ("rereading", &cases.rereading.newer),
+    ];
+    named.extend(cases.rereading.consecutive.iter().map(|f| ("rereading", f)));
+    named.extend(cases.sweep.iter().map(|f| ("sweep", f)));
+    named.extend(cases.dropped_digits.iter().map(|f| ("dropped_digits", f)));
+    named.extend(cases.ring_scale.iter().map(|c| ("ring_scale", &c.frame)));
+    let total = named.len();
+    for (case, frame) in named {
+        if corpus.labels["frames"].get(frame.as_str()).is_none() {
+            outcome.missing.push(format!(
+                "the manifest's case {case} names {frame}, which the labels do not have"
+            ));
+        }
+    }
+    let rows = cases.covered_title.readable_rows;
+    let edges: Vec<f64> = cases.ring_scale.iter().map(|c| c.edge_m).collect();
+    println!(
+        "pinned frames: {total} named, {} not in the labels; the covered title keeps {rows} readable rows; ring edges {edges:?} m",
+        outcome.missing.len()
+    );
+    outcome
 }
 
 /// What became of the labelled values of one surface.
@@ -449,26 +754,13 @@ fn skills_frames(corpus: &Corpus, shard: Shard) -> Vec<(String, Value)> {
         .collect()
 }
 
-/// Frames that show their page whole. A page is whole only where every
-/// labelled row is fully visible and the table's scrollbar shows the
-/// whole list in view: no thumb (f13, f15, f62 to f74). Elsewhere a
-/// thumb shorter than its track shows rows out of view, even where every
-/// row in view is whole: f48 (a 280-pixel thumb on a 440-pixel track)
-/// and f16 (445 on 548) both show the Combat category's second page,
-/// which the thumbs put at eleven rows, nine of them in f16's view and
-/// seven in f48's; f05, f06 and f14 show part of their page with a thumb
-/// as well, and the rest have rows cut by the view.
-const WHOLE_FRAMES: [&str; 15] = [
-    "f13", "f15", "f62", "f63", "f64", "f65", "f66", "f67", "f68", "f69", "f70", "f71", "f72",
-    "f73", "f74",
-];
-
 /// Compare one page's reading with its labels, row by row, for whether
 /// it calls itself whole, and for the bar above the table.
 fn score_skills_page(
     name: &str,
     labels: &Value,
     page: &SkillsPage,
+    should_be_whole: bool,
     rows: &mut Tally,
     bar: &mut Tally,
 ) {
@@ -478,7 +770,6 @@ fn score_skills_page(
             && row["name"].is_string()
             && row["points"].is_string()
     };
-    let should_be_whole = WHOLE_FRAMES.contains(&name);
     if page.whole != should_be_whole {
         rows.wrong.push(format!(
             "{name}: the page reads as whole {}, the screen shows it whole {should_be_whole}",
@@ -578,39 +869,21 @@ fn score_skills_page(
     }
 }
 
-/// Frames the reader refuses although their labels show whole rows: the
-/// refusal it must give, and why. Every other labelled row is required.
-const SKILLS_REFUSALS: [(&str, SkillsError, &str); 3] = [
-    (
-        "f47",
-        SkillsError::ExtentUncertain,
-        "the desktop scaled the frame, so the window's extent is uncertain",
-    ),
-    (
-        "f18",
-        SkillsError::WindowNotFound,
-        "the window runs off the frame's left edge, which cuts the start of its title (so \
-         the window cannot be identified) and the names",
-    ),
-    (
-        "f17",
-        SkillsError::WindowNotFound,
-        "the Inventory window covers the skills window's title, so the window cannot be \
-         identified; the labels mark every row but one under the Inventory window",
-    ),
-];
-
 /// Replay the skills table over every frame whose labels carry it: each
-/// row's name and points, whether the page reads as whole, and the bar
-/// above the table.
+/// row's name and points, whether the page reads as whole (as the manifest
+/// says it shows), and the bar above the table. A frame the reader refuses
+/// although its labels show whole rows must be one whose manifest entry
+/// names that refusal and why; every other labelled row is required.
 pub fn skills(r: &Replay, shard: Shard) -> Outcome {
     let (corpus, profile) = (&r.corpus, &r.profile);
     let read = r.reader();
     let vocabulary = skill_vocabulary();
     let (mut rows, mut bar) = (Tally::default(), Tally::default());
+    let mut unexcused = Vec::new();
+    let mut missing = Vec::new();
     for (name, labels) in skills_frames(corpus, shard) {
         let image = corpus.frame(&name);
-        let excused = SKILLS_REFUSALS.iter().find(|(f, _, _)| *f == name);
+        let entry = corpus.entry(&name).skills.unwrap_or_default();
         let labelled = labels["rows"].as_array().expect("rows");
         let readable = labelled
             .iter()
@@ -618,17 +891,19 @@ pub fn skills(r: &Replay, shard: Shard) -> Outcome {
             .count();
         match (
             read_skills_page(&image, profile, &vocabulary, &read),
-            excused,
+            &entry.refusal,
         ) {
             (Err(SkillsError::NoRecogniser), _) => panic!("the recogniser stopped answering"),
-            (Ok(page), Some((_, _, why))) => rows
-                .wrong
-                .push(format!("{name}: read a page where {why}: {page:?}")),
-            (Err(error), Some((_, want, why))) => {
-                println!("  {name}: frame refused: {error} ({why})");
-                if error != *want {
+            (Ok(page), Some(excused)) => rows.wrong.push(format!(
+                "{name}: read a page where {}: {page:?}",
+                excused.why
+            )),
+            (Err(error), Some(excused)) => {
+                println!("  {name}: frame refused: {error} ({})", excused.why);
+                if !excused.names(&error, None) {
                     rows.wrong.push(format!(
-                        "{name}: refused as {error:?}, where {why} ({want:?})"
+                        "{name}: refused as {error:?}, where {} ({})",
+                        excused.why, excused.refusal
                     ));
                 }
                 for _ in 0..readable {
@@ -641,6 +916,7 @@ pub fn skills(r: &Replay, shard: Shard) -> Outcome {
                 for _ in 0..readable {
                     rows.refused
                         .push(format!("{name}: frame refused ({error})"));
+                    unexcused.push(format!("{name}: frame refused ({error})"));
                 }
             }
             (Ok(page), None) => {
@@ -651,7 +927,16 @@ pub fn skills(r: &Replay, shard: Shard) -> Outcome {
                     page.partial,
                     page.whole
                 );
-                score_skills_page(&name, &labels, &page, &mut rows, &mut bar);
+                let Some(whole) = entry.whole else {
+                    missing.push(format!(
+                        "{name}: the manifest does not say whether this skills page is whole \
+                         (`skills.whole`)"
+                    ));
+                    continue;
+                };
+                let before = rows.refused.len();
+                score_skills_page(&name, &labels, &page, whole, &mut rows, &mut bar);
+                unexcused.extend(rows.refused[before..].iter().cloned());
             }
         }
     }
@@ -661,15 +946,6 @@ pub fn skills(r: &Replay, shard: Shard) -> Outcome {
         &format!("skills total, page and category{shard}"),
         &mut outcome,
     );
-    let unexcused: Vec<&String> = rows
-        .refused
-        .iter()
-        .filter(|line| {
-            !SKILLS_REFUSALS
-                .iter()
-                .any(|(frame, _, _)| line.starts_with(&format!("{frame}:")))
-        })
-        .collect();
     outcome.failures.extend(
         unexcused
             .iter()
@@ -680,78 +956,20 @@ pub fn skills(r: &Replay, shard: Shard) -> Outcome {
             .iter()
             .map(|line| format!("skills: the bar above the table was refused: {line}")),
     );
+    outcome.missing = missing;
     outcome
 }
 
-/// Values the coordinates reader refuses although their labels show them:
-/// the frame, the value, the refusal it must give, and why. Every other
-/// labelled value is required to read exactly.
-fn coord_refusals() -> Vec<(&'static str, &'static str, CoordError, &'static str)> {
-    vec![
-        (
-            "f44",
-            "lon",
-            CoordError::Invalid {
-                raw: "ON68520".into(),
-            },
-            "the Trade Terminal's right edge lies over the L of LON, which reads as ON",
-        ),
-        (
-            "f46",
-            "lon",
-            CoordError::Invalid {
-                raw: "ON68520".into(),
-            },
-            "the Trade Terminal's right edge lies over the L of LON, which reads as ON",
-        ),
-        (
-            "f25",
-            "lat",
-            CoordError::NotFound,
-            "pale sky through dark trees behind LAT joins the lettering into a run too tall \
-             and too wide to stand aligned with the disc",
-        ),
-        (
-            "f29",
-            "lat",
-            CoordError::NotFound,
-            "sunlit foliage around LAT joins the lettering into a run taller than lettering",
-        ),
-        (
-            "f53",
-            "lon",
-            CoordError::Invalid {
-                raw: "LON.67835".into(),
-            },
-            "the recogniser read a speck of the sand between LON and the digits as a stop",
-        ),
-        (
-            "f54",
-            "lat",
-            CoordError::Misplaced {
-                raw: " LAT 87750".into(),
-            },
-            "a rock beside the last digit of LAT joins its lettering, so its end lies past the \
-             disc's edge",
-        ),
-        (
-            "f29",
-            "lon",
-            CoordError::NoSpace {
-                raw: "LON 67707".into(),
-            },
-            "sunlit foliage left of LON joins the lettering, so the label is not where it is \
-             predicted to end",
-        ),
-        (
-            "f31",
-            "lat",
-            CoordError::NoSpace {
-                raw: "LAT87925".into(),
-            },
-            "foliage bridges the space after LAT, so where the label ends cannot be found",
-        ),
-    ]
+/// The text a coordinate's refusal carries, where it carries one.
+fn coord_raw(refusal: &CoordError) -> Option<&str> {
+    match refusal {
+        CoordError::Invalid { raw }
+        | CoordError::NoSpace { raw }
+        | CoordError::Misplaced { raw }
+        | CoordError::WrongWidth { raw } => Some(raw),
+        CoordError::OutOfBounds { text } => Some(text),
+        _ => None,
+    }
 }
 
 /// What a frame's labels say about one coordinate: `Some(Some(text))`
@@ -811,7 +1029,6 @@ pub fn coordinates(r: &Replay, shard: Shard) -> Outcome {
     let names = planet_names();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     let mut covered = 0;
-    let refusals = coord_refusals();
     let mut mismatched = Vec::new();
     for (name, labels) in coordinate_frames(corpus, shard) {
         let image = corpus.frame(&name);
@@ -842,8 +1059,8 @@ pub fn coordinates(r: &Replay, shard: Shard) -> Outcome {
             }
             continue;
         }
-        for (key, label) in [("lon", "LON"), ("lat", "LAT")] {
-            let excused = refusals.iter().find(|(f, k, _, _)| *f == name && *k == key);
+        let entry = corpus.entry(&name).coords.unwrap_or_default();
+        for (key, label, excused) in [("lon", "LON", &entry.lon), ("lat", "LAT", &entry.lat)] {
             let want = coord_label(labels, key).expect("the frame has coordinates");
             let value = match &got {
                 Ok(c) if key == "lon" => c.lon.clone(),
@@ -866,13 +1083,15 @@ pub fn coordinates(r: &Replay, shard: Shard) -> Outcome {
                     println!("  {name}: {key} is covered, refused: {e}");
                 }
                 (Some(want), Err(e)) => match excused {
-                    Some((_, _, expected, why)) if *expected == e => {
-                        tally
-                            .refused
-                            .push(format!("{name}: {key} {want}: {e}; {why} (excused)"));
+                    Some(excused) if excused.names(&e, coord_raw(&e)) => {
+                        tally.refused.push(format!(
+                            "{name}: {key} {want}: {e}; {} (excused)",
+                            excused.why
+                        ));
                     }
-                    Some((_, _, expected, why)) => mismatched.push(format!(
-                        "{name}: {key} {want} refused as {e:?}, where {why} ({expected:?})"
+                    Some(excused) => mismatched.push(format!(
+                        "{name}: {key} {want} refused as {e:?}, where {} ({} {:?})",
+                        excused.why, excused.refusal, excused.raw
                     )),
                     None => tally.refused.push(format!("{name}: {key} {want}: {e}")),
                 },
@@ -993,6 +1212,7 @@ pub fn coordinate_digit_loss(r: &Replay, shard: Shard) -> Outcome {
             .iter()
             .map(|line| format!("digit loss: a damaged coordinate was accepted: {line}"))
             .collect(),
+        missing: Vec::new(),
     }
 }
 
@@ -1052,59 +1272,38 @@ fn labelled_count(labels: &Value) -> u32 {
         .unwrap_or_else(|| panic!("{text:?} has no count"))
 }
 
-/// The spinners the client draws greyed, for every queued row of every
-/// frame, as the labels' notes record them (f59 shows the same queue as
-/// f58 and f60, its notes saying so). A greyed buyout is a switched-off
-/// one. A row missing here fails the replay rather than being assumed
+/// The greyed spinners of every labelled row of `frame`, by the labels'
+/// field names, from the manifest; or, where it lacks an entry for a
+/// labelled row, each such row as missing: a row is never assumed
 /// editable.
-const SALE_LOCKED: [(&str, &str, &[&str]); 20] = [
-    ("f55", "Electric Attack Nanochip 3", &["quantity", "buyout"]),
-    ("f56", "Electric Attack Nanochip 3", &["quantity"]),
-    ("f57", "Electric Attack Nanochip 3", &["quantity"]),
-    ("f57", "Output Amplifier Component", &["buyout"]),
-    ("f57", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
-    ("f58", "Electric Attack Nanochip 3", &["quantity"]),
-    ("f58", "Eyeshadow (Gold)", &["buyout"]),
-    ("f58", "Eyeshadow (Olive Drab)", &["buyout"]),
-    ("f58", "Output Amplifier Component", &["buyout"]),
-    ("f58", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
-    ("f59", "Electric Attack Nanochip 3", &["quantity"]),
-    ("f59", "Eyeshadow (Gold)", &["buyout"]),
-    ("f59", "Eyeshadow (Olive Drab)", &["buyout"]),
-    ("f59", "Output Amplifier Component", &["buyout"]),
-    ("f59", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
-    ("f60", "Electric Attack Nanochip 3", &["quantity"]),
-    ("f60", "Eyeshadow (Gold)", &["buyout"]),
-    ("f60", "Eyeshadow (Olive Drab)", &["buyout"]),
-    ("f60", "Output Amplifier Component", &["buyout"]),
-    ("f60", "Skyripper Loyalist (L)", &["quantity", "buyout"]),
-];
-
-/// The greyed spinners of one row; `None` where the table has no entry
-/// for it.
-fn sale_locked(frame: &str, row: &str) -> Option<&'static [&'static str]> {
-    SALE_LOCKED
-        .iter()
-        .find(|(f, r, _)| *f == frame && *r == row)
-        .map(|(_, _, locked)| *locked)
-}
-
-/// The labelled rows of `frame` the table of greyed spinners has no entry
-/// for, each as a failure: a row is never assumed editable.
-fn unlisted_sale_rows(frame: &str, labels: &Value) -> Vec<String> {
-    labels["rows"]
-        .as_array()
-        .expect("rows")
-        .iter()
-        .map(|row| row["name"].as_str().expect("named"))
-        .filter(|row| sale_locked(frame, row).is_none())
-        .map(|row| {
-            format!(
-                "{frame}: {row:?} has no entry in the table of greyed spinners; add one from \
-                 the frame's notes before replaying it"
-            )
-        })
-        .collect()
+fn sale_greyed(
+    corpus: &Corpus,
+    frame: &str,
+    labels: &Value,
+) -> Result<BTreeMap<String, Vec<&'static str>>, Vec<String>> {
+    let entry = corpus.entry(frame).sale_queue.unwrap_or_default();
+    let mut greyed = BTreeMap::new();
+    let mut missing = Vec::new();
+    for row in labels["rows"].as_array().expect("rows") {
+        let name = row["name"].as_str().expect("named");
+        match entry.greyed.get(name) {
+            Some(spinners) => {
+                greyed.insert(
+                    name.to_string(),
+                    spinners.iter().map(|s| s.field()).collect(),
+                );
+            }
+            None => missing.push(format!(
+                "{frame}: the manifest does not say which of {name:?}'s spinners are greyed \
+                 (`sale_queue.greyed`); add the row from the frame's notes"
+            )),
+        }
+    }
+    if missing.is_empty() {
+        Ok(greyed)
+    } else {
+        Err(missing)
+    }
 }
 
 /// The application's bundled item data, as the reader confirms names by.
@@ -1145,7 +1344,13 @@ impl FieldTallies {
 }
 
 /// Compare one reading of the queue with its labels.
-fn score_sale_queue(name: &str, labels: &Value, queue: &SaleQueue, fields: &mut FieldTallies) {
+fn score_sale_queue(
+    name: &str,
+    labels: &Value,
+    greyed: &BTreeMap<String, Vec<&'static str>>,
+    queue: &SaleQueue,
+    fields: &mut FieldTallies,
+) {
     let labelled = labels["rows"].as_array().expect("rows");
     let visible = |row: &Value| row["fully_visible"].as_bool() == Some(true);
     let mut matched = vec![false; labelled.len()];
@@ -1178,7 +1383,10 @@ fn score_sale_queue(name: &str, labels: &Value, queue: &SaleQueue, fields: &mut 
             }
         };
         matched[i] = true;
-        let locked = sale_locked(name, item.name.text()).unwrap_or_default();
+        let locked = greyed
+            .get(item.name.text())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         for (field, got) in queued_fields(item) {
             let want = labelled[i][field].as_str().expect("labelled");
             // A greyed buyout is switched off: its grey number is no
@@ -1246,19 +1454,34 @@ pub fn sale_queue(r: &Replay, shard: Shard) -> Outcome {
     let mut count = Tally::default();
     let mut outcome = Outcome::default();
     for (name, labels) in sale_frames(corpus, shard) {
-        let unlisted = unlisted_sale_rows(&name, &labels);
-        if !unlisted.is_empty() {
-            outcome.failures.extend(unlisted);
-            continue;
-        }
+        let greyed = match sale_greyed(corpus, &name, &labels) {
+            Ok(greyed) => greyed,
+            Err(missing) => {
+                outcome.missing.extend(missing);
+                continue;
+            }
+        };
         let image = corpus.frame(&name);
         let queue = match read_sale_queue(&image, profile, &catalogue, &read) {
             Ok(queue) => queue,
             Err(SaleQueueError::NoRecogniser) => panic!("the recogniser stopped answering"),
             Err(error) => {
-                outcome
-                    .failures
-                    .push(format!("{name}: the queue was refused: {error}"));
+                // Every whole row and the count are refused with the
+                // queue, and none of them is excused.
+                println!("  {name}: the queue was refused: {error}");
+                for row in labels["rows"].as_array().expect("rows") {
+                    if row["fully_visible"].as_bool() == Some(true) {
+                        let label = row["name"].as_str().expect("named");
+                        let line = format!("{name}: {label} (the queue was refused: {error})");
+                        for field in SALE_FIELDS {
+                            fields.field(field).refused.push(line.clone());
+                        }
+                    }
+                }
+                count.refused.push(format!(
+                    "{name}: {} (the queue was refused: {error})",
+                    labelled_count(&labels)
+                ));
                 continue;
             }
         };
@@ -1280,7 +1503,7 @@ pub fn sale_queue(r: &Replay, shard: Shard) -> Outcome {
                 queue.partial
             ));
         }
-        score_sale_queue(&name, &labels, &queue, &mut fields);
+        score_sale_queue(&name, &labels, &greyed, &queue, &mut fields);
         let want = labelled_count(&labels);
         let whole = cut == 0 && labelled.len() == want as usize;
         match queue.count {
@@ -1346,17 +1569,36 @@ pub fn sale_queue_digit_loss(r: &Replay, shard: Shard) -> Outcome {
     let (corpus, profile) = (&r.corpus, &r.profile);
     let read = dropping_repeats(r.reader());
     let catalogue = item_catalogue();
-    let (mut damaged, mut whole_read) = (0, 0);
+    let (mut damaged, mut whole_read, mut undamaged) = (0, 0, 0);
     let mut by: std::collections::BTreeMap<&'static str, usize> = Default::default();
     let mut wrong = Vec::new();
+    let mut missing = Vec::new();
     let mut frames = 0;
     for (name, labels) in sale_frames(corpus, shard) {
+        let greyed = match sale_greyed(corpus, &name, &labels) {
+            Ok(greyed) => greyed,
+            Err(lacking) => {
+                missing.extend(lacking);
+                continue;
+            }
+        };
         frames += 1;
-        let unlisted = unlisted_sale_rows(&name, &labels);
-        if !unlisted.is_empty() {
-            wrong.extend(unlisted);
-            continue;
-        }
+        // The rows with nothing the damage can touch, as the labels show
+        // them, whether or not the queue then reads.
+        undamaged += labels["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .filter(|row| row["fully_visible"].as_bool() == Some(true))
+            .filter(|row| {
+                let label = row["name"].as_str().expect("named");
+                let locked = greyed.get(label).map(Vec::as_slice).unwrap_or_default();
+                !SALE_FIELDS
+                    .iter()
+                    .filter(|f| **f != "buyout" || !locked.contains(&"buyout"))
+                    .any(|f| row[*f].as_str().is_some_and(has_repeat_digit))
+            })
+            .count();
         let image = corpus.frame(&name);
         let queue = match read_sale_queue(&image, profile, &catalogue, &read) {
             Ok(queue) => queue,
@@ -1377,7 +1619,10 @@ pub fn sale_queue_digit_loss(r: &Replay, shard: Shard) -> Outcome {
                 ));
                 continue;
             };
-            let locked = sale_locked(&name, item.name.text()).unwrap_or_default();
+            let locked = greyed
+                .get(item.name.text())
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             for (field, got) in queued_fields(item) {
                 let want = row[field].as_str();
                 let want = want.filter(|_| field != "buyout" || !locked.contains(&"buyout"));
@@ -1395,7 +1640,7 @@ pub fn sale_queue_digit_loss(r: &Replay, shard: Shard) -> Outcome {
                 continue;
             }
             let label = row["name"].as_str().expect("named");
-            let locked = sale_locked(&name, label).unwrap_or_default();
+            let locked = greyed.get(label).map(Vec::as_slice).unwrap_or_default();
             // A switched-off buyout's number is never read, so its digits
             // are not damaged.
             let hit: Vec<&str> = SALE_FIELDS
@@ -1457,8 +1702,15 @@ pub fn sale_queue_digit_loss(r: &Replay, shard: Shard) -> Outcome {
         })
         .collect();
     // The replay proves the refusals are the damage's only if rows with
-    // nothing to damage still read.
-    if frames > 0 && whole_read == 0 {
+    // nothing to damage still read. Frames that show no such row cannot
+    // prove it at all: that is the corpus lacking a frame, not a fault of
+    // the reader.
+    if frames > 0 && undamaged == 0 {
+        missing.push(format!(
+            "sale queue digit loss{shard}: no queue row the frames show whole is free of repeated \
+             digits, so nothing shows the refusals are the damage's; file a frame that shows one"
+        ));
+    } else if frames > 0 && whole_read == 0 {
         failures.push(format!(
             "sale queue digit loss{shard}: no row with nothing to damage was read"
         ));
@@ -1466,6 +1718,7 @@ pub fn sale_queue_digit_loss(r: &Replay, shard: Shard) -> Outcome {
     Outcome {
         exact: whole_read,
         failures,
+        missing,
     }
 }
 
@@ -1498,15 +1751,6 @@ fn labelled_plates(labels: &Value) -> Vec<bool> {
         .unwrap_or_default()
 }
 
-/// The refusal's name, as the manifest gives it.
-fn refusal_name(refusal: &PlateTextError) -> String {
-    format!("{refusal:?}")
-        .split([' ', '{', '('])
-        .next()
-        .unwrap_or_default()
-        .to_string()
-}
-
 /// Every plate the labels list is found, and no plate anywhere else: not
 /// the player's own health bar, the tool bar beside it, the progress bars
 /// in windows, or pictures of items. The locked plate is the one the
@@ -1533,7 +1777,7 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
         .collect();
     for (name, labels) in frames {
         let want = labelled_plates(labels);
-        let placed = &corpus.manifest["frames"][name.as_str()]["locked_plate"];
+        let placed = corpus.entry(&name).locked_plate;
         let image = corpus.frame(&name);
         let plates = find_plates(&image, profile);
         let got: Vec<bool> = plates.iter().map(|p| p.is_locked()).collect();
@@ -1563,7 +1807,7 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
         println!("  {name}: {plates:?}");
         let mut scratch = PlateScratch::default();
         let locked = find_locked_plate(&image, profile, &mut scratch);
-        let Some(bar) = placed["bar"].as_array() else {
+        let Some(placed) = placed else {
             if locked.is_some() || want.contains(&true) {
                 problems.push(format!(
                     "{name}: no locked plate is placed, found {locked:?}"
@@ -1571,16 +1815,9 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
             }
             continue;
         };
-        let bar: Vec<i64> = bar.iter().filter_map(Value::as_i64).collect();
-        let at = locked.map(|p| {
-            vec![
-                p.bar.x0 as i64,
-                p.bar.y0 as i64,
-                p.bar.x1 as i64,
-                p.bar.y1 as i64,
-            ]
-        });
-        if at.as_ref() != Some(&bar) {
+        let bar = placed.bar;
+        let at = locked.map(|p| [p.bar.x0, p.bar.y0, p.bar.x1, p.bar.y1]);
+        if at != Some(bar) {
             problems.push(format!(
                 "{name}: the locked bar is at {bar:?}, found {at:?}"
             ));
@@ -1596,10 +1833,11 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
             .and_then(|p| p["level"].as_str())
             .expect("the locked plate has a level");
         // A refusal must be the one the manifest names for that field.
-        let excused = |field: &str, refusal: &PlateTextError| {
-            let named = &placed["refusals"][field];
-            named["refusal"].as_str() == Some(refusal_name(refusal).as_str())
-                && named["why"].as_str().is_some()
+        let excused = |field: PlateField, refusal: &PlateTextError| {
+            placed
+                .refusals
+                .get(&field)
+                .is_some_and(|named| named.refusal == variant(refusal))
         };
         match &plate.level {
             Ok(value) if format!("L{value}") == wanted_level => level.exact += 1,
@@ -1607,7 +1845,7 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
                 "{name}: read L{value}, the screen shows {wanted_level}"
             )),
             Err(refusal) => {
-                if !excused("level", refusal) {
+                if !excused(PlateField::Level, refusal) {
                     problems.push(format!(
                         "{name}: the level was refused ({refusal}) unexcused"
                     ));
@@ -1618,27 +1856,27 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
             }
         }
         if let Err(refusal) = &plate.name {
-            if !excused("name", refusal) {
+            if !excused(PlateField::Name, refusal) {
                 problems.push(format!(
                     "{name}: the name was refused ({refusal}) unexcused"
                 ));
             } else {
                 println!(
-                    "  {name}: the name refused as {refusal_name}, as the manifest says: {}",
-                    placed["refusals"]["name"]["why"],
-                    refusal_name = refusal_name(refusal)
+                    "  {name}: the name refused as {}, as the manifest says: {:?}",
+                    variant(refusal),
+                    placed.refusals[&PlateField::Name].why
                 );
             }
         }
-        for field in ["level", "name"] {
-            let named = placed["refusals"][field]["refusal"].as_str();
+        for field in [PlateField::Level, PlateField::Name] {
+            let named = placed.refusals.get(&field).map(|e| e.refusal.as_str());
             let refused = match field {
-                "level" => plate.level.as_ref().err().map(refusal_name),
-                _ => plate.name.as_ref().err().map(refusal_name),
+                PlateField::Level => plate.level.as_ref().err().map(variant),
+                PlateField::Name => plate.name.as_ref().err().map(variant),
             };
             if named.is_some() && refused.as_deref() != named {
                 problems.push(format!(
-                    "{name}: the manifest expects the {field} refused as {named:?}, got {refused:?}"
+                    "{name}: the manifest expects the {field:?} refused as {named:?}, got {refused:?}"
                 ));
             }
         }

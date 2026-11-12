@@ -35,13 +35,18 @@
 //! [`ItemName::Listed`]); otherwise it is returned as unconfirmed, for the
 //! player to check before anything keeps it.
 //!
-//! Several profile values were measured at the one interface scale the
-//! captures show, and are stated relative to a row's or a run's height so
-//! that they should carry to others, but have not been seen to: the
-//! header's share of a row, the picture's share of a row, the word gap,
-//! the stack gap, the spinner boxes' alignment and size shares, the
-//! numeral metrics, and the brightness thresholds (lettering, locked and
-//! editable spinners, the switches' colour).
+//! The client hints its lettering's height to whole pixels while the
+//! width follows the interface scale, so the measures stated in lettering
+//! heights (the numeral metrics and the word gap) hold at one scale only.
+//! They are listed per scale, and the scale is told from the height of the
+//! table's header band, rule to rule, before anything is read: exactly one
+//! entry must claim it, or the queue is refused as drawn at a scale the
+//! profile has not been measured at. Several other values were measured at
+//! one scale and are stated relative to a row's or a run's height so that
+//! they should carry to others: the header's share of a row, the picture's
+//! share of a row, the stack gap, the spinner boxes' alignment and size
+//! shares, and the brightness thresholds (lettering, locked and editable
+//! spinners, the switches' colour).
 
 use std::collections::BTreeMap;
 
@@ -59,7 +64,7 @@ use super::field::{
 };
 use super::geometry::{brightened, chroma, near, Pixels, Rect};
 use super::locate::{locate, Located, ReadError};
-use super::profile::UiProfile;
+use super::profile::{claiming, ScaleError, UiProfile};
 use super::table::{
     column_rules, enclosed_regions, row_rules, rule_extent, table_shape, Band, Panel,
 };
@@ -82,14 +87,10 @@ pub struct SaleQueueProfile {
     pub heading: String,
     /// The table's columns that hold a value, each by its heading.
     pub columns: Vec<QueueColumn>,
-    /// How wide the queue's numerals are. Its amounts, spinners, figures
-    /// and markup are set smaller than the lettering the read profile's
-    /// metrics were measured on, which narrows `PED` against the digits;
-    /// its markups also need `TT+` and the percent sign.
-    pub numerals: NumeralMetrics,
-    /// A gap in a name's ink at least this many of its run's heights wide
-    /// is a space between words; the client's letters stand closer.
-    pub word_gap: f32,
+    /// The queue's lettering measures, one entry per interface scale
+    /// measured. Exactly one entry must claim the scale the queue is
+    /// drawn at, told from the table's geometry, or the queue is refused.
+    pub scales: Vec<SaleQueueScale>,
     /// A name ending within this many of its run's heights of its
     /// column's right edge may have been cut to fit.
     pub cut_reach: f32,
@@ -109,8 +110,6 @@ pub struct SaleQueueProfile {
     /// Anything drawn in a cell at least this share of the row height
     /// tall is a picture in its frame, not lettering.
     pub picture_height: f32,
-    /// The small, dim lettering of the figures under the spinners.
-    pub figure_lettering: TextProfile,
     /// How a spinner's box and its lettering are told apart.
     pub spinner: SpinnerProfile,
     /// How a lit switch is told from an unlit one.
@@ -121,6 +120,39 @@ pub struct SaleQueueProfile {
     /// when its run's width over height is within this share of the
     /// queued name's: the same text in the list's smaller type.
     pub name_aspect_slack: f32,
+}
+
+/// The queue's lettering at one interface scale. The client hints a
+/// glyph's height to whole pixels while its width follows the scale, so
+/// measures stated in lettering heights differ from one scale to the
+/// next and are listed per scale.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SaleQueueScale {
+    /// The scale this entry is for, by the height in pixels of the
+    /// queue's header band, from the rule above the headings to the rule
+    /// under them (both ends included): the rules are drawn at a pitch
+    /// the scale sets, so the band identifies the scale whether or not a
+    /// whole row is in view, and before anything is read.
+    pub header_height: [i32; 2],
+    /// How wide the queue's numerals are: its amounts, spinners, count
+    /// and markup headline. They are set smaller than the lettering the
+    /// read profile's metrics were measured on, which narrows `PED`
+    /// against the digits; its markups also need `TT+` and the percent
+    /// sign.
+    pub numerals: NumeralMetrics,
+    /// How wide the numerals of the small figures under the spinners are.
+    /// They are set in a smaller size than the rest, and the client hints
+    /// each size's height to whole pixels on its own, so at one scale the
+    /// two sizes' widths over heights can differ by more than either
+    /// metric's tolerance allows a single set.
+    pub figure_numerals: NumeralMetrics,
+    /// The small, dim lettering of the figures under the spinners, whose
+    /// gaps and sizes are stated in pixels.
+    pub figure_lettering: TextProfile,
+    /// A gap in a name's ink at least this many of its run's heights wide
+    /// is a space between words; the client's letters stand closer.
+    pub word_gap: f32,
 }
 
 /// One column of the queue, by its heading, and the values it holds.
@@ -553,6 +585,11 @@ pub enum SaleQueueError {
     ModeUnread,
     #[error("the window states prices in another mode than the one the queue is read in")]
     OtherMode,
+    /// The queue is drawn at an interface scale the profile lists no
+    /// lettering measures for (or lists twice), told from its header
+    /// band's height in pixels.
+    #[error("{0}, the height of the queue's header band")]
+    Scale(ScaleError),
 }
 
 impl From<ReadError> for SaleQueueError {
@@ -820,7 +857,7 @@ struct Reader<'a> {
     queue: &'a SaleQueueProfile,
     recogniser: &'a dyn Recogniser,
     located: &'a Located,
-    runs: Vec<TextRun>,
+    runs: &'a [TextRun],
     panel: Panel,
     /// The table's row height.
     pitch: i32,
@@ -892,12 +929,52 @@ fn within(inner: &Rect, outer: &Rect) -> bool {
     inner.x0 >= outer.x0 && inner.x1 <= outer.x1 && inner.y0 >= outer.y0 && inner.y1 <= outer.y1
 }
 
+/// Whether a window in front of the sell window lies over `rect`.
+fn covered(located: &Located, rect: Rect) -> bool {
+    located
+        .in_front
+        .iter()
+        .any(|front| front.intersect(&rect).is_some())
+}
+
+/// Whether the ink in `rect` is lit: `Some(true)` in the accent colour,
+/// `Some(false)` grey, `None` when it cannot be told.
+fn lit(
+    image: &BgrImage,
+    rect: Rect,
+    profile: &UiProfile,
+    queue: &SaleQueueProfile,
+) -> Option<bool> {
+    let rect = rect.intersect(&Rect::new(0, 0, image.width() - 1, image.height() - 1))?;
+    let (mut sum, mut n) = ([0u64; 3], 0u64);
+    for y in rect.y0..=rect.y1 {
+        for x in rect.x0..=rect.x1 {
+            let rgb = image.rgb(x, y);
+            if rgb.iter().copied().max().unwrap_or(0) >= profile.text.min_ink {
+                for (s, c) in sum.iter_mut().zip(rgb) {
+                    *s += c as u64;
+                }
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        return None;
+    }
+    let mean = sum.map(|s| (s / n) as u8);
+    let spread = chroma(mean);
+    if spread >= queue.switch.lit_chroma {
+        Some(true)
+    } else if spread <= queue.switch.unlit_chroma {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 impl Reader<'_> {
     fn covered(&self, rect: Rect) -> bool {
-        self.located
-            .in_front
-            .iter()
-            .any(|front| front.intersect(&rect).is_some())
+        covered(self.located, rect)
     }
 
     fn read(&self, image: &BgrImage, rect: Rect) -> Result<String, SaleQueueError> {
@@ -914,39 +991,8 @@ impl Reader<'_> {
             .collect()
     }
 
-    /// Whether the ink in `rect` is lit: `Some(true)` in the accent
-    /// colour, `Some(false)` grey, `None` when it cannot be told.
     fn lit(&self, rect: Rect) -> Option<bool> {
-        let rect = rect.intersect(&Rect::new(
-            0,
-            0,
-            self.image.width() - 1,
-            self.image.height() - 1,
-        ))?;
-        let (mut sum, mut n) = ([0u64; 3], 0u64);
-        for y in rect.y0..=rect.y1 {
-            for x in rect.x0..=rect.x1 {
-                let rgb = self.image.rgb(x, y);
-                if rgb.iter().copied().max().unwrap_or(0) >= self.profile.text.min_ink {
-                    for (s, c) in sum.iter_mut().zip(rgb) {
-                        *s += c as u64;
-                    }
-                    n += 1;
-                }
-            }
-        }
-        if n == 0 {
-            return None;
-        }
-        let mean = sum.map(|s| (s / n) as u8);
-        let spread = chroma(mean);
-        if spread >= self.queue.switch.lit_chroma {
-            Some(true)
-        } else if spread <= self.queue.switch.unlit_chroma {
-            Some(false)
-        } else {
-            None
-        }
+        lit(self.image, rect, self.profile, self.queue)
     }
 
     /// The cell's two-line stack, right of any picture: `(upper, lower)`.
@@ -1077,9 +1123,14 @@ impl Reader<'_> {
         })
     }
 
-    fn under_box(&self, cell: Rect, field: QueueField) -> Result<Ink, Fault> {
+    fn under_box(
+        &self,
+        cell: Rect,
+        field: QueueField,
+        scale: &SaleQueueScale,
+    ) -> Result<Ink, Fault> {
         let spinner = self.spinner(cell, field)?;
-        let lettering = &self.queue.figure_lettering;
+        let lettering = &scale.figure_lettering;
         // Only what lies under the spinner is looked at: at this dim a
         // threshold the boxes' own frames are ink, and would join it.
         let below = Rect::new(cell.x0, spinner.bottom + 1, cell.x1, cell.y1);
@@ -1178,12 +1229,18 @@ impl Reader<'_> {
         }
     }
 
-    fn ink(&self, cell: Rect, pick: Pick, field: QueueField) -> Result<Ink, Fault> {
+    fn ink(
+        &self,
+        cell: Rect,
+        pick: Pick,
+        field: QueueField,
+        scale: &SaleQueueScale,
+    ) -> Result<Ink, Fault> {
         match pick {
             Pick::StackUpper => Ok(self.plain(self.stack(cell, field)?.0.rect, cell)),
             Pick::StackLower => Ok(self.plain(self.stack(cell, field)?.1.rect, cell)),
             Pick::Boxed => self.boxed(cell, field),
-            Pick::UnderBox => self.under_box(cell, field),
+            Pick::UnderBox => self.under_box(cell, field, scale),
             Pick::BesideBox => self.beside_box(cell, field),
             Pick::Topmost => self.topmost(cell, field),
             Pick::Only => self.only(cell, field),
@@ -1196,9 +1253,10 @@ impl Reader<'_> {
         &self,
         ink: &Ink,
         field: QueueField,
+        scale: &SaleQueueScale,
     ) -> Result<(String, Result<Value, RowRefusal>), SaleQueueError> {
         let height = ink.rect.height() as f32;
-        let gap = (self.queue.word_gap * height).round() as i32;
+        let gap = (scale.word_gap * height).round() as i32;
         let mut read = Vec::new();
         for word in words(self.image, ink.rect, self.profile.text.min_ink, gap) {
             let text = read_isolated(
@@ -1234,20 +1292,26 @@ impl Reader<'_> {
         Ok((raw, value))
     }
 
-    /// Read one field's ink and check it by its grammar and its width:
-    /// the recogniser's text, and the value or why it was refused.
+    /// Read one field's ink and check it by its grammar and its width at
+    /// the queue's scale: the recogniser's text, and the value or why it
+    /// was refused.
     fn value(
         &self,
         field: QueueField,
         ink: &Ink,
+        scale: &SaleQueueScale,
     ) -> Result<(String, Result<Value, RowRefusal>), SaleQueueError> {
         if field == QueueField::Name {
-            return self.name(ink, field);
+            return self.name(ink, field, scale);
         }
         if let Some(lit) = ink.lit {
             return Ok((String::new(), Ok(Value::Switch(lit))));
         }
-        let numerals = &self.queue.numerals;
+        let numerals = if field.is_under_a_spinner() {
+            &scale.figure_numerals
+        } else {
+            &scale.numerals
+        };
         let image = ink.crop.as_ref().unwrap_or(self.image);
         let raw = self.read(image, ink.rect)?;
         let invalid = || RowRefusal::Invalid {
@@ -1342,23 +1406,92 @@ fn plan(queue: &SaleQueueProfile) -> Result<BTreeMap<QueueField, (usize, FieldPi
     Ok(plan)
 }
 
-/// Read the sell queue from a frame.
-pub fn read_sale_queue(
-    image: &BgrImage,
-    profile: &UiProfile,
-    catalogue: &ItemCatalogue,
-    recogniser: &dyn Recogniser,
-) -> Result<SaleQueue, SaleQueueError> {
+/// Which field is read from which column, and how.
+type Plan = BTreeMap<QueueField, (usize, FieldPick)>;
+
+/// The sell queue's profile entry, and its plan of which field is read
+/// from which column.
+fn queue_profile(profile: &UiProfile) -> Result<(&SaleQueueProfile, Plan), SaleQueueError> {
     let queue = profile
         .windows
         .get(WINDOW)
         .and_then(|w| w.sale_queue.as_ref())
         .ok_or_else(|| SaleQueueError::NotInProfile("no sale_queue entry".into()))?;
     let plan = plan(queue).map_err(SaleQueueError::NotInProfile)?;
-    // The title and the headings are recognised while searching and again
-    // while reading.
-    let remembering = Remembering::new(recogniser);
-    let recogniser: &dyn Recogniser = &remembering;
+    Ok((queue, plan))
+}
+
+/// The queue's table as a frame shows it, found from its headings and
+/// rule lines before anything in its rows is read.
+struct Table {
+    located: Located,
+    runs: Vec<TextRun>,
+    panel: Panel,
+    /// The header band, from the row under the rule above the headings to
+    /// the row over the rule under them.
+    header: (i32, i32),
+    /// The table's left and right edges.
+    extent: (i32, i32),
+    /// Each column's inner edges, in the profile's order of columns.
+    columns: Vec<(i32, i32)>,
+    /// The window's lettering above the table: the heading and the price
+    /// toggle.
+    above: Vec<TextRun>,
+    /// The bands under the header, each with whether it is a whole row.
+    rows: Vec<(Band, bool)>,
+    /// A row's height, from the header's.
+    row_height: i32,
+}
+
+impl Table {
+    /// The header band's height in pixels, rule to rule: what tells the
+    /// interface scale the queue is drawn at.
+    fn header_height(&self) -> i32 {
+        self.header.1 - self.header.0 + 1
+    }
+
+    fn reader<'a>(
+        &'a self,
+        image: &'a BgrImage,
+        profile: &'a UiProfile,
+        queue: &'a SaleQueueProfile,
+        recogniser: &'a dyn Recogniser,
+    ) -> Reader<'a> {
+        Reader {
+            image,
+            profile,
+            queue,
+            recogniser,
+            located: &self.located,
+            runs: &self.runs,
+            panel: self.panel,
+            pitch: self.row_height,
+        }
+    }
+
+    /// The whole rows in view, each with its band: rows cut by the view
+    /// or covered by a window in front are left out.
+    fn whole_rows(&self, queue: &SaleQueueProfile) -> Vec<&Band> {
+        let least = self.row_height as f32 * (1.0 - queue.row_slack);
+        self.rows
+            .iter()
+            .filter(|(band, full)| {
+                let row = Rect::new(self.extent.0, band.top, self.extent.1, band.bottom);
+                *full && band.height() as f32 >= least && !covered(&self.located, row)
+            })
+            .map(|(band, _)| band)
+            .collect()
+    }
+}
+
+/// Find the queue's table: the window, its headings, rule lines and
+/// columns, and the price toggle in the mode the reader is built on.
+fn find_table(
+    image: &BgrImage,
+    profile: &UiProfile,
+    queue: &SaleQueueProfile,
+    recogniser: &dyn Recogniser,
+) -> Result<Table, SaleQueueError> {
     let located = locate(image, profile, WINDOW, recogniser)?;
     let window = &located.window;
     if !window.extent_certain() {
@@ -1371,30 +1504,15 @@ pub fn read_sale_queue(
         rgb: profile.chrome.panel_rgb,
         tolerance: profile.chrome.panel_tolerance,
     };
-    let mut reader = Reader {
-        image,
-        profile,
-        queue,
-        recogniser,
-        located: &located,
-        runs: located.runs(image, profile),
-        panel,
-        pitch: 0,
-    };
+    let runs = located.runs(image, profile);
     let no_recogniser = |_| SaleQueueError::NoRecogniser;
 
     // The headings: the first that reads anchors their line, and every
     // other is looked for along it.
     let mut anchor = None;
     for column in &queue.columns {
-        if let Some(run) = first_label(
-            image,
-            &reader.runs,
-            &column.heading,
-            &profile.read,
-            recogniser,
-        )
-        .map_err(no_recogniser)?
+        if let Some(run) = first_label(image, &runs, &column.heading, &profile.read, recogniser)
+            .map_err(no_recogniser)?
         {
             anchor = Some(run.clone());
             break;
@@ -1421,7 +1539,7 @@ pub fn read_sale_queue(
         &profile.text,
     )
     .into_iter()
-    .filter(|r| !reader.covered(r.rect))
+    .filter(|r| !covered(&located, r.rect))
     .collect();
     let mut headings = Vec::with_capacity(queue.columns.len());
     for column in &queue.columns {
@@ -1516,8 +1634,7 @@ pub fn read_sale_queue(
 
     // The toggle over the table says how prices are stated: the spinners
     // hold PED only in the mode the reader is built on.
-    let above: Vec<TextRun> = reader
-        .runs
+    let above: Vec<TextRun> = runs
         .iter()
         .filter(|r| r.rect.y1 < header.0 && r.rect.x0 >= extent.0 && r.rect.x1 <= extent.1)
         .cloned()
@@ -1526,7 +1643,7 @@ pub fn read_sale_queue(
         let run = find_label(image, &above, label, &profile.read, recogniser)
             .map_err(no_recogniser)?
             .ok_or(SaleQueueError::ModeUnread)?;
-        Ok(reader.lit(run.rect))
+        Ok(lit(image, run.rect, profile, queue))
     };
     match toggle(&queue.mode.active)? {
         Some(true) => {}
@@ -1546,7 +1663,7 @@ pub fn read_sale_queue(
         let mut checked = 0;
         for &d in &dividers {
             let strip = Rect::new(d - reach, top, d + reach, bottom);
-            if reader.covered(strip) {
+            if covered(&located, strip) {
                 continue;
             }
             checked += 1;
@@ -1569,34 +1686,59 @@ pub fn read_sale_queue(
     // tall a row is even when only one is in view to measure.
     let header_height = header.1 - header.0 + 1;
     let row_height = (header_height as f32 / queue.header_height_share).round() as i32;
-    reader.pitch = row_height;
-    let least = row_height as f32 * (1.0 - queue.row_slack);
+    Ok(Table {
+        runs,
+        panel,
+        header,
+        extent,
+        columns,
+        above,
+        rows: shape.rows,
+        row_height,
+        located,
+    })
+}
+
+/// Read the sell queue from a frame.
+pub fn read_sale_queue(
+    image: &BgrImage,
+    profile: &UiProfile,
+    catalogue: &ItemCatalogue,
+    recogniser: &dyn Recogniser,
+) -> Result<SaleQueue, SaleQueueError> {
+    let (queue, plan) = queue_profile(profile)?;
+    // The title and the headings are recognised while searching and again
+    // while reading.
+    let remembering = Remembering::new(recogniser);
+    let recogniser: &dyn Recogniser = &remembering;
+    let table = find_table(image, profile, queue, recogniser)?;
+    // The scale is decided from the table's geometry alone, before any
+    // value is read, so no reading can choose the measures it is held to.
+    let (_, scale) = claiming(&queue.scales, table.header_height(), |s| s.header_height)
+        .map_err(SaleQueueError::Scale)?;
+    let reader = table.reader(image, profile, queue, recogniser);
+    let whole = table.whole_rows(queue);
 
     let mut rows = Vec::new();
     let mut unread = Vec::new();
-    let mut partial = 0;
-    for (band, full) in &shape.rows {
-        let row = Rect::new(extent.0, band.top, extent.1, band.bottom);
-        if !*full || (band.height() as f32) < least || reader.covered(row) {
-            partial += 1;
-            continue;
-        }
-        match read_row(&reader, &plan, &columns, band, catalogue)? {
+    let partial = table.rows.len() - whole.len();
+    for band in whole {
+        match read_row(&reader, scale, &plan, &table.columns, band, catalogue)? {
             Ok(item) => rows.push(item),
             Err(row) => unread.push(row),
         }
     }
-    confirm_by_list(&reader, &mut rows, &mut unread, extent.0)?;
+    confirm_by_list(&reader, scale, &mut rows, &mut unread, table.extent.0)?;
 
     // The heading over the table carries the count, its digits measured
     // as any other number.
     let mut counts = Vec::new();
-    for run in &above {
+    for run in &table.above {
         let text = reader.read(image, run.rect)?;
         if let Some(count) = heading_count(&text, &queue.heading, profile.read.label_score) {
             let bracketed = format!("({count})");
             let measured = count_ink(image, run.rect, profile.text.min_ink)
-                .is_some_and(|ink| width_agrees(image, ink.padded(1), &bracketed, &queue.numerals));
+                .is_some_and(|ink| width_agrees(image, ink.padded(1), &bracketed, &scale.numerals));
             counts.push(measured.then_some(count));
         }
     }
@@ -1626,10 +1768,129 @@ pub fn read_sale_queue(
     })
 }
 
+/// The lettering of one field of a whole row, as the reader finds it,
+/// for measuring.
+#[derive(Debug, Clone)]
+pub struct MeasuredInk {
+    /// The image the ink is measured in: a spinner's value or a figure
+    /// under one brightened into a crop of its own (as the reader reads
+    /// and measures it), or `None` for the frame itself.
+    pub crop: Option<BgrImage>,
+    /// The lettering's run, in the coordinates of that image.
+    pub rect: Rect,
+    /// For a name, the widths in pixels of the blank stretches between
+    /// its inked columns, left to right: a word gap must be wider than
+    /// every gap between letters and no wider than every gap between
+    /// words.
+    pub gaps: Vec<i32>,
+}
+
+/// The queue as the reader finds it before reading a value, for
+/// measuring the lettering of a scale the profile may not list yet.
+#[derive(Debug, Clone)]
+pub struct QueueMeasure {
+    /// The header band's height in pixels, rule to rule: what tells the
+    /// interface scale.
+    pub header_height: i32,
+    /// The profile's scale entry that claims it, or why none does.
+    pub scale: Result<usize, ScaleError>,
+    /// The scale entry whose figure lettering found the figures under the
+    /// spinners: the one claiming the queue, or the nearest listed.
+    pub lettering: usize,
+    /// Every whole row in view, top to bottom, with each field's
+    /// lettering or why it was not found. Switches carry no lettering and
+    /// are left out.
+    pub rows: Vec<BTreeMap<QueueField, Result<MeasuredInk, RowRefusal>>>,
+    /// The bracketed count closing the queue's heading, `(3)`, as the
+    /// reader measures it, in the frame's coordinates, and the count it
+    /// read as.
+    pub count: Option<(Rect, u32)>,
+}
+
+/// Find the queue and every field's lettering without holding anything
+/// to a scale's measures: what an operator measures a new scale entry
+/// from. Nothing here is a reading; a value is read only by
+/// [`read_sale_queue`].
+pub fn measure_sale_queue(
+    image: &BgrImage,
+    profile: &UiProfile,
+    recogniser: &dyn Recogniser,
+) -> Result<QueueMeasure, SaleQueueError> {
+    let (queue, plan) = queue_profile(profile)?;
+    let remembering = Remembering::new(recogniser);
+    let recogniser: &dyn Recogniser = &remembering;
+    let table = find_table(image, profile, queue, recogniser)?;
+    let header_height = table.header_height();
+    let scale = claiming(&queue.scales, header_height, |s| s.header_height).map(|(i, _)| i);
+    // The figures under the spinners are found with the lettering of the
+    // scale that claims the queue, or failing one, the nearest listed.
+    let nearest = scale.unwrap_or_else(|_| nearest_scale(&queue.scales, header_height));
+    let lettering = queue
+        .scales
+        .get(nearest)
+        .ok_or_else(|| SaleQueueError::NotInProfile("no sale_queue scale".into()))?;
+    let reader = table.reader(image, profile, queue, recogniser);
+    let mut rows = Vec::new();
+    for band in table.whole_rows(queue) {
+        let mut fields = BTreeMap::new();
+        for (&field, (column, pick)) in &plan {
+            if pick.pick == Pick::BesideBox {
+                continue;
+            }
+            let (left, right) = table.columns[*column];
+            let cell = Rect::new(left, band.top, right, band.bottom);
+            let found = match reader.ink(cell, pick.pick, field, lettering) {
+                Ok(ink) => {
+                    let gaps = if field == QueueField::Name {
+                        let words = words(image, ink.rect, profile.text.min_ink, 1);
+                        words.windows(2).map(|w| w[1].x0 - w[0].x1 - 1).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    Ok(MeasuredInk {
+                        crop: ink.crop,
+                        rect: ink.rect,
+                        gaps,
+                    })
+                }
+                Err(Fault::Merged) => return Err(SaleQueueError::ColumnsMerged),
+                Err(Fault::Row(refusal)) => Err(refusal),
+            };
+            fields.insert(field, found);
+        }
+        rows.push(fields);
+    }
+    let mut count = None;
+    for run in &table.above {
+        let text = reader.read(image, run.rect)?;
+        if let Some(n) = heading_count(&text, &queue.heading, profile.read.label_score) {
+            count = count_ink(image, run.rect, profile.text.min_ink).map(|ink| (ink.padded(1), n));
+        }
+    }
+    Ok(QueueMeasure {
+        header_height,
+        scale,
+        lettering: nearest,
+        rows,
+        count,
+    })
+}
+
+/// The listed scale whose claimed header heights lie nearest `measured`.
+pub fn nearest_scale(scales: &[SaleQueueScale], measured: i32) -> usize {
+    (0..scales.len())
+        .min_by_key(|i| {
+            let [least, most] = scales[*i].header_height;
+            (least - measured).abs().min((most - measured).abs())
+        })
+        .unwrap_or(0)
+}
+
 /// One row: every field read, then the checks between them. A row read
 /// comes with where its name is lettered.
 fn read_row(
     reader: &Reader,
+    scale: &SaleQueueScale,
     plan: &BTreeMap<QueueField, (usize, FieldPick)>,
     columns: &[(i32, i32)],
     band: &Band,
@@ -1650,7 +1911,7 @@ fn read_row(
         {
             continue;
         }
-        let ink = match reader.ink(cell, pick.pick, field) {
+        let ink = match reader.ink(cell, pick.pick, field, scale) {
             Ok(ink) => ink,
             Err(Fault::Merged) => return Err(SaleQueueError::ColumnsMerged),
             Err(Fault::Row(refusal)) => {
@@ -1676,7 +1937,7 @@ fn read_row(
                 continue;
             }
         }
-        let (raw, value) = reader.value(field, &ink)?;
+        let (raw, value) = reader.value(field, &ink, scale)?;
         if field == QueueField::Name {
             raw_name = Some(raw);
             name_rect = Some(ink.rect);
@@ -1825,6 +2086,7 @@ fn read_row(
 /// stack size; a row where they do not is unread.
 fn confirm_by_list(
     reader: &Reader,
+    scale: &SaleQueueScale,
     rows: &mut Vec<(QueuedItem, Rect)>,
     unread: &mut Vec<UnreadQueueRow>,
     table_left: i32,
@@ -1864,12 +2126,7 @@ fn confirm_by_list(
                 let raw = reader.read(reader.image, count_run.rect)?;
                 parse(Grammar::Integer, &raw)
                     .filter(|p| {
-                        width_agrees(
-                            reader.image,
-                            count_run.rect,
-                            &p.text,
-                            &reader.queue.numerals,
-                        )
+                        width_agrees(reader.image, count_run.rect, &p.text, &scale.numerals)
                     })
                     .and_then(|p| p.text.parse::<u64>().ok())
                     .map(|count| (count, stack))
@@ -1896,7 +2153,7 @@ mod tests {
     use super::*;
     use crate::game_ui::test_support::{
         bundled_profile, draw_window, sale_scene, sale_window, standard_sale_layout, Lettering,
-        SaleLayout,
+        SaleLayout, SALE_HEADER_HEIGHT,
     };
 
     fn catalogue() -> ItemCatalogue {
@@ -2783,6 +3040,249 @@ mod tests {
         assert_eq!(catalogue.find("Sollomate Opalo"), Some(Some(4.5)));
         assert_eq!(catalogue.find("Vivo T1"), Some(None));
         assert_eq!(catalogue.find("Atrox"), None);
+    }
+
+    /// `numerals` with every advance and the bias `factor` times as wide:
+    /// how one lettering size measures at another interface scale, its
+    /// width following the scale and its height hinted.
+    fn widened(numerals: &NumeralMetrics, factor: f32) -> NumeralMetrics {
+        let scale = |v: f32| v * factor;
+        NumeralMetrics {
+            digit: scale(numerals.digit),
+            one: scale(numerals.one),
+            comma: scale(numerals.comma),
+            period: scale(numerals.period),
+            ped_suffix: scale(numerals.ped_suffix),
+            above_tt_prefix: numerals.above_tt_prefix.map(scale),
+            percent: numerals.percent.map(scale),
+            bracket: numerals.bracket.map(scale),
+            bias: scale(numerals.bias),
+            ..numerals.clone()
+        }
+    }
+
+    /// The bundled profile's entry for the drawn queue's scale, and a
+    /// second scale's: a taller header band, and numerals as wide as the
+    /// drawn lettering measures at a larger scale.
+    fn two_scales() -> (SaleQueueScale, SaleQueueScale) {
+        let drawn = bundled_profile().windows[WINDOW]
+            .sale_queue
+            .clone()
+            .expect("the bundled profile describes the sell queue")
+            .scales[0]
+            .clone();
+        let larger = SaleQueueScale {
+            header_height: [37, 39],
+            numerals: widened(&drawn.numerals, 1.12),
+            figure_numerals: widened(&drawn.figure_numerals, 1.12),
+            ..drawn.clone()
+        };
+        (drawn, larger)
+    }
+
+    /// The bundled profile with its sell queue's scales replaced.
+    fn with_scales(scales: Vec<SaleQueueScale>) -> UiProfile {
+        let mut profile = bundled_profile();
+        profile
+            .windows
+            .get_mut(WINDOW)
+            .and_then(|w| w.sale_queue.as_mut())
+            .expect("the bundled profile describes the sell queue")
+            .scales = scales;
+        profile
+    }
+
+    fn read_under(
+        profile: &UiProfile,
+        layout: &SaleLayout,
+        change: impl Fn(String) -> String + Send + Sync,
+    ) -> Result<SaleQueue, SaleQueueError> {
+        let d = sale_window(layout);
+        let inner = d.recogniser();
+        let recogniser = move |crop: &BgrImage| inner(crop).map(|(text, c)| (change(text), c));
+        read_sale_queue(&d.image, profile, &catalogue(), &recogniser)
+    }
+
+    #[test]
+    fn the_scale_entry_is_the_one_the_header_band_claims_wherever_it_is_listed() {
+        let (drawn, larger) = two_scales();
+        let layout = standard_sale_layout();
+        let alone = read(&layout).expect("the queue reads");
+        for scales in [
+            vec![larger.clone(), drawn.clone()],
+            vec![drawn.clone(), larger.clone()],
+        ] {
+            let profile = with_scales(scales);
+            let d = sale_window(&layout);
+            let measured = measure_sale_queue(&d.image, &profile, &d.recogniser())
+                .expect("the queue is found");
+            assert_eq!(measured.header_height, SALE_HEADER_HEIGHT);
+            let claimed = measured.scale.expect("one entry claims the drawn queue");
+            assert_eq!(
+                profile.windows[WINDOW].sale_queue.as_ref().unwrap().scales[claimed].header_height,
+                drawn.header_height
+            );
+            assert_eq!(read_under(&profile, &layout, |t| t), Ok(alone.clone()));
+        }
+        assert_eq!(alone.rows.len(), 3);
+    }
+
+    #[test]
+    fn a_queue_at_a_scale_the_profile_does_not_list_is_refused_before_anything_is_read() {
+        let (drawn, larger) = two_scales();
+        let layout = standard_sale_layout();
+        assert_eq!(
+            read_under(&with_scales(vec![larger.clone()]), &layout, |t| t),
+            Err(SaleQueueError::Scale(ScaleError::NotListed {
+                measured: SALE_HEADER_HEIGHT
+            }))
+        );
+        // Two entries claiming one header are a fault of the profile, which
+        // loading refuses; a profile built in code is refused here too.
+        let both = SaleQueueScale {
+            header_height: [25, 35],
+            ..larger
+        };
+        assert_eq!(
+            read_under(&with_scales(vec![drawn, both]), &layout, |t| t),
+            Err(SaleQueueError::Scale(ScaleError::Ambiguous {
+                measured: SALE_HEADER_HEIGHT
+            }))
+        );
+        // Measuring still finds the queue, to measure the missing entry
+        // from, with the nearest scale's lettering.
+        let (_, larger) = two_scales();
+        let d = sale_window(&layout);
+        let measured = measure_sale_queue(&d.image, &with_scales(vec![larger]), &d.recogniser())
+            .expect("the queue is found");
+        assert_eq!(
+            measured.scale,
+            Err(ScaleError::NotListed {
+                measured: SALE_HEADER_HEIGHT
+            })
+        );
+        assert_eq!(measured.rows.len(), 3);
+        // Every value's lettering is found; only the helpers a row does
+        // not draw (the stack under a greyed quantity) are not.
+        for row in &measured.rows {
+            for field in [
+                QueueField::Name,
+                QueueField::Tt,
+                QueueField::Quantity,
+                QueueField::OpeningBid,
+                QueueField::OpeningBidFigure,
+                QueueField::Buyout,
+                QueueField::Days,
+                QueueField::Fee,
+                QueueField::Markup,
+            ] {
+                assert!(matches!(row.get(&field), Some(Ok(_))), "{field:?}: {row:?}");
+            }
+            assert!(!row.contains_key(&QueueField::BuyoutSwitch));
+        }
+        // A three-word name parts at two gaps at least.
+        let name = measured.rows[1][&QueueField::Name].as_ref().unwrap();
+        assert!(name.gaps.len() >= 2, "{:?}", name.gaps);
+    }
+
+    #[test]
+    fn a_figure_is_never_held_to_another_scales_numerals() {
+        use crate::game_ui::test_support::{blank, fill};
+        let (drawn, larger) = two_scales();
+        // The hazard: a figure drawn at the queue's scale, read a digit
+        // short, is as wide as the larger scale's numerals make the short
+        // text. Held to those, the misreading would pass its width.
+        let (text, short) = ("TT+160.47 PED", "TT+16.47 PED");
+        for h in [8, 10] {
+            let units = expected_width(text, &drawn.numerals).expect("covered");
+            let mut image = blank(400, 60, [8, 11, 11]);
+            let ink = Rect::new(20, 20, 20 + (units * h as f32).round() as i32 - 1, 19 + h);
+            fill(&mut image, ink, [200, 200, 200]);
+            assert!(
+                width_agrees(&image, ink.padded(3), short, &larger.numerals),
+                "at {h}"
+            );
+            assert!(
+                !width_agrees(&image, ink.padded(3), short, &drawn.numerals),
+                "at {h}"
+            );
+        }
+        let profile = with_scales(vec![larger.clone(), drawn.clone()]);
+        let layout = standard_sale_layout();
+        // A short reading: refused by its width under the drawn scale's
+        // numerals, wherever the larger scale is listed.
+        let queue = read_under(&profile, &layout, move |t| {
+            if t == text {
+                short.to_string()
+            } else {
+                t
+            }
+        })
+        .expect("the queue reads");
+        let width = |field| RowRefusal::WrongWidth {
+            field,
+            raw: short.into(),
+        };
+        assert_eq!(queue.rows.len(), 2);
+        assert_eq!(
+            queue.unread.iter().map(|u| &u.refusals).collect::<Vec<_>>(),
+            vec![&vec![
+                width(QueueField::BuyoutFigure),
+                width(QueueField::Markup)
+            ]]
+        );
+        // The recogniser's known failure on every reading: one of each
+        // repeated pair of digits dropped. No damaged value is returned,
+        // and the rows with nothing to damage still read.
+        let dropping = |text: String| {
+            let chars: Vec<char> = text.chars().collect();
+            let mut out = String::new();
+            let mut i = 0;
+            while i < chars.len() {
+                out.push(chars[i]);
+                let pair =
+                    i + 1 < chars.len() && chars[i].is_ascii_digit() && chars[i] == chars[i + 1];
+                i += if pair { 2 } else { 1 };
+            }
+            out
+        };
+        let queue = read_under(&profile, &layout, dropping).expect("the queue reads");
+        assert_eq!(
+            queue.rows.iter().map(texts).collect::<Vec<_>>(),
+            vec![vec![
+                "Output Amplifier Component".to_string(),
+                "20.80 PED".into(),
+                "52".into(),
+                "42".into(),
+                "off".into(),
+                "7".into(),
+                "1.54 PED".into(),
+                "201.92%".into(),
+            ]]
+        );
+        assert_eq!(queue.unread.len(), 2);
+        for row in &queue.unread {
+            assert!(
+                row.refusals
+                    .iter()
+                    .all(|r| matches!(r, RowRefusal::WrongWidth { .. } | RowRefusal::Disagrees(_))),
+                "{row:?}"
+            );
+        }
+        // Held to the larger scale's numerals, the drawn queue's true
+        // readings are the wrong width: the entry the header claims is
+        // the one that measures it.
+        let wrong = SaleQueueScale {
+            header_height: drawn.header_height,
+            ..larger.clone()
+        };
+        let swapped = with_scales(vec![wrong]);
+        let queue = read_under(&swapped, &layout, |t| t).expect("the queue reads");
+        assert!(queue.rows.is_empty(), "{queue:?}");
+        assert!(queue.unread.iter().all(|u| u
+            .refusals
+            .iter()
+            .any(|r| matches!(r, RowRefusal::WrongWidth { .. }))));
     }
 
     #[test]

@@ -280,41 +280,63 @@
             ]
           }
         ],
-        "numerals": {
-          "min_ink": 110,
-          "body_row_share": 0.25,
-          "digit": 0.887,
-          "one": 0.8,
-          "comma": 0.363,
-          "period": 0.507,
-          "ped_suffix": 2.71,
-          "above_tt_prefix": 3.12,
-          "percent": 1.215,
-          "bracket": 0.413,
-          "bias": -0.296,
-          "tolerance": 0.4
-        },
-        "word_gap": 0.2,
+        "scales": [
+          {
+            "header_height": [
+              29,
+              31
+            ],
+            "numerals": {
+              "min_ink": 110,
+              "body_row_share": 0.25,
+              "digit": 0.887,
+              "one": 0.8,
+              "comma": 0.363,
+              "period": 0.507,
+              "ped_suffix": 2.71,
+              "above_tt_prefix": 3.12,
+              "percent": 1.215,
+              "bracket": 0.413,
+              "bias": -0.296,
+              "tolerance": 0.4
+            },
+            "figure_numerals": {
+              "min_ink": 110,
+              "body_row_share": 0.25,
+              "digit": 0.887,
+              "one": 0.8,
+              "comma": 0.363,
+              "period": 0.507,
+              "ped_suffix": 2.71,
+              "above_tt_prefix": 3.12,
+              "percent": 1.215,
+              "bracket": 0.413,
+              "bias": -0.296,
+              "tolerance": 0.4
+            },
+            "figure_lettering": {
+              "min_ink": 55,
+              "glyph_gap": 2,
+              "join_factor": 1.7,
+              "max_colour_distance": 110,
+              "min_colour_ink": 12,
+              "line_slack": 0.3334,
+              "run_height": [
+                5,
+                60
+              ],
+              "min_ink_pixels": 14,
+              "merge_pieces": true
+            },
+            "word_gap": 0.2
+          }
+        ],
         "cut_reach": 2.0,
         "row_slack": 0.05,
         "header_height_share": 0.268,
         "line_slack": 0.5,
         "stack_gap": 1.0,
         "picture_height": 0.25,
-        "figure_lettering": {
-          "min_ink": 55,
-          "glyph_gap": 2,
-          "join_factor": 1.7,
-          "max_colour_distance": 110,
-          "min_colour_ink": 12,
-          "line_slack": 0.3334,
-          "run_height": [
-            5,
-            60
-          ],
-          "min_ink_pixels": 14,
-          "merge_pieces": true
-        },
         "spinner": {
           "min_peak": 40,
           "locked_peak": 100,

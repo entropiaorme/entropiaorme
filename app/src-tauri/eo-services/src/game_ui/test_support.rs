@@ -1057,6 +1057,10 @@ pub struct SaleLayout {
     pub hidden_dividers: Vec<usize>,
     /// The price toggle showing markup, not PED.
     pub markup_mode: bool,
+    /// How wide the figures are drawn, in digit heights: the bundled
+    /// profile's numerals for the drawn scale unless a test draws them
+    /// as another scale's would be.
+    pub numerals: NumeralMetrics,
 }
 
 /// The drawn queue's row height, and its header's.
@@ -1097,12 +1101,19 @@ pub fn sale_window(layout: &SaleLayout) -> Lettering {
     d
 }
 
-/// The sell queue's numerals, as the bundled profile measures them.
+/// The sell queue's numerals at the scale the drawn queue is drawn at,
+/// as the bundled profile measures them: its entry claiming the drawn
+/// header's height.
 pub fn sale_numerals() -> NumeralMetrics {
-    bundled_profile().windows["auction_sell"]
+    let queue = bundled_profile().windows["auction_sell"]
         .sale_queue
         .clone()
-        .expect("the bundled profile describes the sell queue")
+        .expect("the bundled profile describes the sell queue");
+    queue
+        .scales
+        .into_iter()
+        .find(|s| (s.header_height[0]..=s.header_height[1]).contains(&SALE_HEADER_HEIGHT))
+        .expect("the bundled profile lists the drawn queue's scale")
         .numerals
 }
 
@@ -1159,31 +1170,23 @@ fn draw_spinner(
         Rect::new(cx - 3, top + 70, cx + 3, top + 72),
         arrow,
     );
-    let numerals = sale_numerals();
-    let width = (expected_width(value, &numerals).expect("a number") * 10.0).round() as i32;
+    let numerals = &layout.numerals;
+    let width = (expected_width(value, numerals).expect("a number") * 10.0).round() as i32;
     let peak = if locked {
         layout.locked_peak
     } else {
         layout.editable_peak
     };
-    d.figure_at(
-        (cx - width / 2, top + 44),
-        10,
-        value,
-        value,
-        &numerals,
-        peak,
-    );
+    d.figure_at((cx - width / 2, top + 44), 10, value, value, numerals, peak);
     value_box
 }
 
 /// Draw a dim figure centred under a spinner on `cx`.
-fn draw_figure_under(d: &mut Lettering, cx: i32, top: i32, text: &str) {
-    let numerals = sale_numerals();
-    match expected_width(text, &numerals) {
+fn draw_figure_under(d: &mut Lettering, cx: i32, top: i32, text: &str, numerals: &NumeralMetrics) {
+    match expected_width(text, numerals) {
         Some(units) => {
             let width = (units * 8.0).round() as i32;
-            d.figure_at((cx - width / 2, top + 88), 8, text, text, &numerals, 120);
+            d.figure_at((cx - width / 2, top + 88), 8, text, text, numerals, 120);
         }
         None => {
             let width = 6 * text.chars().count() as i32;
@@ -1209,7 +1212,7 @@ pub fn draw_sale_window(d: &mut Lettering, layout: &SaleLayout) {
         Rect::new(w.x0 + 80, w.y0 + 22, w.x0 + 330, w.y0 + 33),
         "AUCTION / SELL",
     );
-    let numerals = sale_numerals();
+    let numerals = layout.numerals.clone();
     let edges = sale_column_edges(w);
     let (left, right) = (edges[0], *edges.last().expect("edges"));
     // The heading: its words, then the count between brackets taller
@@ -1290,7 +1293,7 @@ pub fn draw_sale_window(d: &mut Lettering, layout: &SaleLayout) {
         d.figure_at((x0 + 60, top + 63), 8, row.tt, row.tt, &numerals, 230);
         draw_spinner(d, (centre(1), 32), top, row.quantity, layout);
         if !row.quantity.1 {
-            draw_figure_under(d, centre(1), top, row.stack);
+            draw_figure_under(d, centre(1), top, row.stack, &numerals);
         }
         let bid = draw_spinner(d, (centre(2), 32), top, row.opening_bid, layout);
         d.text_at(
@@ -1298,7 +1301,7 @@ pub fn draw_sale_window(d: &mut Lettering, layout: &SaleLayout) {
             "0-9",
             120,
         );
-        draw_figure_under(d, centre(2), top, row.bid_figure);
+        draw_figure_under(d, centre(2), top, row.bid_figure, &numerals);
         let buyout = draw_spinner(d, (centre(3), 32), top, row.buyout, layout);
         d.text_at(
             Rect::new(buyout.x1 + 4, top + 45, buyout.x1 + 16, top + 52),
@@ -1310,9 +1313,15 @@ pub fn draw_sale_window(d: &mut Lettering, layout: &SaleLayout) {
             Rect::new(buyout.x1 + 22, top + 44, buyout.x1 + 32, top + 54),
             if row.buyout_lit { TAG_LIT } else { TAG_UNLIT },
         );
-        draw_figure_under(d, centre(3), top, row.buyout_figure.unwrap_or("-"));
+        draw_figure_under(
+            d,
+            centre(3),
+            top,
+            row.buyout_figure.unwrap_or("-"),
+            &numerals,
+        );
         draw_spinner(d, (centre(4), 18), top, (row.days, false), layout);
-        draw_figure_under(d, centre(4), top, row.days_range);
+        draw_figure_under(d, centre(4), top, row.days_range, &numerals);
         let fee_width =
             (expected_width(row.fee, &numerals).expect("an amount") * 9.0).round() as i32;
         d.figure_at(
@@ -1447,6 +1456,7 @@ pub fn standard_sale_layout() -> SaleLayout {
         editable_peak: 232,
         hidden_dividers: Vec::new(),
         markup_mode: false,
+        numerals: sale_numerals(),
     }
 }
 

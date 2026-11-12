@@ -33,9 +33,9 @@ use serde_json::Value;
 mod game_ui_replay;
 
 use game_ui_replay::{
-    coordinate_digit_loss, coordinates, field, plates, resources, row_is, sale_queue,
-    sale_queue_digit_loss, same_skill, skill_vocabulary, skills, terminal, windows, Corpus,
-    Outcome, Replay, Shard, REPAIR_COST, TRADE_TOTAL,
+    coordinate_digit_loss, coordinates, field, pinned_frames, plates, resources, row_is,
+    sale_queue, sale_queue_digit_loss, same_skill, skill_vocabulary, skills, terminal, windows,
+    Corpus, Outcome, Replay, Shard, REPAIR_COST, TRADE_TOTAL,
 };
 
 fn profile() -> UiProfile {
@@ -71,12 +71,19 @@ fn replay() -> Option<Replay> {
     })
 }
 
-/// A replay passes when nothing fails it.
+/// A replay passes when nothing fails it: no wrong value, no refusal
+/// unexplained, and no frame missing a manifest entry it needs.
 fn check(outcome: Outcome) {
     assert!(
-        outcome.failures.is_empty(),
+        outcome.passed(),
         "{}",
-        outcome.failures.join("\n")
+        outcome
+            .failures
+            .iter()
+            .chain(outcome.missing.iter().map(|line| line as &String))
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 
@@ -141,6 +148,14 @@ window_shards! {
     corpus_windows_shard_7: 7,
 }
 
+/// The manifest names the frames the tests below are pinned to, each one
+/// a frame of the corpus.
+#[test]
+fn the_manifest_names_every_pinned_frame() {
+    let Some((corpus, _)) = corpus() else { return };
+    check(pinned_frames(&corpus));
+}
+
 /// Every repair frame shows its cost in full, so a refusal fails too.
 #[test]
 fn repair_cost_is_read_exactly_or_refused() {
@@ -203,20 +218,25 @@ fn the_trade_terminal_read_answers_the_amount_on_screen() {
     check(outcome);
 }
 
-/// The one frame refused for a covered title loses only the rows the
-/// labels say are readable there; the rest are under the window in front.
+/// The frame refused for a covered title loses only the rows the labels
+/// say are readable there, as many as the manifest says; the rest are
+/// under the window in front.
 #[test]
-fn a_frame_refused_for_a_covered_title_hides_only_one_readable_row() {
+fn a_frame_refused_for_a_covered_title_hides_only_its_readable_rows() {
     let Some((corpus, _)) = corpus() else { return };
-    let rows = corpus.labels["frames"]["f17"]["skills"]["rows"]
+    let case = &corpus
+        .cases()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .covered_title;
+    let rows = corpus.labels["frames"][case.frame.as_str()]["skills"]["rows"]
         .as_array()
-        .expect("f17 rows")
+        .unwrap_or_else(|| panic!("{}: no skills rows", case.frame))
         .clone();
     let readable: Vec<&Value> = rows
         .iter()
         .filter(|row| row["fully_visible"].as_bool() == Some(true))
         .collect();
-    assert_eq!(readable.len(), 1, "{readable:?}");
+    assert_eq!(readable.len(), case.readable_rows, "{readable:?}");
     assert!(rows
         .iter()
         .filter(|row| row["fully_visible"].as_bool() != Some(true))
@@ -246,19 +266,17 @@ skills_shards! {
     skills_rows_shard_7: 7,
 }
 
-/// One sweep of every skill: the thirteen pages of the whole list, read
-/// one after another with nothing gained in between.
-const SWEEP_FRAMES: [&str; 13] = [
-    "f62", "f63", "f64", "f65", "f66", "f67", "f68", "f69", "f70", "f71", "f72", "f73", "f74",
-];
-
-/// The sweep's labelled rows, page by page, split into the names the
+/// The labelled rows of `frames`, page by page, split into the names the
 /// bundled vocabulary knows (with the blank row) and those it lacks.
-fn sweep_labels(corpus: &Corpus, vocabulary: &SkillVocabulary) -> (Vec<Value>, Vec<Value>) {
-    SWEEP_FRAMES
+fn rows_by_vocabulary(
+    corpus: &Corpus,
+    frames: &[String],
+    vocabulary: &SkillVocabulary,
+) -> (Vec<Value>, Vec<Value>) {
+    frames
         .iter()
         .flat_map(|frame| {
-            corpus.labels["frames"][*frame]["skills"]["rows"]
+            corpus.labels["frames"][frame.as_str()]["skills"]["rows"]
                 .as_array()
                 .expect("rows")
                 .clone()
@@ -290,63 +308,107 @@ fn a_skill_the_vocabulary_lacks_is_read_and_leaves_its_page_whole() {
     let read = r.reader();
     let table = skills_table(profile);
     let vocabulary = skill_vocabulary();
-    let page =
-        read_skills_page(&corpus.frame("f66"), profile, &vocabulary, &read).expect("f66 reads");
-    assert!(page.whole, "f66: {page:?}");
+    let frame = &corpus
+        .cases()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .vocabulary_lacks;
+    let page = read_skills_page(&corpus.frame(frame), profile, &vocabulary, &read)
+        .unwrap_or_else(|e| panic!("{frame}: {e}"));
+    assert!(page.whole, "{frame}: {page:?}");
+    let (_, lacking) = rows_by_vocabulary(corpus, std::slice::from_ref(frame), &vocabulary);
+    assert!(
+        !lacking.is_empty(),
+        "{frame}: the labels show no skill the vocabulary lacks"
+    );
     let unknown: Vec<&SkillRow> = page
         .rows
         .iter()
         .filter(|row| row.name == RowName::Unknown)
         .collect();
-    assert_eq!(unknown.len(), 1, "{unknown:?}");
     assert_eq!(
-        (
-            unknown[0].raw_name.as_str(),
-            unknown[0].points_text.as_str()
-        ),
-        ("Food Technology", "1")
+        unknown
+            .iter()
+            .map(|row| (row.raw_name.as_str(), row.points_text.as_str()))
+            .collect::<Vec<_>>(),
+        lacking
+            .iter()
+            .map(|row| (
+                row["name"].as_str().expect("named"),
+                row["points"].as_str().expect("points")
+            ))
+            .collect::<Vec<_>>()
     );
-    let (nearest, score) =
-        nearest_skill(&unknown[0].raw_name, &vocabulary).expect("a nearest skill");
-    println!(
-        "skill the bundled vocabulary lacks: {:?} = {}, nearest {nearest:?} at {score:.1} (near-miss floor {}, sweep floor {})",
-        unknown[0].raw_name, unknown[0].points_text, table.near_miss.score, table.near_miss.sweep_score
-    );
+    for row in unknown {
+        let (nearest, score) = nearest_skill(&row.raw_name, &vocabulary).expect("a nearest skill");
+        println!(
+            "skill the bundled vocabulary lacks: {:?} = {}, nearest {nearest:?} at {score:.1} (near-miss floor {}, sweep floor {})",
+            row.raw_name, row.points_text, table.near_miss.score, table.near_miss.sweep_score
+        );
+    }
 }
 
-/// Two different readings of page 2 (the list before and after a skill
+/// A page's number and total as its labels give them.
+fn labelled_page(corpus: &Corpus, frame: &str) -> (Option<(u32, u32)>, Option<u64>) {
+    let labels = &corpus.labels["frames"][frame]["skills"];
+    let page = labels["page"].as_str().and_then(|p| {
+        let (page, count) = p.split_once('/')?;
+        Some((page.trim().parse().ok()?, count.trim().parse().ok()?))
+    });
+    let total = labels["total_text"]
+        .as_str()
+        .and_then(|t| t.rsplit(' ').next()?.parse().ok());
+    (page, total)
+}
+
+/// Two different readings of one page (the list before and after a skill
 /// rose: the same skills, another total): the later one is kept, each
-/// time. Then page 4's rows arriving under page 3's number, as a misread
-/// pager would bring them, unsettle page 3 until it is read again.
+/// time. Then the next page's rows arriving under the number of the page
+/// before it, as a misread pager would bring them, unsettle that page
+/// until it is read again.
 #[test]
 fn rereadings_replace_and_a_misplaced_page_unsettles_its_number() {
     let Some(r) = replay() else { return };
     let (corpus, profile) = (&r.corpus, &r.profile);
     let read = r.reader();
     let vocabulary = skill_vocabulary();
+    let case = &corpus.cases().unwrap_or_else(|e| panic!("{e}")).rereading;
     let mut sweep = SkillsSweep::new(&skills_table(profile), &vocabulary);
     let page = |frame: &str| {
-        read_skills_page(&corpus.frame(frame), profile, &vocabulary, &read)
-            .unwrap_or_else(|e| panic!("{frame}: {e}"))
+        let page = read_skills_page(&corpus.frame(frame), profile, &vocabulary, &read)
+            .unwrap_or_else(|e| panic!("{frame}: {e}"));
+        assert_eq!(
+            (page.page, page.total),
+            labelled_page(corpus, frame),
+            "{frame}"
+        );
+        page
     };
-    let (older, newer) = (page("f13"), page("f63"));
-    assert_eq!((older.page, older.total), (Some((2, 13)), Some(198258)));
-    assert_eq!((newer.page, newer.total), (Some((2, 13)), Some(198259)));
+    let (older, newer) = (page(&case.older), page(&case.newer));
+    let number = older.page.expect("a page number").0;
+    assert_eq!(older.page, newer.page, "the two readings are of one page");
+    assert_ne!(older.total, newer.total, "the two readings differ");
     assert_eq!(sweep.accept(older.clone()), Admission::Kept);
     assert_eq!(sweep.accept(newer.clone()), Admission::Kept);
-    assert_eq!(sweep.page(2).and_then(|p| p.total), Some(198259));
-    assert_eq!(sweep.accept(older), Admission::Kept);
-    assert_eq!(sweep.page(2).and_then(|p| p.total), Some(198258));
+    assert_eq!(sweep.page(number).and_then(|p| p.total), newer.total);
+    assert_eq!(sweep.accept(older.clone()), Admission::Kept);
+    assert_eq!(sweep.page(number).and_then(|p| p.total), older.total);
 
-    let (third, fourth) = (page("f64"), page("f65"));
-    assert_eq!(sweep.accept(third.clone()), Admission::Kept);
-    let mut misplaced = fourth;
-    misplaced.page = Some((3, 13));
+    let [first, second] = &case.consecutive;
+    let (before, after) = (page(first), page(second));
+    let (at, count) = before.page.expect("a page number");
+    assert_eq!(
+        after.page,
+        Some((at + 1, count)),
+        "the pages are consecutive"
+    );
+    assert_eq!(sweep.accept(before.clone()), Admission::Kept);
+    let mut misplaced = after;
+    misplaced.page = before.page;
     assert_eq!(sweep.accept(misplaced), Admission::Conflict);
-    assert!(sweep.missing().expect("count known").contains(&3));
-    assert_eq!(sweep.accept(third.clone()), Admission::Kept);
-    assert_eq!(sweep.page(3), Some(&third));
-    println!("skills sweep rereadings: page 2 kept from the later reading each time; page 3 unsettled by a misplaced page and settled by a reread");
+    assert!(sweep.missing().expect("count known").contains(&at));
+    assert_eq!(sweep.accept(before.clone()), Admission::Kept);
+    assert_eq!(sweep.page(at), Some(&before));
+    println!("skills sweep rereadings: page {number} kept from the later reading each time; page {at} unsettled by a misplaced page and settled by a reread");
 }
 
 /// The sweep's pages, read with the bundled vocabulary, fed out of order
@@ -358,7 +420,8 @@ fn a_sweep_of_every_page_adds_up_to_the_panels_total() {
     let (corpus, profile) = (&r.corpus, &r.profile);
     let read = r.reader();
     let vocabulary = skill_vocabulary();
-    let pages: Vec<SkillsPage> = SWEEP_FRAMES
+    let frames = &corpus.cases().unwrap_or_else(|e| panic!("{e}")).sweep;
+    let pages: Vec<SkillsPage> = frames
         .iter()
         .map(|name| {
             read_skills_page(&corpus.frame(name), profile, &vocabulary, &read)
@@ -366,18 +429,26 @@ fn a_sweep_of_every_page_adds_up_to_the_panels_total() {
         })
         .collect();
     let mut sweep = SkillsSweep::new(&skills_table(profile), &vocabulary);
-    for index in [12usize, 3, 7, 0, 1, 11, 5, 9, 2, 4, 10, 6, 8, 1] {
+    // Out of order, by a stride through the pages that visits each once,
+    // and the second page read twice.
+    let n = pages.len();
+    let stride = (n / 2..n).find(|s| gcd(*s, n) == 1).unwrap_or(1);
+    let order: Vec<usize> = (0..n)
+        .map(|k| (k * stride + n - 1) % n)
+        .chain([1 % n])
+        .collect();
+    for index in order {
         assert_eq!(
             sweep.accept(pages[index].clone()),
             Admission::Kept,
             "{} (page {}) is whole",
-            SWEEP_FRAMES[index],
+            frames[index],
             index + 1
         );
     }
     assert_eq!(sweep.missing(), Some(Vec::new()));
     let result = sweep.finish().expect("every page is whole");
-    let (known, lacking) = sweep_labels(corpus, &vocabulary);
+    let (known, lacking) = rows_by_vocabulary(corpus, frames, &vocabulary);
     assert_eq!(result.skills.len(), known.len());
     for (got, want) in result.skills.iter().zip(&known) {
         assert!(
@@ -406,16 +477,22 @@ fn a_sweep_of_every_page_adds_up_to_the_panels_total() {
         .count();
     println!(
         "skills sweep: {} pages, {} known ({near_misses} by near miss), {} unknown {unknown:?}, checksum {:?}, total {:?}",
-        SWEEP_FRAMES.len(),
+        frames.len(),
         result.skills.len(),
         result.unknown.len(),
         result.checksum,
         result.total
     );
-    assert_eq!(result.skills.len(), 151);
-    assert_eq!(unknown, vec!["Food Technology 1".to_string()]);
-    assert_eq!(result.total, Some(198259));
+    assert_eq!(result.total, labelled_page(corpus, &frames[0]).1);
     assert_eq!(result.checksum, Checksum::Matches);
+}
+
+fn gcd(a: usize, b: usize) -> usize {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
 }
 
 /// The recogniser's known failure, made systematic: wherever a number
@@ -463,9 +540,14 @@ fn a_recogniser_that_drops_repeated_digits_never_gets_a_number_accepted() {
     let (mut exact, mut refused) = (0usize, 0usize);
     let mut wrong = Vec::new();
     let mut seen_the_first_case = false;
-    // Three pages keep the test well inside the runner's ceiling; they
+    // A few pages keep the test well inside the runner's ceiling; they
     // include the page with `1,444.77`.
-    for name in ["f65", "f71", "f72"] {
+    for name in &corpus
+        .cases()
+        .unwrap_or_else(|e| panic!("{e}"))
+        .dropped_digits
+    {
+        let name = name.as_str();
         let labels = &corpus.labels["frames"][name]["skills"];
         let image = corpus.frame(name);
         let page = read_skills_page(&image, profile, &vocabulary, &read)
@@ -553,22 +635,19 @@ coord_shards! {
 }
 
 /// The rings give one map scale whatever the radar's size, from the
-/// distances read beside them: the default radar (f05, f26, f27) and the
-/// enlarged one (f30, f32) agree on metres per pixel within 3%, and their
-/// edges reach about 218 m and 329 m.
+/// distances read beside them: radars of different sizes agree on metres
+/// per pixel within 3%, and each one's edge reaches the distance the
+/// manifest gives for it, within 2%.
 #[test]
 fn the_ring_scale_is_the_same_for_a_default_and_an_enlarged_radar() {
     let Some(r) = replay() else { return };
     let (corpus, profile) = (&r.corpus, &r.profile);
     let read = r.reader();
     let mut scales = Vec::new();
-    for (name, edge_m) in [
-        ("f05", 218.0),
-        ("f26", 218.0),
-        ("f27", 218.0),
-        ("f30", 329.0),
-        ("f32", 329.0),
-    ] {
+    let cases = &corpus.cases().unwrap_or_else(|e| panic!("{e}")).ring_scale;
+    let mut radii = Vec::new();
+    for case in cases {
+        let (name, edge_m) = (case.frame.as_str(), case.edge_m);
         let image = corpus.frame(name);
         let radar = find_radar(&image, profile).unwrap_or_else(|| panic!("{name}: no radar"));
         let scale = ring_scale(&image, &radar, profile, &read)
@@ -596,7 +675,13 @@ fn the_ring_scale_is_the_same_for_a_default_and_an_enlarged_radar() {
             scale.edge_range_m
         );
         scales.push(scale.metres_per_pixel);
+        radii.push(radar.radius);
     }
+    // The case holds radars of more than one size, or it proves nothing.
+    assert!(
+        radii.iter().any(|r| (r / radii[0] - 1.0).abs() > 0.1),
+        "every radar measured is the same size: {radii:?}"
+    );
     let mean = scales.iter().sum::<f64>() / scales.len() as f64;
     for scale in &scales {
         assert!((scale / mean - 1.0).abs() <= 0.03, "{scales:?}");

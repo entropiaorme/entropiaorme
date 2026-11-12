@@ -738,11 +738,7 @@ mod tests {
 
     /// The sell queue's numerals, which cover markups too.
     fn queue_metrics() -> NumeralMetrics {
-        crate::game_ui::test_support::bundled_profile().windows["auction_sell"]
-            .sale_queue
-            .clone()
-            .expect("the bundled profile describes the sell queue")
-            .numerals
+        crate::game_ui::test_support::sale_numerals()
     }
 
     #[test]

@@ -32,8 +32,12 @@
 //!   solid nameplates in view.
 //! - `measure-numerals <frame> <window kind> <field> <expected text>`, or
 //!   `measure-numerals <frame> --rect x0,y0,x1,y1 <expected text>`
-//!   (`--numerals sale-queue` for the sell queue's metrics): one figure's
-//!   ink against the numeral metrics, and a sample line for `fit-numerals`.
+//!   (`--numerals sale-queue` or `sale-queue-figures` with `--scale
+//!   <index>` for the sell queue's metrics at one of its scales): one figure's ink against the numeral
+//!   metrics, and a sample line for `fit-numerals`.
+//! - `measure-sale-queue <frame> --labels <labels.json>`: a complete entry
+//!   of the sell queue's `scales` measured from a frame and its true texts,
+//!   with the header band's height that identifies the scale.
 //! - `timing <frame> [--repeat <n>] [--planet <name>]`: how long the reads
 //!   that run live take.
 //!
@@ -42,14 +46,19 @@
 //! was found drawn on it; `--overlay-area x0,y0,x1,y1` saves only that
 //! part of it, at native size.
 //!
-//! - `fit-numerals <samples file> [--numerals sale-queue]`: numeral
-//!   metrics fitted to sample lines by least squares.
+//! - `fit-numerals <samples file> [--numerals sale-queue [--scale <index>]]
+//!   [--fit <entry>,...]` (or `--numerals sale-queue-figures`): numeral
+//!   metrics fitted to sample lines by least squares, every entry the
+//!   samples hold or only those `--fit` names.
 //! - `replay <corpus dir> [--profile <path>] [--held-out]`: every reader
 //!   over every frame of a corpus (`frames/*.png`, `labels.json`,
 //!   `manifest.json`), with the tallies the real-capture tests print.
-//!   Exits non-zero when a wrong value was accepted or a refusal is not
-//!   accounted for. Frames the manifest holds out are skipped unless
-//!   `--held-out` asks for them alone.
+//!   Exits non-zero when a wrong value was accepted, a refusal is not
+//!   accounted for, or a frame lacks a manifest entry it needs. Frames the
+//!   manifest holds out are skipped unless `--held-out` asks for them,
+//!   and then they alone are replayed.
+//! - `help [<subcommand>]`, or `<subcommand> --help`: every subcommand's
+//!   arguments, or one's in full.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -72,7 +81,9 @@ use eo_services::game_ui::profile::UiProfile;
 use eo_services::game_ui::radar::{
     find_radar, find_rings, read_coordinates, read_planet_label, ring_scale, CoordinateBounds,
 };
-use eo_services::game_ui::sale_queue::{read_sale_queue, ItemCatalogue};
+use eo_services::game_ui::sale_queue::{
+    measure_sale_queue, read_sale_queue, ItemCatalogue, QueueField, SaleQueueProfile,
+};
 use eo_services::game_ui::seams::{frame_reader, GameFrame};
 use eo_services::game_ui::skills::read_skills_page;
 use eo_services::game_ui::table::{column_rules, row_rules, rows, Panel};
@@ -102,7 +113,7 @@ const CYAN: [u8; 3] = [60, 230, 255];
 const MAGENTA: [u8; 3] = [255, 80, 255];
 
 /// The command line: positional words, and `--name value` options
-/// (`--held-out` alone takes no value).
+/// (`--held-out` and `--help` alone take no value).
 struct Args {
     words: Vec<String>,
     options: BTreeMap<String, String>,
@@ -117,8 +128,8 @@ impl Args {
         let mut raw = raw.peekable();
         while let Some(word) = raw.next() {
             match word.strip_prefix("--") {
-                Some("held-out") => {
-                    args.options.insert("held-out".into(), String::new());
+                Some(flag @ ("held-out" | "help")) => {
+                    args.options.insert(flag.into(), String::new());
                 }
                 Some(name) => {
                     let value = raw
@@ -928,6 +939,15 @@ fn cmd_sale_queue(s: Session) -> Result<(), String> {
     let store = GameDataStore::new(&resources().join("snapshot"))
         .map_err(|error| format!("the bundled game data: {error}"))?;
     let catalogue = ItemCatalogue::from_store(&store);
+    if let Ok(measured) = measure_sale_queue(&s.image, &s.profile, &*read) {
+        match measured.scale {
+            Ok(index) => println!(
+                "header band {} px: the profile's scales[{index}]",
+                measured.header_height
+            ),
+            Err(why) => println!("header band {} px: {why}", measured.header_height),
+        }
+    }
     match read_sale_queue(&s.image, &s.profile, &catalogue, &*read) {
         Ok(queue) => {
             println!(
@@ -1142,19 +1162,59 @@ fn cmd_measure_chrome(mut s: Session) -> Result<(), String> {
     s.overlay.save()
 }
 
+/// The sell queue's profile entry.
+fn sale_queue_profile(profile: &UiProfile) -> Result<&SaleQueueProfile, String> {
+    profile
+        .windows
+        .values()
+        .find_map(|w| w.sale_queue.as_ref())
+        .ok_or_else(|| "the profile describes no sell queue".to_string())
+}
+
 /// The numeral metrics a subcommand measures against: the labelled
-/// fields', or the sell queue's with `--numerals sale-queue`.
+/// fields', or with `--numerals sale-queue` (`sale-queue-figures` for the
+/// figures under its spinners) the sell queue's at the scale `--scale
+/// <index>` names, which may be left out where the profile lists one.
 fn numeral_metrics(args: &Args, profile: &UiProfile) -> Result<NumeralMetrics, String> {
     match args.option("numerals") {
-        None | Some("read") => Ok(profile.read.numerals.clone()),
-        Some("sale-queue") => profile
-            .windows
-            .values()
-            .find_map(|w| w.sale_queue.as_ref())
-            .map(|queue| queue.numerals.clone())
-            .ok_or_else(|| "the profile describes no sell queue".to_string()),
+        None | Some("read") => {
+            if args.option("scale").is_some() {
+                return Err(
+                    "--scale names a sell queue scale entry: add --numerals sale-queue".into(),
+                );
+            }
+            Ok(profile.read.numerals.clone())
+        }
+        Some(which @ ("sale-queue" | "sale-queue-figures")) => {
+            let scales = &sale_queue_profile(profile)?.scales;
+            let index = match (args.number::<usize>("scale")?, scales.len()) {
+                (Some(index), _) => index,
+                (None, 1) => 0,
+                (None, n) => {
+                    return Err(format!(
+                        "the profile lists {n} sell queue scales: name one with --scale <index> \
+                         (`sale-queue` and `measure-sale-queue` print which claims a frame)"
+                    ))
+                }
+            };
+            scales
+                .get(index)
+                .map(|entry| {
+                    if which == "sale-queue" {
+                        entry.numerals.clone()
+                    } else {
+                        entry.figure_numerals.clone()
+                    }
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "--scale {index}: the profile lists sell queue scales 0 to {}",
+                        scales.len().saturating_sub(1)
+                    )
+                })
+        }
         Some(other) => Err(format!(
-            "--numerals {other:?} is not `read` or `sale-queue`"
+            "--numerals {other:?} is not `read`, `sale-queue` or `sale-queue-figures`"
         )),
     }
 }
@@ -1310,16 +1370,13 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
     Some(x)
 }
 
-/// Fit the numeral metrics to samples by least squares. Each sample is a
-/// figure's measured width in digit heights and its true text; the width
-/// the metrics predict is a constant plus so much per glyph, so the
-/// advances that best fit every sample solve a small linear system.
-fn cmd_fit_numerals(args: &Args) -> Result<(), String> {
-    let path = args.word(1, "the samples file")?;
-    let profile = load_profile(args)?;
-    let metrics = numeral_metrics(args, &profile)?;
-    let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
-    let mut samples: Vec<(f64, [f64; TERMS.len()], String)> = Vec::new();
+/// One sample: a figure's measured width in digit heights, how many of
+/// each glyph its true text has, and the text.
+type Sample = (f64, [f64; TERMS.len()], String);
+
+/// Sample lines, `<width in digit heights><TAB><text>`, one a line.
+fn parse_samples(text: &str) -> Result<Vec<Sample>, String> {
+    let mut samples = Vec::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
         let (ratio, figure) = line
             .split_once('\t')
@@ -1332,30 +1389,51 @@ fn cmd_fit_numerals(args: &Args) -> Result<(), String> {
             .ok_or_else(|| format!("{figure:?} holds a character no numeral metric measures"))?;
         samples.push((ratio, counts, figure.to_string()));
     }
-    // The terms the samples exercise are fitted; the rest keep the
-    // profile's values.
-    let fitted: Vec<usize> = (0..TERMS.len())
-        .filter(|t| samples.iter().any(|(_, counts, _)| counts[*t] > 0.0))
-        .collect();
-    if samples.len() <= fitted.len() {
+    Ok(samples)
+}
+
+/// Fit the `free` terms to `samples` by least squares, every other term
+/// held at its value in `base`: each sample's width is a constant plus so
+/// much per glyph, so the free terms that best fit every sample solve a
+/// small linear system. Returns every term, fitted or held.
+fn fit_terms(
+    samples: &[Sample],
+    base: &[Option<f32>; TERMS.len()],
+    free: &[usize],
+) -> Result<[Option<f64>; TERMS.len()], String> {
+    for (_, counts, figure) in samples {
+        if let Some(t) =
+            (0..TERMS.len()).find(|t| counts[*t] > 0.0 && !free.contains(t) && base[*t].is_none())
+        {
+            return Err(format!(
+                "{figure:?} needs {}, which the entry fitted from does not have and is not \
+                 being fitted: add it to --fit",
+                TERMS[t]
+            ));
+        }
+    }
+    if samples.len() <= free.len() {
         return Err(format!(
-            "{} samples cannot fit {} entries ({}); measure more figures",
+            "{} samples cannot fit {} entries ({}); measure more figures, or fit fewer with --fit",
             samples.len(),
-            fitted.len(),
-            fitted
-                .iter()
+            free.len(),
+            free.iter()
                 .map(|t| TERMS[*t])
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
     }
-    let n = fitted.len();
+    let n = free.len();
     let mut normal = vec![vec![0.0; n]; n];
     let mut rhs = vec![0.0; n];
-    for (ratio, counts, _) in &samples {
-        for (i, ti) in fitted.iter().enumerate() {
-            rhs[i] += counts[*ti] * ratio;
-            for (j, tj) in fitted.iter().enumerate() {
+    for (ratio, counts, _) in samples {
+        let held: f64 = (0..TERMS.len())
+            .filter(|t| !free.contains(t))
+            .map(|t| counts[t] * f64::from(base[t].unwrap_or(0.0)))
+            .sum();
+        for (i, ti) in free.iter().enumerate() {
+            rhs[i] += counts[*ti] * (ratio - held);
+            for (j, tj) in free.iter().enumerate() {
                 normal[i][j] += counts[*ti] * counts[*tj];
             }
         }
@@ -1363,41 +1441,432 @@ fn cmd_fit_numerals(args: &Args) -> Result<(), String> {
     let solved = solve(normal, rhs).ok_or(
         "the samples cannot tell the entries apart: every sample has the same number of some \
          glyph as of another, or the same unit; add figures that differ in how many digits, \
-         ones, commas and stops they hold, and some with and some without their unit",
+         ones, commas and stops they hold, and some with and some without their unit, or fit \
+         fewer entries with --fit",
     )?;
-    let current = term_values(&metrics);
+    let mut terms = base.map(|v| v.map(f64::from));
+    for (i, t) in free.iter().enumerate() {
+        terms[*t] = Some((solved[i] * 1000.0).round() / 1000.0);
+    }
+    Ok(terms)
+}
+
+/// The width `counts` predicts with `terms`.
+fn predicted(counts: &[f64; TERMS.len()], terms: &[Option<f64>; TERMS.len()]) -> f64 {
+    (0..TERMS.len())
+        .map(|t| counts[t] * terms[t].unwrap_or(0.0))
+        .sum()
+}
+
+/// `base` with its advances and bias replaced by `terms`, as the
+/// profile's `numerals` entry spells it.
+fn numerals_json(base: &NumeralMetrics, terms: &[Option<f64>; TERMS.len()]) -> Value {
+    // An `f32` widened to `f64` prints its binary tail: round it back.
+    let carried = |value: f32| (f64::from(value) * 1e6).round() / 1e6;
     let mut entry = serde_json::Map::new();
-    for (i, t) in fitted.iter().enumerate() {
-        let value = (solved[i] * 1000.0).round() / 1000.0;
-        println!(
-            "{}: fitted {value:.3} (the profile has {})",
-            TERMS[*t],
-            current[*t].map_or("none".to_string(), |v| format!("{v:.3}"))
-        );
-        entry.insert(TERMS[*t].to_string(), json!(value));
+    entry.insert("min_ink".into(), json!(base.min_ink));
+    entry.insert("body_row_share".into(), json!(carried(base.body_row_share)));
+    for name in [
+        "digit",
+        "one",
+        "comma",
+        "period",
+        "ped_suffix",
+        "above_tt_prefix",
+        "percent",
+        "bracket",
+        "bias",
+    ] {
+        let t = TERMS.iter().position(|n| *n == name).expect("a term");
+        if let Some(value) = terms[t] {
+            entry.insert(name.into(), json!((value * 1000.0).round() / 1000.0));
+        }
     }
+    entry.insert("tolerance".into(), json!(carried(base.tolerance)));
+    Value::Object(entry)
+}
+
+/// Print each sample's residual against `terms`, and the largest.
+fn print_residuals(samples: &[Sample], terms: &[Option<f64>; TERMS.len()]) -> f64 {
     let mut worst: f64 = 0.0;
-    for (ratio, counts, figure) in &samples {
-        let predicted: f64 = fitted
-            .iter()
-            .enumerate()
-            .map(|(i, t)| solved[i] * counts[*t])
-            .sum();
-        let residual = ratio - predicted;
+    for (ratio, counts, figure) in samples {
+        let fitted = predicted(counts, terms);
+        let residual = ratio - fitted;
         worst = worst.max(residual.abs());
-        println!(
-            "  {figure:?}: measured {ratio:.3}, fitted {predicted:.3}, residual {residual:+.3}"
-        );
+        println!("  {figure:?}: measured {ratio:.3}, fitted {fitted:.3}, residual {residual:+.3}");
     }
+    worst
+}
+
+/// Fit the numeral metrics to samples by least squares: every entry the
+/// samples exercise, or only those `--fit` names with the rest held at
+/// the profile's values.
+fn cmd_fit_numerals(args: &Args) -> Result<(), String> {
+    let path = args.word(1, "the samples file")?;
+    let profile = load_profile(args)?;
+    let metrics = numeral_metrics(args, &profile)?;
+    let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+    let samples = parse_samples(&text)?;
+    let exercised: Vec<usize> = (0..TERMS.len())
+        .filter(|t| samples.iter().any(|(_, counts, _)| counts[*t] > 0.0))
+        .collect();
+    let free: Vec<usize> = match args.option("fit") {
+        None => exercised.clone(),
+        Some(names) => {
+            let mut free = Vec::new();
+            for name in names.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                let t = TERMS.iter().position(|n| *n == name).ok_or_else(|| {
+                    format!(
+                        "--fit {name:?} is not a numerals entry; they are {}",
+                        TERMS.join(", ")
+                    )
+                })?;
+                if !exercised.contains(&t) {
+                    return Err(format!(
+                        "--fit {name}: no sample holds it, so it cannot be fitted; leave it out"
+                    ));
+                }
+                if !free.contains(&t) {
+                    free.push(t);
+                }
+            }
+            free
+        }
+    };
+    let base = term_values(&metrics);
+    let terms = fit_terms(&samples, &base, &free)?;
+    for t in 0..TERMS.len() {
+        let was = base[t].map_or("none".to_string(), |v| format!("{v:.3}"));
+        match (free.contains(&t), terms[t]) {
+            (true, Some(value)) => {
+                println!("{}: fitted {value:.3} (the profile has {was})", TERMS[t])
+            }
+            (false, Some(_)) => println!("{}: held at {was}", TERMS[t]),
+            (_, None) => {}
+        }
+    }
+    let worst = print_residuals(&samples, &terms);
     println!(
         "largest residual {worst:.3}; the profile's tolerance is {:.3}. A reading one digit short \
          is narrower by a digit's advance, so the tolerance must stay under half the narrowest \
          glyph that can be lost",
         metrics.tolerance
     );
-    println!("the numerals entries fitted, in the profile's names:");
-    println!("{}", pretty(&Value::Object(entry)));
+    println!("the numerals entry fitted, in the profile's names (min_ink, body_row_share and tolerance carried):");
+    println!("{}", pretty(&numerals_json(&metrics, &terms)));
     Ok(())
+}
+
+/// The labels' name for each sell queue field whose figure is a sample
+/// of the queue's numerals. The figures under the spinners are drawn in
+/// smaller lettering than the rest; the labels may transcribe them under
+/// these names, and where they do not, their ink is shown but not taken
+/// as a sample.
+const SALE_SAMPLE_FIELDS: [(QueueField, &str); 9] = [
+    (QueueField::Tt, "tt"),
+    (QueueField::Quantity, "quantity"),
+    (QueueField::OpeningBid, "opening_bid"),
+    (QueueField::OpeningBidFigure, "opening_bid_figure"),
+    (QueueField::Buyout, "buyout"),
+    (QueueField::BuyoutFigure, "buyout_figure"),
+    (QueueField::Days, "days"),
+    (QueueField::Fee, "fee"),
+    (QueueField::Markup, "markup"),
+];
+
+/// Measure a sell queue scale entry from a frame and its true texts: the
+/// header band's height that identifies the scale, a sample of every
+/// figure the labels transcribe, the word gap the names admit, and the
+/// numerals of the nearest listed scale fitted to the samples by one
+/// common factor.
+fn cmd_measure_sale_queue(mut s: Session) -> Result<(), String> {
+    let frame_path = Path::new(s.args.word(1, "the frame's path")?);
+    let stem = frame_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or("the frame's file has no name")?
+        .to_string();
+    let labels_path = s
+        .args
+        .option("labels")
+        .ok_or("measure-sale-queue needs --labels <labels.json>, the corpus's ground truth")?;
+    let labels: Value = serde_json::from_str(
+        &std::fs::read_to_string(labels_path).map_err(|error| format!("{labels_path}: {error}"))?,
+    )
+    .map_err(|error| format!("{labels_path}: {error}"))?;
+    let truth = labels["frames"][stem.as_str()]["sale_queue"].clone();
+    if truth.is_null() {
+        return Err(format!(
+            "{labels_path} has no sale_queue entry for {stem} (the frame's file name, less \
+             .png, names its labels)"
+        ));
+    }
+    let queue = sale_queue_profile(&s.profile)?.clone();
+    let read = recogniser();
+    let measured = measure_sale_queue(&s.image, &s.profile, &*read)
+        .map_err(|refusal| format!("the queue was not found: {refusal}"))?;
+    let h = measured.header_height;
+    println!("header band: {h} px, rule to rule (what identifies the interface scale)");
+    for (i, entry) in queue.scales.iter().enumerate() {
+        println!(
+            "  the profile's scales[{i}] claims header_height {:?}",
+            entry.header_height
+        );
+    }
+    let base_index = measured.lettering;
+    let claimed = match measured.scale {
+        Ok(index) => {
+            println!("claimed by scales[{index}]: a scale the profile lists");
+            true
+        }
+        Err(why) => {
+            println!(
+                "{why}: a scale the profile does not list; starting from the nearest, \
+                 scales[{base_index}], whose figure lettering found the figures"
+            );
+            false
+        }
+    };
+    let base = &queue.scales[base_index];
+    let wanted: Vec<&Value> = truth["rows"]
+        .as_array()
+        .ok_or("the labels' sale_queue has no rows")?
+        .iter()
+        .filter(|row| row["fully_visible"].as_bool() == Some(true))
+        .collect();
+    if wanted.len() != measured.rows.len() {
+        return Err(format!(
+            "{} whole rows were found and the labels mark {} rows fully visible: measure a \
+             frame where they agree",
+            measured.rows.len(),
+            wanted.len()
+        ));
+    }
+    // The figures under the spinners are a lettering size of their own,
+    // with numerals of their own.
+    let (mut samples, mut figures): (Vec<Sample>, Vec<Sample>) = (Vec::new(), Vec::new());
+    let mut word_gap = (0.0f64, f64::INFINITY);
+    let sample = |samples: &mut Vec<Sample>, image: &BgrImage, rect: Rect, text: &str| {
+        let Some((width, height)) = ink_size(image, rect, &base.numerals) else {
+            println!("  {text:?}: no ink at {}", show(rect));
+            return;
+        };
+        let Some(counts) = glyph_counts(text) else {
+            println!("  {text:?}: holds a character no numeral metric measures; not a sample");
+            return;
+        };
+        let ratio = f64::from(width) / f64::from(height);
+        println!(
+            "  {text:?}: ink {width}x{height} at {}, {ratio:.4} digit heights",
+            show(rect)
+        );
+        samples.push((ratio, counts, text.to_string()));
+    };
+    for (k, (fields, row)) in measured.rows.iter().zip(&wanted).enumerate() {
+        let name = row["name"].as_str().unwrap_or_default();
+        println!("row {k}: {name:?}");
+        match fields.get(&QueueField::Name) {
+            Some(Ok(ink)) => {
+                s.overlay.around(ink.rect, YELLOW);
+                let words = name.split(' ').filter(|w| !w.is_empty()).count();
+                let mut gaps = ink.gaps.clone();
+                gaps.sort_unstable_by(|a, b| b.cmp(a));
+                let height = f64::from(ink.rect.height());
+                if words < 1 || gaps.len() + 1 < words {
+                    println!(
+                        "  name: its ink parts into fewer pieces than it has words; not measured"
+                    );
+                } else {
+                    let word_least = if words > 1 { gaps[words - 2] } else { i32::MAX };
+                    let letter_most = gaps.get(words - 1).copied().unwrap_or(0);
+                    let (low, high) = (
+                        (f64::from(letter_most) + 0.5) / height,
+                        (f64::from(word_least) + 0.5) / height,
+                    );
+                    println!(
+                        "  name: ink {} px tall; gaps between letters up to {letter_most} px, between \
+                         words from {} px: word_gap admitted from {low:.3} up to {}",
+                        ink.rect.height(),
+                        if words > 1 { word_least.to_string() } else { "(one word)".into() },
+                        if words > 1 { format!("{high:.3}") } else { "any".into() }
+                    );
+                    word_gap = (word_gap.0.max(low), word_gap.1.min(high));
+                }
+            }
+            Some(Err(why)) => println!("  name: not found: {why}"),
+            None => {}
+        }
+        for (field, key) in SALE_SAMPLE_FIELDS {
+            let group = if matches!(
+                field,
+                QueueField::OpeningBidFigure | QueueField::BuyoutFigure
+            ) {
+                &mut figures
+            } else {
+                &mut samples
+            };
+            let Some(text) = row[key].as_str() else {
+                if let Some(Ok(ink)) = fields.get(&field) {
+                    let image = ink.crop.as_ref().unwrap_or(&s.image);
+                    if let Some((width, height)) = ink_size(image, ink.rect, &base.numerals) {
+                        println!(
+                            "  {key}: ink {width}x{height}, {:.4} digit heights; the labels \
+                             transcribe no {key}, so it is not a sample",
+                            f64::from(width) / f64::from(height)
+                        );
+                    }
+                }
+                continue;
+            };
+            match fields.get(&field) {
+                Some(Ok(ink)) => {
+                    let image = ink.crop.as_ref().unwrap_or(&s.image);
+                    if ink.crop.is_none() {
+                        s.overlay.around(ink.rect, CYAN);
+                    }
+                    sample(group, image, ink.rect, text);
+                }
+                Some(Err(why)) => println!("  {key}: not found: {why}"),
+                None => {}
+            }
+        }
+    }
+    if let Some((rect, _)) = measured.count {
+        let text = truth["queue_text"]
+            .as_str()
+            .and_then(|t| t.rfind('(').map(|at| t[at..].to_string()));
+        if let Some(text) = text {
+            println!("heading count:");
+            s.overlay.around(rect, CYAN);
+            sample(&mut samples, &s.image, rect, &text);
+        }
+    }
+    if samples.is_empty() {
+        return Err("no figure was measured".into());
+    }
+    let numerals = fit_by_factor("numerals", &samples, &base.numerals, base_index);
+    let figure_numerals = if figures.is_empty() {
+        println!(
+            "figure_numerals: the labels transcribe no figure under a spinner \
+             (opening_bid_figure, buyout_figure), so scales[{base_index}]'s are carried \
+             scaled by the numerals' factor: transcribe them from a native crop and measure again"
+        );
+        let held = term_values(&base.figure_numerals).map(|v| v.map(f64::from));
+        held.map(|v| v.map(|v| v * numerals.0))
+    } else {
+        fit_by_factor(
+            "figure_numerals",
+            &figures,
+            &base.figure_numerals,
+            base_index,
+        )
+        .1
+    };
+    let word_gap = if word_gap.0 < word_gap.1 {
+        ((word_gap.0 + word_gap.1) / 2.0 * 1000.0).round() / 1000.0
+    } else {
+        println!(
+            "no word_gap is admitted by every name measured ({:.3} to {:.3}); scales[{base_index}]'s is carried",
+            word_gap.0, word_gap.1
+        );
+        (f64::from(base.word_gap) * 1000.0).round() / 1000.0
+    };
+    let mut entry = serde_json::Map::new();
+    entry.insert("header_height".into(), json!([h - 1, h + 1]));
+    entry.insert(
+        "numerals".into(),
+        numerals_json(&base.numerals, &numerals.1),
+    );
+    entry.insert(
+        "figure_numerals".into(),
+        numerals_json(&base.figure_numerals, &figure_numerals),
+    );
+    entry.insert(
+        "figure_lettering".into(),
+        profile_json(s.args)?["windows"]
+            .as_object()
+            .and_then(|windows| {
+                windows
+                    .values()
+                    .find_map(|w| w["sale_queue"]["scales"].get(base_index))
+            })
+            .map(|scale| scale["figure_lettering"].clone())
+            .unwrap_or(Value::Null),
+    );
+    entry.insert("word_gap".into(), json!(word_gap));
+    for (i, other) in queue.scales.iter().enumerate() {
+        let [least, most] = other.header_height;
+        if (i != base_index || !claimed) && least <= h + 1 && h - 1 <= most {
+            println!(
+                "header_height [{}, {}] overlaps scales[{i}]'s: narrow it",
+                h - 1,
+                h + 1
+            );
+        }
+    }
+    println!(
+        "a sale_queue.scales[] entry for this scale, in the profile's names: header_height \
+         measured here (one pixel either side); numerals and figure_numerals scales[{base_index}]'s \
+         times a factor fitted to each; figure_lettering carried from scales[{base_index}] (check \
+         that `sale-queue` finds every figure under a spinner); word_gap midway in what every name \
+         admits. Where a largest residual is near the tolerance, collect the sample lines from \
+         several frames and refine with fit-numerals --numerals sale-queue (or \
+         sale-queue-figures) --scale <this entry> --fit <entries>:"
+    );
+    println!("{}", pretty(&Value::Object(entry)));
+    println!("overlay: yellow names, cyan figures measured in the frame (a spinner's value is measured in its own crop)");
+    s.overlay.save()
+}
+
+/// Fit `base` to `samples` by one factor over every advance and the
+/// bias: the lettering's widths follow the scale while its heights are
+/// hinted, so one size's ratios at a scale are about the nearest scale's
+/// times one number. Prints the sample lines and both sets of residuals;
+/// returns the factor and the scaled terms.
+fn fit_by_factor(
+    what: &str,
+    samples: &[Sample],
+    base: &NumeralMetrics,
+    base_index: usize,
+) -> (f64, [Option<f64>; TERMS.len()]) {
+    let flag = if what == "numerals" {
+        "sale-queue"
+    } else {
+        "sale-queue-figures"
+    };
+    println!(
+        "{what}: sample lines for fit-numerals --numerals {flag} (append them to a samples file):"
+    );
+    for (ratio, _, text) in samples {
+        println!("{ratio:.4}\t{text}");
+    }
+    let held = term_values(base).map(|v| v.map(f64::from));
+    println!("{what}: under scales[{base_index}]'s:");
+    let worst = print_residuals(samples, &held);
+    println!(
+        "  largest residual {worst:.3} (tolerance {:.3})",
+        base.tolerance
+    );
+    let (num, den) = samples
+        .iter()
+        .fold((0.0, 0.0), |(num, den), (ratio, counts, _)| {
+            let p = predicted(counts, &held);
+            (num + ratio * p, den + p * p)
+        });
+    let factor = if den > 0.0 { num / den } else { 1.0 };
+    let scaled = held.map(|v| v.map(|v| v * factor));
+    println!("{what}: scales[{base_index}]'s times one common factor {factor:.4}:");
+    let worst = print_residuals(samples, &scaled);
+    let tolerance = f64::from(base.tolerance);
+    let narrowest = scaled[2]
+        .unwrap_or(f64::INFINITY)
+        .min(scaled[1].unwrap_or(f64::INFINITY));
+    println!(
+        "  largest residual {worst:.3}; tolerance {tolerance:.3}; the narrowest glyph a misreading \
+         can drop is {narrowest:.3} wide, so the tolerance {} under half of it",
+        if tolerance < narrowest / 2.0 { "stays" } else { "does NOT stay" }
+    );
+    (factor, scaled)
 }
 
 /// `image` scaled so it is `SMALLER_WIDTH` wide, keeping its shape; the
@@ -1513,7 +1982,7 @@ fn cmd_replay(args: &Args) -> Result<bool, String> {
         "replaying {} frames ({}) with profile {} ({})",
         corpus.frames().len(),
         if held_out {
-            "the held-out frames alone"
+            "the held-out frames alone; run once without --held-out for the rest"
         } else {
             "held-out frames skipped"
         },
@@ -1523,6 +1992,7 @@ fn cmd_replay(args: &Args) -> Result<bool, String> {
     let mut outcomes: Vec<(&str, Outcome)> = Vec::new();
     let all = Shard(None);
     outcomes.push(("windows", replay::windows(&corpus, &profile, all)));
+    outcomes.push(("pinned tests", replay::pinned_frames(&corpus)));
     let mut unavailable = None;
     match load_recogniser() {
         Ok(engine) => {
@@ -1545,44 +2015,121 @@ fn cmd_replay(args: &Args) -> Result<bool, String> {
         Err(why) => unavailable = Some(why),
     }
     let exact: usize = outcomes.iter().map(|(_, outcome)| outcome.exact).sum();
-    let failures: Vec<String> = outcomes
-        .iter()
-        .flat_map(|(surface, outcome)| {
-            outcome
-                .failures
-                .iter()
-                .map(move |line| format!("[{surface}] {line}"))
-        })
-        .collect();
+    let lines = |pick: fn(&Outcome) -> &Vec<String>| -> Vec<String> {
+        outcomes
+            .iter()
+            .flat_map(|(surface, outcome)| {
+                pick(outcome)
+                    .iter()
+                    .map(move |line| format!("[{surface}] {line}"))
+            })
+            .collect()
+    };
+    let failures = lines(|outcome| &outcome.failures);
+    let missing = lines(|outcome| &outcome.missing);
     println!(
-        "replay: {exact} values and findings as labelled over every surface, {} failures",
-        failures.len()
+        "replay: {exact} values and findings as labelled over every surface, {} failures, {} missing from the corpus's manifest or frames",
+        failures.len(),
+        missing.len()
     );
     for line in &failures {
         println!("FAILED {line}");
     }
+    for line in &missing {
+        println!("MISSING {line}");
+    }
     if let Some(why) = &unavailable {
         println!("only the windows were replayed: readings are unavailable: {why}");
     }
-    Ok(failures.is_empty() && unavailable.is_none())
+    Ok(outcomes.iter().all(|(_, outcome)| outcome.passed()) && unavailable.is_none())
 }
 
+/// Every subcommand: its name, its arguments in full, and what it shows.
+const SUBCOMMANDS: [(&str, &str, &str); 17] = [
+    ("windows", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "every window found, front to back: rectangle, sides, ridge, scaled or not, kind, and each run of its title strip as read"),
+    ("runs", "<frame.png> [--window <kind>] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "every run of text in each window (or the windows of one kind), with its rectangle and reading"),
+    ("field", "<frame.png> <window kind> <field> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "one labelled field: the label's and the value's rectangles, the raw text, and the typed result or refusal"),
+    ("table", "<frame.png> --window <kind> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "the row rules across a window, and the upright rules crossing each band of a plausible row height"),
+    ("radar", "<frame.png> [--planet <name>] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "the radar's disc, planet name, coordinates, rings and scale"),
+    ("plates", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "every nameplate, the locked one, and its line read as level and name"),
+    ("sale-queue", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "the header band's height and the scale entry claiming it, then the sell queue's whole typed read, row by row"),
+    ("skills", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "the skills page's whole typed read, row by row"),
+    ("terminal", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "the repair and trade terminals' figures, read as the application reads them"),
+    ("measure-chrome", "<frame.png> [--rect x0,y0,x1,y1] [--depth <n>] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "the front-most window's frame (or the window whose outer rectangle --rect gives), measured as a fragment of the profile's `chrome`"),
+    ("measure-plate", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "a `plates.scales[]` entry measured from the solid nameplates in view"),
+    ("measure-numerals", "<frame.png> (<window kind> <field> | --rect x0,y0,x1,y1) <true text> [--numerals read|sale-queue|sale-queue-figures [--scale <index>]] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "one figure's ink against the numeral metrics, and a sample line for fit-numerals; take a table cell's --rect from `runs`, one pixel wider all round"),
+    ("measure-sale-queue", "<frame.png> --labels <labels.json> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "a complete `sale_queue.scales[]` entry measured from a frame and its true texts (the labels' entry for the frame's file name): the header band's height that identifies the scale, every figure's sample line, the word gap the names admit, and the nearest listed scale's numerals fitted by one common factor"),
+    ("timing", "<frame.png> [--repeat <n>] [--planet <name>] [--profile <path>]",
+     "milliseconds for the reads that run live (build with --release)"),
+    ("fit-numerals", "<samples file> [--numerals read|sale-queue|sale-queue-figures [--scale <index>]] [--fit <entry>,<entry>...] [--profile <path>]",
+     "numeral metrics fitted to sample lines by least squares: every entry the samples hold, or only those --fit names with the rest held at the profile's values"),
+    ("replay", "<corpus dir> [--held-out] [--profile <path>]",
+     "every reader over every frame of a corpus with its tallies; --held-out replays the held-out frames ONLY (run both). Exits non-zero on a wrong value, an unexplained refusal, or a frame missing a manifest entry it needs"),
+    ("help", "[<subcommand>]", "this list, or one subcommand's arguments in full"),
+];
+
 fn usage() -> String {
-    "usage: ui_measure <subcommand> ...\n  \
-     windows|runs|field|table|radar|plates|sale-queue|skills|terminal|measure-chrome|\
-     measure-plate|measure-numerals|timing <frame.png> ... [--profile <path>] [--overlay <out.png> \
-     [--overlay-area x0,y0,x1,y1]]\n  \
-     fit-numerals <samples file> [--profile <path>] [--numerals sale-queue]\n  \
-     replay <corpus dir> [--profile <path>] [--held-out]\n\
-     see the head of examples/ui_measure.rs for each subcommand's arguments"
-        .to_string()
+    let mut text = String::from("usage: ui_measure <subcommand> <arguments>\n");
+    for (name, arguments, _) in SUBCOMMANDS {
+        text.push_str(&format!("  {name} {arguments}\n"));
+    }
+    text.push_str("ui_measure help <subcommand> (or <subcommand> --help) says what one shows");
+    text
+}
+
+/// One subcommand's arguments in full and what it shows.
+fn help(name: &str) -> Result<String, String> {
+    SUBCOMMANDS
+        .iter()
+        .find(|(n, _, _)| *n == name)
+        .map(|(name, arguments, what)| format!("usage: ui_measure {name} {arguments}\n{what}"))
+        .ok_or_else(|| format!("unknown subcommand {name:?}\n{}", usage()))
 }
 
 fn run(args: &Args) -> Result<bool, String> {
-    let subcommand = args.word(0, "a subcommand").map_err(|_| usage())?;
+    let subcommand = match args.word(0, "a subcommand") {
+        Ok(word) => word,
+        Err(_) if args.option("help").is_some() => {
+            println!("{}", usage());
+            return Ok(true);
+        }
+        Err(_) => return Err(usage()),
+    };
+    if subcommand == "help" {
+        match args.words.get(1) {
+            Some(name) => println!("{}", help(name)?),
+            None => println!("{}", usage()),
+        }
+        return Ok(true);
+    }
+    if args.option("help").is_some() {
+        println!("{}", help(subcommand)?);
+        return Ok(true);
+    }
+    // A missing or malformed argument is answered with the subcommand's
+    // own usage.
+    let with_usage = |error: String| match help(subcommand) {
+        Ok(usage) if error.starts_with("missing ") || error.starts_with("--") => {
+            format!("{error}\n{usage}")
+        }
+        _ => error,
+    };
     match subcommand {
-        "replay" => return cmd_replay(args),
-        "fit-numerals" => return cmd_fit_numerals(args).map(|()| true),
+        "replay" => return cmd_replay(args).map_err(with_usage),
+        "fit-numerals" => return cmd_fit_numerals(args).map(|()| true).map_err(with_usage),
         _ => {}
     }
     let frame: fn(Session) -> Result<(), String> = match subcommand {
@@ -1598,10 +2145,14 @@ fn run(args: &Args) -> Result<bool, String> {
         "terminal" => cmd_terminal,
         "measure-chrome" => cmd_measure_chrome,
         "measure-numerals" => cmd_measure_numerals,
+        "measure-sale-queue" => cmd_measure_sale_queue,
         "timing" => cmd_timing,
         other => return Err(format!("unknown subcommand {other:?}\n{}", usage())),
     };
-    frame(Session::open(args)?).map(|()| true)
+    Session::open(args)
+        .and_then(frame)
+        .map(|()| true)
+        .map_err(with_usage)
 }
 
 fn main() -> ExitCode {

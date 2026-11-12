@@ -66,7 +66,9 @@ pub enum SaleCaptureRefusal {
     #[error("the sell queue is empty")]
     QueueEmpty,
     /// No recogniser was loaded, or the interface profile does not
-    /// describe the sell window. Nothing the player does in the game helps.
+    /// describe the sell window, or not at the interface scale the game
+    /// draws it at. Nothing the player does in the sell window helps: the
+    /// profile needs that scale's measurements.
     #[error("the sell queue reader is not available")]
     ReaderUnavailable,
 }
@@ -86,10 +88,11 @@ impl From<SaleQueueError> for SaleCaptureRefusal {
     fn from(error: SaleQueueError) -> Self {
         match error {
             // The service hands the reader a recogniser that always
-            // answers, so this means the profile lacks the sell window.
-            SaleQueueError::NoRecogniser | SaleQueueError::NotInProfile(_) => {
-                SaleCaptureRefusal::ReaderUnavailable
-            }
+            // answers, so this means the profile lacks the sell window, or
+            // lacks its measurements at the scale it is drawn at.
+            SaleQueueError::NoRecogniser
+            | SaleQueueError::NotInProfile(_)
+            | SaleQueueError::Scale(_) => SaleCaptureRefusal::ReaderUnavailable,
             SaleQueueError::WindowNotFound => SaleCaptureRefusal::SellWindowNotOpen,
             SaleQueueError::ExtentUncertain | SaleQueueError::WindowClipped => {
                 SaleCaptureRefusal::SellWindowNotWhole

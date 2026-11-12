@@ -373,7 +373,9 @@ fn framed_plates(
                 if edge.x0 < 0 || edge.y0 < 0 || edge.x1 >= iw || edge.y1 >= ih {
                     continue;
                 }
-                if let Some(fill) = framed_fill(image, &bar, &edge, scale, p, &hues, &frame_at) {
+                if let Some(fill) =
+                    framed_fill(image, &bar, &edge, scale.frame_width, p, &hues, &frame_at)
+                {
                     found.push(Framed {
                         bar,
                         scale: index,
@@ -393,14 +395,14 @@ fn framed_fill(
     image: &BgrImage,
     bar: &Rect,
     edge: &Rect,
-    scale: &PlateScale,
+    frame_width: i32,
     p: &PlateProfile,
     hues: &[f32],
     frame_at: &dyn Fn(i32, i32) -> bool,
 ) -> Option<f64> {
     let f = &p.frame;
     let (mut shown, mut total) = (0usize, 0usize);
-    for k in 0..scale.frame_width {
+    for k in 0..frame_width {
         let ring = edge.padded(-k);
         for x in ring.x0..=ring.x1 {
             for y in [ring.y0, ring.y1] {
@@ -467,6 +469,12 @@ fn pointer_under(
     scale: &PlateScale,
     pointer: &PointerProfile,
 ) -> bool {
+    pointer_pixels(image, bar, pointer) >= scale.pointer_pixels.max(1)
+}
+
+/// How many pixels of the pointer's red stand where the pointer is looked
+/// for under the bar at `bar`.
+fn pointer_pixels(image: &BgrImage, bar: &Rect, pointer: &PointerProfile) -> usize {
     let area = area_of(bar, pointer.area);
     let mut count = 0;
     for y in area.y0..=area.y1 {
@@ -480,7 +488,108 @@ fn pointer_under(
             }
         }
     }
-    count >= scale.pointer_pixels.max(1)
+    count
+}
+
+/// A solid plate as it is drawn, measured without assuming any of the
+/// profile's scales: what a scale's entry is measured from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlateMeasurement {
+    /// The bar's coloured part, filled or not.
+    pub bar: Rect,
+    /// The frame's thickness.
+    pub frame_width: i32,
+    /// The rows of bevel between the frame and the bar.
+    pub bevel_rows: i32,
+    /// The share of the bar its colour fills.
+    pub fill: f64,
+    /// How many pixels of the pointer's red stand under the bar; none for
+    /// a solid plate that is not the locked one.
+    pub pointer_pixels: usize,
+}
+
+/// Every solid plate in `image`, measured from its own pixels, top to
+/// bottom: the bar's size, the frame's thickness and the bevel's rows.
+///
+/// The interface's scale sets a plate's pixel sizes, and the search for
+/// plates knows only the scales the profile lists, so a plate at a new
+/// scale is not found by it. This looks for the same parts without their
+/// sizes: a row of the frame's colour with the bevel's under it (how long
+/// that row is gives the bar's width), the rows of frame above it and of
+/// bevel below it, and the frame's upright sides (how far they run gives
+/// the bar's height). What it finds is then held to the same checks as a
+/// plate of a listed scale: the frame all round, and inside it a bar of
+/// the gradient's colours giving way to the empty part. The frame's,
+/// bevel's and bar's colours are the profile's, which do not change with
+/// the scale.
+pub fn measure_plates(image: &BgrImage, profile: &UiProfile) -> Vec<PlateMeasurement> {
+    let p = &profile.plates;
+    let f = &p.frame;
+    let (iw, ih) = (image.width(), image.height());
+    let coloured = |x: i32, y: i32, rgb: [u8; 3], tolerance: u8| {
+        image.in_bounds(x, y) && close(&image.data, ((y * iw + x) * 3) as usize, rgb, tolerance)
+    };
+    let frame_at = |x: i32, y: i32| coloured(x, y, f.rgb, f.tolerance);
+    let bevel_at = |x: i32, y: i32| coloured(x, y, f.bevel_rgb, f.bevel_tolerance);
+    // Whether row `y` shows `what` along enough of the columns `x0..x1`.
+    let row_shows = |y: i32, x0: i32, x1: i32, what: &dyn Fn(i32, i32) -> bool| {
+        let shown = (x0..x1).filter(|x| what(*x, y)).count();
+        shown as f32 >= f.share * (x1 - x0) as f32
+    };
+    let mut found = Vec::new();
+    let mut top = vec![false; iw.max(0) as usize];
+    for y in 0..ih - 1 {
+        for (x, on) in top.iter_mut().enumerate() {
+            *on = frame_at(x as i32, y) && bevel_at(x as i32, y + 1);
+        }
+        for (start, end) in runs_of(&top, 0) {
+            let bevel_rows = (1..ih - y)
+                .take_while(|k| row_shows(y + k, start, end, &bevel_at))
+                .count() as i32;
+            // The bevel's first row runs a column past each end of the
+            // bar, where it turns into the end caps; every row of it runs
+            // exactly the bar's width.
+            let whole: Vec<bool> = (start..end)
+                .map(|x| (1..=bevel_rows).all(|k| bevel_at(x, y + k)))
+                .collect();
+            let Some((x0, x1)) = runs_of(&whole, start)
+                .into_iter()
+                .max_by_key(|(from, to)| to - from)
+            else {
+                continue;
+            };
+            let frame_width = (0..=y)
+                .take_while(|k| row_shows(y - k, x0, x1, &frame_at))
+                .count() as i32;
+            // The frame's innermost upright column on each side runs from
+            // this row down past the bevel, the bar and the bevel under
+            // it, through the frame's bottom rows.
+            let upright = |x: i32| (0..ih - y).take_while(|k| frame_at(x, y + k)).count() as i32;
+            let tall = upright(x0 - bevel_rows - 1).min(upright(x1 + bevel_rows));
+            let (w, h) = (x1 - x0, tall - 1 - 2 * bevel_rows - frame_width);
+            if w < 2 || h < 1 || h >= w || frame_width < 1 || bevel_rows < 1 {
+                continue;
+            }
+            let bar = Rect::new(x0, y + 1 + bevel_rows, x1 - 1, y + bevel_rows + h);
+            let edge = bar.padded(frame_width + bevel_rows);
+            if edge.x0 < 0 || edge.y0 < 0 || edge.x1 >= iw || edge.y1 >= ih {
+                continue;
+            }
+            let Some(hues) = column_hues(&p.run, w) else {
+                continue;
+            };
+            if let Some(fill) = framed_fill(image, &bar, &edge, frame_width, p, &hues, &frame_at) {
+                found.push(PlateMeasurement {
+                    bar,
+                    frame_width,
+                    bevel_rows,
+                    fill,
+                    pointer_pixels: pointer_pixels(image, &bar, &p.pointer),
+                });
+            }
+        }
+    }
+    found
 }
 
 /// Every washed-out plate's bar within `roi`, at every scale: on each
@@ -793,6 +902,40 @@ fn line_over(
         return Err(PlateTextError::Clipped);
     }
     Ok(line)
+}
+
+/// The line of lettering over a plate's bar, split as the read splits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlateLine {
+    /// The whole line.
+    pub rect: Rect,
+    /// The line's first piece, where the level stands.
+    pub level: Rect,
+    /// The rest of the line, where the name stands; `None` for a line of
+    /// one piece.
+    pub name: Option<Rect>,
+}
+
+/// Where the line of lettering over `plate` lies, and how it splits into
+/// the level's piece and the name's: the places [`read_plate`] reads, by
+/// the same search, before its checks against windows and other plates.
+/// `windows` are the client's windows found in the frame, whose lettering
+/// is not the scene's. Refused as the read refuses it: no line over the
+/// bar, more than one, or one that reaches the edge of the area searched.
+pub fn plate_line(
+    image: &BgrImage,
+    plate: &Plate,
+    windows: &[Rect],
+    profile: &UiProfile,
+) -> Result<PlateLine, PlateTextError> {
+    let p = &profile.plates;
+    let scale = p.scales.get(plate.scale).ok_or(PlateTextError::NotFound)?;
+    let line = line_over(image, &plate.bar, scale, windows, p)?;
+    Ok(PlateLine {
+        rect: line.rect,
+        level: line.pieces[0],
+        name: line.pieces[1..].iter().copied().reduce(union),
+    })
 }
 
 /// Whether a row of `rect` holds `run` pixels of window panel in a row:
@@ -1387,6 +1530,102 @@ mod tests {
             name,
         );
         (scene, bar)
+    }
+
+    #[test]
+    fn the_line_is_placed_where_the_read_reads_it() {
+        let profile = bundled_profile();
+        let (scene, bar) = hunting_scene("L25", "Zombie Fleshripper", LineAlign::Left);
+        let mut scratch = PlateScratch::default();
+        let locked = find_locked_plate(&scene.image, &profile, &mut scratch).expect("locked");
+        let line = plate_line(&scene.image, &locked, &[], &profile).expect("a line");
+        // The level's three glyphs from seven pixels in, nine tall from
+        // 21 above the bar; the name's eighteen after a gap of twelve.
+        let level = Rect::new(bar.x0 + 7, bar.y0 - 21, bar.x0 + 25, bar.y0 - 13);
+        let name = Rect::new(level.x1 + 13, bar.y0 - 22, level.x1 + 136, bar.y0 - 10);
+        let within = |got: Rect, drawn: Rect| {
+            drawn.padded(2).intersect(&got) == Some(got)
+                && got.padded(2).intersect(&drawn) == Some(drawn)
+        };
+        assert!(within(line.level, level), "{line:?} {level:?}");
+        let got_name = line.name.expect("the name's piece");
+        assert!(within(got_name, name), "{line:?} {name:?}");
+        assert_eq!(line.rect, union(line.level, got_name));
+        // A level alone is a line of one piece.
+        let mut alone = RadarScene::sized(1200, 700, 22);
+        alone.plate_line(&PlateDrawing::locked((560, 320), 0.35), bar, "L25", "");
+        draw_plate_bar(&mut alone.image, &PlateDrawing::locked((560, 320), 0.35));
+        let line = plate_line(&alone.image, &locked, &[], &profile).expect("a line");
+        assert_eq!((line.name, line.rect), (None, line.level));
+        // No lettering over the bar, and a bar so near the top of the
+        // frame that its line could be cut, are refused as the read does.
+        let mut bare = RadarScene::sized(1200, 700, 23);
+        draw_plate_bar(&mut bare.image, &PlateDrawing::locked((560, 320), 0.35));
+        assert_eq!(
+            plate_line(&bare.image, &locked, &[], &profile),
+            Err(PlateTextError::NotFound)
+        );
+        let mut high = RadarScene::sized(1200, 700, 24);
+        let top = high.plate(&PlateDrawing::locked((560, 21), 0.35), "L25", "Atrox");
+        let at_top = plate((top.x0, top.y0), PlateKind::Locked { fill: 0.35 });
+        assert_eq!(
+            plate_line(&high.image, &at_top, &[], &profile),
+            Err(PlateTextError::Clipped)
+        );
+    }
+
+    #[test]
+    fn a_solid_plate_is_measured_at_a_scale_the_profile_does_not_list() {
+        let profile = bundled_profile();
+        let width = PLATE_DEFAULT.bar.0 as f64;
+        let mut image = scenery(1300, 800, 12);
+        let listed = draw_plate_bar(&mut image, &PlateDrawing::locked((300, 200), 0.4));
+        // Half as large again, with a frame two thick and three rows of
+        // bevel: not a scale the bundled profile lists, so not found.
+        let larger = PlateGeometry {
+            bar: (246, 9),
+            frame: 2,
+            bevel: 3,
+        };
+        let unlisted = draw_plate_bar(
+            &mut image,
+            &PlateDrawing {
+                geometry: larger,
+                pointer: PlatePointer::Absent,
+                ..PlateDrawing::locked((700, 500), 1.0)
+            },
+        );
+        // A washed-out plate has no frame to measure.
+        draw_plate_bar(&mut image, &PlateDrawing::washed((100, 600)));
+        assert_eq!(
+            plates_in(&image)
+                .iter()
+                .filter(|p| p.is_locked())
+                .map(|p| p.bar)
+                .collect::<Vec<_>>(),
+            vec![listed]
+        );
+        assert_eq!(
+            measure_plates(&image, &profile),
+            vec![
+                PlateMeasurement {
+                    bar: listed,
+                    frame_width: 1,
+                    bevel_rows: 2,
+                    fill: (0.4 * width).round() / width,
+                    pointer_pixels: 14,
+                },
+                PlateMeasurement {
+                    bar: unlisted,
+                    frame_width: 2,
+                    bevel_rows: 3,
+                    fill: 1.0,
+                    pointer_pixels: 0,
+                },
+            ]
+        );
+        // Scenery alone, and a bar without its frame, measure nothing.
+        assert!(measure_plates(&scenery(600, 400, 13), &profile).is_empty());
     }
 
     #[test]

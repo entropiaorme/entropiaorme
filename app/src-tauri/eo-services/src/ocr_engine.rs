@@ -598,6 +598,16 @@ impl OcrEngine {
     }
 }
 
+/// The engine as the interface readers' recognition seam: a crop the
+/// engine cannot read is no reading, as the seam has it. A maintainer
+/// tool or a replay over saved frames hands the engine to a reader this
+/// way, the same route the application's own reads take.
+impl crate::game_ui::field::Recogniser for OcrEngine {
+    fn read(&self, image: &crate::game_ui::geometry::BgrImage) -> Option<(String, f64)> {
+        self.recognize_bgr(&image.data, image.h, image.w).ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -898,6 +908,64 @@ mod tests {
             after > before,
             "a recognise records one OCR-latency sample (before={before}, after={after})"
         );
+    }
+
+    /// The engine answers through the readers' recognition seam exactly
+    /// as it does when called directly, and an image it cannot take (one
+    /// with no pixels) is no reading rather than a failure. Host-gated
+    /// like the tests above.
+    #[test]
+    fn the_engine_reads_through_the_recognition_seam() {
+        use crate::game_ui::field::Recogniser;
+        use crate::game_ui::geometry::BgrImage;
+        use crate::game_ui::seams::frame_reader;
+        let _ort = lock_ort();
+        if !platform_has_bundled_ort() {
+            eprintln!("no bundled ONNX Runtime on this platform; skipping");
+            return;
+        }
+        let dylib = repo_ort_dylib();
+        if !dylib.is_file() {
+            eprintln!("committed ONNX Runtime dylib absent; skipping");
+            return;
+        }
+        // SAFETY: `lock_ort` serialises every env-setting / session-building
+        // test, so no other thread reads or writes the env concurrently.
+        unsafe {
+            std::env::set_var("ORT_DYLIB_PATH", &dylib);
+        }
+        let (model, dict) = repo_model_paths();
+        if !model.is_file() {
+            eprintln!("repo model absent; skipping");
+            return;
+        }
+        let engine = match OcrEngine::new(&model, &dict) {
+            Ok(engine) => engine,
+            Err(error) => {
+                eprintln!("ONNX Runtime unavailable ({error}); skipping");
+                return;
+            }
+        };
+        let white = BgrImage {
+            data: vec![255u8; TARGET_H * 200 * 3],
+            h: TARGET_H,
+            w: 200,
+        };
+        let direct = engine
+            .recognize_bgr(&white.data, white.h, white.w)
+            .expect("the session recognises a warm-up-shaped cell");
+        let empty = BgrImage {
+            data: Vec::new(),
+            h: 0,
+            w: 0,
+        };
+        assert!(engine.recognize_bgr(&empty.data, 0, 0).is_err());
+        // The engine is handed over as a recogniser, and called only by
+        // the readers' own seam.
+        let recogniser: std::sync::Arc<dyn Recogniser> = std::sync::Arc::new(engine);
+        let seam = frame_reader(recogniser);
+        assert_eq!(seam(&white), Some(direct));
+        assert_eq!(seam(&empty), None);
     }
 
     #[test]

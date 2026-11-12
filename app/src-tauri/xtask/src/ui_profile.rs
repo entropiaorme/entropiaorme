@@ -11,6 +11,16 @@
 //!     pixels, with its reason, so a new capture function is gated the
 //!     moment it exists. Outside its own module, a gated function may be
 //!     named only by an allowlisted file, for the names its entry lists.
+//!     The recogniser is handed to the readers as a trait, and a call to
+//!     one of that trait's methods is as much a way to the recogniser as
+//!     a call to the engine: the methods are read from the trait's own
+//!     definition and gated too. Inside the readers such a call is the
+//!     pipeline itself; anywhere else it is a bypass unless allowlisted.
+//!     Implementing the trait is a definition, not a call. Being textual,
+//!     the scan knows a call by the method's name reached through `.` (or
+//!     by the trait's path) in a file that names the trait, which every
+//!     file calling it on an engine must; a call on a trait object in a
+//!     file that never names the trait is beyond it.
 //!     The allowlist only shrinks: an entry whose file no longer names the
 //!     function fails, as does a helper entry naming no public function.
 //!   - Rule (no layout literals in the readers): in the code of
@@ -54,6 +64,14 @@ const CAPTURE_MODULES: &[&str] = &[
 
 /// The module whose public functions reach the recogniser.
 const RECOGNISER_MODULES: &[&str] = &["app/src-tauri/eo-services/src/ocr_engine.rs"];
+
+/// The trait a recogniser is handed to the readers as: the reader module
+/// that defines it, and its name. Its methods are gated outside the
+/// readers.
+const SEAM_TRAIT: (&str, &str) = (
+    "app/src-tauri/eo-services/src/game_ui/field.rs",
+    "Recogniser",
+);
 
 /// Public functions of those modules that touch no pixels: `(module, name,
 /// reason)`. Everything else they make public is gated.
@@ -193,11 +211,6 @@ recogniser seam the readers are handed",
         path: "app/src-tauri/eo-services/examples/capture_probe.rs",
         names: &["capture_region_png", "capture_frame_generation"],
         reason: "a maintainer tool that saves what the capturer sees",
-    },
-    Allowed {
-        path: "app/src-tauri/eo-services/tests/game_ui_corpus.rs",
-        names: &["recognize_bgr"],
-        reason: "the real-capture replays: recorded frames through the real recogniser",
     },
     Allowed {
         path: "app/src-tauri/eo-services/tests/ocr_bench_differential.rs",
@@ -524,6 +537,84 @@ pub struct Gated {
     pub module: String,
     pub name: String,
     pub method: bool,
+    /// For a method of the recogniser trait, the trait's name: such a
+    /// method is gated outside the readers, and known by a call through
+    /// `.` or the trait's path in a file that names the trait.
+    pub seam: Option<String>,
+}
+
+/// The methods the trait `name` declares in `text`: the functions at the
+/// top level of its body. `None` when `text` defines no such trait.
+pub fn trait_methods(text: &str, name: &str) -> Option<Vec<String>> {
+    let masked = mask(text);
+    let code = &masked.code;
+    let head = Regex::new(&format!(r"\btrait\s+{}\b[^{{;]*\{{", regex::escape(name)))
+        .expect("valid trait pattern");
+    let open = head.find(code)?.end();
+    let mut depth = 1usize;
+    let mut close = code.len();
+    for (i, byte) in code.bytes().enumerate().skip(open) {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let body = &code[open..close];
+    let declared = Regex::new(r"\bfn\s+(\w+)").expect("valid function pattern");
+    let mut methods = Vec::new();
+    let mut depth = 0usize;
+    let mut from = 0;
+    // Only the body's own level: a default method's body may define
+    // functions of its own.
+    for (i, byte) in body.bytes().enumerate() {
+        match byte {
+            b'{' => {
+                if depth == 0 {
+                    methods.extend(
+                        declared
+                            .captures_iter(&body[from..i])
+                            .map(|c| c[1].to_string()),
+                    );
+                }
+                depth += 1;
+            }
+            b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    from = i + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    methods.extend(
+        declared
+            .captures_iter(&body[from..])
+            .map(|c| c[1].to_string()),
+    );
+    Some(methods)
+}
+
+/// The recogniser trait's methods, gated: from the text of the module
+/// that defines the trait.
+fn seam_methods(module: &str, text: &str, name: &str) -> Vec<Gated> {
+    trait_methods(text, name)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|method| Gated {
+            module: module.to_string(),
+            name: method,
+            method: true,
+            seam: Some(name.to_string()),
+        })
+        .collect()
 }
 
 fn public_fn_re() -> &'static Regex {
@@ -577,6 +668,7 @@ fn gated_functions(modules: &BTreeMap<String, String>) -> (Vec<Gated>, Vec<Findi
                     module: module.clone(),
                     name: name.clone(),
                     method: *method,
+                    seam: None,
                 });
             }
         }
@@ -602,11 +694,18 @@ function here; remove its entry"
 /// Where `path` names a gated function outside the function's own module:
 /// `(name, line)`. A definition, a field of the same name, and (for a free
 /// function) a field or method reached through `.` are not references.
+///
+/// A method of the recogniser trait is gated outside the readers only,
+/// and its name is as common as `read`, so it is a reference only where
+/// it is a call (`(` follows) reached through `.` or through the trait's
+/// own path, in a file that names the trait. An implementation of the
+/// trait declares the method and calls nothing, so it is not one.
 pub fn references(path: &str, text: &str, gated: &[Gated]) -> Vec<(String, usize)> {
     let posix = path.replace('\\', "/");
     let candidates: Vec<&Gated> = gated
         .iter()
         .filter(|g| g.module != posix && text.contains(g.name.as_str()))
+        .filter(|g| g.seam.is_none() || !posix.starts_with(READERS_ROOT))
         .collect();
     if candidates.is_empty() {
         return Vec::new();
@@ -616,9 +715,31 @@ pub fn references(path: &str, text: &str, gated: &[Gated]) -> Vec<(String, usize
     let mut out = Vec::new();
     for g in candidates {
         let re = Regex::new(&format!(r"\b{}\b", regex::escape(&g.name))).expect("valid name");
+        let names_trait = g.seam.as_ref().is_some_and(|seam| {
+            Regex::new(&format!(r"\b{}\b", regex::escape(seam)))
+                .expect("valid trait name")
+                .is_match(code)
+        });
         for m in re.find_iter(code) {
             let before = code[..m.start()].trim_end();
             let after = code[m.end()..].trim_start();
+            if let Some(seam) = &g.seam {
+                let through_dot = before.ends_with('.') && !before.ends_with("..");
+                let through_trait = before
+                    .strip_suffix("::")
+                    .map(|path| path.trim_end().trim_end_matches('>').trim_end())
+                    .is_some_and(|path| {
+                        path.ends_with(seam.as_str())
+                            && !path[..path.len() - seam.len()]
+                                .bytes()
+                                .last()
+                                .is_some_and(is_ident)
+                    });
+                if names_trait && after.starts_with('(') && (through_dot || through_trait) {
+                    out.push((g.name.clone(), line_at(&masked.starts, m.start())));
+                }
+                continue;
+            }
             let definition = before.ends_with("fn")
                 && !before[..before.len() - 2]
                     .bytes()
@@ -1080,8 +1201,20 @@ fn evaluate(repo_root: &std::path::Path) -> Result<Report, String> {
             .ok_or_else(|| format!("ui-profile: {module} is missing; update the guard"))?;
         modules.insert(module.to_string(), text);
     }
-    let (gated, stale) = gated_functions(&modules);
+    let (mut gated, stale) = gated_functions(&modules);
     report.findings.extend(stale);
+    let (seam_module, seam_trait) = SEAM_TRAIT;
+    let seam_text = read(repo_root, seam_module)?
+        .ok_or_else(|| format!("ui-profile: {seam_module} is missing; update the guard"))?;
+    let seam = seam_methods(seam_module, &seam_text, seam_trait);
+    if seam.is_empty() {
+        return Err(format!(
+            "ui-profile: {seam_module} declares no method of a trait `{seam_trait}`; update the guard"
+        ));
+    }
+    gated.extend(seam);
+    gated.sort();
+    gated.dedup();
     let mut found: BTreeMap<String, Vec<(String, usize)>> = BTreeMap::new();
     for path in tracked.iter().filter(|p| p.ends_with(".rs")) {
         if let Some(text) = read(repo_root, path)? {
@@ -1311,10 +1444,171 @@ mod tests {
                 module: "app/src-tauri/eo-services/src/ocr_engine.rs".to_string(),
                 name: "recognize_bgr".to_string(),
                 method: true,
+                seam: None,
             }]
         );
         let refs = references("app/src-tauri/x.rs", "engine.recognize_bgr(&img)", &gated);
         assert_eq!(refs.len(), 1);
+    }
+
+    const FIELD: &str = "app/src-tauri/eo-services/src/game_ui/field.rs";
+
+    /// The recogniser trait as the readers declare it, gated.
+    fn seam() -> Vec<Gated> {
+        seam_methods(
+            FIELD,
+            "/// The recognition seam.\n\
+             pub trait Recogniser: Send + Sync {\n    \
+                 fn read(&self, image: &BgrImage) -> Option<(String, f64)>;\n\
+             }\n\
+             pub fn read_run(recogniser: &dyn Recogniser) { recogniser.read(&crop()); }\n",
+            "Recogniser",
+        )
+    }
+
+    #[test]
+    fn ui_profile_the_recogniser_traits_methods_are_read_from_its_definition() {
+        assert_eq!(
+            seam(),
+            [Gated {
+                module: FIELD.to_string(),
+                name: "read".to_string(),
+                method: true,
+                seam: Some("Recogniser".to_string()),
+            }]
+        );
+        // Every method the trait declares, with or without a default
+        // body, and none that a body defines for itself or that another
+        // trait or a free function declares.
+        let text = "trait Other { fn glance(&self); }\n\
+                    pub trait Recogniser {\n    \
+                        fn read(&self, image: &BgrImage) -> Option<(String, f64)>;\n    \
+                        fn read_all(&self, images: &[BgrImage]) -> usize {\n        \
+                            fn count(n: usize) -> usize { n }\n        \
+                            count(images.len())\n    \
+                        }\n    \
+                        fn warm(&self);\n\
+                    }\n\
+                    fn after() {}\n";
+        assert_eq!(
+            trait_methods(text, "Recogniser"),
+            Some(vec![
+                "read".to_string(),
+                "read_all".to_string(),
+                "warm".to_string()
+            ])
+        );
+        assert_eq!(
+            trait_methods("pub trait Recogniserish { fn read(&self); }", "Recogniser"),
+            None
+        );
+        assert_eq!(trait_methods("fn read() {}", "Recogniser"), None);
+    }
+
+    #[test]
+    fn ui_profile_a_call_to_the_recogniser_trait_outside_the_readers_is_a_bypass() {
+        let gated = seam();
+        let rogue = "app/src-tauri/eo-services/src/rogue.rs";
+        // On an engine, through a dot; on a trait object; by the trait's
+        // path, plainly and qualified.
+        for (text, line) in [
+            ("use crate::game_ui::field::Recogniser;\nfn peek(engine: &OcrEngine, crop: &BgrImage) {\n    let text = engine.read(crop);\n}\n", 3),
+            ("fn peek(seam: &dyn Recogniser, crop: &BgrImage) {\n    let text = seam\n        .read(crop);\n}\n", 3),
+            ("use crate::game_ui::field::Recogniser;\nfn peek(engine: &OcrEngine, crop: &BgrImage) {\n    Recogniser::read(engine, crop);\n}\n", 3),
+            ("fn peek(engine: &OcrEngine, crop: &BgrImage) {\n    <OcrEngine as crate::game_ui::field::Recogniser>::read(engine, crop);\n}\n", 2),
+        ] {
+            let refs = references(rogue, text, &gated);
+            assert_eq!(refs, [("read".to_string(), line)], "{text}");
+            let found = BTreeMap::from([(rogue.to_string(), refs)]);
+            assert_eq!(rules(&check_references(&found, &[])), ["bypass"]);
+            // Listed for the method with its reason, the file passes; an
+            // entry for another name does not cover it.
+            let listed = Allowed {
+                path: "app/src-tauri/eo-services/src/rogue.rs",
+                names: &["read"],
+                reason: "test",
+            };
+            assert!(check_references(&found, &[&listed]).is_empty());
+            let other = Allowed {
+                path: "app/src-tauri/eo-services/src/rogue.rs",
+                names: &["recognize_bgr"],
+                reason: "test",
+            };
+            assert_eq!(
+                rules(&check_references(&found, &[&other])),
+                ["bypass", "stale-allowance"]
+            );
+        }
+    }
+
+    #[test]
+    fn ui_profile_the_same_call_inside_the_readers_is_the_pipeline() {
+        let gated = seam();
+        let text = "use super::field::Recogniser;\nfn level(recogniser: &dyn Recogniser, crop: &BgrImage) {\n    let text = recogniser.read(crop);\n}\n";
+        for reader in [
+            "app/src-tauri/eo-services/src/game_ui/plates.rs",
+            "app/src-tauri/eo-services/src/game_ui/seams.rs",
+            FIELD,
+        ] {
+            assert!(references(reader, text, &gated).is_empty(), "{reader}");
+        }
+        // A module beside the readers' directory is not in it.
+        assert_eq!(
+            references(
+                "app/src-tauri/eo-services/src/game_ui_extra.rs",
+                text,
+                &gated
+            )
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn ui_profile_implementing_the_recogniser_trait_is_a_definition_not_a_call() {
+        let gated = seam();
+        // The engine's implementation, and a stand-in a test defines.
+        let engine = "impl crate::game_ui::field::Recogniser for OcrEngine {\n    fn read(&self, image: &BgrImage) -> Option<(String, f64)> {\n        self.recognize(image).ok()\n    }\n}\n";
+        let stand_in = "#[cfg(test)]\nmod tests {\n    use crate::game_ui::field::Recogniser;\n    struct Blind;\n    impl Recogniser for Blind {\n        fn read(&self, _: &BgrImage) -> Option<(String, f64)> { None }\n    }\n}\n";
+        for text in [engine, stand_in] {
+            assert!(
+                references("app/src-tauri/eo-services/src/ocr_engine.rs", text, &gated).is_empty(),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn ui_profile_another_read_is_not_the_recogniser_traits() {
+        let gated = seam();
+        // Reading a file or a lock, another type's own `read`, a field and
+        // a closure of that name, in a file that names the trait; and a
+        // call through a dot in a file that does not name it.
+        let text = "use crate::game_ui::field::Recogniser;\n\
+                    fn load(path: &Path, seam: std::sync::Arc<dyn Recogniser>) {\n    \
+                        let bytes = std::fs::read(path);\n    \
+                        let text = fs::read_to_string(path);\n    \
+                        let providers = Providers { read: seam, read_text: None };\n    \
+                        let held = providers.read;\n    \
+                        let read = |crop: &BgrImage| None::<String>;\n    \
+                        read(&crop());\n\
+                    }\n";
+        assert!(references("app/src-tauri/x.rs", text, &gated).is_empty());
+        let unnamed = "fn tail(lock: &RwLock<State>, file: &mut File, buffer: &mut [u8]) {\n    let state = lock.read();\n    file.read(buffer);\n}\n";
+        assert!(references("app/src-tauri/x.rs", unnamed, &gated).is_empty());
+    }
+
+    #[test]
+    fn ui_profile_the_live_recogniser_trait_declares_the_method_the_guard_gates() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let (module, name) = SEAM_TRAIT;
+        let text = std::fs::read_to_string(root.join(module)).expect("the trait's module reads");
+        let gated = seam_methods(module, &text, name);
+        assert!(!gated.is_empty(), "{module} declares no `{name}` method");
+        assert!(module.starts_with(READERS_ROOT));
+        assert!(gated
+            .iter()
+            .all(|g| g.seam.as_deref() == Some(name) && g.method));
     }
 
     #[test]

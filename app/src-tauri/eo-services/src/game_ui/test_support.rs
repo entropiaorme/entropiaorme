@@ -1,14 +1,12 @@
 //! Shared helpers for the reading pipeline's tests: the bundled
-//! profile, frames drawn the way the client draws them, and access to
-//! the private capture corpus where one is present. Compiled for this
-//! crate's tests, and for the facade's through the `test-support`
-//! feature.
+//! profile, and frames drawn the way the client draws them. Compiled
+//! for this crate's tests, and for the facade's through the
+//! `test-support` feature.
 
 use std::path::{Path, PathBuf};
 
 use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::seams::{FrameArea, FrameUnavailable, GameFrame};
-use crate::ocr_engine::load_bgr_png;
 
 use super::geometry::Rect;
 use super::profile::UiProfile;
@@ -32,23 +30,6 @@ pub fn bundled_mobs() -> Vec<serde_json::Value> {
     let path = repo_root().join("app/src-tauri/entropia-orme/resources/snapshot/mobs.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path:?}: {e}"))
-}
-
-/// The private corpus of real captures, when this machine has one.
-/// Real gameplay screens stay out of the public tree, so tests over
-/// them run only where `EO_GAME_UI_CORPUS_DIR` names the corpus and
-/// say so when they skip.
-pub fn corpus_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("EO_GAME_UI_CORPUS_DIR")?);
-    dir.is_dir().then_some(dir)
-}
-
-/// One captured frame from the private corpus.
-pub fn corpus_frame(dir: &Path, frame: &str) -> BgrImage {
-    let path = dir.join("frames").join(format!("{frame}.png"));
-    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
-    let (data, h, w) = load_bgr_png(&bytes).unwrap_or_else(|e| panic!("{path:?}: {e}"));
-    BgrImage { data, h, w }
 }
 
 /// What a game window showing `image`, its client area at `origin` on the

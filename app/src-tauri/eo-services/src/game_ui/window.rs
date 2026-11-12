@@ -299,6 +299,22 @@ fn has_marker<P: Pixels>(image: &P, x0: i32, y0: i32, marker: &MarkerProfile) ->
     // The marker is a thin upright bar. Counting warm pixels alone
     // would also accept an item icon or a coloured tab that happens to
     // sit in the same corner of a pane, so its shape is checked too.
+    marker_extent(image, x0, y0, marker).is_some_and(|(count, bounds)| {
+        count >= marker.min_pixels
+            && bounds.x1 - bounds.x0 < marker.max_width
+            && bounds.height() >= marker.min_height
+    })
+}
+
+/// The pixels of the marker's colour in its search box at the corner
+/// `(x0, y0)`: how many, and their bounds in the frame. `None` when the
+/// box holds none.
+fn marker_extent<P: Pixels>(
+    image: &P,
+    x0: i32,
+    y0: i32,
+    marker: &MarkerProfile,
+) -> Option<(i32, Rect)> {
     let mut count = 0;
     let (mut min_x, mut max_x, mut min_y, mut max_y) = (i32::MAX, i32::MIN, i32::MAX, i32::MIN);
     for y in (y0 + marker.search[1])..=(y0 + marker.search[3]) {
@@ -316,9 +332,193 @@ fn has_marker<P: Pixels>(image: &P, x0: i32, y0: i32, marker: &MarkerProfile) ->
             }
         }
     }
-    count >= marker.min_pixels
-        && max_x - min_x < marker.max_width
-        && max_y - min_y + 1 >= marker.min_height
+    (count > 0).then(|| (count, Rect::new(min_x, min_y, max_x, max_y)))
+}
+
+/// The ridge along one side of a window, as it is drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RidgeMeasurement {
+    /// How many pixels thick the ridge is along most of the side.
+    pub thickness: u8,
+    /// The share of the side that shows a ridge of that thickness; the
+    /// rest is covered, or drawn otherwise.
+    pub support: f32,
+    /// The darkest and the brightest pixel of the ridge.
+    pub lum: [u8; 2],
+    /// The most colourful pixel of the ridge.
+    pub max_chroma: u8,
+    /// The least rise in brightness from the ridge's outer pixel to the
+    /// next one in, for a ridge at least two pixels thick.
+    pub step: Option<u8>,
+    /// The share of the side whose ridge the profile's limits admit: its
+    /// pixels within the ridge's brightness and chroma, and for a ridge of
+    /// two pixels the step between them. The finder wants the profile's
+    /// side support of a side, not all of it: where the ridge meets the
+    /// title bar's furniture a few positions stand outside any limit.
+    pub admitted: f32,
+}
+
+/// The title marker as it is drawn: its bounds relative to the window's
+/// top-left corner, and how many pixels of it have the marker's colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkerMeasurement {
+    pub rect: Rect,
+    pub pixels: i32,
+}
+
+/// A window's frame as it is drawn in one frame: what the profile's
+/// chrome entries are measured from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChromeMeasurement {
+    /// The panel's fill at the window's outer edge.
+    pub panel_rgb: [u8; 3],
+    /// How far any channel of the fill, where a ridge backs it, stands
+    /// from that colour.
+    pub panel_spread: u8,
+    /// The ridge along the left, top, right and bottom sides; `None` for
+    /// a side that shows no ridge (it is covered, or off the frame).
+    pub sides: [Option<RidgeMeasurement>; SIDES],
+    /// The title marker, when its colour is seen at the corner.
+    pub marker: Option<MarkerMeasurement>,
+}
+
+/// The middle value of `values`, which it reorders.
+fn middle(values: &mut [u8]) -> Option<u8> {
+    values.sort_unstable();
+    values.get(values.len() / 2).copied()
+}
+
+/// Measure the frame of the window at `rect`, looking `depth` pixels in
+/// from each side.
+///
+/// The frame is measured against itself, not against the profile: the
+/// fill is the colour most of the outer edge has, and the ridge is
+/// whatever stands between that edge and the fill behind it. So a frame
+/// the client has redrawn, which [`find_windows`] no longer finds, is
+/// still measured once its rectangle is given. Two things are taken from
+/// `chrome`: how far a pixel may stray from the fill and still be the
+/// fill, and what counts as the marker's colour. The ends of each side,
+/// where the ridge turns the corner, are left out. `None` when none of
+/// the rectangle's edge lies in the frame. Beside what is drawn, each
+/// side says how much of it the limits in `chrome` admit.
+pub fn measure_chrome<P: Pixels>(
+    image: &P,
+    rect: Rect,
+    chrome: &ChromeProfile,
+    depth: i32,
+) -> Option<ChromeMeasurement> {
+    // Every position along each side: its pixel on the outer edge, and
+    // the step that leads inward from it.
+    let along = |side: usize| -> Vec<(i32, i32, i32, i32)> {
+        let upright = matches!(side, 0 | 2);
+        let (from, to) = if upright {
+            (rect.y0 + depth, rect.y1 - depth)
+        } else {
+            (rect.x0 + depth, rect.x1 - depth)
+        };
+        (from..=to)
+            .map(|i| match side {
+                0 => (rect.x0, i, 1, 0),
+                1 => (i, rect.y0, 0, 1),
+                2 => (rect.x1, i, -1, 0),
+                _ => (i, rect.y1, 0, -1),
+            })
+            .filter(|&(x, y, dx, dy)| {
+                image.in_bounds(x, y) && image.in_bounds(x + dx * depth, y + dy * depth)
+            })
+            .collect()
+    };
+    let sides: Vec<Vec<(i32, i32, i32, i32)>> = (0..SIDES).map(along).collect();
+    let mut channels: [Vec<u8>; 3] = Default::default();
+    for &(x, y, _, _) in sides.iter().flatten() {
+        let rgb = image.rgb(x, y);
+        for (channel, value) in channels.iter_mut().zip(rgb) {
+            channel.push(value);
+        }
+    }
+    let [r, g, b] = &mut channels;
+    let panel_rgb = [middle(r)?, middle(g)?, middle(b)?];
+    let is_fill = |x: i32, y: i32| near(image.rgb(x, y), panel_rgb, chrome.panel_tolerance);
+    let mut panel_spread = 0u8;
+    let mut measured: [Option<RidgeMeasurement>; SIDES] = Default::default();
+    for (side, positions) in sides.iter().enumerate() {
+        // The ridge's thickness at each position: the pixels between the
+        // fill on the edge and the fill behind.
+        let thickness: Vec<i32> = positions
+            .iter()
+            .map(|&(x, y, dx, dy)| {
+                if !is_fill(x, y) {
+                    return 0;
+                }
+                (1..=depth)
+                    .find(|k| is_fill(x + dx * k, y + dy * k))
+                    .map_or(0, |k| k - 1)
+            })
+            .collect();
+        let Some(usual) = (1..depth)
+            .max_by_key(|t| {
+                (
+                    thickness.iter().filter(|seen| *seen == t).count(),
+                    std::cmp::Reverse(*t),
+                )
+            })
+            .filter(|t| thickness.contains(t))
+        else {
+            continue;
+        };
+        let (mut lo, mut hi, mut max_chroma) = (u8::MAX, 0u8, 0u8);
+        let mut step: Option<u8> = None;
+        let (mut shown, mut admitted) = (0usize, 0usize);
+        for (&(x, y, dx, dy), _) in positions
+            .iter()
+            .zip(&thickness)
+            .filter(|(_, seen)| **seen == usual)
+        {
+            shown += 1;
+            for (mine, panel) in image.rgb(x, y).iter().zip(panel_rgb) {
+                panel_spread = panel_spread.max(mine.abs_diff(panel));
+            }
+            let mut within = true;
+            for k in 1..=usual {
+                let (px, py) = (x + dx * k, y + dy * k);
+                let (lum, colour) = (image.lum(px, py), chroma(image.rgb(px, py)));
+                lo = lo.min(lum);
+                hi = hi.max(lum);
+                max_chroma = max_chroma.max(colour);
+                within &= lum >= chrome.ridge_lum[0]
+                    && lum <= chrome.ridge_lum[1]
+                    && colour <= chrome.ridge_max_chroma;
+            }
+            if usual >= 2 {
+                let rise = image
+                    .lum(x + dx * 2, y + dy * 2)
+                    .saturating_sub(image.lum(x + dx, y + dy));
+                step = Some(step.map_or(rise, |least| least.min(rise)));
+                within &= usual > 2 || rise >= chrome.ridge_step;
+            }
+            admitted += within as usize;
+        }
+        measured[side] = Some(RidgeMeasurement {
+            thickness: u8::try_from(usual).unwrap_or(u8::MAX),
+            support: shown as f32 / positions.len().max(1) as f32,
+            lum: [lo, hi],
+            max_chroma,
+            step,
+            admitted: admitted as f32 / positions.len().max(1) as f32,
+        });
+    }
+    let marker = marker_extent(image, rect.x0, rect.y0, &chrome.marker).map(|(pixels, bounds)| {
+        MarkerMeasurement {
+            rect: bounds.offset(-rect.x0, -rect.y0),
+            pixels,
+        }
+    });
+    Some(ChromeMeasurement {
+        panel_rgb,
+        panel_spread,
+        sides: measured,
+        marker,
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -745,9 +945,7 @@ pub fn find_windows<P: Pixels>(image: &P, chrome: &ChromeProfile) -> Vec<FoundWi
 mod tests {
     use super::*;
     use crate::game_ui::geometry::BgrImage;
-    use crate::game_ui::test_support::{
-        blank, bundled_profile, corpus_dir, corpus_frame, draw_window, put, Lcg,
-    };
+    use crate::game_ui::test_support::{blank, bundled_profile, draw_window, fill, put, Lcg};
 
     fn scenery(w: usize, h: usize, seed: u64) -> BgrImage {
         let mut rng = Lcg(seed);
@@ -783,6 +981,98 @@ mod tests {
         assert!(found[0].fully_visible(&chrome));
         assert!(found[0].marker);
         assert_eq!(found[0].ridge_px, 2);
+    }
+
+    #[test]
+    fn a_frame_is_measured_as_it_is_drawn() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(900, 600, 2);
+        let rect = Rect::new(120, 80, 700, 480);
+        draw_window(&mut image, rect);
+        let got = measure_chrome(&image, rect, &chrome, 6).expect("the window is in the frame");
+        assert_eq!((got.panel_rgb, got.panel_spread), ([8, 11, 11], 0));
+        // The drawn ridge: an outer pixel of brightness 47 and an inner
+        // one of 80, the more colourful of them by 8.
+        let ridge = RidgeMeasurement {
+            thickness: 2,
+            support: 1.0,
+            lum: [47, 80],
+            max_chroma: 8,
+            step: Some(33),
+            admitted: 1.0,
+        };
+        assert_eq!(got.sides, [(); SIDES].map(|()| Some(ridge.clone())));
+        assert_eq!(
+            got.marker,
+            Some(MarkerMeasurement {
+                rect: Rect::new(25, 18, 29, 37),
+                pixels: 100,
+            })
+        );
+        // What it measures is what the finder's thresholds must admit.
+        assert!(chrome.ridge_lum[0] <= ridge.lum[0] && ridge.lum[1] <= chrome.ridge_lum[1]);
+        assert!(ridge.max_chroma <= chrome.ridge_max_chroma);
+        assert!(ridge.step >= Some(chrome.ridge_step));
+    }
+
+    #[test]
+    fn a_redrawn_frame_is_measured_though_it_is_no_longer_found() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(900, 600, 4);
+        let rect = Rect::new(100, 60, 600, 400);
+        // Another fill, a one-pixel ridge two pixels in, and no marker.
+        let (panel, ridge) = ([30, 34, 52], [140, 150, 170]);
+        fill(&mut image, rect, panel);
+        let line = rect.padded(-2);
+        for x in line.x0..=line.x1 {
+            put(&mut image, x, line.y0, ridge);
+            put(&mut image, x, line.y1, ridge);
+        }
+        for y in line.y0..=line.y1 {
+            put(&mut image, line.x0, y, ridge);
+            put(&mut image, line.x1, y, ridge);
+        }
+        assert!(find_windows(&image, &chrome).is_empty());
+        let got = measure_chrome(&image, rect, &chrome, 6).expect("the window is in the frame");
+        assert_eq!((got.panel_rgb, got.marker), (panel, None));
+        // The edge is fill for two pixels, so the first is not a ridge's
+        // outer pixel: nothing stands between it and the fill behind.
+        assert_eq!(got.sides, [(); SIDES].map(|()| None));
+        let got = measure_chrome(&image, rect.padded(-1), &chrome, 6).expect("in the frame");
+        let want = RidgeMeasurement {
+            thickness: 1,
+            support: 1.0,
+            lum: [153, 153],
+            max_chroma: 30,
+            step: None,
+            // Brighter and more colourful than the profile's ridge.
+            admitted: 0.0,
+        };
+        assert_eq!(got.sides, [(); SIDES].map(|()| Some(want.clone())));
+    }
+
+    #[test]
+    fn a_covered_side_is_measured_only_where_it_shows() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(1200, 800, 3);
+        let back = Rect::new(100, 100, 800, 600);
+        draw_window(&mut image, back);
+        // A window over the whole right side and half the bottom.
+        draw_window(&mut image, Rect::new(450, 300, 1100, 700));
+        let got = measure_chrome(&image, back, &chrome, 6).expect("the window is in the frame");
+        let [left, top, right, bottom] = got.sides;
+        assert_eq!(left.map(|s| (s.thickness, s.support)), Some((2, 1.0)));
+        assert_eq!(top.map(|s| (s.thickness, s.support)), Some((2, 1.0)));
+        assert_eq!(right.as_ref().map(|s| s.thickness), Some(2));
+        assert!(right.is_some_and(|s| s.support < 0.5));
+        assert!(bottom.is_some_and(|s| {
+            s.thickness == 2 && s.support > 0.4 && s.support < 0.6 && s.admitted == s.support
+        }));
+        // A rectangle wholly off the frame measures nothing.
+        assert_eq!(
+            measure_chrome(&image, Rect::new(2000, 100, 2400, 500), &chrome, 6),
+            None
+        );
     }
 
     #[test]
@@ -1017,113 +1307,5 @@ mod tests {
             layouts += 1;
         }
         println!("window layouts: {layouts} layouts, {certain} certain rectangles, 0 false");
-    }
-
-    /// The locator against every real capture in the private corpus,
-    /// in shards: an unoptimised build takes a few seconds a frame.
-    fn corpus_windows_shard(shard: usize) {
-        let Some(dir) = corpus_dir() else {
-            eprintln!("skipped: EO_GAME_UI_CORPUS_DIR is not set, so there are no real captures to replay");
-            return;
-        };
-        let chrome = bundled_profile().chrome;
-        let manifest: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join("manifest.json")).expect("manifest"),
-        )
-        .expect("manifest parses");
-        let frames = manifest["frames"].as_object().expect("frames");
-        let (mut expected_total, mut matched, mut false_locks, mut refused_ok) = (0, 0, 0, 0);
-        let mut failures = Vec::new();
-        for (index, (name, entry)) in frames.iter().enumerate() {
-            if index % CORPUS_SHARDS != shard {
-                continue;
-            }
-            if entry["held_out"].as_bool().unwrap_or(false)
-                && std::env::var_os("EO_GAME_UI_HELD_OUT").is_none()
-            {
-                continue;
-            }
-            let image = corpus_frame(&dir, name);
-            let found = find_windows(&image, &chrome);
-            let expected: Vec<(Rect, bool)> = entry["windows"]
-                .as_array()
-                .expect("windows")
-                .iter()
-                .map(|w| {
-                    let r: Vec<i32> = w["rect"]
-                        .as_array()
-                        .expect("rect")
-                        .iter()
-                        .map(|v| v.as_i64().unwrap() as i32)
-                        .collect();
-                    (
-                        Rect::new(r[0], r[1], r[2], r[3]),
-                        w["extent_certain"].as_bool().unwrap_or(true),
-                    )
-                })
-                .collect();
-            let close = |a: &Rect, b: &Rect| {
-                (a.x0 - b.x0).abs() <= 2
-                    && (a.y0 - b.y0).abs() <= 2
-                    && (a.x1 - b.x1).abs() <= 2
-                    && (a.y1 - b.y1).abs() <= 2
-            };
-            for (rect, certain) in &expected {
-                expected_total += 1;
-                if *certain {
-                    if found
-                        .iter()
-                        .any(|f| f.extent_certain() && close(&f.rect, rect))
-                    {
-                        matched += 1;
-                    } else {
-                        failures.push(format!(
-                            "{name}: expected {rect:?} not found in {:?}",
-                            rects(&found)
-                        ));
-                    }
-                } else if found.iter().any(|f| {
-                    f.extent_certain() && !expected.iter().any(|(e, c)| *c && close(&f.rect, e))
-                }) {
-                    failures.push(format!(
-                        "{name}: a window with a hidden side was reported as certain"
-                    ));
-                } else {
-                    refused_ok += 1;
-                }
-            }
-            for f in found.iter().filter(|f| f.extent_certain()) {
-                if !expected.iter().any(|(e, _)| close(&f.rect, e)) {
-                    false_locks += 1;
-                    failures.push(format!("{name}: false window {:?}", f.rect));
-                }
-            }
-        }
-        println!(
-            "corpus windows shard {shard}: {expected_total} expected, {matched} found within 2 px, {refused_ok} correctly reported uncertain, {false_locks} false"
-        );
-        assert!(failures.is_empty(), "{}", failures.join("\n"));
-    }
-
-    const CORPUS_SHARDS: usize = 8;
-
-    macro_rules! corpus_window_shards {
-        ($($name:ident: $shard:expr,)*) => {$(
-            #[test]
-            fn $name() {
-                corpus_windows_shard($shard);
-            }
-        )*};
-    }
-
-    corpus_window_shards! {
-        corpus_windows_shard_0: 0,
-        corpus_windows_shard_1: 1,
-        corpus_windows_shard_2: 2,
-        corpus_windows_shard_3: 3,
-        corpus_windows_shard_4: 4,
-        corpus_windows_shard_5: 5,
-        corpus_windows_shard_6: 6,
-        corpus_windows_shard_7: 7,
     }
 }

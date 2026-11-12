@@ -18,6 +18,14 @@ pub type RegionCapture = Arc<dyn Fn(i64, i64, i64, i64) -> Option<BgrImage> + Se
 /// failed on it.
 pub type FrameReader = Arc<dyn Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync>;
 
+/// A recogniser as the seam a service is composed over: each image is
+/// handed to it, and what it cannot read is no reading. Code outside the
+/// readers that holds a recogniser turns it into this seam here rather
+/// than calling it, so the readers stay the only callers of recognition.
+pub fn frame_reader(recogniser: Arc<dyn super::field::Recogniser>) -> FrameReader {
+    Arc::new(move |image: &BgrImage| recogniser.read(image))
+}
+
 /// Why no frame of the game window could be had.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FrameUnavailable {
@@ -108,3 +116,28 @@ impl GameFrame {
 /// client area as far as it can be captured.
 pub type GameWindowFrame =
     Arc<dyn Fn(FrameArea) -> Result<GameFrame, FrameUnavailable> + Send + Sync>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recogniser_becomes_the_seam_that_hands_it_each_image() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let recogniser = move |image: &BgrImage| {
+            log.lock().unwrap().push((image.w, image.h));
+            (image.w > 1).then(|| (format!("{}x{}", image.w, image.h), 0.5))
+        };
+        let reader = frame_reader(Arc::new(recogniser));
+        let image = |w: usize, h: usize| BgrImage {
+            data: vec![0; w * h * 3],
+            h,
+            w,
+        };
+        assert_eq!(reader(&image(4, 2)), Some(("4x2".to_string(), 0.5)));
+        // What the recogniser cannot read is no reading.
+        assert_eq!(reader(&image(1, 3)), None);
+        assert_eq!(*seen.lock().unwrap(), vec![(4, 2), (1, 3)]);
+    }
+}

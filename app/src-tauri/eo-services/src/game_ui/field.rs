@@ -275,6 +275,28 @@ pub fn read_field(
     read_field_in(image, &runs, field, read, recogniser)
 }
 
+/// Where `field` stands among `runs`: the run that reads as its label,
+/// and the run in the stated relation to it, which holds the value. The
+/// first half of [`read_field_in`], for a caller that wants the value's
+/// place whether or not its text then validates: measuring a figure the
+/// current numeral metrics refuse, say.
+pub fn locate_field<'a>(
+    image: &BgrImage,
+    runs: &'a [TextRun],
+    field: &FieldProfile,
+    read: &ReadProfile,
+    recogniser: &dyn Recogniser,
+) -> Result<(&'a TextRun, &'a TextRun), FieldError> {
+    let label = find_label(image, runs, &field.label, read, recogniser)?
+        .ok_or(FieldError::LabelNotFound)?;
+    let value = match field.value {
+        ValueSide::RightOf => run_right_of(label, runs),
+        ValueSide::Below => run_below(label, runs, read.below_reach),
+    }
+    .ok_or(FieldError::ValueNotFound)?;
+    Ok((label, value))
+}
+
 /// Read `field` from runs already found.
 pub fn read_field_in(
     image: &BgrImage,
@@ -283,13 +305,7 @@ pub fn read_field_in(
     read: &ReadProfile,
     recogniser: &dyn Recogniser,
 ) -> Result<FieldRead, FieldError> {
-    let label = find_label(image, runs, &field.label, read, recogniser)?
-        .ok_or(FieldError::LabelNotFound)?;
-    let value = match field.value {
-        ValueSide::RightOf => run_right_of(label, runs),
-        ValueSide::Below => run_below(label, runs, read.below_reach),
-    }
-    .ok_or(FieldError::ValueNotFound)?;
+    let (label, value) = locate_field(image, runs, field, read, recogniser)?;
     let (raw, confidence) =
         read_run(image, value.rect, read, recogniser).ok_or(FieldError::NoRecogniser)?;
     let parsed = parse(field.grammar, &raw).ok_or(FieldError::Invalid { raw: raw.clone() })?;
@@ -334,6 +350,63 @@ mod tests {
         );
         read_run(&image, Rect::new(20, 10, 60, 24), &read, &recogniser);
         assert_eq!(*seen.lock().unwrap(), vec![(true, false), (true, true)]);
+    }
+
+    #[test]
+    fn a_field_is_located_by_its_label_whether_or_not_its_value_validates() {
+        use crate::game_ui::test_support::{blank, bundled_profile, Lettering};
+        let profile = bundled_profile();
+        let window = Rect::new(0, 0, 599, 299);
+        let field = |value: ValueSide| FieldProfile {
+            label: "REPAIR COST:".to_string(),
+            value,
+            grammar: Grammar::PedAmount,
+        };
+        let mut frame = Lettering::new(blank(600, 300, [8, 11, 11]));
+        let label = Rect::new(40, 100, 160, 111);
+        frame.text(label, "REPAIR COST:");
+        // The value's text is no amount of PED: it is located all the
+        // same, and only the read refuses it.
+        let beside = Rect::new(230, 100, 290, 111);
+        frame.text(beside, "not a number");
+        let below = Rect::new(40, 140, 100, 151);
+        frame.text(below, "nor this");
+        let runs = text_runs(&frame.image, window, &profile.text);
+        let read = frame.recogniser();
+        for (side, want) in [(ValueSide::RightOf, beside), (ValueSide::Below, below)] {
+            let (found_label, value) =
+                locate_field(&frame.image, &runs, &field(side), &profile.read, &read)
+                    .expect("the field is located");
+            assert_eq!((found_label.rect, value.rect), (label, want));
+            assert!(matches!(
+                read_field_in(&frame.image, &runs, &field(side), &profile.read, &read),
+                Err(FieldError::Invalid { .. })
+            ));
+        }
+        // A label with nothing beside it, and a window without the label.
+        let mut alone = Lettering::new(blank(600, 300, [8, 11, 11]));
+        alone.text(label, "REPAIR COST:");
+        let runs = text_runs(&alone.image, window, &profile.text);
+        let read = alone.recogniser();
+        assert_eq!(
+            locate_field(
+                &alone.image,
+                &runs,
+                &field(ValueSide::RightOf),
+                &profile.read,
+                &read
+            )
+            .err(),
+            Some(FieldError::ValueNotFound)
+        );
+        let other = FieldProfile {
+            label: "TOTAL AMOUNT:".to_string(),
+            ..field(ValueSide::RightOf)
+        };
+        assert_eq!(
+            locate_field(&alone.image, &runs, &other, &profile.read, &read).err(),
+            Some(FieldError::LabelNotFound)
+        );
     }
 
     #[test]

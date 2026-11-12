@@ -405,8 +405,14 @@ pub fn expected_width(text: &str, metrics: &NumeralMetrics) -> Option<f32> {
     Some(units)
 }
 
-/// Width and body height of the ink in `rect`.
-fn ink_size<P: Pixels>(image: &P, rect: Rect, metrics: &NumeralMetrics) -> Option<(i32, i32)> {
+/// Width and body height of the ink in `rect`, as the width check
+/// measures them: the width from the first column with ink to the last,
+/// and the height of the rows that carry at least the profile's share of
+/// the busiest row's ink, which leaves out a comma's tail below the line.
+/// A figure's width over this height is what [`expected_width`] predicts,
+/// so a figure whose true text is known measures the client's numerals.
+/// `None` where the rectangle holds no ink or lies off the image.
+pub fn ink_size<P: Pixels>(image: &P, rect: Rect, metrics: &NumeralMetrics) -> Option<(i32, i32)> {
     let rect = rect.intersect(&Rect::new(0, 0, image.width() - 1, image.height() - 1))?;
     let ink = |x: i32, y: i32| {
         let [r, g, b] = image.rgb(x, y);
@@ -706,6 +712,28 @@ mod tests {
             assert!(width_agrees(&image, rect, "27.47542 PED", &m), "height {h}");
             assert!(!width_agrees(&image, rect, "27.4742 PED", &m), "height {h}");
         }
+    }
+
+    #[test]
+    fn ink_is_measured_by_its_width_and_the_height_of_its_body() {
+        use crate::game_ui::test_support::{blank, fill};
+        let m = metrics();
+        let mut image = blank(200, 60, [8, 11, 11]);
+        // A figure's body, with a comma's tail hanging two rows below it
+        // and a pixel dimmer than ink beside it.
+        fill(&mut image, Rect::new(30, 20, 89, 33), [200, 200, 200]);
+        fill(&mut image, Rect::new(50, 34, 51, 35), [200, 200, 200]);
+        fill(&mut image, Rect::new(95, 20, 95, 33), [m.min_ink - 1; 3]);
+        let around = Rect::new(20, 10, 120, 45);
+        assert_eq!(ink_size(&image, around, &m), Some((60, 14)));
+        // Only the ink inside the rectangle counts, and the rectangle is
+        // cut at the image's edge.
+        assert_eq!(
+            ink_size(&image, Rect::new(40, 10, 400, 45), &m),
+            Some((50, 14))
+        );
+        assert_eq!(ink_size(&image, Rect::new(100, 10, 190, 45), &m), None);
+        assert_eq!(ink_size(&image, Rect::new(300, 10, 400, 45), &m), None);
     }
 
     /// The sell queue's numerals, which cover markups too.

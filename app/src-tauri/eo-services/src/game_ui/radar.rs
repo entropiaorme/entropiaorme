@@ -851,11 +851,21 @@ pub fn ring_scale(
 /// not read (the client can hide them); no rings at all is another
 /// matter.
 pub fn rings_found(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> bool {
+    find_rings(image, radar, profile).is_some_and(|radii| !radii.is_empty())
+}
+
+/// The radii, in pixels and nearest first, of the range rings that stand
+/// out round the centre of `radar`, whether or not their distances are
+/// printed or read: what [`ring_scale`] pairs with the labels, and what
+/// the profile's ring entries are measured against. Points under one of
+/// the client's windows are left out. `None` when too little of a circle
+/// is in view to tell, or a ring lies at an end of the span searched.
+pub fn find_rings(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> Option<Vec<f64>> {
     let windows: Vec<Rect> = find_windows(image, &profile.chrome)
         .into_iter()
         .map(|w| w.rect)
         .collect();
-    ring_radii(image, radar, &windows, &profile.radar.rings).is_some_and(|radii| !radii.is_empty())
+    ring_radii(image, radar, &windows, &profile.radar.rings)
 }
 
 /// The planet's name printed above `radar`, when it reads as exactly one
@@ -1974,5 +1984,28 @@ mod tests {
         plain.radar((640, 380), 113, &[]);
         let radar = find_radar(&plain.image, &bundled_profile()).expect("the radar is found");
         assert!(!rings_found(&plain.image, &radar, &bundled_profile()));
+    }
+
+    #[test]
+    fn the_rings_are_found_at_their_radii_with_or_without_labels() {
+        let profile = bundled_profile();
+        let mut scene = RadarScene::new(41);
+        scene.radar((640, 380), 113, &RINGS);
+        let radar = find_radar(&scene.image, &profile).expect("the radar is found");
+        let found = find_rings(&scene.image, &radar, &profile).expect("the rings are in view");
+        assert_eq!(found.len(), RINGS.len(), "{found:?}");
+        for (got, want) in found.iter().zip(RINGS) {
+            assert!((got - want).abs() <= 1.0, "{found:?}");
+        }
+        // No rings is an answer; a ring at the end of the span is none.
+        let mut plain = RadarScene::new(32);
+        plain.radar((640, 380), 113, &[]);
+        let radar = find_radar(&plain.image, &profile).expect("the radar is found");
+        assert_eq!(find_rings(&plain.image, &radar, &profile), Some(Vec::new()));
+        let span_end = (profile.radar.rings.span[1] * 113.0).floor();
+        let mut edge = RadarScene::new(33);
+        edge.radar((640, 380), 113, &[26.0, span_end]);
+        let radar = find_radar(&edge.image, &profile).expect("the radar is found");
+        assert_eq!(find_rings(&edge.image, &radar, &profile), None);
     }
 }

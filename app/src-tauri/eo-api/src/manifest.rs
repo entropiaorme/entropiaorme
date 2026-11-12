@@ -39,7 +39,8 @@ use crate::dev::{
     MetricsSnapshot, RebuildReport,
 };
 use crate::equipment::{
-    EquipmentDetail, EquipmentRequest, EquipmentSearchHit, EquipmentSummary, SearchKind,
+    EquipmentDetail, EquipmentLibrary, EquipmentRequest, EquipmentSearchHit, EquipmentSummary,
+    SearchKind,
 };
 use crate::healing::{
     HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
@@ -116,7 +117,7 @@ pub fn manifest() -> Vec<CommandSpec> {
         CommandSpec {
             name: "equipment_library",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(Vec<EquipmentSummary>))),
+            returns: Some(schema(schema_for!(EquipmentLibrary))),
         },
         CommandSpec {
             name: "equipment_add",
@@ -136,6 +137,20 @@ pub fn manifest() -> Vec<CommandSpec> {
                 ArgSpec {
                     name: "req",
                     schema: schema(schema_for!(EquipmentRequest)),
+                },
+            ],
+            returns: Some(schema(schema_for!(EquipmentSummary))),
+        },
+        CommandSpec {
+            name: "equipment_set_enabled",
+            args: vec![
+                ArgSpec {
+                    name: "item_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "enabled",
+                    schema: schema(schema_for!(bool)),
                 },
             ],
             returns: Some(schema(schema_for!(EquipmentSummary))),

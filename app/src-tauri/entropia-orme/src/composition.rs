@@ -1039,6 +1039,15 @@ async fn compose_with(
                 .map(|profile| profile.mob_names.clone()),
             Some(mob_capture),
         )
+        // The library groups the entries the held-tool bar cannot tell
+        // apart by the same profile the readers load; without one it
+        // reports none and the library still reads.
+        .with_tool_names(
+            game_ui
+                .profile
+                .as_ref()
+                .map(|profile| profile.tool_names.clone()),
+        )
         .with_protection_changed({
             // Recording happens in the overlay's Cost popup while Equipment,
             // History, and the dashboard may be open elsewhere: each re-reads

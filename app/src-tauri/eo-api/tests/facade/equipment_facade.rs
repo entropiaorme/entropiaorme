@@ -235,7 +235,7 @@ async fn the_custom_consumable_cycle_matches_the_http_era_bytes() {
     let (api, db) = api_over(dir.path()).await;
 
     // The library starts empty.
-    assert!(api.equipment_library().await.unwrap().is_empty());
+    assert!(api.equipment_library().await.unwrap().entries.is_empty());
 
     // The stored name is stripped the reference way.
     let added = api
@@ -286,7 +286,7 @@ async fn the_custom_consumable_cycle_matches_the_http_era_bytes() {
     assert!(stored["catalog_id"].is_null());
     assert!(stored["entity"].is_null());
 
-    let listed = api.equipment_library().await.unwrap();
+    let listed = api.equipment_library().await.unwrap().entries;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, "1");
 
@@ -318,7 +318,7 @@ async fn the_custom_consumable_cycle_matches_the_http_era_bytes() {
     // Deletes are idempotent acknowledgements, present row or not.
     api.equipment_delete(1).await.unwrap();
     api.equipment_delete(9).await.unwrap();
-    assert!(api.equipment_library().await.unwrap().is_empty());
+    assert!(api.equipment_library().await.unwrap().entries.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -407,7 +407,7 @@ async fn reload_speed_past_the_attack_rate_limit_reprices_every_weapon_surface()
     assert_eq!(rate.effective_per_minute, 100.0);
     assert!((rate.factor - 1.035).abs() < 1e-9);
     assert!((detail.total_cost_per_use - 2.07).abs() < 1e-9);
-    let listed = api.equipment_library().await.unwrap();
+    let listed = api.equipment_library().await.unwrap().entries;
     let row = listed.iter().find(|item| item.id == added.id).unwrap();
     assert!((row.cost_per_use - 2.07).abs() < 1e-9);
     assert_eq!(row.damage_max.as_ref().copied(), Some(41.4));
@@ -512,7 +512,7 @@ async fn an_existing_weapon_setup_gains_descriptive_lifesteal_without_a_rewrite(
     .await
     .unwrap();
 
-    let listed = api.equipment_library().await.unwrap();
+    let listed = api.equipment_library().await.unwrap().entries;
     assert_eq!(listed[0].lifesteal_percent.as_ref(), Some(&2.0));
     let detail = api.equipment_detail(1).await.unwrap();
     assert_eq!(detail.lifesteal_percent.as_ref(), Some(&2.0));
@@ -727,7 +727,7 @@ async fn a_slotted_or_carried_row_still_deletes() {
     )
     .unwrap();
     api.equipment_delete(1).await.unwrap();
-    assert!(api.equipment_library().await.unwrap().is_empty());
+    assert!(api.equipment_library().await.unwrap().entries.is_empty());
     // Idempotent over the missing row.
     api.equipment_delete(1).await.unwrap();
 }
@@ -912,4 +912,435 @@ async fn a_dose_moves_the_reload_speed_every_surface_prices_under() {
     let stopped = api.consumable_doses().await.unwrap();
     assert!(stopped.doses.is_empty());
     assert_eq!(stopped.reload_speed.in_effect_percent, 0.0);
+}
+
+/// The facade of [`api_over`] grouping the library by the bundled
+/// interface profile's rules for reading tool names.
+async fn api_with_tool_names(dir: &Path) -> (Api, Db) {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../entropia-orme/resources/ui_profile.json");
+    let profile = eo_services::game_ui::profile::UiProfile::load(&path)
+        .expect("the bundled interface profile loads");
+    let (api, db) = api_over(dir).await;
+    (api.with_tool_names(Some(profile.tool_names)), db)
+}
+
+/// Store a weapon, healer or harvesting tool from the test catalogue,
+/// answering its id.
+async fn add_catalogued(api: &Api, kind: EquipmentKind, catalog_id: &str) -> i64 {
+    let mut req = consumable("");
+    req.kind = kind;
+    req.name = None;
+    req.catalog_id = Some(catalog_id.to_string());
+    let added = api.equipment_add(&req).await.unwrap();
+    added.id.parse().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_entry_starts_enabled_and_turns_off_and_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+
+    // Every new entry is enabled, whatever its kind.
+    let weapon = api
+        .equipment_add(&{
+            let mut req = consumable("");
+            req.kind = EquipmentKind::Weapon;
+            req.name = None;
+            req.catalog_id = Some("w1".to_string());
+            req
+        })
+        .await
+        .unwrap();
+    assert!(weapon.enabled);
+    let pill = api.equipment_add(&consumable("Pill")).await.unwrap();
+    assert!(pill.enabled);
+    let id: i64 = weapon.id.parse().unwrap();
+
+    let stored = |db: Db, id: i64| async move {
+        db.with_reader(move |conn| {
+            Ok(conn.query_row(
+                "SELECT enabled FROM equipment_library WHERE id = ?",
+                rusqlite::params![id],
+                |row| row.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .unwrap()
+    };
+
+    // Off: the answer, the stored row and the library all say so; the
+    // other entry is untouched.
+    let off = api.equipment_set_enabled(id, false).await.unwrap();
+    assert_eq!(off.id, weapon.id);
+    assert!(!off.enabled);
+    assert_eq!(stored(db.clone(), id).await, 0);
+    let listed = api.equipment_library().await.unwrap().entries;
+    let enabled: Vec<(&str, bool)> = listed
+        .iter()
+        .map(|entry| (entry.id.as_str(), entry.enabled))
+        .collect();
+    assert_eq!(
+        enabled,
+        [(weapon.id.as_str(), false), (pill.id.as_str(), true)]
+    );
+
+    // Turning it off again changes nothing; on again restores it.
+    assert!(!api.equipment_set_enabled(id, false).await.unwrap().enabled);
+    let on = api.equipment_set_enabled(id, true).await.unwrap();
+    assert!(on.enabled);
+    assert_eq!(stored(db.clone(), id).await, 1);
+    assert!(api.equipment_library().await.unwrap().entries[0].enabled);
+
+    // Editing an entry keeps its flag: only the flag's own command moves it.
+    api.equipment_set_enabled(id, false).await.unwrap();
+    let mut req = consumable("");
+    req.kind = EquipmentKind::Weapon;
+    req.name = None;
+    req.catalog_id = Some("w1".to_string());
+    req.weapon_markup = 120;
+    let edited = api.equipment_update(id, &req).await.unwrap();
+    assert!(!edited.enabled);
+    assert_eq!(stored(db.clone(), id).await, 0);
+
+    // A missing entry is refused as the other edits refuse it.
+    assert_eq!(
+        api.equipment_set_enabled(99, true).await.unwrap_err(),
+        ApiError::not_found("Equipment item 99 not found"),
+    );
+    assert_eq!(
+        api.equipment_set_enabled(99, false).await.unwrap_err(),
+        api.equipment_update(99, &req).await.unwrap_err(),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_library_groups_the_entries_the_bar_cannot_tell_apart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db) = api_with_tool_names(dir.path()).await;
+
+    // Nothing stored, nothing grouped.
+    assert!(api
+        .equipment_library()
+        .await
+        .unwrap()
+        .indistinguishable
+        .is_empty());
+
+    // One weapon alone stands apart.
+    let first = add_catalogued(&api, EquipmentKind::Weapon, "w1").await;
+    assert!(api
+        .equipment_library()
+        .await
+        .unwrap()
+        .indistinguishable
+        .is_empty());
+
+    // The same weapon kept in a second set-up: the two are one group.
+    let second = add_catalogued(&api, EquipmentKind::Weapon, "w1").await;
+    let library = api.equipment_library().await.unwrap();
+    assert_eq!(
+        library.indistinguishable,
+        [vec![first.to_string(), second.to_string()]]
+    );
+
+    // A third entry of another name, and a healer, leave the group of two.
+    add_catalogued(&api, EquipmentKind::Weapon, "w2").await;
+    add_catalogued(&api, EquipmentKind::Healing, "h1").await;
+    let library = api.equipment_library().await.unwrap();
+    assert_eq!(library.entries.len(), 4);
+    assert_eq!(
+        library.indistinguishable,
+        [vec![first.to_string(), second.to_string()]]
+    );
+
+    // A group holds its members on or off alike.
+    api.equipment_set_enabled(second, false).await.unwrap();
+    assert_eq!(
+        api.equipment_library().await.unwrap().indistinguishable,
+        [vec![first.to_string(), second.to_string()]]
+    );
+
+    // A consumable is never held, so never grouped, even two of one name
+    // or one named as a weapon is.
+    api.equipment_add(&consumable("Vita Bar")).await.unwrap();
+    api.equipment_add(&consumable("Vita Bar")).await.unwrap();
+    api.equipment_add(&consumable("Opalo Rifle (L)"))
+        .await
+        .unwrap();
+    let library = api.equipment_library().await.unwrap();
+    assert_eq!(library.entries.len(), 7);
+    assert_eq!(
+        library.indistinguishable,
+        [vec![first.to_string(), second.to_string()]]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn without_the_interface_profile_the_library_reads_with_no_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db) = api_over(dir.path()).await;
+    add_catalogued(&api, EquipmentKind::Weapon, "w1").await;
+    add_catalogued(&api, EquipmentKind::Weapon, "w1").await;
+    let library = api.equipment_library().await.unwrap();
+    assert_eq!(library.entries.len(), 2);
+    assert!(library.indistinguishable.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_entry_turned_off_reads_as_before_everywhere_else() {
+    let dir = tempfile::tempdir().unwrap();
+    // The weapon, the first entry, bound to a slot so a session can start.
+    let (api, db) = api_over_settings(
+        dir.path(),
+        Some("{\"hotbar_hooks_enabled\": true, \"hotbar\": {\"1\": 1}}"),
+    )
+    .await;
+    let weapon = add_catalogued(&api, EquipmentKind::Weapon, "w2").await;
+    assert_eq!(weapon, 1);
+    let healer = add_catalogued(&api, EquipmentKind::Healing, "h1").await;
+    // A pill lasting ten minutes, booked at its TT.
+    let mut pill = consumable("Pill");
+    pill.dose = Some(eo_api::equipment::ConsumableDoseRequest {
+        markup_percent: 100.0,
+        track_cost: true,
+        duration_seconds: Some(600.0),
+        reload_speed_percent: None,
+        tt_value_ped: Some(1.5),
+    });
+    let pill = api
+        .equipment_add(&pill)
+        .await
+        .unwrap()
+        .id
+        .parse::<i64>()
+        .unwrap();
+    let ids = Entries {
+        weapon,
+        healer,
+        pill,
+    };
+    // An ended session with an uncosted heal and an unpriced shot for the
+    // reviews to offer the entries for, and a running one for doses.
+    db.with_writer(move |conn| {
+        conn.execute_batch(&format!(
+            r#"INSERT INTO tracking_sessions(id,started_at,ended_at,is_active,heal_cost,
+                 dangling_cost,mob_tracking_mode,updated_at,weapon_shots_agreed,
+                 weapon_shots_evidenced)
+               VALUES('ended',1000.0,4600.0,0,0.0,0.0,'mob',4600.0,0,0);
+               INSERT INTO healing_outputs(id,session_id,activation_id,observed_at,
+                 chat_timestamp,amount,classification,reason)
+               VALUES('heal','ended',NULL,1200,'t',28,'unattributed','seeded');
+               INSERT INTO weapon_shot_evidence(id,session_id,kill_id,observed_at,amount,
+                 critical,attribution,hotbar_tool,tool_name,cost_per_shot,candidates_json,
+                 reason)
+               VALUES('shot','ended',NULL,1300.0,30.0,0,'unresolved',NULL,NULL,0,
+                 '[{{"equipmentId":{weapon},"name":"Rapid Carbine","fits":true}}]',
+                 'no weapon declared');"#
+        ))?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    api.tracking_start().await.unwrap();
+
+    let before = everything_but_the_flag(&api, &db, ids).await;
+    assert_ne!(
+        before["weaponCostByName"], 0.0,
+        "the weapon is priced by name"
+    );
+    assert_eq!(
+        before["healingCorrectionTools"][0]["equipmentId"], healer,
+        "the healer is offered for the heal"
+    );
+    assert_eq!(
+        before["weaponCorrectionWeapons"][0]["equipmentId"], weapon,
+        "the weapon is offered for the shot"
+    );
+    for id in [weapon, healer, pill] {
+        api.equipment_set_enabled(id, false).await.unwrap();
+    }
+    let after = everything_but_the_flag(&api, &db, ids).await;
+    for (reader, value) in before.as_object().unwrap() {
+        assert_eq!(&after[reader], value, "{reader} reads as before");
+    }
+}
+
+/// The entries [`everything_but_the_flag`] reads.
+#[derive(Clone, Copy)]
+struct Entries {
+    weapon: i64,
+    healer: i64,
+    pill: i64,
+}
+
+/// The error kind and message of a refusal, or the value of an answer.
+fn answer<T: serde::Serialize>(result: Result<T, ApiError>) -> Value {
+    match result {
+        Ok(value) => serde_json::to_value(value).unwrap(),
+        Err(error) => serde_json::json!({ "refused": error }),
+    }
+}
+
+/// What the entries are to every reader of the library but the flag's
+/// own, by reader. The reads that write (marking a heal or a shot, taking a
+/// dose) are undone after, so the reads can be taken again.
+async fn everything_but_the_flag(api: &Api, db: &Db, ids: Entries) -> Value {
+    use eo_api::healing::HealingCorrectionTarget;
+    use eo_api::weapons::WeaponShotGroup;
+    use eo_services::equipment_pricing::{
+        hotbar_equipment_row_sync, weapon_cost_by_name, weapon_properties_by_name_fragment_sync,
+    };
+
+    let Entries {
+        weapon,
+        healer,
+        pill,
+    } = ids;
+    let mut reads = serde_json::Map::new();
+
+    // The library, less the flag, and each entry's detail.
+    let mut summaries = Vec::new();
+    for entry in api.equipment_library().await.unwrap().entries {
+        let mut value = serde_json::to_value(&entry).unwrap();
+        value.as_object_mut().unwrap().remove("enabled");
+        summaries.push(value);
+    }
+    reads.insert("library".into(), summaries.into());
+    let mut details = Vec::new();
+    for id in [weapon, healer, pill] {
+        details.push(answer(api.equipment_detail(id).await));
+    }
+    reads.insert("details".into(), details.into());
+
+    // The hotbar and tool-change paths' rows, the trifecta's typed rows,
+    // and the weapon cost looked up by name.
+    let (hotbar, by_name, by_name_async, cost) = (
+        db.with_reader(move |conn| {
+            [weapon, healer, pill]
+                .into_iter()
+                .map(|id| hotbar_equipment_row_sync(conn, id))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .unwrap(),
+        db.with_reader(|conn| weapon_properties_by_name_fragment_sync(conn, "Carbine"))
+            .await
+            .unwrap(),
+        db.weapon_properties_by_name_fragment("Carbine")
+            .await
+            .unwrap(),
+        db.with_reader(|conn| {
+            Ok(weapon_cost_by_name(
+                conn,
+                "Rapid Carbine",
+                &|props: &Value| props.clone(),
+            ))
+        })
+        .await
+        .unwrap(),
+    );
+    reads.insert("hotbarRows".into(), serde_json::json!(hotbar));
+    reads.insert("weaponByName".into(), serde_json::json!(by_name));
+    reads.insert("weaponByNameAsync".into(), serde_json::json!(by_name_async));
+    reads.insert("weaponCostByName".into(), serde_json::json!(cost));
+    let mut typed = Vec::new();
+    for (id, kind) in [
+        (weapon, "weapon"),
+        (healer, "healing"),
+        (pill, "consumable"),
+    ] {
+        typed.push(serde_json::json!(db
+            .equipment_item(id, kind)
+            .await
+            .unwrap()));
+    }
+    reads.insert("typedRows".into(), typed.into());
+
+    // The consumables: the items the doses readout offers, and a dose taken
+    // of the entry (then removed).
+    reads.insert(
+        "consumableOptions".into(),
+        serde_json::to_value(api.consumable_doses().await.unwrap().options).unwrap(),
+    );
+    let taken = api.consumable_dose_start(pill, false).await.unwrap();
+    let dose = taken
+        .doses
+        .iter()
+        .find(|dose| {
+            dose.equipment_id.as_ref().copied() == Some(pill)
+                && dose.removed_at.as_ref().is_none()
+                && !dose.replaced
+        })
+        .expect("the dose is taken");
+    reads.insert(
+        "consumableDoseStart".into(),
+        serde_json::json!({
+            "itemName": dose.item_name,
+            "costPed": dose.cost_ped,
+            "costTracked": dose.cost_tracked,
+            "effects": dose.effects,
+        }),
+    );
+    api.consumable_dose_remove(dose.id.clone()).await.unwrap();
+
+    // The healing review: the items offered for the heal, and marking the
+    // heal a paid use of the healer (then undoing it).
+    reads.insert(
+        "healingCorrectionTools".into(),
+        answer(api.healing_correction_tools("heal".into()).await),
+    );
+    let corrected = api
+        .healing_correct(HealingCorrectionTarget::PaidUse {
+            output_id: "heal".into(),
+            equipment_id: healer,
+        })
+        .await
+        .unwrap();
+    let minted = corrected
+        .healing
+        .activations
+        .iter()
+        .map(|row| serde_json::to_value(row).unwrap())
+        .find(|row| row["provenance"] == "corrected")
+        .expect("the heal is a paid use");
+    reads.insert(
+        "healingCorrect".into(),
+        serde_json::json!({
+            "healCost": corrected.summary.cost_breakdown.heal_cost,
+            "activations": corrected.healing.activation_count,
+            "toolName": minted["toolName"],
+            "costPed": minted["costPed"],
+        }),
+    );
+    api.healing_correction_undo(minted["correction"]["id"].as_str().unwrap().to_string())
+        .await
+        .unwrap();
+
+    // The weapon review: the weapons offered for the shot, and assigning
+    // the shot to the weapon (then undoing it).
+    reads.insert(
+        "weaponCorrectionWeapons".into(),
+        answer(api.weapon_correction_weapons("shot".into()).await),
+    );
+    let assigned = api.weapon_assign("shot".into(), weapon).await.unwrap();
+    reads.insert(
+        "weaponAssign".into(),
+        serde_json::json!({
+            "cost": assigned.summary.cost,
+            "assigned": serde_json::to_value(&assigned.weapon_attribution).unwrap()["assigned"],
+        }),
+    );
+    let correction = api
+        .weapon_shots("ended".into(), WeaponShotGroup::Unresolved, 0, 10)
+        .await
+        .unwrap()
+        .shots[0]
+        .correction_id
+        .0
+        .clone()
+        .expect("a live assignment");
+    api.weapon_assignment_undo(correction).await.unwrap();
+
+    Value::Object(reads)
 }

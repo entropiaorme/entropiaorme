@@ -433,6 +433,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "kill mob routes",
         sql: include_str!("../../migrations/0079_kill_mob_routes.sql"),
     },
+    Migration {
+        version: 80,
+        description: "equipment enabled",
+        sql: include_str!("../../migrations/0080_equipment_enabled.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -520,6 +525,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "3563B9BB772098EBC5C5B19485EE25EFA0F58CB4DEDD03C77968784CFC1B0E9A2BA74F84EB4AB6924CC06D4C3A6AD342",
     "05FCA82F42CE9F5D4BA4BDECCC5268FEA846E3CBD03CC72EA6356A36270177F6911C0A489ECFC31F6A0AD3082DCCBA34",
     "838DB4BF28D0A5845768FFC692148AF27430C7AA8B947FB04DD85CFB2FAE851EB8B81AC1CBEAAA89BEEAA6F9AC32F1E1",
+    "6545E8EE456350B342B77A03532267BB0604FBCF934ACE8A56D924E4CA8C7C7F8BABB5C55D768B21B91B427116A8BAB1",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -2039,5 +2045,157 @@ mod tests {
                 [],
             )
             .expect("a whole settlement is kept");
+    }
+
+    /// The enabled flag joins the equipment library additively: every entry
+    /// a version-79 database holds stays as it was and reads enabled, a new
+    /// entry starts enabled, an entry can be turned off and on, and the flag
+    /// holds nothing but on and off.
+    #[test]
+    fn equipment_enabled_upgrade_keeps_every_entry_and_reads_them_enabled() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..79] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO equipment_library (id, name, item_type, catalog_id, \
+                  properties_json, created_at, updated_at) VALUES \
+                 (1, 'Opalo', 'weapon', 'w1', '{\"weapon_entity\": {}}', 10, 11), \
+                 (2, 'Opalo', 'weapon', 'w1', '{\"weapon_entity\": {\"v\": 2}}', 12, 13), \
+                 (3, 'Vita Bar', 'consumable', NULL, '{}', 14, 15);",
+            )
+            .expect("v79 entries");
+
+        run(&mut connection).expect("v80 upgrade");
+
+        type Kept = (
+            i64,
+            String,
+            String,
+            Option<String>,
+            String,
+            f64,
+            Option<f64>,
+            i64,
+        );
+        let read = |connection: &Connection| -> Vec<Kept> {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT id, name, item_type, catalog_id, properties_json, created_at, \
+                     updated_at, enabled FROM equipment_library ORDER BY id",
+                )
+                .expect("library read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            })
+            .expect("library rows")
+            .collect::<Result<_, _>>()
+            .expect("library rows")
+        };
+        assert_eq!(
+            read(&connection),
+            [
+                (
+                    1,
+                    "Opalo".into(),
+                    "weapon".into(),
+                    Some("w1".into()),
+                    r#"{"weapon_entity": {}}"#.into(),
+                    10.0,
+                    Some(11.0),
+                    1
+                ),
+                (
+                    2,
+                    "Opalo".into(),
+                    "weapon".into(),
+                    Some("w1".into()),
+                    r#"{"weapon_entity": {"v": 2}}"#.into(),
+                    12.0,
+                    Some(13.0),
+                    1
+                ),
+                (
+                    3,
+                    "Vita Bar".into(),
+                    "consumable".into(),
+                    None,
+                    "{}".into(),
+                    14.0,
+                    Some(15.0),
+                    1
+                ),
+            ]
+        );
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .expect("integrity");
+        assert_eq!(integrity, "ok");
+
+        // A new entry starts enabled; an old one turns off and on again.
+        connection
+            .execute(
+                "INSERT INTO equipment_library (name, item_type, properties_json) \
+                 VALUES ('Healer', 'healing', '{}')",
+                [],
+            )
+            .expect("a new entry is kept");
+        let enabled = |connection: &Connection, id: i64| -> i64 {
+            connection
+                .query_row(
+                    "SELECT enabled FROM equipment_library WHERE id = ?",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .expect("enabled read")
+        };
+        assert_eq!(enabled(&connection, 4), 1);
+        for value in [0, 1] {
+            connection
+                .execute(
+                    "UPDATE equipment_library SET enabled = ? WHERE id = 1",
+                    rusqlite::params![value],
+                )
+                .expect("the flag turns");
+            assert_eq!(enabled(&connection, 1), value);
+        }
+
+        // Nothing but on and off is kept.
+        for refused in [
+            "UPDATE equipment_library SET enabled = 2 WHERE id = 1",
+            "UPDATE equipment_library SET enabled = -1 WHERE id = 1",
+            "UPDATE equipment_library SET enabled = NULL WHERE id = 1",
+            "UPDATE equipment_library SET enabled = 'yes' WHERE id = 1",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+        assert_eq!(enabled(&connection, 1), 1);
     }
 }

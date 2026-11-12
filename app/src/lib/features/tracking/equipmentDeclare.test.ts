@@ -20,10 +20,13 @@ beforeEach(() => {
 
 describe('createEquipmentDeclare', () => {
 	it('builds the picker over the library and the live hotbar', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([
-			{ id: '1', name: 'Opalo', type: 'weapon' },
-			{ id: '4', name: 'FAP', type: 'healing' },
-		] as unknown as EquipmentSummary[]);
+		mocked.getEquipmentLibrary.mockResolvedValue({
+			entries: [
+				{ id: '1', name: 'Opalo', type: 'weapon' },
+				{ id: '4', name: 'FAP', type: 'healing' },
+			] as unknown as EquipmentSummary[],
+			indistinguishable: [],
+		});
 		mocked.getSettings.mockResolvedValue({
 			hotbar: { '1': 1 },
 			activeHotbarPreset: 1,

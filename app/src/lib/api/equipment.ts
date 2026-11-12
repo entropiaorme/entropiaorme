@@ -56,6 +56,11 @@ export async function updateLibrary(id: string, req: commands.EquipmentRequest) 
 	return commands.equipmentUpdate(Number(id), req);
 }
 
+/** Turn a library entry on or off; answers the entry as it now stands. */
+export async function setLibraryEnabled(id: string, enabled: boolean) {
+	return commands.equipmentSetEnabled(Number(id), enabled);
+}
+
 export async function getEquipmentDetail(id: string) {
 	return commands.equipmentDetail(Number(id));
 }

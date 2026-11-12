@@ -714,8 +714,8 @@ impl Api {
             let props = library
                 .iter()
                 .rev()
-                .find(|(_, row_name, kind, _)| kind == "weapon" && row_name == name)
-                .and_then(|(_, _, _, json)| serde_json::from_str::<serde_json::Value>(json).ok())
+                .find(|(_, row_name, kind, _, _)| kind == "weapon" && row_name == name)
+                .and_then(|(_, _, _, json, _)| serde_json::from_str::<serde_json::Value>(json).ok())
                 .map(|props| {
                     self.weapon_pricing
                         .prepare(&with_current_offensive_efficiencies(

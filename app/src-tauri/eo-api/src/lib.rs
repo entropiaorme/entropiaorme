@@ -160,6 +160,11 @@ pub struct Api {
     /// Whether creature detection can capture the game window, for the
     /// settings; `None` without a watcher (detection then cannot run).
     mob_capture: Option<eo_services::mob_watch::CaptureStatusProbe>,
+    /// How names read off the held-tool bar are told apart, from the
+    /// interface profile: the library read groups the entries the bar
+    /// cannot tell apart by it. `None` without a profile (the library then
+    /// reports no groups).
+    tool_names: Option<eo_services::game_ui::tool_names::ToolNameProfile>,
     /// The session-definition service (definition + roster lifecycle), built
     /// over the facade's shared db and clock; the tracking family's
     /// selection verb validates against it.
@@ -299,6 +304,7 @@ impl Api {
             weapon_review,
             mob_review,
             mob_capture: None,
+            tool_names: None,
             weapon_pricing,
             session_definitions,
             definition_transition: tokio::sync::Mutex::new(()),
@@ -329,6 +335,16 @@ impl Api {
             Some(self.game_data.clone()),
             names,
         );
+        self
+    }
+
+    /// Group the library entries the held-tool bar cannot tell apart by
+    /// `names`, the interface profile's rules for reading tool names.
+    pub fn with_tool_names(
+        mut self,
+        names: Option<eo_services::game_ui::tool_names::ToolNameProfile>,
+    ) -> Self {
+        self.tool_names = names;
         self
     }
 

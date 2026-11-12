@@ -37,7 +37,8 @@ use eo_api::dev::{
     MetricsSnapshot, RebuildReport,
 };
 use eo_api::equipment::{
-    EquipmentDetail, EquipmentRequest, EquipmentSearchHit, EquipmentSummary, SearchKind,
+    EquipmentDetail, EquipmentLibrary, EquipmentRequest, EquipmentSearchHit, EquipmentSummary,
+    SearchKind,
 };
 use eo_api::healing::{
     HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
@@ -107,7 +108,7 @@ pub async fn equipment_catalogue(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn equipment_library(app: tauri::AppHandle) -> Result<Vec<EquipmentSummary>, ApiError> {
+pub async fn equipment_library(app: tauri::AppHandle) -> Result<EquipmentLibrary, ApiError> {
     facade(&app)?.equipment_library().await
 }
 
@@ -126,6 +127,15 @@ pub async fn equipment_update(
     req: EquipmentRequest,
 ) -> Result<EquipmentSummary, ApiError> {
     facade(&app)?.equipment_update(item_id, &req).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn equipment_set_enabled(
+    app: tauri::AppHandle,
+    item_id: i64,
+    enabled: bool,
+) -> Result<EquipmentSummary, ApiError> {
+    facade(&app)?.equipment_set_enabled(item_id, enabled).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

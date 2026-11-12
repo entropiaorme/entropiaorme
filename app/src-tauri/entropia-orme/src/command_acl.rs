@@ -13,6 +13,7 @@ macro_rules! app_command_surface {
             equipment_library,
             equipment_add,
             equipment_update,
+            equipment_set_enabled,
             equipment_delete,
             equipment_detail,
             loadout_compare,

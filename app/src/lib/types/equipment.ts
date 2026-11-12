@@ -11,6 +11,7 @@ export type {
 	CostBreakdownLine,
 	EquipmentDetail,
 	EquipmentKind,
+	EquipmentLibrary,
 	EquipmentSummary as Equipment,
 	HealingMode,
 	HealingProfileDto as HealingProfile,

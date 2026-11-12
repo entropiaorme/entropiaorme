@@ -342,6 +342,12 @@ describe('equipment wrappers dispatch typed commands', () => {
 			{ item_id: 7, req: { type: 'weapon' } },
 		],
 		[
+			'setLibraryEnabled coerces the string id to a number',
+			() => api.setLibraryEnabled('7', false),
+			'equipment_set_enabled',
+			{ item_id: 7, enabled: false },
+		],
+		[
 			'removeFromLibrary coerces the string id to a number',
 			() => api.removeFromLibrary('7'),
 			'equipment_delete',

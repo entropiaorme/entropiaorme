@@ -23,6 +23,7 @@ use eo_services::expected_hunting::{
     self, HuntingLooterLevels, LooterSource, OffensiveLoadoutEvidence,
 };
 use eo_services::game_data_store::GameDataStore;
+use eo_services::game_ui::tool_names::{indistinguishable, LibraryTool, ToolKind, ToolNameProfile};
 use eo_services::passive_effects::reload_seconds_under;
 use eo_services::weapon_effect::{
     effect_profile_from_props, WeaponEffectProfile, EFFECT_PROFILE_KEY,
@@ -376,6 +377,10 @@ pub struct EquipmentSummary {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: EquipmentKind,
+    /// Whether the player has the entry in use: of entries that cannot be
+    /// told apart by name, the one left on. Its set-up and cost are the
+    /// same either way.
+    pub enabled: bool,
     pub amplifier_name: Nullable<String>,
     pub cost_per_use: f64,
     pub damage_min: Nullable<f64>,
@@ -390,6 +395,22 @@ pub struct EquipmentSummary {
     pub effect_profile: Nullable<WeaponEffectProfileDto>,
     /// A consumable's dose; null for every other kind.
     pub consumable: Nullable<ConsumableSettings>,
+}
+
+/// The stored library: its entries, and which of them the held-tool bar
+/// cannot tell apart.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EquipmentLibrary {
+    /// Every entry, oldest first.
+    pub entries: Vec<EquipmentSummary>,
+    /// The groups of entries a player can hold (weapons, healing tools and
+    /// harvesting tools) whose names read the same on the held-tool bar:
+    /// one name kept in two set-ups, or long names the game client cuts
+    /// short alike. Each group lists two entry ids or more, on or off
+    /// alike; no entry is in two groups. Empty when every entry stands
+    /// apart, or when the interface profile is unavailable.
+    pub indistinguishable: Vec<Vec<String>>,
 }
 
 /// One configured component of a stored weapon setup.
@@ -820,6 +841,7 @@ fn row_to_summary(
     id: i64,
     name: &str,
     item_type: &str,
+    enabled: bool,
     props: &Value,
     game_data: &GameDataStore,
     pricing: &WeaponPricing,
@@ -847,6 +869,7 @@ fn row_to_summary(
             id: id.to_string(),
             name: name.to_string(),
             kind: EquipmentKind::Weapon,
+            enabled,
             amplifier_name: amp_e
                 .and_then(|amp| amp.get("name"))
                 .and_then(Value::as_str)
@@ -871,6 +894,7 @@ fn row_to_summary(
             id: id.to_string(),
             name: name.to_string(),
             kind: EquipmentKind::Consumable,
+            enabled,
             amplifier_name: None.into(),
             // What taking a dose books, PEC: the dose cost when tracked.
             cost_per_use: round_half_even(settings.booked_cost_pec(), 4),
@@ -900,6 +924,7 @@ fn row_to_summary(
             id: id.to_string(),
             name: name.to_string(),
             kind: EquipmentKind::Tool,
+            enabled,
             amplifier_name: None.into(),
             cost_per_use: heal_cost_per_use(tool_e, markup),
             damage_min: None.into(),
@@ -925,6 +950,7 @@ fn row_to_summary(
         id: id.to_string(),
         name: name.to_string(),
         kind: EquipmentKind::Healing,
+        enabled,
         amplifier_name: None.into(),
         cost_per_use: heal_cost_with_stored_implant(props, tool_e, markup),
         damage_min: None.into(),
@@ -1253,25 +1279,27 @@ impl Api {
         Ok(rows.iter().map(search_hit).collect())
     }
 
-    /// The stored library, oldest first.
-    pub async fn equipment_library(&self) -> Result<Vec<EquipmentSummary>, ApiError> {
+    /// The stored library, oldest first, with the groups of entries the
+    /// held-tool bar cannot tell apart.
+    pub async fn equipment_library(&self) -> Result<EquipmentLibrary, ApiError> {
         let rows = self
             .db
             .equipment_library_rows()
             .await
             .map_err(ApiError::internal("equipment library read"))?;
-        let mut results = Vec::with_capacity(rows.len());
-        for (id, name, item_type, raw_props) in rows {
-            results.push(summary_from_parts(
-                id,
-                &name,
-                &item_type,
-                &raw_props,
+        let indistinguishable = indistinguishable_groups(&rows, self.tool_names.as_ref());
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            entries.push(summary_from_parts(
+                row,
                 &self.game_data,
                 &self.weapon_pricing,
             )?);
         }
-        Ok(results)
+        Ok(EquipmentLibrary {
+            entries,
+            indistinguishable,
+        })
     }
 
     /// Store a new library entry.
@@ -1291,7 +1319,7 @@ impl Api {
             )
             .await
             .map_err(ApiError::internal("equipment insert"))?;
-        let Some((id, name, item_type, raw_props)) = self
+        let Some(row) = self
             .db
             .equipment_row(inserted)
             .await
@@ -1303,14 +1331,7 @@ impl Api {
                 "inserted equipment read-back failed",
             ));
         };
-        summary_from_parts(
-            id,
-            &name,
-            &item_type,
-            &raw_props,
-            &self.game_data,
-            &self.weapon_pricing,
-        )
+        summary_from_parts(row, &self.game_data, &self.weapon_pricing)
     }
 
     /// Replace a stored entry's configuration; its class is fixed.
@@ -1338,7 +1359,7 @@ impl Api {
             .update_equipment(item_id, built.name, built.stored_catalog_id, props_json)
             .await
             .map_err(ApiError::internal("equipment update"))?;
-        let Some((id, name, item_type, raw_props)) = self
+        let Some(row) = self
             .db
             .equipment_row(item_id)
             .await
@@ -1350,14 +1371,27 @@ impl Api {
                 "updated equipment read-back failed",
             ));
         };
-        summary_from_parts(
-            id,
-            &name,
-            &item_type,
-            &raw_props,
-            &self.game_data,
-            &self.weapon_pricing,
-        )
+        summary_from_parts(row, &self.game_data, &self.weapon_pricing)
+    }
+
+    /// Turn a stored entry on or off. Only the flag changes: the entry's
+    /// configuration and cost are as they were.
+    pub async fn equipment_set_enabled(
+        &self,
+        item_id: i64,
+        enabled: bool,
+    ) -> Result<EquipmentSummary, ApiError> {
+        let Some(row) = self
+            .db
+            .set_equipment_enabled(item_id, enabled)
+            .await
+            .map_err(ApiError::internal("equipment enabled update"))?
+        else {
+            return Err(ApiError::not_found(format!(
+                "Equipment item {item_id} not found"
+            )));
+        };
+        summary_from_parts(row, &self.game_data, &self.weapon_pricing)
     }
 
     /// Delete a stored entry. Idempotent over a missing row. A hotbar slot
@@ -1689,17 +1723,49 @@ fn heal_cost_with_stored_implant(props: &Value, tool_e: &Value, markup: f64) -> 
     )
 }
 
-/// Shape one library row (id, name, item_type, properties_json) to the
-/// list form.
+/// Shape one library row (id, name, item_type, properties_json, enabled)
+/// to the list form.
 fn summary_from_parts(
-    id: i64,
-    name: &str,
-    item_type: &str,
-    raw_props: &str,
+    (id, name, item_type, raw_props, enabled): (i64, String, String, String, bool),
     game_data: &GameDataStore,
     pricing: &WeaponPricing,
 ) -> Result<EquipmentSummary, ApiError> {
-    let props = serde_json::from_str::<Value>(raw_props)
+    let props = serde_json::from_str::<Value>(&raw_props)
         .map_err(ApiError::internal("stored equipment props parse"))?;
-    row_to_summary(id, name, item_type, &props, game_data, pricing)
+    row_to_summary(id, &name, &item_type, enabled, &props, game_data, pricing)
+}
+
+/// A library row as the held-tool bar names it, when it is one a player
+/// can hold (consumables never are).
+fn holdable(
+    (id, name, item_type, _, enabled): &(i64, String, String, String, bool),
+) -> Option<LibraryTool> {
+    let kind = match item_type.as_str() {
+        "weapon" => ToolKind::Weapon,
+        "healing" => ToolKind::Healing,
+        "tool" => ToolKind::Tool,
+        _ => return None,
+    };
+    Some(LibraryTool {
+        id: *id,
+        name: name.clone(),
+        kind,
+        enabled: *enabled,
+    })
+}
+
+/// The groups of library `rows` the held-tool bar cannot tell apart under
+/// `names`, as entry ids; none without a profile.
+fn indistinguishable_groups(
+    rows: &[(i64, String, String, String, bool)],
+    names: Option<&ToolNameProfile>,
+) -> Vec<Vec<String>> {
+    let Some(names) = names else {
+        return Vec::new();
+    };
+    let holdable: Vec<LibraryTool> = rows.iter().filter_map(holdable).collect();
+    indistinguishable(&holdable, names)
+        .into_iter()
+        .map(|group| group.into_iter().map(|id| id.to_string()).collect())
+        .collect()
 }

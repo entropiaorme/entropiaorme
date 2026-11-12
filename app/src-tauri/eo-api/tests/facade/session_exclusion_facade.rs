@@ -969,6 +969,7 @@ const OTHER_COMMANDS: &[&str] = &[
     "equipment_library",
     "equipment_add",
     "equipment_update",
+    "equipment_set_enabled",
     "equipment_delete",
     "equipment_detail",
     "loadout_compare",

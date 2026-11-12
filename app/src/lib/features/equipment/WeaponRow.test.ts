@@ -12,6 +12,7 @@ const item: Equipment = {
 	id: '1',
 	name: 'Jester D-1',
 	type: 'weapon',
+	enabled: true,
 	amplifierName: null,
 	costPerUse: 0.42,
 	damageMin: 13.0,

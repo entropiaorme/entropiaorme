@@ -244,7 +244,10 @@ export function createLibraryModel() {
 
 	async function loadData(): Promise<void> {
 		try {
-			const [library, settings] = await Promise.all([getEquipmentLibrary(), getSettings()]);
+			const [{ entries: library }, settings] = await Promise.all([
+				getEquipmentLibrary(),
+				getSettings(),
+			]);
 			allEquipment = library;
 			splitByKind(library);
 			applyHotbar(settings);
@@ -547,7 +550,7 @@ export function createLibraryModel() {
 	 * weapon's attack rate and every healer's reload may have. */
 	async function refreshPricing() {
 		try {
-			const library = await getEquipmentLibrary();
+			const { entries: library } = await getEquipmentLibrary();
 			allEquipment = library;
 			splitByKind(library);
 			detailCache = {};

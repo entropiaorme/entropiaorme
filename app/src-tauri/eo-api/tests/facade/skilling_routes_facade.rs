@@ -828,3 +828,49 @@ async fn named_sessions_price_an_expected_loss_like_a_route() {
     assert_eq!(whole.coverage, 1.0);
     assert!(whole.weapon_return > expected.weapon_return);
 }
+
+/// A named session's weapon is priced from the player's own library entry
+/// of its name, whether the entry is on or off: the flag says which of
+/// entries the game shows alike is in use, not what an entry costs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_library_entry_turned_off_prices_the_forecast_as_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    seed_skills(&db, standard_levels()).await;
+    seed_definition(&db, 7, "Swordplay").await;
+    seed_kills(
+        &db,
+        "s",
+        Some(7),
+        false,
+        "Laconian Sword",
+        "Longblades",
+        1.7e9,
+        150,
+    )
+    .await;
+    // The library's sword at twice its TT: dearer than the catalogue's.
+    let request: eo_api::equipment::EquipmentRequest = serde_json::from_value(
+        json!({"type": "weapon", "catalog_id": "sword", "weapon_markup": 200}),
+    )
+    .unwrap();
+    let sword: i64 = api
+        .equipment_add(&request)
+        .await
+        .unwrap()
+        .id
+        .parse()
+        .unwrap();
+    let read = || async {
+        serde_json::to_value(forecast(&api, &swordsman_query(20.0, Vec::new())).await).unwrap()
+    };
+
+    let before = read().await;
+    api.equipment_set_enabled(sword, false).await.unwrap();
+    assert_eq!(read().await, before);
+
+    // The forecast does read the entry: without it the sword is priced from
+    // the catalogue alone.
+    api.equipment_delete(sword).await.unwrap();
+    assert_ne!(read().await, before);
+}

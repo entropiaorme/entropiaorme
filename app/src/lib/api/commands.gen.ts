@@ -1124,6 +1124,17 @@ export interface EquipmentExpectedReturns {
 export type EquipmentKind = 'weapon' | 'healing' | 'consumable' | 'tool';
 
 /**
+ * The stored library: its entries, and which of them the held-tool bar
+ * cannot tell apart.
+ */
+export interface EquipmentLibrary {
+	/** Every entry, oldest first. */
+	entries: EquipmentSummary[];
+	/** The groups of entries a player can hold (weapons, healing tools and harvesting tools) whose names read the same on the held-tool bar: one name kept in two set-ups, or long names the game client cuts short alike. Each group lists two entry ids or more, on or off alike; no entry is in two groups. Empty when every entry stands apart, or when the interface profile is unavailable. */
+	indistinguishable: string[][];
+}
+
+/**
  * An auction draft for one whole capital-equipment position.
  */
 export interface EquipmentListingInput {
@@ -1199,6 +1210,8 @@ export interface EquipmentSummary {
 	id: string;
 	name: string;
 	type: EquipmentKind;
+	/** Whether the player has the entry in use: of entries that cannot be told apart by name, the one left on. Its set-up and cost are the same either way. */
+	enabled: boolean;
 	amplifierName: string | null;
 	costPerUse: number;
 	damageMin: number | null;
@@ -4899,7 +4912,7 @@ export async function equipmentCatalogue(kind: SearchKind): Promise<EquipmentSea
 	return invokeCommand('equipment_catalogue', { kind });
 }
 
-export async function equipmentLibrary(): Promise<EquipmentSummary[]> {
+export async function equipmentLibrary(): Promise<EquipmentLibrary> {
 	return invokeCommand('equipment_library', {});
 }
 
@@ -4909,6 +4922,10 @@ export async function equipmentAdd(req: EquipmentRequest): Promise<EquipmentSumm
 
 export async function equipmentUpdate(itemId: number, req: EquipmentRequest): Promise<EquipmentSummary> {
 	return invokeCommand('equipment_update', { item_id: itemId, req });
+}
+
+export async function equipmentSetEnabled(itemId: number, enabled: boolean): Promise<EquipmentSummary> {
+	return invokeCommand('equipment_set_enabled', { item_id: itemId, enabled });
 }
 
 export async function equipmentDelete(itemId: number): Promise<void> {

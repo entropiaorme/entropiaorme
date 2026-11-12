@@ -23,7 +23,10 @@ export function createEquipmentDeclare(options: {
 		inHand: string | null,
 		healer: string | null,
 	): Promise<OverlayEquipmentMenuState> {
-		const [library, settings] = await Promise.all([getEquipmentLibrary(), getSettings()]);
+		const [{ entries: library }, settings] = await Promise.all([
+			getEquipmentLibrary(),
+			getSettings(),
+		]);
 		return buildEquipmentMenuState(
 			anchorWidth,
 			declarableOptions(library, settings),

@@ -530,13 +530,13 @@ impl Db {
     }
 
     /// The stored equipment library, oldest first:
-    /// `(id, name, item_type, properties_json)` per row.
+    /// `(id, name, item_type, properties_json, enabled)` per row.
     pub async fn equipment_library_rows(
         &self,
-    ) -> Result<Vec<(i64, String, String, String)>, DbError> {
+    ) -> Result<Vec<(i64, String, String, String, bool)>, DbError> {
         self.with_reader(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, item_type, properties_json FROM equipment_library \
+                "SELECT id, name, item_type, properties_json, enabled FROM equipment_library \
                  ORDER BY created_at",
             )?;
             let mapped = stmt.query_map([], |row| {
@@ -545,6 +545,7 @@ impl Db {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, bool>(4)?,
                 ))
             })?;
             Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -597,16 +598,17 @@ impl Db {
     }
 
     /// One equipment-library row by id:
-    /// `(id, name, item_type, properties_json)`, or None when absent.
+    /// `(id, name, item_type, properties_json, enabled)`, or None when
+    /// absent.
     pub async fn equipment_row(
         &self,
         item_id: i64,
-    ) -> Result<Option<(i64, String, String, String)>, DbError> {
+    ) -> Result<Option<(i64, String, String, String, bool)>, DbError> {
         self.with_reader(move |conn| {
             Ok(conn
                 .query_row(
-                    "SELECT id, name, item_type, properties_json FROM equipment_library \
-                     WHERE id = ?",
+                    "SELECT id, name, item_type, properties_json, enabled \
+                     FROM equipment_library WHERE id = ?",
                     rusqlite::params![item_id],
                     |row| {
                         Ok((
@@ -614,6 +616,7 @@ impl Db {
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
                             row.get::<_, String>(3)?,
+                            row.get::<_, bool>(4)?,
                         ))
                     },
                 )
@@ -679,6 +682,36 @@ impl Db {
                 rusqlite::params![name, catalog_id, properties_json, item_id],
             )?;
             Ok(())
+        })
+        .await
+    }
+
+    /// Turn a stored equipment row on or off in one statement, answering
+    /// the row as it now stands (`(id, name, item_type, properties_json,
+    /// enabled)`, as [`Self::equipment_row`] reads it), or None when absent.
+    /// Nothing else about the row changes.
+    pub async fn set_equipment_enabled(
+        &self,
+        item_id: i64,
+        enabled: bool,
+    ) -> Result<Option<(i64, String, String, String, bool)>, DbError> {
+        self.with_writer(move |conn| {
+            Ok(conn
+                .query_row(
+                    "UPDATE equipment_library SET enabled = ? WHERE id = ? \
+                     RETURNING id, name, item_type, properties_json, enabled",
+                    rusqlite::params![enabled, item_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, bool>(4)?,
+                        ))
+                    },
+                )
+                .optional()?)
         })
         .await
     }
@@ -2228,7 +2261,8 @@ mod tests {
             .unwrap();
         assert_eq!((first, second), (1, 2));
 
-        // equipment_row: the full four-tuple by id, None when absent.
+        // equipment_row: the full row by id, enabled from the start, None
+        // when absent.
         assert_eq!(
             db.equipment_row(first).await.unwrap(),
             Some((
@@ -2236,6 +2270,7 @@ mod tests {
                 "Opalo".into(),
                 "weapon".into(),
                 r#"{"weapon_entity":{}}"#.into(),
+                true,
             )),
         );
         assert_eq!(db.equipment_row(999).await.unwrap(), None);
@@ -2284,11 +2319,46 @@ mod tests {
                     1,
                     "Opalo".into(),
                     "weapon".into(),
-                    r#"{"weapon_entity":{}}"#.into()
+                    r#"{"weapon_entity":{}}"#.into(),
+                    true
                 ),
-                (2, "Healer".into(), "healing".into(), r#"{"tool":1}"#.into()),
+                (
+                    2,
+                    "Healer".into(),
+                    "healing".into(),
+                    r#"{"tool":1}"#.into(),
+                    true
+                ),
             ],
         );
+
+        // set_equipment_enabled turns one row off and on and nothing else,
+        // and reports a missing row.
+        let off = Some((
+            2,
+            "Healer".into(),
+            "healing".into(),
+            r#"{"tool":1}"#.into(),
+            false,
+        ));
+        assert_eq!(db.set_equipment_enabled(second, false).await.unwrap(), off);
+        assert_eq!(db.equipment_row(second).await.unwrap(), off);
+        assert_eq!(
+            db.equipment_row(first).await.unwrap().map(|row| row.4),
+            Some(true)
+        );
+        assert_eq!(
+            db.set_equipment_enabled(second, true)
+                .await
+                .unwrap()
+                .map(|row| row.4),
+            Some(true)
+        );
+        assert_eq!(
+            db.equipment_row(second).await.unwrap().map(|row| row.4),
+            Some(true)
+        );
+        assert_eq!(db.set_equipment_enabled(999, false).await.unwrap(), None);
 
         // update_equipment replaces name, catalogue binding and properties;
         // the item type is fixed.

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppSettings, EquipmentDetail } from '$lib/api/commands.gen';
+import type { AppSettings, EquipmentDetail, EquipmentLibrary } from '$lib/api/commands.gen';
 import type { Equipment } from '$lib/types';
 import { createLibraryModel } from './libraryModel.svelte';
 
@@ -30,6 +30,7 @@ function summary(overrides: Partial<Equipment> = {}): Equipment {
 		id: '1',
 		name: 'Jester D-1',
 		type: 'weapon',
+		enabled: true,
 		amplifierName: null,
 		costPerUse: 0.42,
 		damageMin: 13,
@@ -43,6 +44,11 @@ function summary(overrides: Partial<Equipment> = {}): Equipment {
 		consumable: null,
 		...overrides,
 	};
+}
+
+/** The library read over `entries`, none of them indistinguishable. */
+function library(entries: Equipment[]): EquipmentLibrary {
+	return { entries, indistinguishable: [] };
 }
 
 function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
@@ -115,7 +121,7 @@ const weaponHit = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocked.getEquipmentLibrary.mockResolvedValue([]);
+	mocked.getEquipmentLibrary.mockResolvedValue(library([]));
 	mocked.getSettings.mockResolvedValue(settings());
 	mocked.searchEquipmentItems.mockResolvedValue([]);
 });
@@ -126,12 +132,14 @@ afterEach(() => {
 
 describe('loadData', () => {
 	it('splits the library by kind and sorts the healing and consumable views', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([
-			summary({ id: '1', name: 'Zulu', type: 'weapon' }),
-			summary({ id: '2', name: 'Vivo T1', type: 'healing', costPerUse: 0.18, isLimited: true }),
-			summary({ id: '3', name: 'Adjusted Fap', type: 'healing' }),
-			summary({ id: '4', name: 'Oil', type: 'consumable' }),
-		]);
+		mocked.getEquipmentLibrary.mockResolvedValue(
+			library([
+				summary({ id: '1', name: 'Zulu', type: 'weapon' }),
+				summary({ id: '2', name: 'Vivo T1', type: 'healing', costPerUse: 0.18, isLimited: true }),
+				summary({ id: '3', name: 'Adjusted Fap', type: 'healing' }),
+				summary({ id: '4', name: 'Oil', type: 'consumable' }),
+			]),
+		);
 		const model = createLibraryModel();
 		await model.loadData();
 
@@ -153,7 +161,7 @@ describe('loadData', () => {
 	});
 
 	it('drops the detail cache on a live reload', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary()]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary()]));
 		mocked.getEquipmentDetail.mockResolvedValue(detail());
 		const model = createLibraryModel();
 		await model.loadData();
@@ -173,9 +181,9 @@ describe('loadData', () => {
 	});
 
 	it('reads as loading until the first load settles, and not again on a reload', async () => {
-		let answer!: (library: Equipment[]) => void;
+		let answer!: (library: EquipmentLibrary) => void;
 		mocked.getEquipmentLibrary.mockReturnValue(
-			new Promise<Equipment[]>((resolve) => {
+			new Promise<EquipmentLibrary>((resolve) => {
 				answer = resolve;
 			}),
 		);
@@ -183,11 +191,11 @@ describe('loadData', () => {
 		expect(model.loading).toBe(true);
 		const first = model.loadData();
 		expect(model.loading).toBe(true);
-		answer([]);
+		answer(library([]));
 		await first;
 		expect(model.loading).toBe(false);
 
-		mocked.getEquipmentLibrary.mockResolvedValue([summary()]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary()]));
 		const reload = model.loadData();
 		expect(model.loading).toBe(false);
 		await reload;
@@ -605,7 +613,7 @@ describe('saveEquipment', () => {
 			tickMax: 6,
 			tickSeconds: 2,
 		};
-		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1', effectProfile })]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1', effectProfile })]));
 		mocked.getEquipmentDetail.mockResolvedValue(detail({ effectProfile }));
 		mocked.updateLibrary.mockResolvedValue(summary({ id: '1' }));
 		const model = createLibraryModel();
@@ -634,7 +642,7 @@ describe('saveEquipment', () => {
 	});
 
 	it('routes an edit through updateLibrary and swaps the row in place', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1', name: 'Old' })]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1', name: 'Old' })]));
 		mocked.getEquipmentDetail.mockResolvedValue(detail());
 		mocked.updateLibrary.mockResolvedValue(summary({ id: '1', name: 'New' }));
 		const model = createLibraryModel();
@@ -651,7 +659,7 @@ describe('saveEquipment', () => {
 	});
 
 	it('evicts stale weapon detail when the post-save refresh fails', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1', name: 'Old' })]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1', name: 'Old' })]));
 		mocked.getEquipmentDetail
 			.mockResolvedValueOnce(detail())
 			.mockRejectedValueOnce(new Error('refresh failed'));
@@ -677,9 +685,9 @@ describe('saveEquipment', () => {
 			tickMax: null,
 			tickSeconds: null,
 		};
-		mocked.getEquipmentLibrary.mockResolvedValue([
-			summary({ id: '5', name: 'Old FAP', type: 'healing', healingProfile }),
-		]);
+		mocked.getEquipmentLibrary.mockResolvedValue(
+			library([summary({ id: '5', name: 'Old FAP', type: 'healing', healingProfile })]),
+		);
 		mocked.getEquipmentDetail
 			.mockResolvedValueOnce(
 				detail({
@@ -772,7 +780,7 @@ describe('saveEquipment', () => {
 	});
 
 	it('seeds and resets the implant picker through the edit cycle', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1' })]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1' })]));
 		mocked.getEquipmentDetail.mockResolvedValue(
 			detail({
 				implant: {
@@ -802,11 +810,13 @@ describe('saveEquipment', () => {
 
 describe('removeEquipment', () => {
 	async function loadedModel() {
-		mocked.getEquipmentLibrary.mockResolvedValue([
-			summary({ id: '1', name: 'Weapon', type: 'weapon' }),
-			summary({ id: '2', name: 'Fap', type: 'healing' }),
-			summary({ id: '3', name: 'Oil', type: 'consumable' }),
-		]);
+		mocked.getEquipmentLibrary.mockResolvedValue(
+			library([
+				summary({ id: '1', name: 'Weapon', type: 'weapon' }),
+				summary({ id: '2', name: 'Fap', type: 'healing' }),
+				summary({ id: '3', name: 'Oil', type: 'consumable' }),
+			]),
+		);
 		const model = createLibraryModel();
 		await model.loadData();
 		return model;

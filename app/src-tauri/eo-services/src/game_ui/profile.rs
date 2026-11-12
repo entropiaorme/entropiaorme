@@ -14,6 +14,7 @@ use super::plates::PlateProfile;
 use super::radar::RadarProfile;
 use super::table::RuleProfile;
 use super::text::TextProfile;
+use super::tool_bar::ToolBarProfile;
 use super::window::ChromeProfile;
 
 /// The profile format this build reads.
@@ -52,6 +53,9 @@ pub struct UiProfile {
     pub mob_names: MobNameProfile,
     /// How plates read over time are grouped into fights and voted on.
     pub mob_history: MobHistoryProfile,
+    /// The health bar and the tool bar beside it, which names the tool
+    /// the player holds.
+    pub tool_bar: ToolBarProfile,
 }
 
 /// Why a profile could not be used.
@@ -195,6 +199,8 @@ impl UiProfile {
                 .map_err(ProfileError::Inconsistent)?;
             }
         }
+        claims_apart(&profile.tool_bar.scales, "tool_bar.scales", |s| s.width)
+            .map_err(ProfileError::Inconsistent)?;
         profile.mob_history.pulse_ms = profile.mob_history.pulse_ms.max(MIN_PULSE_MS);
         Ok(profile)
     }
@@ -310,6 +316,7 @@ mod tests {
     fn a_profile_whose_scale_entries_overlap_is_refused() {
         let bundled: serde_json::Value = serde_json::from_str(&bundled_text()).unwrap();
         for scales in [
+            "/tool_bar/scales",
             "/windows/auction_sell/sale_queue/scales",
             "/read/field_scales",
             "/windows/skills/skills_table/scales",

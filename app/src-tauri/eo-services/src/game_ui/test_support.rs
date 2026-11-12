@@ -1902,6 +1902,267 @@ pub fn draw_status_icon(image: &mut BgrImage, (x, y): (i32, i32)) {
     );
 }
 
+// The health bar and the tool bar beside it, drawn as the client draws
+// them at the default interface scale (see `game_ui::tool_bar`).
+
+/// The size of each panel's outline at the default interface scale, its
+/// top and bottom rows included.
+pub const TOOL_PANEL: (i32, i32) = (372, 31);
+
+/// How far right of the health bar's left end the tool bar's starts.
+pub const TOOL_PITCH: i32 = 394;
+
+/// The outline's colour.
+pub const OUTLINE: [u8; 3] = [1, 2, 3];
+/// The lighter frame round the outline.
+pub const PANEL_FRAME: [u8; 3] = [42, 42, 42];
+/// The health bar's fill, and its empty part.
+pub const HEALTH_RED: [u8; 3] = [222, 40, 62];
+pub const HEALTH_EMPTY: [u8; 3] = [9, 19, 16];
+/// The tool bar's fill when ready: a bright highlight along its top, tan
+/// below, darkening row by row by `TOOL_SHADING`; and while the tool
+/// reloads.
+pub const TOOL_HIGHLIGHT: [u8; 3] = [246, 224, 191];
+pub const TOOL_READY: [u8; 3] = [205, 168, 118];
+pub const TOOL_RELOADING: [u8; 3] = [9, 19, 16];
+pub const TOOL_SHADING: u8 = 5;
+/// The lettering.
+pub const TOOL_LETTERING: [u8; 3] = [236, 234, 228];
+
+/// The tool bar's fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolFill {
+    Ready,
+    Reloading,
+}
+
+/// One drawing of the two panels: where the health bar's outline starts,
+/// at what size and pitch, how much health is left, how the tool bar is
+/// filled, and the name on it (none for nothing held).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ToolBarDrawing<'a> {
+    pub at: (i32, i32),
+    pub size: (i32, i32),
+    pub pitch: i32,
+    pub health: f64,
+    pub fill: ToolFill,
+    pub name: Option<&'a str>,
+}
+
+impl<'a> ToolBarDrawing<'a> {
+    /// The panels at the default scale, full health, the tool ready and
+    /// named `name`.
+    pub fn named(at: (i32, i32), name: &'a str) -> Self {
+        Self {
+            at,
+            size: TOOL_PANEL,
+            pitch: TOOL_PITCH,
+            health: 1.0,
+            fill: ToolFill::Ready,
+            name: Some(name),
+        }
+    }
+}
+
+/// How the drawn lettering is set: each glyph `GLYPH_W` wide and
+/// `GLYPH_H` tall, `GLYPH_GAP` apart, words `WORD_GAP` apart, starting
+/// `NAME_LEFT` in from the outline's left end and `NAME_TOP` down from its
+/// top; the dots of a name cut short are `NAME_DOT` square, `DOT_GAP` apart, on
+/// the glyphs' foot.
+pub const GLYPH_W: i32 = 6;
+pub const GLYPH_H: i32 = 10;
+pub const GLYPH_GAP: i32 = 2;
+pub const WORD_GAP: i32 = 6;
+pub const NAME_LEFT: i32 = 16;
+pub const NAME_TOP: i32 = 10;
+pub const NAME_DOT: i32 = 2;
+pub const DOT_GAP: i32 = 3;
+
+/// The lit pixels of `c`'s glyph, by column and row: a stroke down its
+/// left side, and beside it a pattern of pixels drawn from a hash of the
+/// character, so that any two characters differ in many pixels, as the
+/// client's glyphs do. The last column stays clear.
+fn glyph(c: char) -> Vec<(i32, i32)> {
+    let hash = (c as u64 + 1)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .rotate_left(17);
+    let mut lit = Vec::new();
+    for y in 0..GLYPH_H {
+        lit.push((0, y));
+        for x in 1..GLYPH_W - 1 {
+            let k = (y * (GLYPH_W - 2) + (x - 1)) as u32 % 64;
+            if hash >> k & 1 == 1 {
+                lit.push((x, y));
+            }
+        }
+    }
+    lit
+}
+
+/// The lettering of `text` as lit pixels from its top-left, and its width:
+/// glyphs and word gaps, and a trailing `...` drawn as the client's dots.
+pub fn name_pixels(text: &str) -> (Vec<(i32, i32)>, i32) {
+    let (body, cut) = match text.strip_suffix("...") {
+        Some(body) => (body, true),
+        None => (text, false),
+    };
+    let mut lit = Vec::new();
+    let mut x = 0;
+    for c in body.chars() {
+        if c == ' ' {
+            x += WORD_GAP - GLYPH_GAP;
+            continue;
+        }
+        lit.extend(glyph(c).into_iter().map(|(gx, gy)| (x + gx, gy)));
+        x += GLYPH_W + GLYPH_GAP;
+    }
+    if cut {
+        for _ in 0..3 {
+            for dy in 0..NAME_DOT {
+                for dx in 0..NAME_DOT {
+                    lit.push((x + dx, GLYPH_H - NAME_DOT + dy));
+                }
+            }
+            x += NAME_DOT + DOT_GAP;
+        }
+    }
+    let width = lit.iter().map(|(x, _)| x + 1).max().unwrap_or(0);
+    (lit, width)
+}
+
+/// Draw one panel's outline and frame, its outline's top-left at `at`.
+fn draw_panel(image: &mut BgrImage, at: (i32, i32), (w, h): (i32, i32)) -> Rect {
+    let outline = Rect::new(at.0, at.1, at.0 + w - 1, at.1 + h - 1);
+    fill(image, outline.padded(3), PANEL_FRAME);
+    fill(image, outline, OUTLINE);
+    outline
+}
+
+/// Draw the health bar and the tool bar as `drawing` says. Returns the two
+/// outlines, health bar first.
+pub fn draw_tool_bars(image: &mut BgrImage, drawing: &ToolBarDrawing) -> (Rect, Rect) {
+    let (w, h) = drawing.size;
+    let health = draw_panel(image, drawing.at, drawing.size);
+    let inner = Rect::new(health.x0 + 3, health.y0 + 1, health.x1 - 3, health.y1 - 1);
+    fill(image, inner, HEALTH_EMPTY);
+    let reach = (drawing.health * inner.width() as f64).round() as i32;
+    if reach > 0 {
+        fill(
+            image,
+            Rect::new(inner.x0, inner.y0, inner.x0 + reach - 1, inner.y1),
+            HEALTH_RED,
+        );
+    }
+    let tool = draw_panel(image, (drawing.at.0 + drawing.pitch, drawing.at.1), (w, h));
+    let inner = Rect::new(tool.x0 + 3, tool.y0 + 1, tool.x1 - 3, tool.y1 - 1);
+    match drawing.fill {
+        ToolFill::Ready => {
+            for (k, y) in (inner.y0..=inner.y1).enumerate() {
+                let rgb = if k < 3 {
+                    TOOL_HIGHLIGHT
+                } else {
+                    TOOL_READY.map(|c| c.saturating_sub(TOOL_SHADING * (k as u8 - 3)))
+                };
+                fill(image, Rect::new(inner.x0, y, inner.x1, y), rgb);
+            }
+        }
+        ToolFill::Reloading => fill(image, inner, TOOL_RELOADING),
+    }
+    // The counter: three figures at the right end.
+    for k in 0..3 {
+        let x = tool.x1 - 50 + k * 10;
+        fill(
+            image,
+            Rect::new(
+                x,
+                tool.y0 + NAME_TOP,
+                x + 6,
+                tool.y0 + NAME_TOP + GLYPH_H - 1,
+            ),
+            TOOL_LETTERING,
+        );
+    }
+    if let Some(name) = drawing.name {
+        let (lit, _) = name_pixels(name);
+        for (x, y) in lit {
+            put(
+                image,
+                tool.x0 + NAME_LEFT + x,
+                tool.y0 + NAME_TOP + y,
+                TOOL_LETTERING,
+            );
+        }
+    }
+    (health, tool)
+}
+
+/// A frame with the tool bar drawn on it, and a stand-in recogniser that
+/// reads a crop as the name whose lettering lies whole within it (as the
+/// pixels of the drawn lettering), and as nothing when no name does or
+/// when the crop takes in a panel's outline: the client's own recogniser
+/// misreads a crop that takes in the bar's edge.
+pub struct ToolBarScene {
+    pub image: BgrImage,
+    names: Vec<String>,
+}
+
+impl ToolBarScene {
+    pub fn new(image: BgrImage) -> Self {
+        Self {
+            image,
+            names: Vec::new(),
+        }
+    }
+
+    /// Draw the panels as `drawing` says; returns the two outlines.
+    pub fn draw(&mut self, drawing: &ToolBarDrawing) -> (Rect, Rect) {
+        if let Some(name) = drawing.name {
+            self.names.push(name.to_string());
+        }
+        draw_tool_bars(&mut self.image, drawing)
+    }
+
+    pub fn recogniser(&self) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
+        // Each name's lettering as a grid of lit pixels, row by row.
+        let names: Vec<(String, Vec<bool>, i32)> = self
+            .names
+            .iter()
+            .map(|name| {
+                let (lit, w) = name_pixels(name);
+                let mut grid = vec![false; (w * GLYPH_H) as usize];
+                for (x, y) in lit {
+                    grid[(y * w + x) as usize] = true;
+                }
+                (name.clone(), grid, w)
+            })
+            .collect();
+        move |crop: &BgrImage| {
+            let at = |x: i32, y: i32| -> [u8; 3] {
+                let i = (y as usize * crop.w + x as usize) * 3;
+                [crop.data[i + 2], crop.data[i + 1], crop.data[i]]
+            };
+            let (cw, ch) = (crop.w as i32, crop.h as i32);
+            if (0..ch).any(|y| (0..cw).any(|x| at(x, y) == OUTLINE)) {
+                return Some((String::new(), 0.9));
+            }
+            let lettered = |x: i32, y: i32| at(x, y) == TOOL_LETTERING;
+            let found = names.iter().find(|(_, grid, w)| {
+                (0..=cw - w).any(|x0| {
+                    (0..=ch - GLYPH_H).any(|y0| {
+                        (0..GLYPH_H).all(|y| {
+                            (0..*w).all(|x| lettered(x0 + x, y0 + y) == grid[(y * w + x) as usize])
+                        })
+                    })
+                })
+            });
+            Some((
+                found.map_or(String::new(), |(name, _, _)| name.clone()),
+                0.97,
+            ))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

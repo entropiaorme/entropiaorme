@@ -18,7 +18,7 @@
 
 use serde::Deserialize;
 
-use super::geometry::{chroma, near, Pixels, Rect};
+use super::geometry::{chroma, crop, near, BgrImage, Pixels, Rect};
 
 /// What the client's window frame looks like. Every number is a
 /// measurement of the client's rendering and lives in the profile.
@@ -964,6 +964,61 @@ pub fn window_edge_in<P: Pixels>(image: &P, chrome: &ChromeProfile) -> bool {
     })
 }
 
+/// The client's windows, as a reader of `area` must know them: none when
+/// no window's frame shows in `area` grown by the padding, or else every
+/// window in the frame.
+///
+/// A window that reaches into `area` without covering all of it has an
+/// edge there or in the padding: the padding is the shortest stretch of a
+/// window's edge the window search sees, so a window only a corner of
+/// which reaches `area` still shows that much of its edge round the
+/// corner. So `area` grown by the padding is looked at first for any such
+/// edge; finding none, no window can bear on a read of `area` but one
+/// covering all of it, and the search of the whole frame, which costs many
+/// times the rest of the read, is not made. When one shows, the whole
+/// frame is searched: a window only part of which lies in `area` is told
+/// from the scene by all of it, and a search of `area` alone would miss
+/// one too little of which lies there.
+pub fn windows_around(image: &BgrImage, area: Rect, chrome: &ChromeProfile) -> Vec<Rect> {
+    WindowsNear::new(image, chrome).around(area).to_vec()
+}
+
+/// The client's windows, asked for round one area after another (see
+/// [`windows_around`]): the search of the whole frame is made at most once,
+/// and only when some area asked about shows a window's edge.
+pub struct WindowsNear<'a> {
+    image: &'a BgrImage,
+    chrome: &'a ChromeProfile,
+    all: std::cell::OnceCell<Vec<Rect>>,
+}
+
+impl<'a> WindowsNear<'a> {
+    pub fn new(image: &'a BgrImage, chrome: &'a ChromeProfile) -> Self {
+        Self {
+            image,
+            chrome,
+            all: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The windows as a reader of `area` must know them: none when no
+    /// window's frame shows in `area` grown by the padding, or else every
+    /// window in the frame.
+    pub fn around(&self, area: Rect) -> &[Rect] {
+        let frame = Rect::new(0, 0, self.image.width() - 1, self.image.height() - 1);
+        let around = area.padded(self.chrome.min_edge_run).intersect(&frame);
+        if !around.is_some_and(|around| window_edge_in(&crop(self.image, around), self.chrome)) {
+            return &[];
+        }
+        self.all.get_or_init(|| {
+            find_windows(self.image, self.chrome)
+                .into_iter()
+                .map(|w| w.rect)
+                .collect()
+        })
+    }
+}
+
 /// Every game window in `image`, front to back.
 pub fn find_windows<P: Pixels>(image: &P, chrome: &ChromeProfile) -> Vec<FoundWindow> {
     let mut best: Vec<FoundWindow> = Vec::new();
@@ -991,7 +1046,6 @@ pub fn find_windows<P: Pixels>(image: &P, chrome: &ChromeProfile) -> Vec<FoundWi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game_ui::geometry::{crop, BgrImage};
     use crate::game_ui::test_support::{blank, bundled_profile, draw_window, fill, put, Lcg};
 
     fn scenery(w: usize, h: usize, seed: u64) -> BgrImage {

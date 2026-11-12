@@ -207,6 +207,21 @@ pub fn read_run(
     recogniser.read(&crop(image, run.padded(margin)))
 }
 
+/// Recognise one run cropped as [`read_run`] does, the crop kept within
+/// `bounds`: lettering on a panel whose edge or highlight lies within the
+/// margin is read without them.
+pub fn read_run_within(
+    image: &BgrImage,
+    run: Rect,
+    bounds: Rect,
+    read: &ReadProfile,
+    recogniser: &dyn Recogniser,
+) -> Option<(String, f64)> {
+    let margin = crop_margin(run.height(), read);
+    let area = run.padded(margin).intersect(&bounds).unwrap_or(run);
+    recogniser.read(&crop(image, area))
+}
+
 /// Recognise one run cropped as [`read_run`] does, with every column of
 /// the crop outside `keep` (its first and last column, in the frame's
 /// coordinates) painted `fill`: one word of a phrase read on its own,

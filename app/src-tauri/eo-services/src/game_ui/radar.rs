@@ -46,7 +46,7 @@ use super::geometry::{chroma, crop, Pixels, Rect, TURN_DEGREES};
 use super::profile::UiProfile;
 use super::text::{scenery_runs, stroke_ink, StrokeProfile, TextProfile, TextRun};
 use super::validate::{distance_labels, labelled_integer};
-use super::window::{find_windows, window_edge_in};
+use super::window::windows_around;
 
 /// What the radar looks like, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
@@ -870,43 +870,15 @@ pub fn find_rings(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> Optio
     ring_radii(image, radar, &windows, &profile.radar.rings)
 }
 
-/// The client's windows, as a reader of `area` must know them: none when
-/// no window's frame shows in `area` grown by the padding, or else every
-/// window in the frame.
-///
-/// A window that reaches into `area` without covering all of it has an
-/// edge there or in the padding: the padding is the shortest stretch of a
-/// window's edge the window search sees, so a window only a corner of
-/// which reaches `area` still shows that much of its edge round the
-/// corner. So `area` grown by the padding is looked at first for any such
-/// edge; finding none, no window can bear on a read of `area` but one
-/// covering all of it, and the search of the whole frame, which costs many
-/// times the rest of the read, is not made. When one shows, the whole
-/// frame is searched: a window only part of which lies in `area` is told
-/// from the scene by all of it, and a search of `area` alone would miss
-/// one too little of which lies there.
-fn windows_round(image: &BgrImage, area: Rect, profile: &UiProfile) -> Vec<Rect> {
-    let chrome = &profile.chrome;
-    let frame = Rect::new(0, 0, image.width() - 1, image.height() - 1);
-    let around = area.padded(chrome.min_edge_run).intersect(&frame);
-    if !around.is_some_and(|around| window_edge_in(&crop(image, around), chrome)) {
-        return Vec::new();
-    }
-    find_windows(image, chrome)
-        .into_iter()
-        .map(|w| w.rect)
-        .collect()
-}
-
 /// The client's windows, as a reader of `radar` must know them (see
-/// [`windows_round`]). Everything a reader of the radar asks of the
+/// [`windows_around`]). Everything a reader of the radar asks of the
 /// windows (whether one covers the coordinates, the planet's name or the
 /// ring labels, and which ink is a window's rather than the scene's) lies
 /// in the radar's neighbourhood (see [`Radar::neighbourhood`]), and a
 /// window covering all of it covers the disc, when there is no radar to
 /// read.
 fn windows_near(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> Vec<Rect> {
-    windows_round(image, radar.neighbourhood(&profile.radar), profile)
+    windows_around(image, radar.neighbourhood(&profile.radar), &profile.chrome)
 }
 
 /// The planet's name printed above `radar`, when it reads as exactly one
@@ -1439,7 +1411,7 @@ pub fn read_region_coordinates(
     if region.width() < 2 {
         return Ok(refused(CoordError::NotFound));
     }
-    if windows_round(image, region, profile)
+    if windows_around(image, region, &profile.chrome)
         .iter()
         .any(|window| window.intersect(&region).is_some())
     {
@@ -1490,6 +1462,7 @@ mod tests {
         scenery, within, Printed, RadarScene, RegionHalf, DOT, HEIGHT, MAP, PITCH, RIM, RINGS,
         RING_LABELS, SHADOW,
     };
+    use crate::game_ui::window::find_windows;
 
     fn assert_found(found: Option<Radar>, centre: (i32, i32), radius: i32) {
         let found = found.unwrap_or_else(|| panic!("no radar found at {centre:?} radius {radius}"));

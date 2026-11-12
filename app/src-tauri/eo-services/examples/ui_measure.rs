@@ -24,12 +24,16 @@
 //! - `radar <frame> [--planet <name>]`: the radar, its coordinates, rings
 //!   and scale.
 //! - `plates <frame>`: every nameplate, and the locked one read.
+//! - `tool-bar <frame>`: the tool bar, its state, its lettering and the
+//!   tool's name read.
 //! - `sale-queue <frame>`, `skills <frame>`, `terminal <frame>`: the whole
 //!   typed read of each reader, row by row.
 //! - `measure-chrome <frame> [--rect x0,y0,x1,y1] [--depth <n>]`: a
 //!   window's frame, measured, as a fragment of the profile's `chrome`.
 //! - `measure-plate <frame>`: a `plates.scales[]` entry measured from the
 //!   solid nameplates in view.
+//! - `measure-tool-bar <frame>`: a `tool_bar.scales[]` entry measured from
+//!   the health bar and the tool bar in view.
 //! - `measure-numerals <frame> <window kind> <field> <expected text>`, or
 //!   `measure-numerals <frame> --rect x0,y0,x1,y1 <expected text>`
 //!   (`--numerals fields`, `skills`, `sale-queue` or `sale-queue-figures`,
@@ -95,6 +99,9 @@ use eo_services::game_ui::sale_queue::{
 use eo_services::game_ui::seams::{frame_reader, GameFrame};
 use eo_services::game_ui::skills::{measure_skills_page, read_skills_page, SkillsTableProfile};
 use eo_services::game_ui::table::{column_rules, row_rules, rows, Panel};
+use eo_services::game_ui::tool_bar::{
+    bar_state, find_tool_bar, lettering, measure_tool_bars, read_tool_name, BarState,
+};
 use eo_services::game_ui::validate::{expected_width, ink_size, NumeralMetrics};
 use eo_services::game_ui::window::{find_windows, measure_chrome, FoundWindow, Side};
 use eo_services::ocr_engine::{load_bgr_png, resize_bilinear, OcrEngine};
@@ -854,6 +861,121 @@ fn cmd_plates(mut s: Session) -> Result<(), String> {
     println!(
         "overlay: green the locked plate, yellow the others, cyan the level's piece, magenta the name's"
     );
+    s.overlay.save()
+}
+
+fn cmd_tool_bar(mut s: Session) -> Result<(), String> {
+    let found = find_tool_bar(&s.image, &s.profile);
+    let state = bar_state(&s.image, found, &s.profile);
+    let Some(bar) = found else {
+        println!("no tool bar: none found, or found at a scale the profile does not list");
+        return s.overlay.save();
+    };
+    let scale = &s.profile.tool_bar.scales[bar.scale];
+    println!(
+        "tool bar: panel {} at scale {} (size {:?}), {:?}",
+        show(bar.panel),
+        bar.scale,
+        scale.size,
+        bar.view
+    );
+    println!("  name area    {}", show(bar.name));
+    println!("  counter area {}", show(bar.counter));
+    let health = bar.panel.offset(-scale.pitch, 0);
+    s.overlay.rect(health, RED);
+    s.overlay.rect(
+        bar.panel,
+        if matches!(state, BarState::Lettered(_) | BarState::Empty(_)) {
+            GREEN
+        } else {
+            YELLOW
+        },
+    );
+    s.overlay.rect(bar.name, CYAN);
+    s.overlay.rect(bar.counter, MAGENTA);
+    if let Some(marks) = lettering(&s.image, &state, &s.profile) {
+        let (w, h) = marks.size();
+        println!("  lettering: {} of {} pixels", marks.pixels(), w * h);
+    }
+    match state {
+        BarState::Absent => println!("state: absent"),
+        BarState::NoPanel(_) => println!("state: a health bar with no panel beside it"),
+        BarState::Covered(_) => println!("state: covered, not read"),
+        BarState::Unclear(_) => {
+            println!("state: unclear (a broken outline, or marks that are not lettering)")
+        }
+        BarState::Empty(_) => println!("state: empty, nothing held"),
+        BarState::Lettered(_) => {
+            println!("state: lettered");
+            let read = recogniser();
+            match read_tool_name(&s.image, &state, &s.profile, &*read) {
+                Ok(name) => println!(
+                    "name: {:?}{}",
+                    name.text,
+                    if name.cut_short { ", cut short" } else { "" }
+                ),
+                Err(refusal) => println!("name: refused: {refusal}"),
+            }
+        }
+    }
+    println!(
+        "overlay: red where the health bar stands, green the tool bar when whole (yellow otherwise), cyan its name area, magenta its counter area"
+    );
+    s.overlay.save()
+}
+
+fn cmd_measure_tool_bar(mut s: Session) -> Result<(), String> {
+    let measured = measure_tool_bars(&s.image, &s.profile);
+    if measured.is_empty() {
+        println!(
+            "no health bar and tool bar were measured: capture again with both in view, clear \
+             of windows"
+        );
+        return s.overlay.save();
+    }
+    let entries = profile_json(s.args)?["tool_bar"]["scales"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for pair in &measured {
+        let (w, h) = (pair.tool.width(), pair.tool.height());
+        let pitch = pair.tool.x0 - pair.health.x0;
+        println!(
+            "health bar {}, tool bar {}: outline {w}x{h}, pitch {pitch}",
+            show(pair.health),
+            show(pair.tool)
+        );
+        s.overlay.rect(pair.health, RED);
+        s.overlay.rect(pair.tool, GREEN);
+        match claiming(&s.profile.tool_bar.scales, w, |scale| scale.width) {
+            Ok((index, scale)) => {
+                println!(
+                    "  the profile lists this scale as tool_bar.scales[{index}] (size {:?}, pitch {})",
+                    scale.size, scale.pitch
+                );
+                continue;
+            }
+            Err(why) => println!("  {why}"),
+        }
+        let nearest = nearest_to_measure(&s.profile.tool_bar.scales, w, |scale| scale.width);
+        let Some(base) = entries.get(nearest) else {
+            println!("  the profile lists no scale to carry the unmeasured entries from");
+            continue;
+        };
+        let mut entry = base.clone();
+        let slack = s.profile.tool_bar.scales[nearest].width[1]
+            - s.profile.tool_bar.scales[nearest].size[0];
+        entry["width"] = json!([w - slack, w + slack]);
+        entry["size"] = json!([w, h]);
+        entry["pitch"] = json!(pitch);
+        println!(
+            "  not a scale the profile lists. A tool_bar.scales[] entry for it: width, size and \
+             pitch are measured here; tolerance and text are carried from scales[{nearest}] and \
+             are to be checked with `tool-bar` on captures at this scale:"
+        );
+        println!("{}", pretty(&entry));
+    }
+    println!("overlay: red the health bar's outline, green the tool bar's");
     s.overlay.save()
 }
 
@@ -2236,6 +2358,42 @@ fn cmd_timing(s: Session) -> Result<(), String> {
                 None => "no locked plate".to_string(),
             }
         );
+        let mut bar = None;
+        let ms = time(&mut || {
+            bar = std::hint::black_box(find_tool_bar(image, &s.profile));
+        });
+        println!(
+            "  tool bar search:     {ms:.1} ms ({})",
+            match &bar {
+                Some(bar) => format!("found, {:?}", bar.view),
+                None => "no tool bar".to_string(),
+            }
+        );
+        if bar.is_some() {
+            let state = bar_state(image, bar, &s.profile);
+            let ms = time(&mut || {
+                std::hint::black_box(bar_state(image, bar, &s.profile));
+            });
+            println!("  tool bar state:      {ms:.3} ms ({state:?})");
+            let ms = time(&mut || {
+                std::hint::black_box(lettering(image, &state, &s.profile));
+            });
+            println!("  tool bar lettering:  {ms:.3} ms (the mask a watcher compares)");
+            let mut name = None;
+            let ms = time(&mut || {
+                name = Some(std::hint::black_box(read_tool_name(
+                    image, &state, &s.profile, &*read,
+                )));
+            });
+            println!(
+                "  tool name read:      {ms:.1} ms ({})",
+                match &name {
+                    Some(Ok(tool)) => format!("{:?}", tool.text),
+                    Some(Err(refusal)) => format!("refused: {refusal}"),
+                    None => String::new(),
+                }
+            );
+        }
         let mut radar = None;
         let ms = time(&mut || {
             radar = std::hint::black_box(find_radar(image, &s.profile));
@@ -2311,6 +2469,7 @@ fn cmd_replay(args: &Args) -> Result<bool, String> {
             outcomes.push(("sale queue", replay::sale_queue(&r, all)));
             outcomes.push(("sale queue", replay::sale_queue_digit_loss(&r, all)));
             outcomes.push(("plates", replay::plates(&r, all)));
+            outcomes.push(("tool bar", replay::tool_bar(&r, all)));
         }
         Err(why) => unavailable = Some(why),
     }
@@ -2345,7 +2504,7 @@ fn cmd_replay(args: &Args) -> Result<bool, String> {
 }
 
 /// Every subcommand: its name, its arguments in full, and what it shows.
-const SUBCOMMANDS: [(&str, &str, &str); 19] = [
+const SUBCOMMANDS: [(&str, &str, &str); 21] = [
     ("windows", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "every window found, front to back: rectangle, sides, ridge, scaled or not, kind, and each run of its title strip as read"),
     ("runs", "<frame.png> [--window <kind>] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
@@ -2358,6 +2517,8 @@ const SUBCOMMANDS: [(&str, &str, &str); 19] = [
      "the radar's disc, planet name, coordinates, rings and scale"),
     ("plates", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "every nameplate, the locked one, and its line read as level and name"),
+    ("tool-bar", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "the tool bar: its panel, name and counter areas, whether it is covered, its lettering's pixels, its state, and the tool's name read"),
     ("sale-queue", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "the header band's height and the scale entry claiming it, then the sell queue's whole typed read, row by row"),
     ("skills", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
@@ -2368,6 +2529,8 @@ const SUBCOMMANDS: [(&str, &str, &str); 19] = [
      "the front-most window's frame (or the window whose outer rectangle --rect gives), measured as a fragment of the profile's `chrome`"),
     ("measure-plate", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "a `plates.scales[]` entry measured from the solid nameplates in view"),
+    ("measure-tool-bar", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "a `tool_bar.scales[]` entry measured from the health bar and the tool bar in view"),
     ("measure-numerals", "<frame.png> (<window kind> <field> | --rect x0,y0,x1,y1) <true text> [--numerals fields|skills|sale-queue|sale-queue-figures [--scale <index>]] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "one figure's ink against the numeral metrics, and a sample line for fit-numerals; take a table cell's --rect from `runs`, one pixel wider all round"),
     ("measure-sale-queue", "<frame.png> --labels <labels.json> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
@@ -2444,6 +2607,8 @@ fn run(args: &Args) -> Result<bool, String> {
         "radar" => cmd_radar,
         "plates" => cmd_plates,
         "measure-plate" => cmd_measure_plate,
+        "tool-bar" => cmd_tool_bar,
+        "measure-tool-bar" => cmd_measure_tool_bar,
         "sale-queue" => cmd_sale_queue,
         "skills" => cmd_skills,
         "terminal" => cmd_terminal,

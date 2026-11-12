@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eo_services::game_data_store::GameDataStore;
-use eo_services::game_ui::field::{FieldError, Recogniser};
+use eo_services::game_ui::field::{label_key, FieldError, Recogniser};
 use eo_services::game_ui::geometry::{BgrImage, Rect};
 use eo_services::game_ui::locate::{read_window_field, ReadError};
 use eo_services::game_ui::mob_names::{resolve, MobCatalogue, Resolved};
@@ -43,6 +43,7 @@ use eo_services::game_ui::seams::{frame_reader, GameFrame};
 use eo_services::game_ui::skills::{
     read_skills_page, RowName, SkillRow, SkillVocabulary, SkillsError, SkillsPage,
 };
+use eo_services::game_ui::tool_bar::{lettering, read_tool_name, tool_bar_state, Lettering};
 use eo_services::game_ui::window::find_windows;
 use eo_services::ocr_engine::load_bgr_png;
 use eo_services::planet_maps::PlanetMapStore;
@@ -72,6 +73,20 @@ pub struct Manifest {
     /// The frames particular real-capture tests are pinned to.
     #[serde(default)]
     pub cases: Option<Cases>,
+    /// What the corpus is known to cost a reader, which a replay of the
+    /// whole corpus must not exceed.
+    #[serde(default)]
+    pub ceilings: Option<Ceilings>,
+}
+
+/// What the corpus is known to cost a reader: counts a replay of the
+/// whole corpus may reach and not exceed.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Ceilings {
+    /// Names on the tool bar whose letters and digits the recogniser
+    /// gets wrong.
+    pub tool_name_misreads: usize,
 }
 
 /// What was measured or decided by hand about one frame.
@@ -95,6 +110,15 @@ pub struct FrameEntry {
     /// The sell queue, for a frame whose labels carry it.
     #[serde(default)]
     pub sale_queue: Option<SaleQueueEntry>,
+    /// The state the tool bar's reader must give although the labels show
+    /// the bar otherwise (`Absent` for a bar drawn at a scale the profile
+    /// does not list), and why.
+    #[serde(default)]
+    pub tool_bar: Option<Excused>,
+    /// The refusal the tool bar's name must be read with although the
+    /// labels show it, and why.
+    #[serde(default)]
+    pub tool_name: Option<Excused>,
 }
 
 /// A window's outer rectangle, measured or checked by hand.
@@ -278,6 +302,8 @@ pub struct Corpus {
     /// The frames particular tests are pinned to, if the manifest names
     /// them.
     cases: Option<Cases>,
+    /// What the corpus is known to cost a reader.
+    ceilings: Option<Ceilings>,
     /// Whether the frames replayed are the held-out ones or the rest.
     held_out: bool,
 }
@@ -310,6 +336,7 @@ impl Corpus {
             labels,
             entries,
             cases: manifest.cases,
+            ceilings: manifest.ceilings,
             dir: dir.to_path_buf(),
             held_out,
         })
@@ -1935,5 +1962,209 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
     outcome
         .failures
         .extend(problems.iter().map(|line| format!("plates: {line}")));
+    outcome
+}
+
+// The tool bar.
+
+/// What a frame's labels say the tool bar shows: its state as the
+/// reader's state is named (`no_panel` as `NoPanel`), and for a bar with
+/// lettering the name as the screen shows it (with the dots of a name cut
+/// short). `None` for a frame whose labels say nothing of the bar.
+fn labelled_tool_bar(labels: &Value) -> Option<(String, Option<String>)> {
+    let entry = labels.get("tool_bar")?;
+    let state = entry["state"].as_str().expect("the tool bar's state");
+    let named: String = state
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_uppercase().chain(chars).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect();
+    Some((named, entry["name"].as_str().map(str::to_string)))
+}
+
+/// Every frame's tool bar in the state its labels give, or the one the
+/// manifest names with its reason: a bar found where none is, or one read
+/// as whole where a window covers it, fails, as does any other state
+/// than the labelled one. On every bar with lettering the name is read
+/// and compared with the screen's: a refusal the manifest does not excuse
+/// fails, a misread is counted and printed (the recogniser's reading is
+/// matched against the known tools later), and the tally says how many
+/// read right in their letters and digits (a name is compared on those
+/// alone, the recogniser dropping spaces between words) and how many
+/// letter-perfect; whether the name was cut short is told from the
+/// pixels and must be right.
+///
+/// Over the whole corpus (not a shard of it), two more rules hold: the
+/// misreads may not outnumber the manifest's ceiling, and the lettering's
+/// masks are compared between every pair of frames with lettering. Two
+/// tools' masks must always differ by more than the profile's threshold
+/// for reading again; one tool's masks may differ by more (a reload
+/// darkening the fill), which costs only a needless read and is counted.
+pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
+    let (corpus, profile) = (&r.corpus, &r.profile);
+    let read = r.reader();
+    let mut outcome = Outcome::default();
+    let (mut states, mut right, mut perfect, mut lettered) = (0usize, 0usize, 0usize, 0usize);
+    let (mut misread, mut refused) = (Vec::new(), Vec::new());
+    let mut masks: Vec<(String, String, Lettering)> = Vec::new();
+    let frames: Vec<(String, &Value)> = corpus
+        .frames()
+        .into_iter()
+        .enumerate()
+        .filter(|(index, _)| shard.holds(*index))
+        .map(|(_, frame)| frame)
+        .collect();
+    for (name, labels) in frames {
+        let Some((labelled, truth)) = labelled_tool_bar(labels) else {
+            outcome
+                .missing
+                .push(format!("{name}: the labels say nothing of the tool bar"));
+            continue;
+        };
+        let entry = corpus.entry(&name);
+        let expected = entry
+            .tool_bar
+            .as_ref()
+            .map_or(labelled.clone(), |e| e.refusal.clone());
+        let image = corpus.frame(&name);
+        let state = tool_bar_state(&image, profile);
+        let got = variant(&state);
+        if got != expected {
+            let why = match (expected.as_str(), got.as_str()) {
+                ("Absent", _) => "a bar was found where none is",
+                ("Covered", "Lettered" | "Empty") => "a covered bar was taken as whole",
+                _ => "the state is not the labelled one",
+            };
+            outcome.failures.push(format!(
+                "tool bar: {name}: {why}: expected {expected}, found {state:?}"
+            ));
+            continue;
+        }
+        states += 1;
+        if let Some(e) = &entry.tool_bar {
+            println!(
+                "  {name}: {got} as the manifest says, though the labels show {labelled}: {:?}",
+                e.why
+            );
+        }
+        let Some(mask) = lettering(&image, &state, profile) else {
+            println!("  {name}: {got}");
+            continue;
+        };
+        let Some(truth) = truth else {
+            outcome.missing.push(format!(
+                "{name}: the labels give the tool bar lettering but no name"
+            ));
+            continue;
+        };
+        lettered += 1;
+        masks.push((name.clone(), truth.clone(), mask));
+        match read_tool_name(&image, &state, profile, &read) {
+            Ok(tool) => {
+                let shown = if tool.cut_short {
+                    format!("{}...", tool.text)
+                } else {
+                    tool.text.clone()
+                };
+                if tool.cut_short != truth.ends_with("...") {
+                    outcome.failures.push(format!(
+                        "tool bar: {name}: read as cut short {}, the screen shows {truth:?}",
+                        tool.cut_short
+                    ));
+                }
+                // A name is compared on its letters and digits: the
+                // recogniser may drop the spaces between words.
+                let visible = truth.strip_suffix("...").unwrap_or(&truth);
+                if tool.key() == label_key(visible) {
+                    right += 1;
+                    perfect += usize::from(shown == truth);
+                    println!("  {name}: {shown:?}");
+                } else {
+                    misread.push(format!(
+                        "{name}: read {shown:?}, the screen shows {truth:?}"
+                    ));
+                }
+            }
+            Err(refusal) => {
+                let line = format!("{name} ({truth:?}): {refusal}");
+                match &entry.tool_name {
+                    Some(e) if e.names(&refusal, None) => {
+                        println!("  refused as the manifest says: {line}: {:?}", e.why);
+                    }
+                    _ => outcome
+                        .failures
+                        .push(format!("tool bar: the name was refused unexcused: {line}")),
+                }
+                refused.push(line);
+            }
+        }
+    }
+    println!(
+        "tool bar{shard}: {states} states as labelled; {lettered} with lettering: {right} read right in their letters and digits ({perfect} letter-perfect, spaces too), {} misread, {} refused",
+        misread.len(),
+        refused.len(),
+    );
+    for line in &misread {
+        println!("  misread: {line}");
+    }
+    for line in &refused {
+        println!("  refused: {line}");
+    }
+    if shard.0.is_some() {
+        println!(
+            "tool bar{shard}: the misread ceiling and the lettering's pairs are held over the whole corpus only"
+        );
+        outcome.exact += states + right;
+        return outcome;
+    }
+    match corpus.ceilings.as_ref().map(|c| c.tool_name_misreads) {
+        None => outcome.missing.push(
+            "the manifest gives no ceiling for the tool bar's misread names (`ceilings`)".into(),
+        ),
+        Some(most) if misread.len() > most => outcome.failures.push(format!(
+            "tool bar: {} names misread in their letters and digits, more than the corpus's ceiling of {most}",
+            misread.len()
+        )),
+        Some(most) => println!("tool bar: {} misread, the ceiling is {most}", misread.len()),
+    }
+    let limit = profile.tool_bar.lettering.max_differing;
+    let (mut same_most, mut same_over) = (None::<(usize, String)>, 0usize);
+    let mut other_least: Option<(usize, String)> = None;
+    for (i, (a, a_name, a_mask)) in masks.iter().enumerate() {
+        for (b, b_name, b_mask) in &masks[i + 1..] {
+            let differing = a_mask.differing(b_mask).unwrap_or(usize::MAX);
+            let pair = format!("{a} and {b}");
+            if a_name == b_name {
+                same_over += usize::from(differing > limit);
+                if same_most.as_ref().is_none_or(|(n, _)| differing > *n) {
+                    same_most = Some((differing, pair));
+                }
+            } else {
+                if differing <= limit {
+                    outcome.failures.push(format!(
+                        "tool bar: two tools' lettering differ by {differing} pixels, no more than {limit}: {pair}"
+                    ));
+                }
+                if other_least.as_ref().is_none_or(|(n, _)| differing < *n) {
+                    other_least = Some((differing, pair));
+                }
+            }
+        }
+    }
+    let area = masks.first().map_or(0, |(_, _, m)| {
+        let (w, h) = m.size();
+        (w * h) as usize
+    });
+    println!(
+        "tool bar lettering: {area} pixels; one tool differs in at most {:?}, {same_over} pairs over {limit} (a needless read each); two tools in at least {:?}",
+        same_most.as_ref().map(|(n, pair)| format!("{n} ({pair})")),
+        other_least.as_ref().map(|(n, pair)| format!("{n} ({pair})")),
+    );
+    outcome.exact += states + right;
     outcome
 }

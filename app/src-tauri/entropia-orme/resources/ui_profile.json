@@ -828,5 +828,86 @@
     "continuity_kills": 3,
     "continuity_horizon_ms": 120000,
     "continuity_run": 10
+  },
+  "tool_bar": {
+    "scales": [
+      {
+        "width": [
+          371,
+          373
+        ],
+        "size": [
+          372,
+          31
+        ],
+        "pitch": 394,
+        "tolerance": 1,
+        "text": {
+          "min_ink": 171,
+          "glyph_gap": 1,
+          "join_factor": 1.0,
+          "max_colour_distance": 110,
+          "min_colour_ink": 12,
+          "line_slack": 0.3334,
+          "run_height": [
+            6,
+            21
+          ],
+          "min_ink_pixels": 20
+        }
+      }
+    ],
+    "outline_max": 6,
+    "outline_share": 0.9,
+    "whole_share": 1.0,
+    "fill_share": 0.5,
+    "min_part": 0.05,
+    "health": {
+      "area": [
+        0.0135,
+        0.1291,
+        0.0404,
+        0.871
+      ],
+      "hue": [
+        -30.0,
+        15.0
+      ],
+      "min_chroma": 40,
+      "empty_rgb": [
+        9,
+        19,
+        16
+      ],
+      "empty_tolerance": 6,
+      "share": 0.8
+    },
+    "name_area": [
+      0.0242,
+      0.1613,
+      0.7742,
+      0.8387
+    ],
+    "counter_area": [
+      0.793,
+      0.1613,
+      0.9839,
+      0.8387
+    ],
+    "lettering": {
+      "min_channel": 171,
+      "min_pixels": 20,
+      "max_differing": 8
+    },
+    "plain": {
+      "across": 8,
+      "down": 24,
+      "max_marks": 4
+    },
+    "ellipsis": {
+      "dots": 3,
+      "max_dot": 3
+    },
+    "crop_margin": 7
   }
 }

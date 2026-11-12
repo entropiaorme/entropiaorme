@@ -240,7 +240,21 @@ fn panel_ink<P: Pixels>(image: &P, x: i32, y: i32, profile: &TextProfile) -> boo
 
 /// Every run of text-like ink inside `roi`, in reading order.
 pub fn text_runs<P: Pixels>(image: &P, roi: Rect, profile: &TextProfile) -> Vec<TextRun> {
-    let blobs = glyph_blobs(image, roi, profile, &|x, y| panel_ink(image, x, y, profile));
+    runs_of_ink(image, roi, profile, &|x, y| panel_ink(image, x, y, profile))
+}
+
+/// Every run of ink inside `roi`, in reading order, grouped as
+/// [`text_runs`] groups it, where `ink` says which pixels (in the frame's
+/// coordinates) are ink. For lettering on a panel that is itself bright,
+/// where brightness alone does not tell the lettering from the panel and
+/// the reader knows what does.
+pub fn runs_of_ink<P: Pixels>(
+    image: &P,
+    roi: Rect,
+    profile: &TextProfile,
+    ink: &dyn Fn(i32, i32) -> bool,
+) -> Vec<TextRun> {
+    let blobs = glyph_blobs(image, roi, profile, ink);
     let runs = join_runs(blobs, profile);
     let runs = if profile.merge_pieces {
         merge_lines(runs, profile)

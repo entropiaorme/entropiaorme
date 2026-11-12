@@ -34,8 +34,8 @@ mod game_ui_replay;
 
 use game_ui_replay::{
     coordinate_digit_loss, coordinates, field, pinned_frames, plates, resources, row_is,
-    sale_queue, sale_queue_digit_loss, same_skill, skill_vocabulary, skills, terminal, windows,
-    Corpus, Outcome, Replay, Shard, REPAIR_COST, TRADE_TOTAL,
+    sale_queue, sale_queue_digit_loss, same_skill, skill_vocabulary, skills, terminal, tool_bar,
+    windows, Corpus, Outcome, Replay, Shard, REPAIR_COST, TRADE_TOTAL,
 };
 
 fn profile() -> UiProfile {
@@ -736,4 +736,27 @@ plate_shards! {
     plates_shard_1: 1,
     plates_shard_2: 2,
     plates_shard_3: 3,
+}
+
+// The tool bar: every frame's bar in the state its labels give (or the
+// manifest names), each name read or its misreading counted, and the
+// lettering's masks apart between tools and alike within one.
+
+const TOOL_BAR_SHARDS: usize = 4;
+
+macro_rules! tool_bar_shards {
+    ($($name:ident: $shard:expr,)*) => {$(
+        #[test]
+        fn $name() {
+            let Some(r) = replay() else { return };
+            check(tool_bar(&r, Shard(Some(($shard, TOOL_BAR_SHARDS)))));
+        }
+    )*};
+}
+
+tool_bar_shards! {
+    tool_bar_shard_0: 0,
+    tool_bar_shard_1: 1,
+    tool_bar_shard_2: 2,
+    tool_bar_shard_3: 3,
 }

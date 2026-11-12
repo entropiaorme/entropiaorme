@@ -1003,6 +1003,55 @@ impl RadarScene {
     }
 }
 
+/// The mark at the start of a painted region's left half (see
+/// [`paint_region`]).
+pub const REGION_LEFT: [u8; 3] = [1, 1, 1];
+/// The mark at the start of a painted region's right half.
+pub const REGION_RIGHT: [u8; 3] = [2, 2, 2];
+
+/// Which half of a region drawn round the coordinates a crop is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionHalf {
+    Left,
+    Right,
+}
+
+/// Paint `rect` of `image` as a region the player drew round the
+/// coordinates, for a stand-in recogniser rather than as lettering: bright
+/// columns with a dark gap at the middle, so the region's reader splits it
+/// there, and a mark at the start of each half ([`REGION_LEFT`] at the
+/// region's left edge, [`REGION_RIGHT`] just past the middle), so the
+/// stand-in can tell by [`region_half`] which half it is handed. `rect`
+/// is at least a dozen columns wide.
+pub fn paint_region(image: &mut BgrImage, rect: Rect) {
+    let w = rect.width();
+    assert!(w >= 12, "a painted region is at least a dozen columns wide");
+    let (middle, gap) = (w / 2, w / 12);
+    fill(image, rect, [200, 200, 200]);
+    let column = |x: i32| Rect::new(rect.x0 + x, rect.y0, rect.x0 + x, rect.y1);
+    fill(image, column(0), REGION_LEFT);
+    for x in middle - gap..middle {
+        fill(image, column(x), REGION_LEFT);
+    }
+    for x in middle..middle + gap {
+        fill(image, column(x), REGION_RIGHT);
+    }
+}
+
+/// The half of a painted region `crop` is, by the mark it starts with;
+/// `None` for any other crop.
+pub fn region_half(crop: &BgrImage) -> Option<RegionHalf> {
+    let first = crop.data.get(..3)?;
+    let rgb = [first[2], first[1], first[0]];
+    if rgb == REGION_LEFT {
+        Some(RegionHalf::Left)
+    } else if rgb == REGION_RIGHT {
+        Some(RegionHalf::Right)
+    } else {
+        None
+    }
+}
+
 // A drawn auction sell window: the inventory list on the left, and the
 // sell queue's ruled table beside it, each value drawn as a block of ink
 // in its own colour (see [`Lettering`]) at the brightness the client

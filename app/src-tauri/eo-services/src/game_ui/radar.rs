@@ -32,17 +32,21 @@
 //! Their radii, found from the brightness round the centre, and the
 //! distances read from their labels give the map's scale; the radii must
 //! be in the proportion of the distances read, or no scale is given.
+//!
+//! Where the radar cannot be found on the player's setup, a region the
+//! player has drawn round the coordinates by hand is read instead (see
+//! [`read_region_coordinates`]), with the same grammar and bounds.
 
 use serde::Deserialize;
 
 use crate::game_ui::geometry::BgrImage;
 
 use super::field::{read_run, Recogniser};
-use super::geometry::{chroma, Pixels, Rect, TURN_DEGREES};
+use super::geometry::{chroma, crop, Pixels, Rect, TURN_DEGREES};
 use super::profile::UiProfile;
 use super::text::{scenery_runs, stroke_ink, StrokeProfile, TextProfile, TextRun};
 use super::validate::{distance_labels, labelled_integer};
-use super::window::find_windows;
+use super::window::{find_windows, window_edge_in};
 
 /// What the radar looks like, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
@@ -264,6 +268,10 @@ pub struct CoordinatesProfile {
     /// Largest share by which the ratio of the two values' widths may
     /// differ from what their labels and digit counts predict.
     pub pair_tolerance: f64,
+    /// A region the player drew round the coordinates by hand is split
+    /// between its two values at the widest gap in its middle third; one
+    /// narrower than this many columns is split at its middle.
+    pub region_split_width: usize,
 }
 
 /// The radar found in a frame.
@@ -780,10 +788,7 @@ pub fn ring_scale(
     recogniser: &dyn Recogniser,
 ) -> Option<RingScale> {
     let rings = &profile.radar.rings;
-    let windows: Vec<Rect> = find_windows(image, &profile.chrome)
-        .into_iter()
-        .map(|w| w.rect)
-        .collect();
+    let windows = windows_near(image, radar, profile);
     let radii = ring_radii(image, radar, &windows, rings)?;
     let reach = rings.label_reach * radar.radius;
     let strip = Rect::new(
@@ -861,11 +866,47 @@ pub fn rings_found(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> bool
 /// the client's windows are left out. `None` when too little of a circle
 /// is in view to tell, or a ring lies at an end of the span searched.
 pub fn find_rings(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> Option<Vec<f64>> {
-    let windows: Vec<Rect> = find_windows(image, &profile.chrome)
+    let windows = windows_near(image, radar, profile);
+    ring_radii(image, radar, &windows, &profile.radar.rings)
+}
+
+/// The client's windows, as a reader of `area` must know them: none when
+/// no window's frame shows in `area` grown by the padding, or else every
+/// window in the frame.
+///
+/// A window that reaches into `area` without covering all of it has an
+/// edge there or in the padding: the padding is the shortest stretch of a
+/// window's edge the window search sees, so a window only a corner of
+/// which reaches `area` still shows that much of its edge round the
+/// corner. So `area` grown by the padding is looked at first for any such
+/// edge; finding none, no window can bear on a read of `area` but one
+/// covering all of it, and the search of the whole frame, which costs many
+/// times the rest of the read, is not made. When one shows, the whole
+/// frame is searched: a window only part of which lies in `area` is told
+/// from the scene by all of it, and a search of `area` alone would miss
+/// one too little of which lies there.
+fn windows_round(image: &BgrImage, area: Rect, profile: &UiProfile) -> Vec<Rect> {
+    let chrome = &profile.chrome;
+    let frame = Rect::new(0, 0, image.width() - 1, image.height() - 1);
+    let around = area.padded(chrome.min_edge_run).intersect(&frame);
+    if !around.is_some_and(|around| window_edge_in(&crop(image, around), chrome)) {
+        return Vec::new();
+    }
+    find_windows(image, chrome)
         .into_iter()
         .map(|w| w.rect)
-        .collect();
-    ring_radii(image, radar, &windows, &profile.radar.rings)
+        .collect()
+}
+
+/// The client's windows, as a reader of `radar` must know them (see
+/// [`windows_round`]). Everything a reader of the radar asks of the
+/// windows (whether one covers the coordinates, the planet's name or the
+/// ring labels, and which ink is a window's rather than the scene's) lies
+/// in the radar's neighbourhood (see [`Radar::neighbourhood`]), and a
+/// window covering all of it covers the disc, when there is no radar to
+/// read.
+fn windows_near(image: &BgrImage, radar: &Radar, profile: &UiProfile) -> Vec<Rect> {
+    windows_round(image, radar.neighbourhood(&profile.radar), profile)
 }
 
 /// The planet's name printed above `radar`, when it reads as exactly one
@@ -894,10 +935,7 @@ pub fn read_planet_label(
         (top - label.band[0] * r).ceil() as i32,
     )
     .intersect(&Rect::new(0, 0, image.width() - 1, image.height() - 1))?;
-    let windows: Vec<Rect> = find_windows(image, &profile.chrome)
-        .into_iter()
-        .map(|w| w.rect)
-        .collect();
+    let windows = windows_near(image, radar, profile);
     let runs = scenery_runs(image, band, &label.lettering, &label.stroke, &windows);
     let mut centred = runs.iter().filter(|run| {
         let middle = (run.rect.x0 + run.rect.x1) as f64 / 2.0;
@@ -970,6 +1008,8 @@ pub enum CoordError {
     OutOfBounds { text: String },
     #[error("the values read as {lon:?} and {lat:?}, but their lettering is not as wide as that")]
     WidthsDisagree { lon: String, lat: String },
+    #[error("the region drawn round the coordinates is not wholly inside the frame")]
+    RegionOutsideFrame,
 }
 
 /// One coordinate read and validated.
@@ -1259,10 +1299,7 @@ pub fn read_coordinates(
     recogniser: &dyn Recogniser,
 ) -> Result<Coordinates, CoordError> {
     let radar = find_radar(image, profile).ok_or(CoordError::RadarNotFound)?;
-    let windows: Vec<Rect> = find_windows(image, &profile.chrome)
-        .into_iter()
-        .map(|w| w.rect)
-        .collect();
+    let windows = windows_near(image, &radar, profile);
     let coords = &profile.radar.coordinates;
     let read = |value: &CoordinateProfile,
                 range: (i64, i64)|
@@ -1288,12 +1325,170 @@ pub fn read_coordinates(
     Ok(Coordinates { radar, lon, lat })
 }
 
+/// The coordinates read from a region the player drew round them by
+/// hand, each read or refused on its own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RegionCoordinates {
+    pub lon: Result<Coordinate, CoordError>,
+    pub lat: Result<Coordinate, CoordError>,
+}
+
+/// The column of `strip` it splits at between its two values: the centre
+/// of the widest run of dark columns in its middle third, or its middle
+/// when it is too narrow to search or shows no such run.
+///
+/// The two values sit in the region's left and right halves with empty
+/// space between them, and cutting through that space rather than at the
+/// middle keeps the cut off the digits: the values are unpadded, so one
+/// can be much wider than the other. The search is kept to the middle
+/// third so the gap between a label and its own value cannot win, and a
+/// region with no gap to tell (a blank capture, a uniform one) is cut at
+/// its middle rather than at a boundary made up.
+fn split_column(strip: &BgrImage, coords: &CoordinatesProfile) -> usize {
+    let middle = strip.w / 2;
+    if strip.w < coords.region_split_width || strip.h == 0 {
+        return middle;
+    }
+    // Each column's brightness, summed over its channels and averaged over
+    // its rows: only compared with the others, so never divided by the
+    // number of channels.
+    let column: Vec<f64> = (0..strip.w)
+        .map(|x| {
+            let total: f64 = (0..strip.h)
+                .flat_map(|y| {
+                    let i = (y * strip.w + x) * 3;
+                    strip.data[i..i + 3].iter().map(|v| f64::from(*v))
+                })
+                .sum();
+            total / strip.h as f64
+        })
+        .collect();
+    let lo = column.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = column.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if hi - lo <= f64::EPSILON {
+        return middle;
+    }
+    let threshold = (lo + hi) / 2.0;
+    let (start, end) = (strip.w / 3, strip.w - strip.w / 3);
+    let mut widest: Option<(usize, usize)> = None;
+    let mut run: Option<usize> = None;
+    let close = |run: &mut Option<usize>, at: usize, widest: &mut Option<(usize, usize)>| {
+        if let Some(from) = run.take() {
+            if widest.is_none_or(|(_, longest)| at - from > longest) {
+                *widest = Some((from, at - from));
+            }
+        }
+    };
+    for (x, level) in column.iter().enumerate().take(end).skip(start) {
+        if *level < threshold {
+            run.get_or_insert(x);
+        } else {
+            close(&mut run, x, &mut widest);
+        }
+    }
+    close(&mut run, end, &mut widest);
+    widest.map_or(middle, |(from, length)| from + length / 2)
+}
+
+/// `strip` split side by side at its gap (see [`split_column`]), each half
+/// as its rectangle within `strip`. Both halves hold at least a column.
+fn split_halves(strip: &BgrImage, coords: &CoordinatesProfile) -> (Rect, Rect) {
+    let split = split_column(strip, coords).clamp(1, strip.w - 1) as i32;
+    let bottom = strip.h as i32 - 1;
+    (
+        Rect::new(0, 0, split - 1, bottom),
+        Rect::new(split, 0, strip.w as i32 - 1, bottom),
+    )
+}
+
+/// Read the coordinates from `region` of `image`, a rectangle the player
+/// drew round them by hand, each within `bounds`, the coordinates of the
+/// planet the player is on. This is what is read when the radar is not
+/// found.
+///
+/// The client prints `LON <value>` on the region's left and `LAT <value>`
+/// on its right, so the region is split at the gap between them and each
+/// half is read whole on its own. The grammar and the planet's bounds
+/// apply as they do under the radar: each half must read as its label and
+/// one run of digits, inside the planet, and two halves that read alike
+/// did not tell the values apart. The width and placement checks cannot
+/// apply here: the region is a rectangle the player drew, not the disc the
+/// lettering is aligned with and measured against, so a value cut short at
+/// the region's edge is refused only where the bounds tell it apart. A
+/// window of the client over any of the region covers both values: what
+/// it hides cannot be told from the region alone.
+///
+/// `Err` when the region is not wholly inside `image`, or there is no
+/// recogniser.
+pub fn read_region_coordinates(
+    image: &BgrImage,
+    region: Rect,
+    profile: &UiProfile,
+    bounds: &CoordinateBounds,
+    recogniser: &dyn Recogniser,
+) -> Result<RegionCoordinates, CoordError> {
+    let frame = Rect::new(0, 0, image.width() - 1, image.height() - 1);
+    if region.intersect(&frame) != Some(region) {
+        return Err(CoordError::RegionOutsideFrame);
+    }
+    let refused = |refusal: CoordError| RegionCoordinates {
+        lon: Err(refusal.clone()),
+        lat: Err(refusal),
+    };
+    // Too narrow to split between two values: nothing is printed there.
+    if region.width() < 2 {
+        return Ok(refused(CoordError::NotFound));
+    }
+    if windows_round(image, region, profile)
+        .iter()
+        .any(|window| window.intersect(&region).is_some())
+    {
+        return Ok(refused(CoordError::Covered));
+    }
+    let coords = &profile.radar.coordinates;
+    let strip = crop(image, region);
+    let halves = split_halves(&strip, coords);
+    let read = |half: Rect| {
+        recogniser
+            .read(&crop(&strip, half))
+            .map(|(text, _)| (text, half.offset(region.x0, region.y0)))
+            .ok_or(CoordError::NoRecogniser)
+    };
+    let (lon, lat) = (read(halves.0)?, read(halves.1)?);
+    let separated = lon.0 != lat.0;
+    let value = |(raw, rect): (String, Rect), value: &CoordinateProfile, range: (i64, i64)| {
+        if !separated {
+            return Err(CoordError::Ambiguous);
+        }
+        let invalid = || CoordError::Invalid { raw: raw.clone() };
+        let parsed = labelled_integer(&raw, &value.label, coords.digits).ok_or_else(invalid)?;
+        let number = parsed
+            .number
+            .and_then(|n| u32::try_from(n as u64).ok().filter(|v| *v as f64 == n))
+            .ok_or_else(invalid)?;
+        if (number as i64) < range.0 || (number as i64) > range.1 {
+            return Err(CoordError::OutOfBounds { text: parsed.text });
+        }
+        Ok(Coordinate {
+            value: number,
+            text: parsed.text,
+            raw,
+            rect,
+        })
+    };
+    Ok(RegionCoordinates {
+        lon: value(lon, &coords.lon, bounds.lon),
+        lat: value(lat, &coords.lat, bounds.lat),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::game_ui::test_support::{
-        blank, bundled_profile, draw_radar, draw_window, fill, put, scenery, within, Printed,
-        RadarScene, DOT, HEIGHT, MAP, PITCH, RIM, RINGS, RING_LABELS, SHADOW,
+        blank, bundled_profile, draw_radar, draw_window, fill, paint_region, put, region_half,
+        scenery, within, Printed, RadarScene, RegionHalf, DOT, HEIGHT, MAP, PITCH, RIM, RINGS,
+        RING_LABELS, SHADOW,
     };
 
     fn assert_found(found: Option<Radar>, centre: (i32, i32), radius: i32) {
@@ -1851,6 +2046,62 @@ mod tests {
     }
 
     #[test]
+    fn windows_are_searched_for_only_when_one_shows_round_the_radar() {
+        let profile = bundled_profile();
+        let (centre, radius) = ((900, 200), 113);
+        let mut scene = scene_with_coordinates(centre, radius, "LON 67739", "LAT 87740");
+        let radar = find_radar(&scene.image, &profile).expect("the radar is found");
+        let area = radar.neighbourhood(&profile.radar);
+        // A window well away from the radar has no bearing on the read, and
+        // no search is made for it.
+        let far = Rect::new(20, 300, area.x0 - 2 * profile.chrome.min_edge_run, 740);
+        draw_window(&mut scene.image, far);
+        assert!(find_windows(&scene.image, &profile.chrome)
+            .iter()
+            .any(|w| w.rect == far));
+        assert_eq!(windows_near(&scene.image, &radar, &profile), Vec::new());
+        assert_eq!(
+            values(&read(&scene).expect("the radar is found")),
+            (Ok(67739), Ok(87740))
+        );
+        // A window only the corner of which reaches the band under the
+        // disc's right half is found whole, by the search of the whole
+        // frame its edge there calls for, and the value under it refused.
+        let near = Rect::new(centre.0 + 20, centre.1 + radius + 8, 1270, 740);
+        assert!(near.x1 > area.x1 && near.y1 > area.y1);
+        draw_window(&mut scene.image, near);
+        let found = windows_near(&scene.image, &radar, &profile);
+        assert!(found.contains(&near) && found.contains(&far), "{found:?}");
+        assert_eq!(
+            values(&read(&scene).expect("the radar is found")),
+            (Ok(67739), Err(CoordError::Covered))
+        );
+    }
+
+    #[test]
+    fn a_window_whose_edge_shows_only_in_the_padding_is_still_found() {
+        let profile = bundled_profile();
+        let coords = &profile.radar.coordinates;
+        let (centre, radius) = ((900, 200), 97);
+        let mut scene = scene_with_coordinates(centre, radius, "LON 67739", "LAT 87740");
+        let clean = read(&scene).expect("the radar is found");
+        let lat = clean.lat.as_ref().expect("the latitude reads").rect;
+        let area = clean.radar.neighbourhood(&profile.radar);
+        // The corner of a window just inside where LAT's guard reaches:
+        // right of its digits and below them, clear of their ink.
+        let reach = (coords.lettering.join_factor * lat.height() as f32).ceil() as i32;
+        let corner = (lat.x1 + reach - 1, lat.y1 + coords.guard_rows - 1);
+        // Of its edges, the stretches inside the neighbourhood are each
+        // shorter than the window search can see; only the padding shows
+        // enough of them.
+        let run = profile.chrome.min_edge_run;
+        assert!(area.x1 - corner.0 + 1 < run && area.y1 - corner.1 + 1 < run);
+        draw_window(&mut scene.image, Rect::new(corner.0, corner.1, 1279, 759));
+        let got = read(&scene).expect("the radar is found");
+        assert_eq!(values(&got), (Ok(67739), Err(CoordError::Covered)));
+    }
+
+    #[test]
     fn a_band_run_off_the_screen_is_refused() {
         let scene = scene_with_coordinates((640, 600), 113, "LON 67739", "LAT 87740");
         let got = read(&scene).expect("the radar is found");
@@ -2007,5 +2258,251 @@ mod tests {
         edge.radar((640, 380), 113, &[26.0, span_end]);
         let radar = find_radar(&edge.image, &profile).expect("the radar is found");
         assert_eq!(find_rings(&edge.image, &radar, &profile), None);
+    }
+
+    /// A frame with a region painted at `REGION` for a stand-in that reads
+    /// its halves as `left` and `right`.
+    const REGION: Rect = Rect {
+        x0: 200,
+        y0: 100,
+        x1: 319,
+        y1: 123,
+    };
+
+    fn region_scene() -> BgrImage {
+        let mut image = scenery(640, 400, 3);
+        paint_region(&mut image, REGION);
+        image
+    }
+
+    fn halves(
+        left: &'static str,
+        right: &'static str,
+    ) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
+        move |crop: &BgrImage| {
+            let text = match region_half(crop) {
+                Some(RegionHalf::Left) => left,
+                Some(RegionHalf::Right) => right,
+                None => "",
+            };
+            Some((text.to_string(), 0.93))
+        }
+    }
+
+    /// The coordinates of a planet that holds every value read here.
+    const PLANET: CoordinateBounds = CoordinateBounds {
+        lon: (16384, 90112),
+        lat: (24576, 98304),
+    };
+
+    fn read_region(
+        left: &'static str,
+        right: &'static str,
+    ) -> (Result<u32, CoordError>, Result<u32, CoordError>) {
+        let got = read_region_coordinates(
+            &region_scene(),
+            REGION,
+            &bundled_profile(),
+            &PLANET,
+            &halves(left, right),
+        )
+        .expect("a recogniser is given");
+        (got.lon.map(|c| c.value), got.lat.map(|c| c.value))
+    }
+
+    #[test]
+    fn a_region_drawn_by_hand_is_read_half_by_half() {
+        let got = read_region_coordinates(
+            &region_scene(),
+            REGION,
+            &bundled_profile(),
+            &PLANET,
+            &halves("LON 61234", "LAT 75456"),
+        )
+        .expect("a recogniser is given");
+        let lon = got.lon.expect("the longitude reads");
+        let lat = got.lat.expect("the latitude reads");
+        assert_eq!((lon.value, lon.text.as_str()), (61234, "LON 61234"));
+        assert_eq!((lat.value, lat.text.as_str()), (75456, "LAT 75456"));
+        // Each half is where it lies in the frame, split at the gap.
+        assert_eq!(lon.rect, Rect::new(200, 100, 259, 123));
+        assert_eq!(lat.rect, Rect::new(260, 100, 319, 123));
+    }
+
+    #[test]
+    fn a_region_is_held_to_the_grammar_and_the_planets_bounds() {
+        let invalid = |raw: &str| {
+            Err(CoordError::Invalid {
+                raw: raw.to_string(),
+            })
+        };
+        let outside = |text: &str| {
+            Err(CoordError::OutOfBounds {
+                text: text.to_string(),
+            })
+        };
+        for (left, right, want) in [
+            // A misread label, a value split in two, and the labels the
+            // wrong way round.
+            ("L0N 61234", "LAT 75456", (invalid("L0N 61234"), Ok(75456))),
+            (
+                "LON 612 34",
+                "LAT 75456",
+                (invalid("LON 612 34"), Ok(75456)),
+            ),
+            (
+                "LAT 61234",
+                "LON 75456",
+                (invalid("LAT 61234"), invalid("LON 75456")),
+            ),
+            // A digit short or long reads as a number outside the planet,
+            // and one longer than any coordinate is not one.
+            ("LON 6123", "LAT 75456", (outside("LON 6123"), Ok(75456))),
+            (
+                "LON 61234",
+                "LAT 754567",
+                (Ok(61234), outside("LAT 754567")),
+            ),
+            (
+                "LON 6123456",
+                "LAT 75456",
+                (invalid("LON 6123456"), Ok(75456)),
+            ),
+            // Halves that read alike did not tell the values apart.
+            (
+                "LON 61234 LAT 75456",
+                "LON 61234 LAT 75456",
+                (Err(CoordError::Ambiguous), Err(CoordError::Ambiguous)),
+            ),
+        ] {
+            assert_eq!(read_region(left, right), want, "{left:?} {right:?}");
+        }
+    }
+
+    #[test]
+    fn a_region_the_frame_does_not_hold_or_without_a_recogniser_is_not_read() {
+        let profile = bundled_profile();
+        let image = region_scene();
+        let reader = halves("LON 61234", "LAT 75456");
+        for region in [Rect::new(560, 100, 679, 123), Rect::new(-10, 100, 109, 123)] {
+            assert_eq!(
+                read_region_coordinates(&image, region, &profile, &PLANET, &reader),
+                Err(CoordError::RegionOutsideFrame),
+                "{region:?}"
+            );
+        }
+        let narrow = read_region_coordinates(
+            &image,
+            Rect::new(200, 100, 200, 123),
+            &profile,
+            &PLANET,
+            &reader,
+        )
+        .expect("a recogniser is given");
+        assert_eq!(
+            (narrow.lon, narrow.lat),
+            (Err(CoordError::NotFound), Err(CoordError::NotFound))
+        );
+        let none = |_: &BgrImage| None;
+        assert_eq!(
+            read_region_coordinates(&image, REGION, &profile, &PLANET, &none),
+            Err(CoordError::NoRecogniser)
+        );
+    }
+
+    #[test]
+    fn a_region_a_window_lies_over_is_refused_as_covered() {
+        let profile = bundled_profile();
+        let reader = halves("LON 61234", "LAT 75456");
+        let covered = (Err(CoordError::Covered), Err(CoordError::Covered));
+        // A window over the latitude's half, over only the region's corner,
+        // and one whose edge alone shows in the padding round the region
+        // while it reaches the region itself.
+        for window in [
+            Rect::new(280, 60, 600, 300),
+            Rect::new(310, 118, 600, 300),
+            Rect::new(100, 115, 205, 300),
+        ] {
+            let mut image = region_scene();
+            draw_window(&mut image, window);
+            let got = read_region_coordinates(&image, REGION, &profile, &PLANET, &reader)
+                .expect("a recogniser is given");
+            assert_eq!((got.lon, got.lat), covered, "{window:?}");
+        }
+        // A window away from the region does not bear on it.
+        let mut image = region_scene();
+        draw_window(&mut image, Rect::new(400, 200, 630, 390));
+        let got = read_region_coordinates(&image, REGION, &profile, &PLANET, &reader)
+            .expect("a recogniser is given");
+        assert_eq!(
+            (got.lon.map(|c| c.value), got.lat.map(|c| c.value)),
+            (Ok(61234), Ok(75456))
+        );
+    }
+
+    /// A one-row strip whose columns take the given brightnesses: the
+    /// column-gap geometry `split_column` reads, without any pixels
+    /// standing for glyphs.
+    fn columns(brightness: &[u8]) -> BgrImage {
+        BgrImage {
+            data: brightness.iter().flat_map(|b| [*b, *b, *b]).collect(),
+            h: 1,
+            w: brightness.len(),
+        }
+    }
+
+    fn split(brightness: &[u8]) -> usize {
+        split_column(&columns(brightness), &bundled_profile().radar.coordinates)
+    }
+
+    #[test]
+    fn the_split_cuts_the_gap_between_the_halves_not_the_midpoint() {
+        // A wide longitude and a narrow latitude: bright through column
+        // 7, a two-column gap, then bright again. The midpoint (7) sits
+        // inside the left value's digits; the gap's centre is 9.
+        let mut brightness = [200u8; 15];
+        brightness[8] = 10;
+        brightness[9] = 10;
+        assert_eq!(split(&brightness), 9);
+    }
+
+    #[test]
+    fn a_gap_outside_the_middle_third_cannot_win() {
+        // A wider blank run at the strip's left edge (outside the
+        // search window) must not drag the split off the real gap.
+        let mut brightness = [200u8; 15];
+        for column in brightness.iter_mut().take(5) {
+            *column = 10;
+        }
+        brightness[8] = 10;
+        brightness[9] = 10;
+        assert_eq!(split(&brightness), 9);
+    }
+
+    #[test]
+    fn a_strip_with_no_discernible_gap_falls_back_to_the_midpoint() {
+        // Uniform pixels: no contrast to read a boundary from.
+        assert_eq!(split(&[128u8; 15]), 7);
+        // Too narrow to search at all: the profile's narrowest is six
+        // columns, and five with a gap off the middle are split there.
+        assert_eq!(bundled_profile().radar.coordinates.region_split_width, 6);
+        assert_eq!(split(&[10, 200, 10, 200]), 2);
+        assert_eq!(split(&[200, 200, 200, 10, 200]), 2);
+    }
+
+    #[test]
+    fn the_halves_carry_the_pixels_either_side_of_the_split() {
+        let mut brightness = [200u8; 15];
+        brightness[8] = 10;
+        brightness[9] = 10;
+        let strip = columns(&brightness);
+        let (left, right) = split_halves(&strip, &bundled_profile().radar.coordinates);
+        assert_eq!((left.width(), right.width()), (9, 6));
+        assert_eq!(left.x1 + 1, right.x0, "no column is dropped or duplicated");
+        assert_eq!(right.x1 + 1, strip.w as i32);
+        // The gap's first column lands in the left half, its second in
+        // the right: the cut runs through the dead space.
+        assert_eq!(crop(&strip, left).data[8 * 3], 10);
+        assert_eq!(crop(&strip, right).data[0], 10);
     }
 }

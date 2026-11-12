@@ -185,6 +185,12 @@ pub enum NavigationPositionStatus {
     Superseded,
     /// The position poll is not reading; `stopped` says why.
     PollStopped,
+    /// The poll was asked to read sooner than its least interval after its
+    /// last read; nothing was captured.
+    TooSoon,
+    /// The poll was asked to read while the game is not the window in
+    /// front; nothing was captured.
+    GameNotFocused,
     Ambiguous,
     OutOfTolerance,
 }
@@ -494,6 +500,8 @@ fn position_to_dto(
             });
             (NavigationPositionStatus::PollStopped, None)
         }
+        PositionUpdate::TooSoon => (NavigationPositionStatus::TooSoon, None),
+        PositionUpdate::GameNotFocused => (NavigationPositionStatus::GameNotFocused, None),
         PositionUpdate::Ambiguous(run) => (NavigationPositionStatus::Ambiguous, Some(run)),
         PositionUpdate::OutOfTolerance(run) => {
             (NavigationPositionStatus::OutOfTolerance, Some(run))
@@ -1175,6 +1183,9 @@ pub enum CoordScanRefusal {
     RadarNotFound,
     /// The radar names another planet than the one the read is for.
     OtherPlanet,
+    /// No radar is on the screen, and the region drawn by hand is not
+    /// wholly inside the game window: it must be drawn again.
+    RegionOutsideWindow,
     /// At least one value was refused; `lon` and `lat` say why.
     NotRead,
 }
@@ -1234,6 +1245,7 @@ impl From<ServiceCoordRefusal> for CoordRefusal {
             ServiceCoordRefusal::CaptureNotAllowed => only(CoordScanRefusal::CaptureNotAllowed),
             ServiceCoordRefusal::RadarNotFound => only(CoordScanRefusal::RadarNotFound),
             ServiceCoordRefusal::OtherPlanet => only(CoordScanRefusal::OtherPlanet),
+            ServiceCoordRefusal::RegionOutsideWindow => only(CoordScanRefusal::RegionOutsideWindow),
             ServiceCoordRefusal::NotRead { lon, lat } => CoordRefusal {
                 reason: CoordScanRefusal::NotRead,
                 lon: lon.map(CoordValueRefusal::from).into(),
@@ -1764,6 +1776,10 @@ mod tests {
             (ServiceCoordRefusal::CaptureNotAllowed, "captureNotAllowed"),
             (ServiceCoordRefusal::RadarNotFound, "radarNotFound"),
             (ServiceCoordRefusal::OtherPlanet, "otherPlanet"),
+            (
+                ServiceCoordRefusal::RegionOutsideWindow,
+                "regionOutsideWindow",
+            ),
         ] {
             assert_eq!(
                 serde_json::to_value(CoordScanResult::from(Err(refusal))).unwrap(),

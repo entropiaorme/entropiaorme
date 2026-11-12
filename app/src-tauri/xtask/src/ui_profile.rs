@@ -117,6 +117,16 @@ const NOT_GATED: &[(&str, &str, &str)] = &[
         "where the pointer is",
     ),
     (
+        "app/src-tauri/eo-services/src/eu_window.rs",
+        "keys_reach_game",
+        "what a focus state means for a key press",
+    ),
+    (
+        "app/src-tauri/eo-services/src/eu_window.rs",
+        "game_in_view",
+        "what a focus state means for a read the app makes on its own",
+    ),
+    (
         "app/src-tauri/eo-services/src/ocr_engine.rs",
         "load_bgr_png",
         "decodes an image file",
@@ -221,12 +231,7 @@ recogniser seam the readers are handed",
 
 /// Readers not yet on the pipeline: debt, kept visible here until it is
 /// paid. Same shape and the same ratchet as [`ALLOWED`].
-const TO_MIGRATE: &[Allowed] = &[Allowed {
-    path: "app/src-tauri/entropia-orme/src/composition.rs",
-    names: &["capture_region_bgr"],
-    reason: "the hand-drawn coordinate region: coord_capture reads a raw screen rectangle \
-and hands it to the recogniser itself, not through game_ui",
-}];
+const TO_MIGRATE: &[Allowed] = &[];
 
 /// The readers whose code holds no layout numbers.
 const READERS_ROOT: &str = "app/src-tauri/eo-services/src/game_ui/";

@@ -9,10 +9,6 @@ use std::sync::Arc;
 
 use crate::game_ui::geometry::{BgrImage, Rect};
 
-/// A screen rectangle, given as `x`, `y`, width and height in screen
-/// coordinates, captured as BGR pixels; `None` when the capture fails.
-pub type RegionCapture = Arc<dyn Fn(i64, i64, i64, i64) -> Option<BgrImage> + Send + Sync>;
-
 /// One image to the recogniser's `(text, confidence)`; `None` when this
 /// image could not be read: there is no recogniser, or the recogniser
 /// failed on it.

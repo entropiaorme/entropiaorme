@@ -37,13 +37,10 @@ use crate::clock::Clock;
 use crate::game_ui::geometry::{crop, BgrImage, Rect};
 use crate::game_ui::profile::UiProfile;
 use crate::game_ui::radar::{
-    find_radar, read_coordinates, read_planet_label, ring_scale, rings_found, CoordError,
-    Coordinate, CoordinateBounds, CoordinateProfile, Coordinates, Radar,
+    find_radar, read_coordinates, read_planet_label, read_region_coordinates, ring_scale,
+    rings_found, CoordError, Coordinate, CoordinateBounds, Coordinates, Radar,
 };
-use crate::game_ui::seams::{
-    FrameArea, FrameReader, FrameUnavailable, GameFrame, GameWindowFrame, RegionCapture,
-};
-use crate::game_ui::validate::labelled_integer;
+use crate::game_ui::seams::{FrameArea, FrameReader, FrameUnavailable, GameFrame, GameWindowFrame};
 use crate::time::naive_to_epoch;
 
 /// The persisted capture rectangle, in screen coordinates.
@@ -85,10 +82,9 @@ pub struct CoordCaptureProviders {
     /// planet's radar from one under the planet asked for.
     pub planets: Vec<KnownPlanet>,
     pub cursor_position: CursorPosition,
-    /// The hand-drawn region, and the capture of the screen rectangle it
-    /// is read through.
+    /// The hand-drawn region, in screen coordinates. It is read from the
+    /// same capture of the game window the radar was not found in.
     pub region: RegionProvider,
-    pub capture_region: RegionCapture,
     pub persist_region: RegionSink,
     pub debug_dir: DebugDir,
 }
@@ -102,7 +98,6 @@ impl Default for CoordCaptureProviders {
             planets: Vec::new(),
             cursor_position: Arc::new(|| None),
             region: Arc::new(|| None),
-            capture_region: Arc::new(|_, _, _, _| None),
             persist_region: Arc::new(|_| Ok(())),
             debug_dir: Arc::new(|| None),
         }
@@ -200,7 +195,8 @@ impl From<&CoordError> for ValueRefusal {
             | CoordError::WrongWidth { .. }
             | CoordError::WidthsDisagree { .. }
             | CoordError::NoRecogniser
-            | CoordError::RadarNotFound => ValueRefusal::Unclear,
+            | CoordError::RadarNotFound
+            | CoordError::RegionOutsideFrame => ValueRefusal::Unclear,
         }
     }
 }
@@ -233,6 +229,12 @@ pub enum CoordRefusal {
     /// The radar names another planet than the one the read is for.
     #[error("the radar names another planet")]
     OtherPlanet,
+    /// The radar is not on the screen, and the region the player drew
+    /// round the coordinates by hand is not wholly inside the game window:
+    /// the window has moved or shrunk since, and the region must be drawn
+    /// again.
+    #[error("the region drawn round the coordinates is outside the game window")]
+    RegionOutsideWindow,
     /// At least one value was refused; each refused value says why, and a
     /// value that read is `None`, its number not kept.
     #[error("the coordinates were not read (longitude: {lon:?}, latitude: {lat:?})")]
@@ -638,7 +640,9 @@ impl CoordCaptureService {
                 outcome
             }
             None => match (self.providers.region)() {
-                Some(region) => self.read_region(region, profile, &bounds, read_text),
+                Some(region) => {
+                    self.read_region(region, &frame, profile, &bounds, &recogniser, read_at)
+                }
                 None => Err(CoordRefusal::RadarNotFound),
             },
         };
@@ -696,24 +700,23 @@ impl CoordCaptureService {
         }
     }
 
-    /// Read the hand-drawn region, used only when the radar was not found.
-    ///
-    /// The game prints `LON <value>` on the region's left and `LAT
-    /// <value>` on its right, so the region is split at the gap between
-    /// them and each half is read on its own. The grammar and the planet's
-    /// bounds apply as they do under the radar: each half must read as its
-    /// label and one run of digits, inside the planet. The width and
-    /// placement checks cannot apply here: the region is a rectangle the
-    /// player drew, not the disc the lettering is aligned with and measured
-    /// against, so a value cut short at the region's edge is refused only
-    /// where the bounds tell it apart. Nor can the planet's name be read:
-    /// it is printed above the radar, which is not in view.
+    /// Read the hand-drawn region, used only when the radar was not found,
+    /// from `frame`, the capture of the whole game window the radar was
+    /// looked for in, captured at `read_at`. The region is in screen
+    /// coordinates, as the player drew it, and is placed in the frame by
+    /// where the frame was taken from on the screen; a region the frame
+    /// does not wholly hold is refused as outside the game window. The reader
+    /// applies the grammar and the planet's bounds (see
+    /// [`read_region_coordinates`]). Nor can the planet's name be read: it
+    /// is printed above the radar, which is not in view.
     fn read_region(
         &self,
         region: CoordRegion,
+        frame: &GameFrame,
         profile: &UiProfile,
         bounds: &CoordinateBounds,
-        read_text: &FrameReader,
+        recogniser: &dyn crate::game_ui::field::Recogniser,
+        read_at: (f64, f64),
     ) -> Result<CoordReading, CoordRefusal> {
         if region.w < MIN_REGION_PX
             || region.h < MIN_REGION_PX
@@ -722,42 +725,38 @@ impl CoordCaptureService {
         {
             return Err(CoordRefusal::RadarNotFound);
         }
-        let strip = (self.providers.capture_region)(region.x, region.y, region.w, region.h)
-            .filter(|strip| strip.w >= 2)
-            .ok_or(CoordRefusal::CaptureFailed)?;
-        let read_at = (naive_to_epoch(self.clock.now()), self.clock.monotonic());
-        let (left, right) = split_columns(&strip);
-        let text = |half: &BgrImage| read_text(half).map(|(text, _)| text).unwrap_or_default();
-        let (lon_text, lat_text) = (text(&left), text(&right));
-        let coords = &profile.radar.coordinates;
-        // Two halves that read the same did not separate the values: each
-        // is seeing the whole strip.
-        let separated = lon_text != lat_text;
-        let value = |raw: &str, value: &CoordinateProfile, range: (i64, i64)| {
-            if !separated {
-                return Err(ValueRefusal::Unclear);
-            }
-            let parsed =
-                labelled_integer(raw, &value.label, coords.digits).ok_or(ValueRefusal::Unclear)?;
-            let number = parsed
-                .number
-                .and_then(|n| u32::try_from(n as u64).ok().filter(|v| *v as f64 == n))
-                .ok_or(ValueRefusal::Unclear)?;
-            if (number as i64) < range.0 || (number as i64) > range.1 {
-                return Err(ValueRefusal::OutOfBounds);
-            }
-            Ok(number)
+        let corner = |at: i64, origin: i64, length: i64| {
+            let from = i32::try_from(at - origin).ok()?;
+            Some((from, from.checked_add(i32::try_from(length).ok()? - 1)?))
+        };
+        let (Some((x0, x1)), Some((y0, y1))) = (
+            corner(region.x, frame.origin.0, region.w),
+            corner(region.y, frame.origin.1, region.h),
+        ) else {
+            return Err(CoordRefusal::RegionOutsideWindow);
+        };
+        let rect = Rect::new(x0, y0, x1, y1);
+        let coordinates = read_region_coordinates(&frame.image, rect, profile, bounds, recogniser)
+            .map_err(|error| match error {
+                CoordError::RegionOutsideFrame => CoordRefusal::RegionOutsideWindow,
+                _ => CoordRefusal::ReaderUnavailable,
+            })?;
+        let value = |value: &Result<Coordinate, CoordError>| {
+            value
+                .as_ref()
+                .map(|coordinate| coordinate.value)
+                .map_err(ValueRefusal::from)
         };
         let outcome = both(
-            value(&lon_text, &coords.lon, bounds.lon),
-            value(&lat_text, &coords.lat, bounds.lat),
+            value(&coordinates.lon),
+            value(&coordinates.lat),
             ReadSource::Region,
             read_at,
         );
         if outcome.is_err() {
             self.keep_evidence(
-                &strip,
-                &format!("longitude half: {lon_text:?}\nlatitude half: {lat_text:?}"),
+                &crop(&frame.image, rect),
+                &format!("{coordinates:#?}"),
                 &outcome,
             );
         }
@@ -1103,103 +1102,13 @@ impl CoordConfirmListener {
     }
 }
 
-/// The column the strip splits at: the centre of the widest blank run
-/// in its middle third, or the exact midpoint when the strip shows no
-/// such gap.
-///
-/// The two values sit in the strip's left and right halves with empty
-/// space between them, and cutting through that space rather than at a
-/// fixed midpoint keeps the boundary off the digits: the values are
-/// unpadded, so one can be much wider than the other. The search is
-/// confined to the middle third so the gap between a label and its own
-/// value cannot win, and a strip with no discernible gap (a blank
-/// capture, a uniform crop) falls back to the midpoint rather than
-/// inventing a boundary.
-fn split_column(frame: &BgrImage) -> usize {
-    let midpoint = frame.w / 2;
-    if frame.w < 6 || frame.h == 0 {
-        return midpoint;
-    }
-    let mut column_means = vec![0.0f64; frame.w];
-    for (x, mean) in column_means.iter_mut().enumerate() {
-        let mut total = 0.0;
-        for y in 0..frame.h {
-            let idx = (y * frame.w + x) * 3;
-            total += f64::from(frame.data[idx])
-                + f64::from(frame.data[idx + 1])
-                + f64::from(frame.data[idx + 2]);
-        }
-        *mean = total / (frame.h as f64 * 3.0);
-    }
-    let lo = column_means.iter().copied().fold(f64::INFINITY, f64::min);
-    let hi = column_means
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
-    if hi - lo <= f64::EPSILON {
-        return midpoint;
-    }
-    let threshold = (lo + hi) / 2.0;
-
-    let start = frame.w / 3;
-    let end = frame.w - frame.w / 3;
-    let mut best: Option<(usize, usize)> = None;
-    let mut run_start: Option<usize> = None;
-    let close = |run_start: &mut Option<usize>, at: usize, best: &mut Option<(usize, usize)>| {
-        if let Some(from) = run_start.take() {
-            let len = at - from;
-            if best.is_none_or(|(_, longest)| len > longest) {
-                *best = Some((from, len));
-            }
-        }
-    };
-    for (offset, mean) in column_means[start..end].iter().enumerate() {
-        let x = start + offset;
-        if *mean < threshold {
-            run_start.get_or_insert(x);
-        } else {
-            close(&mut run_start, x, &mut best);
-        }
-    }
-    close(&mut run_start, end, &mut best);
-
-    best.map_or(midpoint, |(from, len)| from + len / 2)
-}
-
-/// Split a frame into its two side-by-side readout halves. The caller
-/// guarantees a frame at least two columns wide, so both halves are
-/// non-empty.
-fn split_columns(frame: &BgrImage) -> (BgrImage, BgrImage) {
-    let split = split_column(frame).clamp(1, frame.w - 1);
-    let stride = frame.w * 3;
-    let cut = split * 3;
-    let mut left = Vec::with_capacity(frame.h * cut);
-    let mut right = Vec::with_capacity(frame.h * (stride - cut));
-    for row in frame.data.chunks_exact(stride) {
-        left.extend_from_slice(&row[..cut]);
-        right.extend_from_slice(&row[cut..]);
-    }
-    (
-        BgrImage {
-            data: left,
-            h: frame.h,
-            w: split,
-        },
-        BgrImage {
-            data: right,
-            h: frame.h,
-            w: frame.w - split,
-        },
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clock::MockClock;
     use crate::game_ui::test_support::{
-        bundled_profile, draw_window, scenery, window_frame, Printed, RadarScene, RINGS,
-        RING_LABELS,
+        bundled_profile, draw_window, paint_region, region_half, scenery, window_frame, Printed,
+        RadarScene, RegionHalf, RINGS, RING_LABELS,
     };
     use std::sync::atomic::AtomicUsize;
 
@@ -1267,33 +1176,34 @@ mod tests {
     struct Rig {
         service: Arc<CoordCaptureService>,
         window: Arc<Window>,
-        /// Screen rectangles captured for the hand-drawn region.
-        region_captures: Arc<AtomicUsize>,
+        /// Halves of the hand-drawn region handed to the recogniser.
+        region_reads: Arc<AtomicUsize>,
     }
 
     /// The service over `image` as the game window, read by `read_text`,
-    /// with `region` as the hand-drawn region (captured as `strip`).
+    /// with `region` as the hand-drawn region. The halves of a region
+    /// painted on `image` (see [`paint_region`]) handed to `read_text` are
+    /// counted.
     fn service_over(
         image: BgrImage,
         read_text: impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync + 'static,
-        region: Option<(CoordRegion, BgrImage)>,
+        region: Option<CoordRegion>,
     ) -> Rig {
         let window = Window::showing(image);
-        let region_captures = Arc::new(AtomicUsize::new(0));
-        let counted = region_captures.clone();
-        let stored = region.as_ref().map(|(region, _)| *region);
-        let strip = region.map(|(_, strip)| strip);
+        let region_reads = Arc::new(AtomicUsize::new(0));
+        let counted = region_reads.clone();
         let service = CoordCaptureService::new(
             CoordCaptureProviders {
                 frame: window.frame(),
                 profile: Some(Arc::new(bundled_profile())),
-                read_text: Some(Arc::new(read_text)),
+                read_text: Some(Arc::new(move |crop: &BgrImage| {
+                    if region_half(crop).is_some() {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                    }
+                    read_text(crop)
+                })),
                 planets: planets(),
-                region: Arc::new(move || stored),
-                capture_region: Arc::new(move |_, _, _, _| {
-                    counted.fetch_add(1, Ordering::SeqCst);
-                    strip.clone()
-                }),
+                region: Arc::new(move || region),
                 ..CoordCaptureProviders::default()
             },
             Arc::new(MockClock::new(None, 0.0)),
@@ -1301,7 +1211,7 @@ mod tests {
         Rig {
             service,
             window,
-            region_captures,
+            region_reads,
         }
     }
 
@@ -1416,16 +1326,7 @@ mod tests {
         }
     }
 
-    /// A two-column strip whose columns carry distinct bytes, so a
-    /// stand-in recogniser can tell its left half from its right.
-    fn strip() -> BgrImage {
-        BgrImage {
-            data: [vec![1u8; 3], vec![2u8; 3], vec![1u8; 3], vec![2u8; 3]].concat(),
-            h: 2,
-            w: 2,
-        }
-    }
-
+    /// The hand-drawn region, in screen coordinates.
     const REGION: CoordRegion = CoordRegion {
         x: 10,
         y: 10,
@@ -1433,16 +1334,24 @@ mod tests {
         h: 20,
     };
 
-    /// A recogniser that reads the strip's halves as `left` and `right`.
+    /// A game window with no radar, at the screen's corner, showing the
+    /// hand-drawn region's pixels painted where it was drawn.
+    fn region_window() -> BgrImage {
+        let mut image = scenery(640, 400, 3);
+        paint_region(&mut image, Rect::new(10, 10, 129, 29));
+        image
+    }
+
+    /// A recogniser that reads the region's halves as `left` and `right`.
     fn halves(
         left: &'static str,
         right: &'static str,
     ) -> impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync {
         move |crop: &BgrImage| {
-            let text = match crop.data.first() {
-                Some(1) => left,
-                Some(2) => right,
-                _ => "",
+            let text = match region_half(crop) {
+                Some(RegionHalf::Left) => left,
+                Some(RegionHalf::Right) => right,
+                None => "",
             };
             Some((text.to_string(), 0.93))
         }
@@ -1450,24 +1359,27 @@ mod tests {
 
     #[test]
     fn without_the_radar_or_a_region_nothing_is_read() {
-        let rig = service_over(scenery(640, 400, 3), halves("LON 61234", "LAT 75456"), None);
+        let rig = service_over(region_window(), halves("LON 61234", "LAT 75456"), None);
         assert_eq!(read(&rig.service), Err(CoordRefusal::RadarNotFound));
-        assert_eq!(rig.region_captures.load(Ordering::SeqCst), 0);
+        assert_eq!(rig.region_reads.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn the_hand_drawn_region_is_read_when_the_radar_is_not_found() {
         let rig = service_over(
-            scenery(640, 400, 3),
+            region_window(),
             halves("LON 61234", "LAT 75456"),
-            Some((REGION, strip())),
+            Some(REGION),
         );
         let reading = read(&rig.service).expect("the region reads");
         assert_eq!(
             (reading.lon, reading.lat, reading.source),
             (61234, 75456, ReadSource::Region)
         );
-        assert_eq!(rig.region_captures.load(Ordering::SeqCst), 1);
+        // Both halves are read from the capture of the game window the
+        // radar was looked for in: nothing else is captured.
+        assert_eq!(rig.region_reads.load(Ordering::SeqCst), 2);
+        assert_eq!(rig.window.asked(), vec![FrameArea::Whole]);
 
         // The same grammar and bounds apply to the region.
         for (left, right, want) in [
@@ -1493,11 +1405,7 @@ mod tests {
                 (Some(ValueRefusal::Unclear), Some(ValueRefusal::Unclear)),
             ),
         ] {
-            let rig = service_over(
-                scenery(640, 400, 3),
-                halves(left, right),
-                Some((REGION, strip())),
-            );
+            let rig = service_over(region_window(), halves(left, right), Some(REGION));
             assert_eq!(
                 read(&rig.service),
                 Err(CoordRefusal::NotRead {
@@ -1510,16 +1418,84 @@ mod tests {
     }
 
     #[test]
+    fn the_region_is_placed_by_where_the_game_window_is_on_the_screen() {
+        // The game window sits at (100, 50) on the screen: the region drawn
+        // at (110, 60) there is at (10, 10) in the window.
+        let image = region_window();
+        let clock = Arc::new(MockClock::new(None, 0.0));
+        let captured_at = (naive_to_epoch(clock.now()), clock.monotonic());
+        let slow = clock.clone();
+        let inner = Arc::new(halves("LON 61234", "LAT 75456"));
+        let service = |drawn: CoordRegion| {
+            let image = image.clone();
+            let slow = slow.clone();
+            let inner = inner.clone();
+            CoordCaptureService::new(
+                CoordCaptureProviders {
+                    frame: Arc::new(move |area| window_frame(&image, (100, 50), area)),
+                    profile: Some(Arc::new(bundled_profile())),
+                    // Recognising takes a while; the reading is as of the
+                    // capture.
+                    read_text: Some(Arc::new(move |crop: &BgrImage| {
+                        slow.advance(5.0).expect("forward");
+                        (*inner)(crop)
+                    })),
+                    region: Arc::new(move || Some(drawn)),
+                    ..CoordCaptureProviders::default()
+                },
+                clock.clone(),
+            )
+        };
+        let placed = CoordRegion {
+            x: 110,
+            y: 60,
+            ..REGION
+        };
+        let reading = read(&service(placed)).expect("the region reads");
+        assert_eq!(
+            (reading.lon, reading.lat, reading.source),
+            (61234, 75456, ReadSource::Region)
+        );
+        assert_eq!((reading.read_at, reading.read_mono), captured_at);
+        // Drawn where the window is not, or running off its edge, the
+        // region is outside the game window, and is not clamped to it.
+        for drawn in [
+            REGION,
+            CoordRegion {
+                x: 100 + 600,
+                y: 60,
+                ..REGION
+            },
+        ] {
+            assert_eq!(
+                read(&service(drawn)),
+                Err(CoordRefusal::RegionOutsideWindow),
+                "{drawn:?}"
+            );
+        }
+    }
+
+    #[test]
     fn a_refusal_under_a_found_radar_is_not_answered_from_the_region() {
         let mut scene = radar_scene("LON 67739", "LAT 87740");
         draw_window(&mut scene.image, Rect::new(300, 40, 900 - 113 + 60, 650));
-        let recogniser = scene.recogniser();
-        let rig = service_over(scene.image.clone(), recogniser, Some((REGION, strip())));
-        assert!(matches!(
+        // The region is drawn on the same screen, and would read cleanly.
+        paint_region(&mut scene.image, Rect::new(10, 10, 129, 29));
+        let radar = scene.recogniser();
+        let region = halves("LON 61234", "LAT 75456");
+        let recogniser = move |crop: &BgrImage| match region_half(crop) {
+            Some(_) => region(crop),
+            None => radar(crop),
+        };
+        let rig = service_over(scene.image.clone(), recogniser, Some(REGION));
+        assert_eq!(
             read(&rig.service),
-            Err(CoordRefusal::NotRead { lon: Some(_), .. })
-        ));
-        assert_eq!(rig.region_captures.load(Ordering::SeqCst), 0);
+            Err(CoordRefusal::NotRead {
+                lon: Some(ValueRefusal::Covered),
+                lat: None,
+            })
+        );
+        assert_eq!(rig.region_reads.load(Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -1588,7 +1564,7 @@ mod tests {
 
     #[test]
     fn an_automatic_read_never_asks_again_once_capture_was_not_permitted() {
-        let rig = service_over(scenery(640, 400, 3), halves("LON 61234", "LAT 75456"), None);
+        let rig = service_over(region_window(), halves("LON 61234", "LAT 75456"), None);
         *rig.window.shown.lock().unwrap() = Err(FrameUnavailable::CaptureNotStarted);
         for _ in 0..3 {
             assert_eq!(
@@ -1673,7 +1649,6 @@ mod tests {
                     profile: Some(Arc::new(bundled_profile())),
                     read_text: Some(Arc::new(|_| Some(("LON 61234".into(), 0.9)))),
                     region: Arc::new(|| Some(REGION)),
-                    capture_region: Arc::new(|_, _, _, _| Some(strip())),
                     ..CoordCaptureProviders::default()
                 },
                 Arc::new(MockClock::new(None, 0.0)),
@@ -1804,65 +1779,6 @@ mod tests {
 
     fn calibration_service(providers: CoordCaptureProviders) -> Arc<CoordCaptureService> {
         CoordCaptureService::new(providers, Arc::new(MockClock::new(None, 0.0)))
-    }
-
-    /// A one-row strip whose columns take the given brightnesses: the
-    /// column-gap geometry `split_column` reads, without any pixels
-    /// standing for glyphs.
-    fn columns(brightness: &[u8]) -> BgrImage {
-        BgrImage {
-            data: brightness.iter().flat_map(|b| [*b, *b, *b]).collect(),
-            h: 1,
-            w: brightness.len(),
-        }
-    }
-
-    #[test]
-    fn the_split_cuts_the_gap_between_the_halves_not_the_midpoint() {
-        // A wide longitude and a narrow latitude: bright through column
-        // 7, a two-column gap, then bright again. The midpoint (7) sits
-        // inside the left value's digits; the gap's centre is 9.
-        let mut brightness = [200u8; 15];
-        brightness[8] = 10;
-        brightness[9] = 10;
-        assert_eq!(split_column(&columns(&brightness)), 9);
-    }
-
-    #[test]
-    fn a_gap_outside_the_middle_third_cannot_win() {
-        // A wider blank run at the strip's left edge (outside the
-        // search window) must not drag the split off the real gap.
-        let mut brightness = [200u8; 15];
-        for column in brightness.iter_mut().take(5) {
-            *column = 10;
-        }
-        brightness[8] = 10;
-        brightness[9] = 10;
-        assert_eq!(split_column(&columns(&brightness)), 9);
-    }
-
-    #[test]
-    fn a_strip_with_no_discernible_gap_falls_back_to_the_midpoint() {
-        // Uniform pixels: no contrast to read a boundary from.
-        assert_eq!(split_column(&columns(&[128u8; 15])), 7);
-        // Too narrow to search at all.
-        assert_eq!(split_column(&columns(&[10, 200, 10, 200])), 2);
-    }
-
-    #[test]
-    fn the_halves_carry_the_pixels_either_side_of_the_split() {
-        let mut brightness = [200u8; 15];
-        brightness[8] = 10;
-        brightness[9] = 10;
-        let (left, right) = split_columns(&columns(&brightness));
-        assert_eq!((left.w, right.w), (9, 6));
-        assert_eq!(left.w + right.w, 15, "no column is dropped or duplicated");
-        assert_eq!(left.data.len(), left.w * left.h * 3);
-        assert_eq!(right.data.len(), right.w * right.h * 3);
-        // The gap's first column lands in the left half, its second in
-        // the right: the cut runs through the dead space.
-        assert_eq!(left.data[8 * 3], 10);
-        assert_eq!(right.data[0], 10);
     }
 
     #[test]

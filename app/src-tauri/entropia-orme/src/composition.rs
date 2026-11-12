@@ -105,7 +105,6 @@ use eo_services::quests::QuestService;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
 use eo_services::sale_capture::{SaleCaptureProviders, SaleCaptureService};
 use eo_services::scan_completion::{complete_skill_scan, latest_skill_levels, ScannedLevel};
-use eo_services::screen_capture::capture_region_bgr;
 pub use eo_services::skill_scan::SkillScanService;
 use eo_services::skill_scan::{
     CompletionCallback, SkillScanProviders, DEFAULT_IDLE_LIMIT, DEFAULT_TICK,
@@ -922,7 +921,6 @@ async fn compose_with(
                     .unwrap_or_default(),
                 cursor_position: Arc::new(eu_window::cursor_position),
                 region: Arc::new(region_reader),
-                capture_region: Arc::new(capture_region_bgr),
                 persist_region: Arc::new(move |region| {
                     let mut updates = serde_json::Map::new();
                     updates.insert(

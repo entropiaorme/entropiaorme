@@ -653,7 +653,7 @@ impl MobWatch {
             .providers
             .focus
             .as_ref()
-            .is_some_and(|focus| focus() == GameFocus::Unfocused)
+            .is_some_and(|focus| !GameFocus::game_in_view(focus()))
         {
             return Look::Missed;
         }

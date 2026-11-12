@@ -338,10 +338,11 @@ impl HotbarListener {
             return;
         }
         // Asked on the source's dispatch worker, never the hook thread.
-        // Only a definite Unfocused drops the press: a platform that
-        // cannot tell keeps admitting every press, as before the probe.
+        // Only another window definitely in front, the app's own
+        // included, drops the press: a platform that cannot tell keeps
+        // admitting every press, as before the probe.
         if let Some(focus) = &self.focus {
-            if focus() == GameFocus::Unfocused {
+            if !focus().keys_reach_game() {
                 // A dropped press silently changes which weapon is
                 // declared, so the first one per start is worth a line in
                 // the default log.
@@ -796,6 +797,9 @@ mod tests {
             }));
 
         rig.source.inject("1", now(), KeystrokeKind::Press);
+        // Typed into one of the app's own windows: not the game's either.
+        *focus.lock().unwrap() = GameFocus::OwnWindow;
+        rig.source.inject("4", now(), KeystrokeKind::Press);
         *focus.lock().unwrap() = GameFocus::Focused;
         rig.source.inject("2", now(), KeystrokeKind::Press);
         *focus.lock().unwrap() = GameFocus::Unknown;

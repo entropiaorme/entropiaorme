@@ -549,7 +549,8 @@
       "min_space": 0.25,
       "digit_trim": 0.2,
       "ruler_tolerance": 0.4,
-      "pair_tolerance": 0.05
+      "pair_tolerance": 0.05,
+      "region_split_width": 6
     },
     "planet": {
       "band": [

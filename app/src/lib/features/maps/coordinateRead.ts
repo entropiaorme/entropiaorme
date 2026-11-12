@@ -56,6 +56,8 @@ export function coordRefusalMessage(refusal: CoordRefusal, planet: string): stri
 			return 'The radar is not on the screen.';
 		case 'otherPlanet':
 			return `The radar names another planet than ${planet}.`;
+		case 'regionOutsideWindow':
+			return 'The region you drew is outside the game window; draw it again.';
 		case 'notRead': {
 			const refused = [refusal.lon, refusal.lat].filter(
 				(value): value is CoordValueRefusal => value != null,

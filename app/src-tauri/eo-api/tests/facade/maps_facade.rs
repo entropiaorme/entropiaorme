@@ -16,13 +16,16 @@ use eo_services::coord_capture::{
     CoordCaptureProviders, CoordCaptureService, CoordRegion, KnownPlanet,
 };
 use eo_services::db::Db;
+use eo_services::eu_window::GameFocus;
 use eo_services::game_data_store::GameDataStore;
 use eo_services::game_ui::geometry::{BgrImage, Rect};
 use eo_services::game_ui::radar::CoordinateBounds;
 use eo_services::game_ui::seams::FrameReader;
 use eo_services::game_ui::test_support::{
-    blank, bundled_profile, draw_window, window_frame, Printed, RadarScene, RINGS, RING_LABELS,
+    blank, bundled_profile, draw_window, paint_region, region_half, window_frame, Printed,
+    RadarScene, RegionHalf, RINGS, RING_LABELS,
 };
+use eo_services::hotbar_listener::GameFocusProbe;
 use eo_services::navigation::{NavigationProviders, NavigationService, NavigationSettings};
 use eo_services::planet_maps::PlanetMapStore;
 
@@ -38,7 +41,9 @@ fn bundled_maps_dir() -> PathBuf {
 }
 
 /// A stand-in game window: what it shows, how its lettering reads, and
-/// what the hand-drawn region's two halves read when one is drawn.
+/// what the hand-drawn region's two halves read when one is drawn. With
+/// no scene shown, the window shows no radar, and the region's pixels
+/// where the region is drawn.
 struct Screen {
     shown: Mutex<(BgrImage, FrameReader)>,
     region: Mutex<Option<(String, String)>>,
@@ -46,27 +51,16 @@ struct Screen {
 
 impl Screen {
     fn new() -> Arc<Self> {
+        let mut window = blank(160, 48, [120, 110, 90]);
+        paint_region(&mut window, Rect::new(0, 0, 119, 23));
         Arc::new(Self {
-            shown: Mutex::new((
-                blank(64, 48, [120, 110, 90]),
-                Arc::new(|_: &BgrImage| Some((String::new(), 0.9))),
-            )),
+            shown: Mutex::new((window, Arc::new(|_: &BgrImage| Some((String::new(), 0.9))))),
             region: Mutex::new(None),
         })
     }
 
     fn show(&self, scene: &RadarScene) {
         *self.shown.lock().unwrap() = (scene.image.clone(), Arc::new(scene.recogniser()));
-    }
-
-    /// A two-column strip whose columns carry the bytes the region's
-    /// reader tells its halves apart by.
-    fn strip() -> BgrImage {
-        BgrImage {
-            data: [vec![1u8; 3], vec![2u8; 3], vec![1u8; 3], vec![2u8; 3]].concat(),
-            h: 2,
-            w: 2,
-        }
     }
 
     fn capture(self: &Arc<Self>, clock: Arc<dyn Clock>) -> Arc<CoordCaptureService> {
@@ -86,9 +80,9 @@ impl Screen {
                     })
                     .to_vec(),
                 read_text: Some(Arc::new(move |crop: &BgrImage| {
-                    if crop.w == 1 && matches!(crop.data.first(), Some(1 | 2)) {
+                    if let Some(half) = region_half(crop) {
                         let region = halves.region.lock().unwrap().clone()?;
-                        let text = if crop.data[0] == 1 {
+                        let text = if half == RegionHalf::Left {
                             region.0
                         } else {
                             region.1
@@ -107,7 +101,6 @@ impl Screen {
                         h: 24,
                     })
                 }),
-                capture_region: Arc::new(|_, _, _, _| Some(Screen::strip())),
                 ..CoordCaptureProviders::default()
             },
             clock,
@@ -559,6 +552,28 @@ async fn without_the_radar_only_a_hand_drawn_region_is_read() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hand_drawn_region_outside_the_game_window_is_refused_as_such() {
+    let dir = tempfile::tempdir().unwrap();
+    let screen = Screen::new();
+    *screen.region.lock().unwrap() = Some(("LON 61234".into(), "LAT 75456".into()));
+    // The game window is smaller now than when the region was drawn.
+    screen.show(&RadarScene::sized(100, 20, 5));
+    let api = maps_api(
+        dir.path(),
+        true,
+        Some(screen.capture(Arc::new(RealClock::new()))),
+    )
+    .await;
+    assert_eq!(
+        scan(&api, "Calypso"),
+        serde_json::json!({
+            "kind": "refused",
+            "refusal": {"reason": "regionOutsideWindow", "lon": null, "lat": null},
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_calibration_verbs_walk_the_flow_and_report_status() {
     let dir = tempfile::tempdir().unwrap();
     let screen = Screen::new();
@@ -612,6 +627,15 @@ async fn navigation_api(
     dir: &Path,
     screen: &Arc<Screen>,
 ) -> (Api, Arc<MockClock>, Arc<NavigationService>) {
+    navigation_api_with_focus(dir, screen, None).await
+}
+
+/// [`navigation_api`] with `focus` as where keyboard focus sits.
+async fn navigation_api_with_focus(
+    dir: &Path,
+    screen: &Arc<Screen>,
+    focus: Option<GameFocusProbe>,
+) -> (Api, Arc<MockClock>, Arc<NavigationService>) {
     let (db, data_dir) = open_db(dir).await;
     let clock = Arc::new(MockClock::new(None, 0.0));
     let shared: Arc<dyn Clock> = clock.clone();
@@ -629,7 +653,7 @@ async fn navigation_api(
             }),
             changed: Arc::new(|| {}),
             input: None,
-            focus: None,
+            focus,
             settings: NavigationSettings {
                 guidance_interval: Duration::from_secs(3600),
                 ..NavigationSettings::default()
@@ -671,6 +695,40 @@ async fn navigation_api(
 
 async fn poll(api: &Api) -> serde_json::Value {
     serde_json::to_value(api.navigation_update_position().await.unwrap()).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_poll_not_taken_reaches_the_wire_as_why_with_nothing_else() {
+    let dir = tempfile::tempdir().unwrap();
+    let screen = Screen::new();
+    let focus = Arc::new(Mutex::new(GameFocus::Focused));
+    let probe_focus = focus.clone();
+    let probe: GameFocusProbe = Arc::new(move || *probe_focus.lock().unwrap());
+    let (api, clock, _navigation) =
+        navigation_api_with_focus(dir.path(), &screen, Some(probe)).await;
+    api.navigation_start("Calypso".to_string(), None, 61000.0, 75000.0, None, false)
+        .await
+        .unwrap();
+    api.navigation_set_overlays_shown(true).unwrap();
+    clock.advance(1.0).unwrap();
+    assert_eq!(poll(&api).await["status"], "notRead");
+    // Asked again at once: too soon, nothing read.
+    assert_eq!(
+        poll(&api).await,
+        serde_json::json!({"status": "tooSoon", "run": null, "refusal": null, "stopped": null})
+    );
+    // Another application in front: nothing read.
+    *focus.lock().unwrap() = GameFocus::Unfocused;
+    clock.advance(1.0).unwrap();
+    assert_eq!(
+        poll(&api).await,
+        serde_json::json!({
+            "status": "gameNotFocused",
+            "run": null,
+            "refusal": null,
+            "stopped": null,
+        })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

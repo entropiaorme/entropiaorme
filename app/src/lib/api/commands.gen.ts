@@ -895,7 +895,7 @@ export interface CoordRegionDto {
 /**
  * Why no position was read.
  */
-export type CoordScanRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'readerUnavailable' | 'planetUnknown' | 'captureNotAllowed' | 'radarNotFound' | 'otherPlanet' | 'notRead';
+export type CoordScanRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'readerUnavailable' | 'planetUnknown' | 'captureNotAllowed' | 'radarNotFound' | 'otherPlanet' | 'regionOutsideWindow' | 'notRead';
 
 /**
  * One coordinate scan's answer: both values exactly as the screen
@@ -2564,7 +2564,7 @@ export interface NavigationPositionResult {
 	stopped: PositionPollStop | null;
 }
 
-export type NavigationPositionStatus = 'updated' | 'noActiveRun' | 'paused' | 'ambiguous' | 'outOfTolerance' | 'notRead' | 'jumpRefused' | 'superseded' | 'pollStopped';
+export type NavigationPositionStatus = 'updated' | 'noActiveRun' | 'paused' | 'ambiguous' | 'outOfTolerance' | 'notRead' | 'jumpRefused' | 'superseded' | 'pollStopped' | 'tooSoon' | 'gameNotFocused';
 
 export interface NavigationRun {
 	id: number;

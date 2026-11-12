@@ -128,13 +128,65 @@ pub fn game_window_present() -> bool {
 pub enum GameFocus {
     /// The game client window holds focus.
     Focused,
-    /// The game client is running but another window (or none) holds
-    /// focus.
+    /// The game client is running but another application's window (or
+    /// none) holds focus.
     Unfocused,
+    /// One of this app's own windows holds focus: the route overlay, the
+    /// radar overlay, a control the player clicked. The game is still on
+    /// the screen behind it.
+    OwnWindow,
     /// The platform cannot tell: no display connection, a window
-    /// manager that does not publish the active window, or a game
-    /// window this lookup cannot see (a native-Wayland client, say).
+    /// manager that does not publish the active window, a window whose
+    /// owner cannot be told, or a game window this lookup cannot see (a
+    /// native-Wayland client, say).
     Unknown,
+}
+
+impl GameFocus {
+    /// Whether a key pressed now may be one typed into the game: not when
+    /// another window, the app's own included, definitely holds focus. A
+    /// platform that cannot tell admits it.
+    pub fn keys_reach_game(self) -> bool {
+        matches!(self, GameFocus::Focused | GameFocus::Unknown)
+    }
+
+    /// Whether the game may be read off the screen by a read the app makes
+    /// on its own: not while another application definitely holds focus.
+    /// One of the app's own windows in front leaves the game on the screen
+    /// behind it, and a platform that cannot tell reads.
+    pub fn game_in_view(self) -> bool {
+        self != GameFocus::Unfocused
+    }
+}
+
+/// What the platform could tell about the window holding focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Foreground {
+    /// Nothing can be told: no window is reported, or activation is
+    /// changing hands.
+    Untold,
+    /// The game's own window.
+    Game,
+    /// A window of this process.
+    Ours,
+    /// A window of another process, or no window at all.
+    Other,
+    /// A window whose owning process cannot be told.
+    OwnerUnknown,
+}
+
+/// The focus state from what the platform told of the foreground window;
+/// `game_present` is asked only when another application's window is in
+/// front, so that a game this lookup cannot see is never reported as
+/// unfocused.
+fn focus_of(foreground: Foreground, game_present: impl FnOnce() -> bool) -> GameFocus {
+    match foreground {
+        Foreground::Untold | Foreground::OwnerUnknown => GameFocus::Unknown,
+        Foreground::Game => GameFocus::Focused,
+        Foreground::Ours => GameFocus::OwnWindow,
+        Foreground::Other if game_present() => GameFocus::Unfocused,
+        Foreground::Other => GameFocus::Unknown,
+    }
 }
 
 /// Where keyboard focus sits relative to the game client. `Unfocused`
@@ -156,7 +208,7 @@ pub fn cursor_position() -> Option<(i64, i64)> {
 
 #[cfg(windows)]
 mod platform {
-    use super::{GameFocus, WindowHandle, GAME_TITLE_PREFIX};
+    use super::{focus_of, Foreground, GameFocus, WindowHandle, GAME_TITLE_PREFIX};
 
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
@@ -203,19 +255,27 @@ mod platform {
 
     pub fn game_focus() -> GameFocus {
         let foreground = unsafe { GetForegroundWindow() };
-        if foreground.0.is_null() {
+        let told = if foreground.0.is_null() {
             // No foreground window: activation is mid-transition, so the
             // answer is unknowable rather than "not the game".
-            return GameFocus::Unknown;
-        }
-        if window_title(foreground).is_some_and(|title| title.starts_with(GAME_TITLE_PREFIX)) {
-            return GameFocus::Focused;
-        }
-        if find_game_window().is_some() {
-            GameFocus::Unfocused
+            Foreground::Untold
         } else {
-            GameFocus::Unknown
-        }
+            let mut owner = 0u32;
+            let thread =
+                unsafe { GetWindowThreadProcessId(foreground, Some(&mut owner as *mut u32)) };
+            if thread == 0 {
+                Foreground::OwnerUnknown
+            } else if owner == std::process::id() {
+                Foreground::Ours
+            } else if window_title(foreground)
+                .is_some_and(|title| title.starts_with(GAME_TITLE_PREFIX))
+            {
+                Foreground::Game
+            } else {
+                Foreground::Other
+            }
+        };
+        focus_of(told, || find_game_window().is_some())
     }
 
     pub fn find_game_window() -> Option<WindowHandle> {
@@ -281,7 +341,7 @@ mod platform {
 /// though the Wayland client itself is invisible here.
 #[cfg(target_os = "linux")]
 mod platform {
-    use super::{GameFocus, WindowHandle, GAME_TITLE_PREFIX};
+    use super::{focus_of, Foreground, GameFocus, WindowHandle, GAME_TITLE_PREFIX};
 
     use std::sync::{Mutex, PoisonError};
 
@@ -293,6 +353,7 @@ mod platform {
         net_client_list: Atom,
         net_active_window: Atom,
         net_wm_name: Atom,
+        net_wm_pid: Atom,
         utf8_string: Atom,
     }
 
@@ -305,6 +366,7 @@ mod platform {
                 net_client_list: intern(b"_NET_CLIENT_LIST")?,
                 net_active_window: intern(b"_NET_ACTIVE_WINDOW")?,
                 net_wm_name: intern(b"_NET_WM_NAME")?,
+                net_wm_pid: intern(b"_NET_WM_PID")?,
                 utf8_string: intern(b"UTF8_STRING")?,
             })
         }
@@ -403,20 +465,40 @@ mod platform {
                 .ok()?
                 .reply()
                 .ok()?;
-            let Some(active) = reply.value32().and_then(|mut windows| windows.next()) else {
+            let told = match reply.value32().and_then(|mut windows| windows.next()) {
                 // The window manager does not publish the active window.
-                return Some(GameFocus::Unknown);
-            };
-            if active != x11rb::NONE && is_game_title(&self.conn, active, &self.atoms) {
-                return Some(GameFocus::Focused);
-            }
-            Some(
-                if find_game_window_on(&self.conn, self.root, &self.atoms).is_some() {
-                    GameFocus::Unfocused
-                } else {
-                    GameFocus::Unknown
+                None => Foreground::Untold,
+                // No window holds focus: none of ours does either.
+                Some(x11rb::NONE) => Foreground::Other,
+                Some(active) if is_game_title(&self.conn, active, &self.atoms) => Foreground::Game,
+                Some(active) => match self.owner(active) {
+                    Some(pid) if pid == std::process::id() => Foreground::Ours,
+                    Some(_) => Foreground::Other,
+                    None => Foreground::OwnerUnknown,
                 },
-            )
+            };
+            Some(focus_of(told, || {
+                find_game_window_on(&self.conn, self.root, &self.atoms).is_some()
+            }))
+        }
+
+        /// The process that owns `window`, as its `_NET_WM_PID` says; None
+        /// when the window does not say.
+        fn owner(&self, window: Window) -> Option<u32> {
+            self.conn
+                .get_property(
+                    false,
+                    window,
+                    self.atoms.net_wm_pid,
+                    AtomEnum::CARDINAL,
+                    0,
+                    1,
+                )
+                .ok()?
+                .reply()
+                .ok()?
+                .value32()?
+                .next()
         }
     }
 
@@ -540,6 +622,35 @@ mod tests {
         assert_eq!(capturable_part((100, 100, 800, 600), right_monitor), None);
         assert_eq!(capturable_part((1120, 0, 800, 600), right_monitor), None);
         assert_eq!(capturable_part((0, 1080, 800, 600), screen), None);
+    }
+
+    #[test]
+    fn focus_is_told_from_whose_window_is_in_front() {
+        let present = || true;
+        assert_eq!(focus_of(Foreground::Game, present), GameFocus::Focused);
+        assert_eq!(focus_of(Foreground::Ours, present), GameFocus::OwnWindow);
+        assert_eq!(focus_of(Foreground::Other, present), GameFocus::Unfocused);
+        // A game this lookup cannot see is never unfocused.
+        assert_eq!(focus_of(Foreground::Other, || false), GameFocus::Unknown);
+        // Whose window it is, or which window, cannot be told.
+        assert_eq!(
+            focus_of(Foreground::OwnerUnknown, present),
+            GameFocus::Unknown
+        );
+        assert_eq!(focus_of(Foreground::Untold, present), GameFocus::Unknown);
+        // The app's own window in front: the game stays on the screen for
+        // the reads the app makes on its own, but a key typed now is not
+        // typed into the game.
+        let all = [
+            GameFocus::Focused,
+            GameFocus::Unfocused,
+            GameFocus::OwnWindow,
+            GameFocus::Unknown,
+        ];
+        let in_view: Vec<bool> = all.iter().map(|f| f.game_in_view()).collect();
+        let keys: Vec<bool> = all.iter().map(|f| f.keys_reach_game()).collect();
+        assert_eq!(in_view, [true, false, true, true]);
+        assert_eq!(keys, [true, false, false, true]);
     }
 
     #[test]

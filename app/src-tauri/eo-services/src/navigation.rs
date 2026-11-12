@@ -27,7 +27,6 @@ use crate::coord_capture::{
     ScaleReading, SightingFailure, Trigger,
 };
 use crate::db::{Db, DbError};
-use crate::eu_window::GameFocus;
 use crate::game_ui::radar::CoordinateBounds;
 use crate::game_ui::seams::FrameUnavailable;
 use crate::hotbar_listener::GameFocusProbe;
@@ -143,6 +142,17 @@ pub struct NavigationSettings {
     /// it stops and says so: a few minutes of the coordinates covered or
     /// unreadable means the poll is no longer serving the player.
     pub poll_refusal_limit: Duration,
+    /// The least time between two reads of the position poll. The overlay
+    /// sets the poll's pace; whatever pace it asks for, a poll sooner than
+    /// this after the last one captures nothing and is answered as too
+    /// soon. Below the overlay's quickest pace, so a timer firing a little
+    /// early is not turned away.
+    pub poll_min_interval: Duration,
+    /// The least time between two looks guidance takes again on its own:
+    /// a wake sooner than this after the last look captures nothing, and
+    /// the placement stands. The first look of a run, and the one after
+    /// the player calibrates the radar by hand, are taken whatever.
+    pub guidance_min_interval: Duration,
 }
 
 impl Default for NavigationSettings {
@@ -153,6 +163,8 @@ impl Default for NavigationSettings {
             guidance_idle_limit: Duration::from_secs(3 * 60),
             guidance_loss_looks: 2,
             poll_refusal_limit: Duration::from_secs(3 * 60),
+            poll_min_interval: Duration::from_millis(500),
+            guidance_min_interval: Duration::from_secs(1),
         }
     }
 }
@@ -338,6 +350,12 @@ pub enum PositionUpdate {
     Superseded,
     /// The position poll is not running; the reason says why.
     PollStopped(PollStop),
+    /// The poll was asked to read sooner than its least interval after its
+    /// last read; nothing was captured.
+    TooSoon,
+    /// The poll was asked to read while the game is not the window in
+    /// front; nothing was captured.
+    GameNotFocused,
     Ambiguous(NavigationRun),
     /// A manual `Visited` whose observed position is outside the arrival
     /// tolerance. The run position is updated so distance/bearing are fresh,
@@ -546,8 +564,12 @@ impl JumpGate {
 struct PollState {
     stopped: Option<PollStop>,
     /// When, on the monotonic clock, the current run of refused reads
-    /// began.
+    /// began, moved on by any time the poll was not reading.
     failing_since: Option<f64>,
+    /// When, on the monotonic clock, the poll stopped reading in a run of
+    /// refused reads (the game not in front, or asked too soon): the
+    /// refusal limit counts only the time the poll spent reading.
+    paused_since: Option<f64>,
 }
 
 /// What became of a read for a route, once checked.
@@ -580,8 +602,20 @@ enum Guiding {
         /// Held to wake the worker for a look now, and to be dropped:
         /// leaving this state disconnects the worker's receiver, which
         /// ends its wait at once.
-        wake: mpsc::Sender<()>,
+        wake: mpsc::Sender<LookFor>,
     },
+}
+
+/// Why guidance looks for the radar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LookFor {
+    /// Guidance has just started, or the player has just calibrated the
+    /// radar by hand: the look is taken whatever.
+    Asked,
+    /// Guidance looks again on its own, at its interval or when woken: not
+    /// while the game is definitely not in front, nor sooner than the least
+    /// interval after the last look.
+    Again,
 }
 
 /// What one look for the radar came to.
@@ -632,6 +666,9 @@ pub struct NavigationService {
     operation: tokio::sync::Mutex<()>,
     jump_gate: Mutex<JumpGate>,
     poll: Mutex<PollState>,
+    /// When, on the monotonic clock, the poll last read, for its least
+    /// interval.
+    poll_read_at: Mutex<Option<f64>>,
     /// Whether the route overlays are showing: the poll and guidance run
     /// only for overlays someone can see.
     overlays_shown: std::sync::atomic::AtomicBool,
@@ -686,6 +723,7 @@ impl NavigationService {
             operation: tokio::sync::Mutex::new(()),
             jump_gate: Mutex::new(JumpGate::default()),
             poll: Mutex::new(PollState::default()),
+            poll_read_at: Mutex::new(None),
             overlays_shown: std::sync::atomic::AtomicBool::new(false),
             radar_phase: Mutex::new(RadarCalibrationPhase::Idle),
             radar_confirm_listener: Mutex::new(None),
@@ -732,13 +770,10 @@ impl NavigationService {
                 {
                     return;
                 }
-                // Only a definite Unfocused drops the press, matching the
-                // hotbar listener: a platform that cannot tell admits it.
-                if service
-                    .focus
-                    .as_ref()
-                    .is_some_and(|focus| focus() == GameFocus::Unfocused)
-                {
+                // Only another window definitely in front, the app's own
+                // included, drops the press, matching the hotbar listener:
+                // a platform that cannot tell admits it.
+                if !service.keys_reach_game() {
                     return;
                 }
                 let service = service.clone();
@@ -748,6 +783,34 @@ impl NavigationService {
             }));
         }
         service
+    }
+
+    /// Whether a key pressed now may be typed into the game (see
+    /// [`crate::eu_window::GameFocus::keys_reach_game`]). Without a focus seam it may.
+    fn keys_reach_game(&self) -> bool {
+        self.focus
+            .as_ref()
+            .is_none_or(|focus| focus().keys_reach_game())
+    }
+
+    /// Whether another application definitely holds focus, so a read the
+    /// app makes on its own is not taken (see [`crate::eu_window::GameFocus::game_in_view`]).
+    /// The probe asks the platform and may wait on it: called only off the
+    /// async runtime's threads.
+    fn game_out_of_view(&self) -> bool {
+        self.focus
+            .as_ref()
+            .is_some_and(|focus| !focus().game_in_view())
+    }
+
+    /// [`Self::game_out_of_view`], asked on the blocking pool.
+    async fn game_out_of_view_now(&self) -> bool {
+        let Some(focus) = self.focus.clone() else {
+            return false;
+        };
+        tokio::task::spawn_blocking(move || !focus().game_in_view())
+            .await
+            .unwrap_or(false)
     }
 
     /// The route is no longer live (ended or completed): the keyboard is
@@ -1026,19 +1089,70 @@ impl NavigationService {
         poll.stopped
     }
 
+    /// The poll is not reading now: a run of refused reads stops ageing
+    /// until it reads again.
+    fn pause_poll_clock(&self) {
+        let now = self.clock.monotonic();
+        let mut poll = self.poll.lock().unwrap_or_else(PoisonError::into_inner);
+        if poll.failing_since.is_some() && poll.paused_since.is_none() {
+            poll.paused_since = Some(now);
+        }
+    }
+
+    /// The poll reads again: a run of refused reads moves on by the time
+    /// it was not reading.
+    fn resume_poll_clock(&self) {
+        let now = self.clock.monotonic();
+        let mut poll = self.poll.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(paused) = poll.paused_since.take() {
+            if let Some(since) = poll.failing_since.as_mut() {
+                *since += now - paused;
+            }
+        }
+    }
+
+    /// Whether the poll may read now, its least interval since its last
+    /// read having passed; if so, now is its last read. Asked and answered
+    /// under one lock, so two polls at once cannot both read.
+    fn claim_poll_read(&self) -> bool {
+        let now = self.clock.monotonic();
+        let mut last = self
+            .poll_read_at
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let floor = self.settings.poll_min_interval.as_secs_f64();
+        if last.is_some_and(|at| now - at < floor) {
+            return false;
+        }
+        *last = Some(now);
+        true
+    }
+
     /// Observe the current position. Strictly reads the coordinates and
     /// refreshes the run's position so distance and bearing to the active
     /// tree recompute; it never records a visit or advances the route. The
     /// overlay's automatic position poll rides this path, so it reads only
     /// while the route overlays show and the poll has not stopped, and a
     /// position is recorded and announced only when it passes the checks.
+    /// Being automatic, it captures nothing while the game is definitely
+    /// not the window in front, nor sooner than its least interval after
+    /// its last read, whatever pace it is asked at.
     pub async fn update_position(&self) -> Result<PositionUpdate, NavigationError> {
         if let Some(stop) = self.poll_stopped() {
             return Ok(PositionUpdate::PollStopped(stop));
         }
+        if self.game_out_of_view_now().await {
+            self.pause_poll_clock();
+            return Ok(PositionUpdate::GameNotFocused);
+        }
         let Some(run) = load_live_run(&self.db).await? else {
             return Ok(PositionUpdate::NoActiveRun);
         };
+        if !self.claim_poll_read() {
+            self.pause_poll_clock();
+            return Ok(PositionUpdate::TooSoon);
+        }
+        self.resume_poll_clock();
         let read = self.read_position(&run.planet, Trigger::Automatic).await;
         let _guard = self.operation.lock().await;
         let Checked::Current(_, checked) = self.checked(&run, read).await? else {
@@ -1843,7 +1957,7 @@ impl NavigationService {
                         radius_px: radius,
                         display_scale: 1.0,
                     });
-                    self.guidance_check_now();
+                    self.guidance_look(LookFor::Asked);
                 }
             }
         }
@@ -1900,7 +2014,8 @@ impl NavigationService {
 
     /// Start radar guidance for the live route: one worker finds the radar
     /// now and looks again at the configured interval. Already running, it
-    /// looks again at once. Nothing starts without a live route, without the
+    /// is woken to look again as a look of its own, held to the least
+    /// interval and to the game being in view. Nothing starts without a live route, without the
     /// route overlays showing, or when the radar could not be placed at all
     /// (no interface profile and no hand calibration). Waits, briefly, for
     /// the first look, so the overlays open where the radar is.
@@ -1973,15 +2088,21 @@ impl NavigationService {
         self.radar_guidance()
     }
 
-    /// Look for the radar now, if guidance is running.
+    /// Look for the radar again now, if guidance is running: a look of
+    /// its own (see [`LookFor::Again`]).
     pub fn guidance_check_now(&self) {
+        self.guidance_look(LookFor::Again);
+    }
+
+    /// Wake the guidance worker, if guidance is running, to look `why`.
+    fn guidance_look(&self, why: LookFor) {
         if let Guiding::Running { wake, .. } = &self
             .guidance
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .lifecycle
         {
-            let _ = wake.send(());
+            let _ = wake.send(why);
         }
     }
 
@@ -2063,14 +2184,17 @@ impl NavigationService {
     fn guide(
         &self,
         session: u64,
-        woken: &mpsc::Receiver<()>,
+        woken: &mpsc::Receiver<LookFor>,
         first_look: tokio::sync::oneshot::Sender<()>,
         _token: WorkerToken,
     ) {
         let mut first_look = Some(first_look);
         let mut sight = Sight::new(self.clock.monotonic());
+        let mut why = LookFor::Asked;
         loop {
-            let step = catch_unwind(AssertUnwindSafe(|| self.guide_step(session, &mut sight)));
+            let step = catch_unwind(AssertUnwindSafe(|| {
+                self.guide_step(session, &mut sight, why)
+            }));
             let carry_on = step.unwrap_or_else(|_| {
                 tracing::error!(
                     target: "eo::navigation",
@@ -2085,15 +2209,19 @@ impl NavigationService {
             if !carry_on {
                 return;
             }
-            match woken.recv_timeout(self.settings.guidance_interval) {
-                Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+            why = match woken.recv_timeout(self.settings.guidance_interval) {
+                Ok(why) => why,
+                Err(RecvTimeoutError::Timeout) => LookFor::Again,
                 Err(RecvTimeoutError::Disconnected) => return,
-            }
+            };
         }
     }
 
-    /// One look and its write-back; answers whether to keep looking.
-    fn guide_step(&self, session: u64, sight: &mut Sight) -> bool {
+    /// One look and its write-back; answers whether to keep looking. A
+    /// look of guidance's own while the game is definitely not in front, or
+    /// sooner than the least interval after the last look, captures nothing
+    /// and writes back the view as it was.
+    fn guide_step(&self, session: u64, sight: &mut Sight, why: LookFor) -> bool {
         // A capture is taken only for the guidance that is running, for a
         // route that is live: checked here, and again once the capture's
         // turn has come (another read may hold it).
@@ -2104,8 +2232,15 @@ impl NavigationService {
             self.end_guidance(session, None);
             return false;
         }
+        if why == LookFor::Again && (self.game_out_of_view() || !sight.due(self)) {
+            sight.pause(self.clock.monotonic());
+            self.count_look();
+            return true;
+        }
         let still_wanted =
             || self.guiding(session) && self.route_live.load(std::sync::atomic::Ordering::SeqCst);
+        sight.resume(self.clock.monotonic());
+        sight.looked_at = Some(self.clock.monotonic());
         let looked = self.coord_capture.sight_radar(&still_wanted);
         let now = self.clock.monotonic();
         let view = match sight.look(looked, now, self) {
@@ -2129,12 +2264,17 @@ impl NavigationService {
         // The look counts as done only once its change has been told:
         // whoever waits on the count then finds the telling already made.
         self.announce_guidance();
+        self.count_look();
+        true
+    }
+
+    /// A look is written back.
+    fn count_look(&self) {
         self.guidance
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .looks += 1;
         self.guidance_looked.notify_all();
-        true
     }
 
     /// The hand calibration's placement, if there is one.
@@ -2184,6 +2324,12 @@ struct Sight {
     last_seen: f64,
     /// Looks in a row that found the radar without a scale, and why.
     unscaled: (u32, Option<ScaleMissing>),
+    /// When the last look captured, on the monotonic clock.
+    looked_at: Option<f64>,
+    /// When guidance stopped looking (the game not in view, or a wake too
+    /// soon), on the monotonic clock: the idle limit counts only the time
+    /// spent looking.
+    paused_since: Option<f64>,
 }
 
 impl Sight {
@@ -2193,7 +2339,30 @@ impl Sight {
             misses: 0,
             last_seen: now,
             unscaled: (0, None),
+            looked_at: None,
+            paused_since: None,
         }
+    }
+
+    /// A look was not taken at `now`.
+    fn pause(&mut self, now: f64) {
+        self.paused_since.get_or_insert(now);
+    }
+
+    /// A look is taken at `now`: the time not looking does not count
+    /// against the idle limit.
+    fn resume(&mut self, now: f64) {
+        if let Some(paused) = self.paused_since.take() {
+            self.last_seen += now - paused;
+        }
+    }
+
+    /// Whether guidance's least interval has passed since the last look
+    /// captured.
+    fn due(&self, service: &NavigationService) -> bool {
+        let floor = service.settings.guidance_min_interval.as_secs_f64();
+        self.looked_at
+            .is_none_or(|at| service.clock.monotonic() - at >= floor)
     }
 
     /// What `looked` comes to, given what was seen before; `Err` when
@@ -2604,10 +2773,12 @@ mod tests {
     use super::*;
     use crate::clock::MockClock;
     use crate::coord_capture::{CoordCaptureProviders, CoordRegion, ValueRefusal};
-    use crate::game_ui::geometry::BgrImage;
+    use crate::eu_window::GameFocus;
+    use crate::game_ui::geometry::{BgrImage, Rect};
     use crate::game_ui::seams::{FrameArea, FrameReader, GameFrame};
     use crate::game_ui::test_support::{
-        blank, bundled_profile, window_frame, RadarScene, RINGS, RING_LABELS,
+        blank, bundled_profile, paint_region, region_half, window_frame, RadarScene, RegionHalf,
+        RINGS, RING_LABELS,
     };
     use crate::keystroke_source::MockKeystrokeSource;
     use crate::map_pins::{MapPinsService, NewMapPin};
@@ -2666,8 +2837,8 @@ mod tests {
     type Shown = (BgrImage, (i64, i64));
 
     /// A stand-in screen. The game window shows `shown`, read by `reader`;
-    /// with no radar on it, positions are read from the hand-drawn region,
-    /// whose two halves print `position`. The test decides what is shown,
+    /// with no radar on it, positions are read from the hand-drawn region
+    /// painted on it, whose two halves print `position`. The test decides what is shown,
     /// counts every capture, and can hold captures until it releases them.
     struct Screen {
         shown: Mutex<Result<Shown, FrameUnavailable>>,
@@ -2680,7 +2851,6 @@ mod tests {
         /// Seconds that pass on the clock while the region is recognised.
         read_takes: Mutex<f64>,
         captures: AtomicUsize,
-        region_captures: AtomicUsize,
         held: Mutex<bool>,
         released: std::sync::Condvar,
         clock: Arc<MockClock>,
@@ -2689,15 +2859,13 @@ mod tests {
     impl Screen {
         fn new(position: Arc<Mutex<(i64, i64)>>, clock: Arc<MockClock>) -> Arc<Self> {
             Arc::new(Self {
-                // A game window with no radar on it.
-                shown: Mutex::new(Ok((blank(64, 48, [120, 110, 90]), (0, 0)))),
+                shown: Mutex::new(Ok((Screen::no_radar(), (0, 0)))),
                 reader: Mutex::new(None),
                 position,
                 garble_lon: AtomicBool::new(false),
                 broken: AtomicBool::new(false),
                 read_takes: Mutex::new(0.0),
                 captures: AtomicUsize::new(0),
-                region_captures: AtomicUsize::new(0),
                 held: Mutex::new(false),
                 released: std::sync::Condvar::new(),
                 clock,
@@ -2714,7 +2882,15 @@ mod tests {
         }
 
         fn show_no_radar(&self) {
-            *self.shown.lock().unwrap() = Ok((blank(64, 48, [120, 110, 90]), (0, 0)));
+            *self.shown.lock().unwrap() = Ok((Screen::no_radar(), (0, 0)));
+        }
+
+        /// A game window with no radar on it, and the hand-drawn region
+        /// painted where it was drawn.
+        fn no_radar() -> BgrImage {
+            let mut image = blank(160, 48, [120, 110, 90]);
+            paint_region(&mut image, Rect::new(0, 0, 119, 19));
+            image
         }
 
         fn captures(&self) -> usize {
@@ -2737,23 +2913,8 @@ mod tests {
             }
         }
 
-        /// A two-column strip whose columns carry the bytes the region's
-        /// reader tells its halves apart by.
-        fn strip() -> BgrImage {
-            BgrImage {
-                data: [vec![1u8; 3], vec![2u8; 3], vec![1u8; 3], vec![2u8; 3]].concat(),
-                h: 2,
-                w: 2,
-            }
-        }
-
         fn providers(self: &Arc<Self>) -> CoordCaptureProviders {
-            let (window, region, reading, cursor) = (
-                self.clone(),
-                self.clone(),
-                self.clone(),
-                self.position.clone(),
-            );
+            let (window, reading, cursor) = (self.clone(), self.clone(), self.position.clone());
             CoordCaptureProviders {
                 frame: Arc::new(
                     move |area: FrameArea| -> Result<GameFrame, FrameUnavailable> {
@@ -2769,15 +2930,14 @@ mod tests {
                 ),
                 profile: Some(Arc::new(bundled_profile())),
                 read_text: Some(Arc::new(move |crop: &BgrImage| {
-                    let half = crop.w == 1 && matches!(crop.data.first(), Some(1 | 2));
-                    if !half {
+                    let Some(half) = region_half(crop) else {
                         let reader = reading.reader.lock().unwrap().clone();
                         return reader.and_then(|reader| reader(crop));
-                    }
+                    };
                     let takes = *reading.read_takes.lock().unwrap();
                     reading.clock.advance(takes).expect("forward");
                     let (lon, lat) = *reading.position.lock().unwrap();
-                    let text = if crop.data[0] == 1 {
+                    let text = if half == RegionHalf::Left {
                         let label = if reading.garble_lon.load(AtomicOrdering::SeqCst) {
                             "L0N"
                         } else {
@@ -2797,11 +2957,6 @@ mod tests {
                         w: 120,
                         h: 20,
                     })
-                }),
-                capture_region: Arc::new(move |_, _, _, _| {
-                    region.region_captures.fetch_add(1, AtomicOrdering::SeqCst);
-                    region.wait_if_held();
-                    Some(Screen::strip())
                 }),
                 cursor_position: Arc::new(move || Some(*cursor.lock().unwrap())),
                 ..CoordCaptureProviders::default()
@@ -2916,7 +3071,18 @@ mod tests {
     }
 
     async fn rig() -> Rig {
-        rig_with(None, NavigationSettings::default()).await
+        rig_with(None, unpaced()).await
+    }
+
+    /// The default settings without the least intervals between automatic
+    /// reads: the test sets the pace, and the floors are pinned by tests
+    /// of their own.
+    fn unpaced() -> NavigationSettings {
+        NavigationSettings {
+            poll_min_interval: Duration::ZERO,
+            guidance_min_interval: Duration::ZERO,
+            ..NavigationSettings::default()
+        }
     }
 
     async fn rig_with(focus: Option<GameFocusProbe>, settings: NavigationSettings) -> Rig {
@@ -3240,7 +3406,7 @@ mod tests {
         let focus = Arc::new(Mutex::new(GameFocus::Unfocused));
         let probe_focus = focus.clone();
         let probe: GameFocusProbe = Arc::new(move || *probe_focus.lock().unwrap());
-        let rig = rig_with(Some(probe), NavigationSettings::default()).await;
+        let rig = rig_with(Some(probe), unpaced()).await;
         rig.start(Some(vec![1, 2]), true).await;
         rig.tick(1.0);
         rig.stand(at(30, 0));
@@ -3251,10 +3417,128 @@ mod tests {
         // was captured for it.
         assert_eq!(rig.screen.captures(), 1, "only the start was read");
         assert!(key_visits(&rig).await.is_empty());
+        // A key typed into one of the app's own windows is not typed into
+        // the game either.
+        *focus.lock().unwrap() = GameFocus::OwnWindow;
+        press_off_runtime(&rig.input, KeystrokeKind::Press);
+        press_off_runtime(&rig.input, KeystrokeKind::Release);
+        assert_eq!(rig.screen.captures(), 1, "only the start was read");
+        assert!(key_visits(&rig).await.is_empty());
 
         *focus.lock().unwrap() = GameFocus::Focused;
         press_off_runtime(&rig.input, KeystrokeKind::Press);
         await_key_visits(&rig, 1).await;
+    }
+
+    /// A focus seam the test sets, starting at `state`.
+    fn focus_at(state: GameFocus) -> (Arc<Mutex<GameFocus>>, GameFocusProbe) {
+        let focus = Arc::new(Mutex::new(state));
+        let probe_focus = focus.clone();
+        (focus, Arc::new(move || *probe_focus.lock().unwrap()))
+    }
+
+    #[tokio::test]
+    async fn the_poll_captures_nothing_inside_its_least_interval() {
+        let floor = NavigationSettings::default()
+            .poll_min_interval
+            .as_secs_f64();
+        assert!(floor > 0.0);
+        let rig = rig_with(None, NavigationSettings::default()).await;
+        rig.start(Some(vec![1, 2]), false).await;
+        rig.tick(1.0);
+        let before = rig.screen.captures();
+        assert_ne!(rig.poll().await, PositionUpdate::TooSoon);
+        let read = rig.screen.captures();
+        assert!(read > before, "the first poll reads");
+        // Asked again at once, and again just inside the floor, it is too
+        // soon: nothing is captured, and no number is answered.
+        assert_eq!(rig.poll().await, PositionUpdate::TooSoon);
+        rig.tick(floor * 0.9);
+        assert_eq!(rig.poll().await, PositionUpdate::TooSoon);
+        assert_eq!(rig.screen.captures(), read);
+        // A read the player asks for is not held to the poll's pace.
+        rig.service.mark_visited(false).await.unwrap();
+        let visited = rig.screen.captures();
+        assert!(visited > read, "the player's Visited reads");
+        // Once the floor has passed since the poll's last read, it reads.
+        rig.tick(floor * 0.2);
+        assert_ne!(rig.poll().await, PositionUpdate::TooSoon);
+        assert!(rig.screen.captures() > visited);
+    }
+
+    #[tokio::test]
+    async fn the_poll_captures_nothing_while_another_window_holds_focus() {
+        let (focus, probe) = focus_at(GameFocus::Unfocused);
+        let rig = rig_with(Some(probe), NavigationSettings::default()).await;
+        rig.start(Some(vec![1, 2]), false).await;
+        rig.tick(1.0);
+        let before = rig.screen.captures();
+        assert_eq!(rig.poll().await, PositionUpdate::GameNotFocused);
+        assert_eq!(rig.screen.captures(), before);
+        // A read the player asks for is not held back.
+        rig.service.mark_visited(false).await.unwrap();
+        let mut captures = rig.screen.captures();
+        assert!(captures > before, "the player's Visited reads");
+        // Focus that cannot be told reads, as the other readers do; so does
+        // one of the app's own windows in front, the game still on the
+        // screen behind it; and the game in front reads.
+        for state in [GameFocus::Unknown, GameFocus::OwnWindow, GameFocus::Focused] {
+            *focus.lock().unwrap() = state;
+            rig.tick(1.0);
+            assert_ne!(
+                rig.poll().await,
+                PositionUpdate::GameNotFocused,
+                "{state:?}"
+            );
+            assert!(rig.screen.captures() > captures, "{state:?}");
+            captures = rig.screen.captures();
+        }
+    }
+
+    #[test]
+    fn the_production_floors_are_pinned() {
+        let settings = NavigationSettings::default();
+        assert_eq!(settings.poll_min_interval, Duration::from_millis(500));
+        assert_eq!(settings.guidance_min_interval, Duration::from_secs(1));
+        // The overlay's quickest pace: its update interval is clamped to
+        // between one and sixty seconds. The poll's floor stays below it,
+        // so a timer firing a little early is not turned away.
+        const QUICKEST_OVERLAY_PACE: Duration = Duration::from_secs(1);
+        assert!(settings.poll_min_interval < QUICKEST_OVERLAY_PACE);
+        // Guidance's floor stays below its own interval: only wakes are
+        // held to it.
+        assert!(settings.guidance_min_interval < settings.guidance_interval);
+    }
+
+    #[tokio::test]
+    async fn time_the_poll_is_not_reading_does_not_count_towards_its_refusal_limit() {
+        let (focus, probe) = focus_at(GameFocus::Focused);
+        let rig = rig_with(Some(probe), unpaced()).await;
+        rig.start(Some(vec![1, 2]), false).await;
+        let limit = unpaced().poll_refusal_limit.as_secs_f64();
+        rig.screen.garble_lon.store(true, AtomicOrdering::SeqCst);
+        rig.tick(1.0);
+        assert!(matches!(rig.poll().await, PositionUpdate::NotRead(_)));
+        // The player is in another application for longer than the limit.
+        *focus.lock().unwrap() = GameFocus::Unfocused;
+        rig.tick(limit / 2.0);
+        assert_eq!(rig.poll().await, PositionUpdate::GameNotFocused);
+        rig.tick(limit);
+        assert_eq!(rig.poll().await, PositionUpdate::GameNotFocused);
+        // Back in the game, one more refusal is not a run of them lasting
+        // the limit.
+        *focus.lock().unwrap() = GameFocus::Focused;
+        rig.tick(1.0);
+        assert!(
+            matches!(rig.poll().await, PositionUpdate::NotRead(_)),
+            "the poll stopped on time it was not reading"
+        );
+        // Reading time still counts: refused for the limit, it stops.
+        rig.tick(limit);
+        assert_eq!(
+            rig.poll().await,
+            PositionUpdate::PollStopped(PollStop::NotReading)
+        );
     }
 
     #[tokio::test]
@@ -4224,7 +4508,7 @@ mod tests {
     fn test_driven() -> NavigationSettings {
         NavigationSettings {
             guidance_interval: Duration::from_secs(3600),
-            ..NavigationSettings::default()
+            ..unpaced()
         }
     }
 
@@ -4545,6 +4829,114 @@ mod tests {
         calibrate(&rig).await;
         placement(start_guidance(&rig).await);
         rig.tick(test_driven().guidance_idle_limit.as_secs_f64());
+        look_again(&rig);
+        assert!(rig.service.wait_for_guidance_workers(GUARD));
+        assert_eq!(
+            rig.service.radar_guidance(),
+            RadarGuidance::Off {
+                stopped: Some(GuidanceStop::RadarNotSeen),
+            }
+        );
+    }
+
+    /// Wait for the next look, of whatever kind, to land.
+    fn await_look(rig: &Rig, looks: u64) {
+        tokio::task::block_in_place(|| {
+            assert!(
+                rig.service.wait_for_guidance_looks(looks + 1, GUARD),
+                "the look never landed"
+            );
+        });
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn guidance_looks_again_only_past_its_floor_and_with_the_game_in_front() {
+        let floor = NavigationSettings::default()
+            .guidance_min_interval
+            .as_secs_f64();
+        assert!(floor > 0.0);
+        let (focus, probe) = focus_at(GameFocus::Unfocused);
+        let paced = NavigationSettings {
+            guidance_interval: Duration::from_secs(3600),
+            ..NavigationSettings::default()
+        };
+        let rig = rig_with(Some(probe), paced).await;
+        rig.start(Some(vec![1, 2]), false).await;
+        show_radar(&rig, (400, 260), 113, false);
+        // Starting guidance looks whatever: the overlays open on the radar.
+        let before = rig.screen.captures();
+        let first = placement(start_guidance(&rig).await);
+        assert!(rig.screen.captures() > before);
+        let mut captures = rig.screen.captures();
+
+        // Looks of its own while another window holds focus capture
+        // nothing, inside the floor or past it; the placement stands.
+        assert_eq!(placement(look_again(&rig)), first);
+        rig.tick(floor);
+        assert_eq!(placement(look_again(&rig)), first);
+        assert_eq!(rig.screen.captures(), captures);
+
+        // With the game in front, the look past the floor captures; one
+        // asked for at once after it does not.
+        *focus.lock().unwrap() = GameFocus::Focused;
+        let second = placement(look_again(&rig));
+        assert!(rig.screen.captures() > captures);
+        captures = rig.screen.captures();
+        assert_eq!(placement(look_again(&rig)), second);
+        rig.tick(floor * 0.9);
+        assert_eq!(placement(look_again(&rig)), second);
+        assert_eq!(rig.screen.captures(), captures);
+
+        // One of the app's own windows in front leaves the game on the
+        // screen: past the floor, the look captures.
+        *focus.lock().unwrap() = GameFocus::OwnWindow;
+        rig.tick(floor);
+        placement(look_again(&rig));
+        assert!(rig.screen.captures() > captures);
+        captures = rig.screen.captures();
+
+        // The look after the player calibrates the radar by hand is taken
+        // whatever: inside the floor, and with another window in front.
+        *focus.lock().unwrap() = GameFocus::Unfocused;
+        rig.service.radar_calibration_start();
+        rig.stand(at(0, 0));
+        rig.service.radar_confirm().await;
+        rig.stand(at(20, 0));
+        let looks = rig.service.guidance_looks();
+        rig.service.radar_confirm().await;
+        await_look(&rig, looks);
+        assert!(rig.screen.captures() > captures);
+        rig.service.guidance_stop();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn time_guidance_is_not_looking_does_not_count_towards_its_idle_limit() {
+        let (focus, probe) = focus_at(GameFocus::Focused);
+        let rig = rig_with(Some(probe), test_driven()).await;
+        rig.start(Some(vec![1, 2]), false).await;
+        let limit = test_driven().guidance_idle_limit.as_secs_f64();
+        assert_eq!(
+            start_guidance(&rig).await,
+            RadarGuidance::Lost(GuidanceLoss::RadarNotFound)
+        );
+        // The player is in another application for longer than the limit,
+        // and guidance looks nowhere meanwhile.
+        *focus.lock().unwrap() = GameFocus::Unfocused;
+        rig.tick(limit / 2.0);
+        look_again(&rig);
+        rig.tick(limit);
+        look_again(&rig);
+        // Back in the game, one more look that misses the radar is not the
+        // radar unseen for the limit.
+        *focus.lock().unwrap() = GameFocus::Focused;
+        rig.tick(1.0);
+        assert_eq!(
+            look_again(&rig),
+            RadarGuidance::Lost(GuidanceLoss::RadarNotFound),
+            "guidance stopped on time it was not looking"
+        );
+        // Looking time still counts.
+        rig.tick(limit);
         look_again(&rig);
         assert!(rig.service.wait_for_guidance_workers(GUARD));
         assert_eq!(

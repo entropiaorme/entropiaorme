@@ -917,6 +917,23 @@ fn find_with_ridge<P: Pixels>(image: &P, chrome: &ChromeProfile, ridge_px: u8) -
     accepted
 }
 
+/// Whether `image` shows a stretch of a window's frame as long as
+/// [`find_windows`] needs to see a side: the frame's ridge backed by the
+/// panel, at any of the ridge thicknesses it looks for. A window shows its
+/// frame wherever its edge is not under another window, so where none
+/// shows, no window lies there, unless one covers the whole of `image`
+/// (or covers it but for parts of other windows that cover the rest). A
+/// reader that cares only about one part of the frame asks this of that
+/// part before paying for the search of the whole.
+pub fn window_edge_in<P: Pixels>(image: &P, chrome: &ChromeProfile) -> bool {
+    chrome.ridge_widths.iter().any(|&ridge_px| {
+        let map = edge_map(image, chrome, ridge_px);
+        [(LEFT, true), (RIGHT, true), (TOP, false), (BOTTOM, false)]
+            .into_iter()
+            .any(|(bit, vertical)| !edge_lines(&map, bit, vertical, chrome).is_empty())
+    })
+}
+
 /// Every game window in `image`, front to back.
 pub fn find_windows<P: Pixels>(image: &P, chrome: &ChromeProfile) -> Vec<FoundWindow> {
     let mut best: Vec<FoundWindow> = Vec::new();
@@ -944,7 +961,7 @@ pub fn find_windows<P: Pixels>(image: &P, chrome: &ChromeProfile) -> Vec<FoundWi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game_ui::geometry::BgrImage;
+    use crate::game_ui::geometry::{crop, BgrImage};
     use crate::game_ui::test_support::{blank, bundled_profile, draw_window, fill, put, Lcg};
 
     fn scenery(w: usize, h: usize, seed: u64) -> BgrImage {
@@ -968,6 +985,29 @@ mod tests {
         let chrome = bundled_profile().chrome;
         assert!(find_windows(&scenery(640, 400, 1), &chrome).is_empty());
         assert!(find_windows(&blank(640, 400, [8, 11, 11]), &chrome).is_empty());
+    }
+
+    #[test]
+    fn a_stretch_of_a_windows_edge_shows_a_window_and_the_bare_scene_none() {
+        let chrome = bundled_profile().chrome;
+        let mut image = scenery(900, 600, 2);
+        assert!(!window_edge_in(&image, &chrome));
+        assert!(!window_edge_in(&blank(640, 400, [8, 11, 11]), &chrome));
+        let rect = Rect::new(120, 80, 700, 480);
+        draw_window(&mut image, rect);
+        assert!(window_edge_in(&image, &chrome));
+        // A part of the frame holding no more of the window than a stretch
+        // of its right side as long as the search needs still shows it; a
+        // shorter stretch is not seen as a side by the search either.
+        let run = chrome.min_edge_run;
+        let side = |length: i32| crop(&image, Rect::new(690, 200, 760, 200 + length - 1));
+        assert!(window_edge_in(&side(run), &chrome));
+        assert!(!window_edge_in(&side(run - 1), &chrome));
+        // Inside the window, away from its edges, nothing shows.
+        assert!(!window_edge_in(
+            &crop(&image, Rect::new(300, 200, 500, 400)),
+            &chrome
+        ));
     }
 
     #[test]

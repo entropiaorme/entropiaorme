@@ -28,5 +28,8 @@ describe('a coordinate read', () => {
 		expect(coordRefusalMessage({ reason: 'otherPlanet', lon: null, lat: null }, 'Calypso')).toBe(
 			'The radar names another planet than Calypso.',
 		);
+		expect(
+			coordRefusalMessage({ reason: 'regionOutsideWindow', lon: null, lat: null }, 'Calypso'),
+		).toBe('The region you drew is outside the game window; draw it again.');
 	});
 });

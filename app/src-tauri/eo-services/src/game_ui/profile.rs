@@ -15,6 +15,7 @@ use super::radar::RadarProfile;
 use super::table::RuleProfile;
 use super::text::TextProfile;
 use super::tool_bar::ToolBarProfile;
+use super::tool_names::ToolNameProfile;
 use super::window::ChromeProfile;
 
 /// The profile format this build reads.
@@ -56,6 +57,9 @@ pub struct UiProfile {
     /// The health bar and the tool bar beside it, which names the tool
     /// the player holds.
     pub tool_bar: ToolBarProfile,
+    /// How strictly a name read off the tool bar must match a known
+    /// tool.
+    pub tool_names: ToolNameProfile,
 }
 
 /// Why a profile could not be used.

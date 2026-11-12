@@ -14,9 +14,13 @@ use rapidfuzz::distance::indel;
 
 const UNBASE_SCALE: f64 = 0.95;
 
+/// The score of a perfect match: every scorer here scores out of a
+/// hundred.
+pub const PERFECT: f64 = 100.0;
+
 /// `fuzz.ratio`: the normalised Indel similarity over code points.
 pub fn ratio(a: &[char], b: &[char]) -> f64 {
-    indel::normalized_similarity(a.iter().copied(), b.iter().copied()) * 100.0
+    indel::normalized_similarity(a.iter().copied(), b.iter().copied()) * PERFECT
 }
 
 /// The implementation half of `partial_ratio`, assuming

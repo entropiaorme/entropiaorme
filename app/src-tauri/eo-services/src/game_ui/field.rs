@@ -10,7 +10,7 @@
 
 use serde::Deserialize;
 
-use crate::fuzzy_match::ratio;
+use crate::fuzzy_match::{ratio, PERFECT};
 use crate::game_ui::geometry::BgrImage;
 
 use super::geometry::{crop, Rect};
@@ -189,6 +189,49 @@ pub fn label_key(text: &str) -> Vec<char> {
         .filter(|c| c.is_alphanumeric())
         .flat_map(|c| c.to_uppercase())
         .collect()
+}
+
+/// Whether `text` has too few letters to be a name: fewer than
+/// `min_letters` (and never none), or letters making less than
+/// `min_share` of its characters other than spaces.
+pub fn too_few_letters(text: &str, min_letters: usize, min_share: f64) -> bool {
+    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
+    let visible = text.chars().filter(|c| !c.is_whitespace()).count();
+    letters < min_letters.max(1) || (letters as f64) < min_share * visible as f64
+}
+
+/// The letters and the digits a key is counted over; anything else in
+/// a key shares one further count.
+const LETTERS: usize = 'Z' as usize - 'A' as usize + 1;
+const DIGITS: usize = '9' as usize - '0' as usize + 1;
+
+/// Letter and digit counts of a key, for a cheap upper bound on how
+/// similar two keys can be before comparing them properly.
+pub type KeyCounts = [u16; LETTERS + DIGITS + 1];
+
+/// The counts of `key`, a [`label_key`].
+pub fn key_counts(key: &[char]) -> KeyCounts {
+    let mut out = [0u16; LETTERS + DIGITS + 1];
+    for c in key {
+        let slot = match c {
+            'A'..='Z' => *c as usize - 'A' as usize,
+            '0'..='9' => LETTERS + (*c as usize - '0' as usize),
+            _ => LETTERS + DIGITS,
+        };
+        out[slot] = out[slot].saturating_add(1);
+    }
+    out
+}
+
+/// The most [`ratio`] can score two keys of these counts and lengths:
+/// the share of characters they could have in common, whatever their
+/// order.
+pub fn similarity_bound(a: &KeyCounts, a_len: usize, b: &KeyCounts, b_len: usize) -> f64 {
+    let common: u32 = a.iter().zip(b).map(|(x, y)| (*x).min(*y) as u32).sum();
+    if a_len + b_len == 0 {
+        return 0.0;
+    }
+    2.0 * PERFECT * common as f64 / (a_len + b_len) as f64
 }
 
 /// The margin a run of `height` is cropped with before recognition.

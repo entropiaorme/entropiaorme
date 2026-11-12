@@ -28,7 +28,9 @@
 //! - `tool <frame>... --rect x0,y0,x1,y1 [--jitter <px>]`: one rectangle
 //!   read in each frame, as given and moved about by a few pixels.
 //! - `match <names file> <text>...`: a text matched against a list of
-//!   names, one per line, and how long the match takes.
+//!   names, one per line, as a name read off the tool bar is (a text
+//!   ending in dots was cut short): the nearest names with their scores,
+//!   what it resolves to, and how long each takes.
 //! - `together <frame> [--plate-ms <n>] [--radar-ms <n>] [--tool-ms <n>
 //!   --tool-rect x0,y0,x1,y1] [--capture none|whole|part] [--seconds <n>]`:
 //!   the watching readers run side by side at their intervals, as the
@@ -43,8 +45,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use eo_services::fuzzy_match::ratio;
-use eo_services::game_ui::field::read_run;
+use eo_services::game_ui::field::{label_key, read_run};
 use eo_services::game_ui::geometry::{crop, BgrImage, Rect};
 use eo_services::game_ui::plates::{
     find_locked_plate, find_plates_in, read_found_plate, PlateScratch,
@@ -52,6 +53,8 @@ use eo_services::game_ui::plates::{
 use eo_services::game_ui::profile::UiProfile;
 use eo_services::game_ui::radar::{find_radar, read_coordinates, CoordinateBounds};
 use eo_services::game_ui::text::text_runs;
+use eo_services::game_ui::tool_bar::ToolName;
+use eo_services::game_ui::tool_names::{self, BundledTool, ToolCatalogue};
 use eo_services::game_ui::window::find_windows;
 use eo_services::ocr_engine::{load_bgr_png, preprocess_into, resize_bilinear, OcrEngine};
 use serde_json::{json, Value};
@@ -524,15 +527,6 @@ fn cmd_tool(args: &Args) -> Result<(), String> {
     Ok(())
 }
 
-/// The letters and digits of `text`, lower case: what a name is matched
-/// on, so spacing, case and punctuation never decide a match.
-fn key(text: &str) -> Vec<char> {
-    text.chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
-        .collect()
-}
-
 fn cmd_match(args: &Args) -> Result<(), String> {
     let path = args.word(1, "a file of names")?;
     let names: Vec<String> = std::fs::read_to_string(path)
@@ -542,29 +536,42 @@ fn cmd_match(args: &Args) -> Result<(), String> {
         .filter(|line| !line.is_empty())
         .map(str::to_string)
         .collect();
-    let keys: Vec<Vec<char>> = names.iter().map(|name| key(name)).collect();
+    let profile = load_profile()?;
+    let p = &profile.tool_names;
+    let catalogue = ToolCatalogue::new(
+        Vec::new(),
+        names.iter().enumerate().map(|(line, name)| BundledTool {
+            endpoint: path.to_string(),
+            item_id: (line + 1).to_string(),
+            name: name.clone(),
+        }),
+        Vec::new(),
+    );
+    let tools: Vec<(Vec<char>, &str)> = catalogue
+        .bundled()
+        .map(|tool| (label_key(&tool.name), tool.name.as_str()))
+        .collect();
     for text in &args.words[2..] {
-        // A text ending in an ellipsis was cut short by the game: it is
-        // matched against the start of each name, no further than it runs.
-        let cut = text.trim_end().ends_with("...") || text.trim_end().ends_with('…');
-        let wanted = key(text.trim_end().trim_end_matches(['.', '…']));
-        let score = |name: &[char]| {
-            if cut {
-                (wanted.len().saturating_sub(2)..=(wanted.len() + 2).min(name.len()))
-                    .map(|end| ratio(&wanted, &name[..end.min(name.len())]))
-                    .fold(0.0, f64::max)
-            } else {
-                ratio(&wanted, name)
-            }
+        // A text ending in an ellipsis was cut short by the game.
+        let trimmed = text.trim_end();
+        let read = ToolName {
+            text: trimmed.trim_end_matches(['.', '\u{2026}']).to_string(),
+            cut_short: trimmed.ends_with("...") || trimmed.ends_with('\u{2026}'),
         };
+        let wanted = read.key();
         let mut scored: Vec<(f64, &str)> = Vec::new();
         let took = sample(50, || {
-            scored = keys
+            scored = tools
                 .iter()
-                .zip(&names)
-                .map(|(k, name)| (score(k), name.as_str()))
+                .filter_map(|(key, name)| {
+                    tool_names::score(&wanted, read.cut_short, key, p).map(|s| (s, *name))
+                })
                 .collect();
             black_box(&scored);
+        });
+        let resolved = tool_names::resolve(&read, &catalogue, p);
+        let resolve_took = sample(50, || {
+            black_box(tool_names::resolve(&read, &catalogue, p));
         });
         scored.sort_by(|a, b| b.0.total_cmp(&a.0));
         let best: Vec<Value> = scored
@@ -575,8 +582,9 @@ fn cmd_match(args: &Args) -> Result<(), String> {
         println!(
             "{}",
             json!({
-                "what": "match", "text": text, "cut_short": cut,
+                "what": "match", "text": text, "cut_short": read.cut_short,
                 "names": names.len(), "best": best, "took": took,
+                "resolved": format!("{resolved:?}"), "resolve_took": resolve_took,
             })
         );
     }

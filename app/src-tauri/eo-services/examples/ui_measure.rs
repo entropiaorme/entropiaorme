@@ -25,7 +25,7 @@
 //!   and scale.
 //! - `plates <frame>`: every nameplate, and the locked one read.
 //! - `tool-bar <frame>`: the tool bar, its state, its lettering and the
-//!   tool's name read.
+//!   tool's name read, resolved against the bundled tools.
 //! - `sale-queue <frame>`, `skills <frame>`, `terminal <frame>`: the whole
 //!   typed read of each reader, row by row.
 //! - `measure-chrome <frame> [--rect x0,y0,x1,y1] [--depth <n>]`: a
@@ -102,6 +102,7 @@ use eo_services::game_ui::table::{column_rules, row_rules, rows, Panel};
 use eo_services::game_ui::tool_bar::{
     bar_state, find_tool_bar, lettering, measure_tool_bars, read_tool_name, BarState,
 };
+use eo_services::game_ui::tool_names::{self, ToolCatalogue};
 use eo_services::game_ui::validate::{expected_width, ink_size, NumeralMetrics};
 use eo_services::game_ui::window::{find_windows, measure_chrome, FoundWindow, Side};
 use eo_services::ocr_engine::{load_bgr_png, resize_bilinear, OcrEngine};
@@ -909,11 +910,20 @@ fn cmd_tool_bar(mut s: Session) -> Result<(), String> {
             println!("state: lettered");
             let read = recogniser();
             match read_tool_name(&s.image, &state, &s.profile, &*read) {
-                Ok(name) => println!(
-                    "name: {:?}{}",
-                    name.text,
-                    if name.cut_short { ", cut short" } else { "" }
-                ),
+                Ok(name) => {
+                    println!(
+                        "name: {:?}{}",
+                        name.text,
+                        if name.cut_short { ", cut short" } else { "" }
+                    );
+                    let store = GameDataStore::new(&resources().join("snapshot"))
+                        .map_err(|error| format!("the bundled game data: {error}"))?;
+                    let catalogue = ToolCatalogue::from_store(&store, Vec::new(), Vec::new());
+                    println!(
+                        "resolved against the bundled tools: {:?}",
+                        tool_names::resolve(&name, &catalogue, &s.profile.tool_names)
+                    );
+                }
                 Err(refusal) => println!("name: refused: {refusal}"),
             }
         }

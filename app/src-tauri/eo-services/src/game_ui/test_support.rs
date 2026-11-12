@@ -27,7 +27,14 @@ pub fn bundled_profile() -> UiProfile {
 /// The creatures of the bundled game data, as its `mobs` collection
 /// lists them.
 pub fn bundled_mobs() -> Vec<serde_json::Value> {
-    let path = repo_root().join("app/src-tauri/entropia-orme/resources/snapshot/mobs.json");
+    bundled_collection("mobs")
+}
+
+/// The entities of one collection of the bundled game data.
+pub fn bundled_collection(endpoint: &str) -> Vec<serde_json::Value> {
+    let path = repo_root().join(format!(
+        "app/src-tauri/entropia-orme/resources/snapshot/{endpoint}.json"
+    ));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("{path:?}: {e}"))
 }

@@ -909,5 +909,23 @@
       "max_dot": 3
     },
     "crop_margin": 7
+  },
+  "tool_names": {
+    "min_letters": 3,
+    "min_cut_key": 18,
+    "cut_tolerance": 2,
+    "library": {
+      "floor": 90.0,
+      "margin": 11.0
+    },
+    "dismissed": {
+      "floor": 90.0,
+      "margin": 11.0
+    },
+    "bundled": {
+      "floor": 90.0
+    },
+    "max_candidates": 5,
+    "twin_visible": 28
   }
 }

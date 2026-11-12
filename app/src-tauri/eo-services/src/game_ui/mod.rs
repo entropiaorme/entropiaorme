@@ -21,6 +21,7 @@ pub mod skills;
 pub mod table;
 pub mod text;
 pub mod tool_bar;
+pub mod tool_names;
 pub mod validate;
 pub mod window;
 

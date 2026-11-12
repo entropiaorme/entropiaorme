@@ -26,13 +26,10 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::fuzzy_match::ratio;
+use crate::fuzzy_match::{ratio, PERFECT};
 use crate::game_data_store::GameDataStore;
 
-use super::field::label_key;
-
-/// The scale the fuzzy matcher scores on: a hundred is a perfect match.
-const PERCENT: f64 = 100.0; // not layout: the fuzzy matcher's percent scale
+use super::field::{key_counts, label_key, similarity_bound, too_few_letters, KeyCounts};
 
 /// How strictly a reading must match a known name, as the profile
 /// describes it.
@@ -74,38 +71,6 @@ pub struct CatalogueMob {
     pub level: Option<u32>,
 }
 
-/// The letters and the digits a key is counted over; anything else in
-/// a key shares one further count.
-const LETTERS: usize = 'Z' as usize - 'A' as usize + 1;
-const DIGITS: usize = '9' as usize - '0' as usize + 1;
-
-/// Letter and digit counts of a key, for a cheap upper bound on how
-/// similar two keys can be before comparing them properly.
-type Counts = [u16; LETTERS + DIGITS + 1];
-
-fn counts(key: &[char]) -> Counts {
-    let mut out = [0u16; LETTERS + DIGITS + 1];
-    for c in key {
-        let slot = match c {
-            'A'..='Z' => *c as usize - 'A' as usize,
-            '0'..='9' => LETTERS + (*c as usize - '0' as usize),
-            _ => LETTERS + DIGITS,
-        };
-        out[slot] = out[slot].saturating_add(1);
-    }
-    out
-}
-
-/// The most the similarity of two keys can be: the share of characters
-/// they could have in common, whatever their order.
-fn bound(a: &Counts, a_len: usize, b: &Counts, b_len: usize) -> f64 {
-    let common: u32 = a.iter().zip(b).map(|(x, y)| (*x).min(*y) as u32).sum();
-    if a_len + b_len == 0 {
-        return 0.0;
-    }
-    2.0 * PERCENT * common as f64 / (a_len + b_len) as f64
-}
-
 /// Who a key names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Who {
@@ -115,7 +80,7 @@ enum Who {
 
 struct Key {
     chars: Vec<char>,
-    counts: Counts,
+    counts: KeyCounts,
     who: Who,
 }
 
@@ -123,7 +88,7 @@ impl Key {
     fn new(text: &str, who: Who) -> Option<Self> {
         let chars = label_key(text);
         (!chars.is_empty()).then(|| Key {
-            counts: counts(&chars),
+            counts: key_counts(&chars),
             chars,
             who,
         })
@@ -367,7 +332,7 @@ fn distinct(catalogue: &MobCatalogue, candidates: &[(Who, f64)]) -> Vec<(Who, f6
 }
 
 fn spelling_of(score: f64, profile: &MobNameProfile) -> Spelling {
-    if score >= PERCENT {
+    if score >= PERFECT {
         Spelling::Exact
     } else if score >= profile.known_score {
         Spelling::Near
@@ -456,11 +421,7 @@ pub fn resolve(
         text: text.trim().to_string(),
         level,
     };
-    let letters = text.chars().filter(|c| c.is_alphabetic()).count();
-    let visible = text.chars().filter(|c| !c.is_whitespace()).count();
-    if letters < profile.min_letters.max(1)
-        || (letters as f64) < profile.min_letter_share * visible as f64
-    {
+    if too_few_letters(text, profile.min_letters, profile.min_letter_share) {
         return Resolved::Unclear;
     }
     let key = label_key(text);
@@ -469,14 +430,14 @@ pub fn resolve(
         .iter()
         .position(|name| label_key(name) == key)
     {
-        return answer(catalogue, Who::Confirmed(i), PERCENT, profile);
+        return answer(catalogue, Who::Confirmed(i), PERFECT, profile);
     }
-    let key_counts = counts(&key);
+    let read_counts = key_counts(&key);
     let floor = profile.guess_score - profile.margin;
     let candidates: Vec<(Who, f64)> = catalogue
         .keys
         .iter()
-        .filter(|k| bound(&k.counts, k.chars.len(), &key_counts, key.len()) >= floor)
+        .filter(|k| similarity_bound(&k.counts, k.chars.len(), &read_counts, key.len()) >= floor)
         .filter_map(|k| {
             let score = ratio(&key, &k.chars);
             (score >= floor).then_some((k.who, score))

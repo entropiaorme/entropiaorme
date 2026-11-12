@@ -44,6 +44,7 @@ use eo_services::game_ui::skills::{
     read_skills_page, RowName, SkillRow, SkillVocabulary, SkillsError, SkillsPage,
 };
 use eo_services::game_ui::tool_bar::{lettering, read_tool_name, tool_bar_state, Lettering};
+use eo_services::game_ui::tool_names::{self, ToolCatalogue, ToolMatch};
 use eo_services::game_ui::window::find_windows;
 use eo_services::ocr_engine::load_bgr_png;
 use eo_services::planet_maps::PlanetMapStore;
@@ -1967,11 +1968,23 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
 
 // The tool bar.
 
+/// The item a bar with lettering names, as its labels give it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LabelledItem {
+    /// The item's full name, as the bundled game data lists it.
+    Listed(String),
+    /// An item in no list of the tools a player holds.
+    Unlisted,
+}
+
 /// What a frame's labels say the tool bar shows: its state as the
 /// reader's state is named (`no_panel` as `NoPanel`), and for a bar with
 /// lettering the name as the screen shows it (with the dots of a name cut
-/// short). `None` for a frame whose labels say nothing of the bar.
-fn labelled_tool_bar(labels: &Value) -> Option<(String, Option<String>)> {
+/// short), with the item it names. `None` for a frame whose labels say
+/// nothing of the bar.
+type LabelledBar = (String, Option<String>, Option<LabelledItem>);
+
+fn labelled_tool_bar(labels: &Value) -> Option<LabelledBar> {
     let entry = labels.get("tool_bar")?;
     let state = entry["state"].as_str().expect("the tool bar's state");
     let named: String = state
@@ -1984,7 +1997,12 @@ fn labelled_tool_bar(labels: &Value) -> Option<(String, Option<String>)> {
                 .unwrap_or_default()
         })
         .collect();
-    Some((named, entry["name"].as_str().map(str::to_string)))
+    let item = match (entry["item"].as_str(), entry["unlisted"].as_bool()) {
+        (Some(item), None) => Some(LabelledItem::Listed(item.to_string())),
+        (None, Some(true)) => Some(LabelledItem::Unlisted),
+        _ => None,
+    };
+    Some((named, entry["name"].as_str().map(str::to_string), item))
 }
 
 /// Every frame's tool bar in the state its labels give, or the one the
@@ -1997,7 +2015,11 @@ fn labelled_tool_bar(labels: &Value) -> Option<(String, Option<String>)> {
 /// read right in their letters and digits (a name is compared on those
 /// alone, the recogniser dropping spaces between words) and how many
 /// letter-perfect; whether the name was cut short is told from the
-/// pixels and must be right.
+/// pixels and must be right. Every name read is then resolved against the
+/// bundled tools: naming another tool than the labelled one, or any tool
+/// for an item in no list, fails; resolving to the labelled tool (or to
+/// nothing, for an item in no list) is right; a contention or nothing
+/// where a tool is labelled is counted as unresolved and printed.
 ///
 /// Over the whole corpus (not a shard of it), two more rules hold: the
 /// misreads may not outnumber the manifest's ceiling, and the lettering's
@@ -2012,6 +2034,9 @@ pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
     let (mut states, mut right, mut perfect, mut lettered) = (0usize, 0usize, 0usize, 0usize);
     let (mut misread, mut refused) = (Vec::new(), Vec::new());
     let mut masks: Vec<(String, String, Lettering)> = Vec::new();
+    let store = GameDataStore::new(&resources().join("snapshot")).expect("the bundled game data");
+    let catalogue = ToolCatalogue::from_store(&store, Vec::new(), Vec::new());
+    let (mut resolved, mut unresolved) = (0usize, Vec::new());
     let frames: Vec<(String, &Value)> = corpus
         .frames()
         .into_iter()
@@ -2020,7 +2045,7 @@ pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
         .map(|(_, frame)| frame)
         .collect();
     for (name, labels) in frames {
-        let Some((labelled, truth)) = labelled_tool_bar(labels) else {
+        let Some((labelled, truth, item)) = labelled_tool_bar(labels) else {
             outcome
                 .missing
                 .push(format!("{name}: the labels say nothing of the tool bar"));
@@ -2056,9 +2081,9 @@ pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
             println!("  {name}: {got}");
             continue;
         };
-        let Some(truth) = truth else {
+        let (Some(truth), Some(item)) = (truth, item) else {
             outcome.missing.push(format!(
-                "{name}: the labels give the tool bar lettering but no name"
+                "{name}: the labels give the tool bar lettering but no name, or not the item it names (`item`, or `unlisted`)"
             ));
             continue;
         };
@@ -2089,6 +2114,16 @@ pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
                         "{name}: read {shown:?}, the screen shows {truth:?}"
                     ));
                 }
+                let found = tool_names::resolve(&tool, &catalogue, &profile.tool_names);
+                match resolution(&found, &item) {
+                    Resolution::Right => resolved += 1,
+                    Resolution::Unresolved => {
+                        unresolved.push(format!("{name}: read {shown:?}, {found:?}"))
+                    }
+                    Resolution::Wrong => outcome.failures.push(format!(
+                        "tool bar: {name}: read {shown:?}, resolved to {found:?}, but the item is {item:?}"
+                    )),
+                }
             }
             Err(refusal) => {
                 let line = format!("{name} ({truth:?}): {refusal}");
@@ -2112,6 +2147,13 @@ pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
     for line in &misread {
         println!("  misread: {line}");
     }
+    println!(
+        "tool bar{shard}: of the names read, {resolved} resolved to the labelled item, {} unresolved, none to another",
+        unresolved.len()
+    );
+    for line in &unresolved {
+        println!("  unresolved: {line}");
+    }
     for line in &refused {
         println!("  refused: {line}");
     }
@@ -2119,7 +2161,7 @@ pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
         println!(
             "tool bar{shard}: the misread ceiling and the lettering's pairs are held over the whole corpus only"
         );
-        outcome.exact += states + right;
+        outcome.exact += states + right + resolved;
         return outcome;
     }
     match corpus.ceilings.as_ref().map(|c| c.tool_name_misreads) {
@@ -2165,6 +2207,27 @@ pub fn tool_bar(r: &Replay, shard: Shard) -> Outcome {
         same_most.as_ref().map(|(n, pair)| format!("{n} ({pair})")),
         other_least.as_ref().map(|(n, pair)| format!("{n} ({pair})")),
     );
-    outcome.exact += states + right;
+    outcome.exact += states + right + resolved;
     outcome
+}
+
+/// How a resolved name stands against the item its frame is labelled
+/// with.
+enum Resolution {
+    Right,
+    Unresolved,
+    Wrong,
+}
+
+fn resolution(found: &ToolMatch, item: &LabelledItem) -> Resolution {
+    match (found, item) {
+        (ToolMatch::Bundled { name, .. }, LabelledItem::Listed(item)) if name == item => {
+            Resolution::Right
+        }
+        (ToolMatch::Unknown { .. }, LabelledItem::Unlisted) => Resolution::Right,
+        (ToolMatch::Contended { .. } | ToolMatch::Unknown { .. }, LabelledItem::Listed(_)) => {
+            Resolution::Unresolved
+        }
+        _ => Resolution::Wrong,
+    }
 }

@@ -136,6 +136,15 @@ impl SessionDetection {
         self.continuity = self.history.continuity(at_ms);
         self.view() != before
     }
+
+    /// Bring the creature the latest kills were up to date at `at_ms`,
+    /// after kills were answered: an answer changes it as much as a look
+    /// does. Answers whether what is shown changed.
+    fn follow_answers(&mut self, at_ms: i64) -> bool {
+        let before = self.view();
+        self.continuity = self.history.continuity(at_ms);
+        self.view() != before
+    }
 }
 
 /// A kill waiting for the history's answer.
@@ -501,11 +510,22 @@ impl TrackerActor {
             self.detection_failed();
             return;
         }
-        let changed = detection.follow(pulse.at_ms);
+        let at_ms = pulse.at_ms;
+        let looked = detection.follow(at_ms);
         self.answer_pending().await;
-        if changed {
+        let answered = self.follow_answers(at_ms);
+        if looked || answered {
             self.emit_mob_source_changed();
         }
+    }
+
+    /// After kills were answered at `at_ms`: whether the creature the
+    /// latest kills were, as shown, changed with them.
+    fn follow_answers(&mut self, at_ms: i64) -> bool {
+        self.session
+            .active_mut()
+            .and_then(|active| active.detection.as_mut())
+            .is_some_and(|detection| detection.follow_answers(at_ms))
     }
 
     /// A kill just recorded, while the screen was read, with its typed
@@ -546,6 +566,11 @@ impl TrackerActor {
             declared,
         });
         self.answer_pending().await;
+        // A kill whose line arrives after the looks that answer it changes
+        // what the latest kills were with no further look to show it.
+        if self.follow_answers(clock_epoch_ms(self.clock.as_ref())) {
+            self.emit_mob_source_changed();
+        }
     }
 
     /// Ask about every kill still waiting, one last time before the stop

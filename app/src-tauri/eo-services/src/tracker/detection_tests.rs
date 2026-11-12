@@ -247,6 +247,12 @@ impl Hunt {
         if let Some(arrived) = arrived {
             self.at(arrived);
         }
+        self.report_kill(logged, arrived);
+    }
+
+    /// The same report without moving the clock: a line stamped as read at
+    /// `arrived` that reaches the tracker later than that.
+    fn report_kill(&mut self, logged: i64, arrived: Option<i64>) {
         self.kills += 1;
         // One priced shot before each kill, so the session cycles value.
         let shot_at = naive("2026-01-01T00:00:00") + chrono::TimeDelta::seconds(logged / 1000);
@@ -928,6 +934,33 @@ fn a_pin_from_the_screen_or_by_typing_names_every_kill_until_it_is_released() {
         assert_eq!(stamp.1, s("declared"), "a pin is the player's word");
     }
     assert!(hunt.kept().is_empty() && hunt.continued().is_empty());
+}
+
+#[test]
+fn a_kill_answered_after_the_last_look_still_moves_the_creature_recent_kills_show() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    let mut t = 0;
+    for _ in 0..2 {
+        t = hunt.fight(t, &["Daikiba Mature"; 4], 9);
+        t = hunt.idle(t, 8);
+    }
+    assert_eq!(hunt.view().continuity, None, "two kills are not yet a run");
+    // The third fight's looks all come first, and those after the death
+    // too; its line is read off the log only then, with no look after it.
+    let mut at = t;
+    for i in 0..4 {
+        let fill = 1.0 - 0.8 * f64::from(i) / 4.0;
+        hunt.look(at, Some(("Daikiba Mature", 9, fill)));
+        at += 1_000;
+    }
+    let death = at - 500;
+    hunt.idle(at, 8);
+    hunt.settle();
+    assert_eq!(hunt.view().continuity, None, "the kill is not logged yet");
+    // Read when it was written, reaching the tracker after those looks.
+    hunt.report_kill(death / 1000 * 1000, Some(death + 700));
+    assert_eq!(hunt.view().continuity, Some(mob("Daikiba", "Mature")));
 }
 
 #[test]

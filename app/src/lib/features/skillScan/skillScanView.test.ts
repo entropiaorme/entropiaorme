@@ -54,7 +54,12 @@ describe('scanView', () => {
 	});
 
 	it('says why the last scan stopped, in words the player can act on', () => {
-		for (const stopped of ['readFailed', 'captureNotAllowed', 'noNewPage'] as const) {
+		for (const stopped of [
+			'readFailed',
+			'captureNotAllowed',
+			'noNewPage',
+			'interfaceSizeUnreadable',
+		] as const) {
 			expect(scanView({ phase: 'idle', available: true, stopped })).toEqual({
 				kind: 'idle',
 				canStart: true,
@@ -97,6 +102,25 @@ describe('scanView', () => {
 			hint: HINT_TEXT.windowTooShort,
 		});
 		expect(scanView(collecting(3, 13, [1]))).toMatchObject({ hint: null });
+	});
+
+	it('says plainly when the window is drawn at a size no page can be read at', () => {
+		expect(scanView(collecting(0, null, [], 'interfaceSizeUnreadable'))).toMatchObject({
+			hint: 'The Skills window is drawn at an interface size this app cannot read yet.',
+		});
+		// Neither the hint nor the stop that follows it sends the player to
+		// show the page again or to start again: neither would help.
+		for (const text of [HINT_TEXT.interfaceSizeUnreadable, STOP_TEXT.interfaceSizeUnreadable]) {
+			expect(text).toMatch(/interface size this app cannot read yet/);
+			expect(text).not.toMatch(/again|retry|show it/i);
+		}
+		expect(
+			scanView({ phase: 'idle', available: true, stopped: 'interfaceSizeUnreadable' }),
+		).toEqual({
+			kind: 'idle',
+			canStart: true,
+			note: 'The scan stopped: the Skills window is drawn at an interface size this app cannot read yet.',
+		});
 	});
 
 	it('hands over to the review once every page is in, and says when it saves', () => {

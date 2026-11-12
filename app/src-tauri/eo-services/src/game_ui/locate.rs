@@ -15,14 +15,14 @@ use crate::fuzzy_match::ratio;
 use crate::game_ui::geometry::BgrImage;
 
 use super::field::{
-    label_key, read_field_in, read_run, FieldError, FieldProfile, FieldRead, Recogniser,
+    label_key, read_field_in, read_run, FieldError, FieldProfile, FieldRead, FieldScale, Recogniser,
 };
-use super::geometry::Rect;
-use super::profile::UiProfile;
+use super::geometry::{Pixels, Rect};
+use super::profile::{claiming, ScaleError, UiProfile};
 use super::sale_queue::SaleQueueProfile;
 use super::skills::SkillsTableProfile;
 use super::text::{text_runs, TextRun};
-use super::window::{find_windows, FoundWindow, Side};
+use super::window::{find_windows, marker_area, title_marker, FoundWindow, Side};
 
 /// One kind of client window, as the profile describes it.
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +93,44 @@ impl Located {
                     .any(|front| front.intersect(&run.rect).is_some())
             })
             .collect()
+    }
+
+    /// The height in pixels of the window's title marker, which the
+    /// client sizes with the interface scale: what tells the scale a
+    /// window's labelled fields are drawn at. Unmeasured when the marker's
+    /// box is not wholly in the frame, or a window in front reaches into
+    /// it: either could cut the marker short. Unmeasured too when the
+    /// marker runs to an edge of its box or is not the marker's shape, and
+    /// for a window the desktop scaled: its lettering keeps the proportions
+    /// of the scale it was drawn at, whatever its marker now measures.
+    pub fn marker_height(&self, image: &BgrImage, profile: &UiProfile) -> Result<i32, ScaleError> {
+        let window = &self.window;
+        if window.scaled_frame || window.top != Side::Seen || window.left == Side::BeyondFrame {
+            return Err(ScaleError::Unmeasured);
+        }
+        let corner = (window.rect.x0, window.rect.y0);
+        let area = marker_area(corner, &profile.chrome.marker);
+        let frame = Rect::new(0, 0, image.width() - 1, image.height() - 1);
+        if area.intersect(&frame) != Some(area)
+            || self.in_front.iter().any(|f| f.intersect(&area).is_some())
+        {
+            return Err(ScaleError::Unmeasured);
+        }
+        title_marker(image, corner, &profile.chrome.marker)
+            .map(|marker| marker.height())
+            .ok_or(ScaleError::Unmeasured)
+    }
+
+    /// The labelled fields' scale entry for this window: the one entry
+    /// claiming its title marker's height, with its index, decided from
+    /// the window's frame before anything in it is read.
+    pub fn field_scale<'p>(
+        &self,
+        image: &BgrImage,
+        profile: &'p UiProfile,
+    ) -> Result<(usize, &'p FieldScale), ScaleError> {
+        let height = self.marker_height(image, profile)?;
+        claiming(&profile.read.field_scales, height, |s| s.marker_height)
     }
 }
 
@@ -234,12 +272,18 @@ pub fn read_window_field(
         .and_then(|w| w.fields.get(field))
         .ok_or_else(|| ReadError::NotInProfile(format!("{window}.{field}")))?;
     let located = locate(image, profile, window, recogniser)?;
+    // The scale is decided from the window's frame before its figure is
+    // read: never by trying each entry's numerals on the reading.
+    let (_, scale) = located
+        .field_scale(image, profile)
+        .map_err(|why| ReadError::Field(FieldError::Scale(why)))?;
     let runs = located.runs(image, profile);
     Ok(read_field_in(
         image,
         &runs,
         field_profile,
         &profile.read,
+        &scale.numerals,
         recogniser,
     )?)
 }

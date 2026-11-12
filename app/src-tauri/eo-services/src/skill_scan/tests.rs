@@ -633,6 +633,51 @@ fn a_scan_with_no_new_page_for_a_while_stops() {
 }
 
 #[test]
+fn a_skills_window_at_an_interface_size_the_profile_lacks_is_said_as_that_to_the_end() {
+    // The table drawn with taller rows than any scale the bundled profile
+    // lists, whatever it comes to list: no look can read it.
+    let tallest_listed = crate::game_ui::test_support::bundled_profile().windows["skills"]
+        .skills_table
+        .as_ref()
+        .expect("the bundled profile describes the skills table")
+        .scales
+        .iter()
+        .map(|scale| scale.row_pitch[1])
+        .max()
+        .expect("a scale is listed");
+    let larger = SkillsLayout {
+        // The drawn pitch runs rule to rule, one more than the band a
+        // claim is stated in; well clear of the tallest claim.
+        row_pitch: tallest_listed + 1 + (SKILLS_ROW_PITCH - 44),
+        ..layout(
+            "1 / 2",
+            "Total: 4427",
+            vec![(None, "1"), (Some("Agility"), "73.71")],
+        )
+    };
+    let pages = pages(&[larger]);
+    let rig = rig_with(Arc::new(pages.lettering.recogniser()), |providers| {
+        providers.idle_limit = Duration::from_secs(120);
+    });
+    rig.screen.show(&pages.frames[0]);
+    start(&rig);
+    // Once two looks agree, the player is told why, not to show the page
+    // again.
+    wait_for(&rig.scan, "said the size is unreadable", |s| {
+        matches!(s, ScanStatus::Collecting(p)
+            if p.hint == Some(ScanHint::InterfaceSizeUnreadable) && p.collected == 0)
+    });
+    // When the scan gives up, it says the same, not that a wait passed
+    // with no new page.
+    rig.clock.advance(120.0).unwrap();
+    let status = wait_for(&rig.scan, "stopped", |s| {
+        matches!(s, ScanStatus::Idle { .. })
+    });
+    assert_eq!(status, idle(Some(ScanStop::InterfaceSizeUnreadable)));
+    assert!(rig.scan.wait_for_workers(Duration::from_secs(60)));
+}
+
+#[test]
 fn a_cancelled_scan_drops_the_page_it_was_reading_and_stops() {
     let pages = pages(&two_pages("Total: 4427")[..1]);
     let rig = rig(&pages);

@@ -14,7 +14,8 @@ use crate::fuzzy_match::ratio;
 use crate::game_ui::geometry::BgrImage;
 
 use super::geometry::{crop, Rect};
-use super::text::{run_below, run_right_of, text_runs, TextProfile, TextRun};
+use super::profile::ScaleError;
+use super::text::{run_below, run_right_of, TextRun};
 use super::validate::{parse, width_agrees, Grammar, NumeralMetrics, Parsed};
 
 /// The recognition seam: one crop to `(text, confidence)`, or `None`
@@ -125,6 +126,25 @@ pub struct ReadProfile {
     /// its text is long. Runs outside it are not worth recognising.
     pub label_aspect_per_char: [f32; 2],
     pub label_aspect_slack: f32,
+    /// How wide the numerals of a window's labelled fields are, one entry
+    /// per interface scale measured. Exactly one entry must claim the
+    /// scale the window is drawn at, told from its title marker, or the
+    /// field is refused.
+    pub field_scales: Vec<FieldScale>,
+}
+
+/// The numerals of labelled fields at one interface scale. The client
+/// hints a glyph's height to whole pixels while its width follows the
+/// scale, so a figure's width in digit heights differs from one scale
+/// to the next.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldScale {
+    /// The scale this entry is for, by the height in pixels of the title
+    /// marker at the window's top-left corner (both ends included): the
+    /// client sizes the marker with the scale, and it is measured from
+    /// the window's own frame before anything is read.
+    pub marker_height: [i32; 2],
     /// How wide the client's numerals are, for checking a number's
     /// reading against its ink.
     pub numerals: NumeralMetrics,
@@ -144,6 +164,11 @@ pub enum FieldError {
     Invalid { raw: String },
     #[error("the value read as {raw:?}, but the figure on screen is not that wide")]
     WrongWidth { raw: String },
+    /// The window is drawn at an interface scale the profile lists no
+    /// numerals for (or lists twice), told from its title marker's
+    /// height in pixels, or the marker is not in view to tell it.
+    #[error("{0}, the height of the window's title marker")]
+    Scale(ScaleError),
 }
 
 /// One field read and validated.
@@ -262,19 +287,6 @@ pub fn first_label<'a>(
     Ok(None)
 }
 
-/// Read `field` from the window at `window`.
-pub fn read_field(
-    image: &BgrImage,
-    window: Rect,
-    field: &FieldProfile,
-    text: &TextProfile,
-    read: &ReadProfile,
-    recogniser: &dyn Recogniser,
-) -> Result<FieldRead, FieldError> {
-    let runs = text_runs(image, window, text);
-    read_field_in(image, &runs, field, read, recogniser)
-}
-
 /// Where `field` stands among `runs`: the run that reads as its label,
 /// and the run in the stated relation to it, which holds the value. The
 /// first half of [`read_field_in`], for a caller that wants the value's
@@ -297,19 +309,22 @@ pub fn locate_field<'a>(
     Ok((label, value))
 }
 
-/// Read `field` from runs already found.
+/// Read `field` from runs already found, its figure held to `numerals`,
+/// the metrics of the scale the window is drawn at, chosen by the caller
+/// from the window's geometry before anything is read.
 pub fn read_field_in(
     image: &BgrImage,
     runs: &[TextRun],
     field: &FieldProfile,
     read: &ReadProfile,
+    numerals: &NumeralMetrics,
     recogniser: &dyn Recogniser,
 ) -> Result<FieldRead, FieldError> {
     let (label, value) = locate_field(image, runs, field, read, recogniser)?;
     let (raw, confidence) =
         read_run(image, value.rect, read, recogniser).ok_or(FieldError::NoRecogniser)?;
     let parsed = parse(field.grammar, &raw).ok_or(FieldError::Invalid { raw: raw.clone() })?;
-    if !width_agrees(image, value.rect, &parsed.text, &read.numerals) {
+    if !width_agrees(image, value.rect, &parsed.text, numerals) {
         return Err(FieldError::WrongWidth { raw });
     }
     Ok(FieldRead {
@@ -324,6 +339,7 @@ pub fn read_field_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game_ui::text::text_runs;
 
     #[test]
     fn an_isolated_word_is_read_without_its_neighbours() {
@@ -379,7 +395,14 @@ mod tests {
                     .expect("the field is located");
             assert_eq!((found_label.rect, value.rect), (label, want));
             assert!(matches!(
-                read_field_in(&frame.image, &runs, &field(side), &profile.read, &read),
+                read_field_in(
+                    &frame.image,
+                    &runs,
+                    &field(side),
+                    &profile.read,
+                    &profile.read.field_scales[0].numerals,
+                    &read
+                ),
                 Err(FieldError::Invalid { .. })
             ));
         }

@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eo_services::game_data_store::GameDataStore;
-use eo_services::game_ui::field::Recogniser;
+use eo_services::game_ui::field::{FieldError, Recogniser};
 use eo_services::game_ui::geometry::{BgrImage, Rect};
 use eo_services::game_ui::locate::{read_window_field, ReadError};
 use eo_services::game_ui::mob_names::{resolve, MobCatalogue, Resolved};
@@ -676,9 +676,10 @@ pub fn terminal(r: &Replay, labelled: &LabelledField) -> Outcome {
         };
         let image = corpus.frame(&name);
         let read = r.reader();
+        let frame = image.clone();
         let service = RepairOcrService::new(RepairProviders {
             // The terminal reads ask for the whole window.
-            frame: Arc::new(move |_| Ok(GameFrame::whole(image.clone(), (0, 0)))),
+            frame: Arc::new(move |_| Ok(GameFrame::whole(frame.clone(), (0, 0)))),
             profile: Some(profile.clone()),
             read_text: Some(Arc::new(read)),
         });
@@ -699,8 +700,22 @@ pub fn terminal(r: &Replay, labelled: &LabelledField) -> Outcome {
                 "{name}: read {:?} as {}, the screen shows {want:?}",
                 got.text, got.value_ped
             )),
+            // With the profile and recogniser in hand, the service is
+            // unavailable only for a terminal drawn at a scale the profile
+            // has no numerals for: the reader's own refusal says so.
             Err(TerminalRefusal::ReaderUnavailable) => {
-                panic!("the terminal reader is unavailable")
+                match read_window_field(
+                    &image,
+                    &r.profile,
+                    labelled.window,
+                    labelled.field,
+                    &r.reader(),
+                ) {
+                    Err(why @ ReadError::Field(FieldError::Scale(_))) => {
+                        tally.refused.push(format!("{name} ({want}): {why}"))
+                    }
+                    other => panic!("{name}: the terminal reader is unavailable ({other:?})"),
+                }
             }
             Err(refusal) => tally.refused.push(format!("{name} ({want}): {refusal}")),
         }

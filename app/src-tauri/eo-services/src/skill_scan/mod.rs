@@ -141,6 +141,10 @@ pub enum ScanStop {
     CaptureNotAllowed,
     /// The idle limit passed with no new page collected.
     NoNewPage,
+    /// The idle limit passed while the skills window was drawn at an
+    /// interface size the profile has no measurements for: starting again
+    /// would not help until the size changes or the app learns it.
+    InterfaceSizeUnreadable,
 }
 
 /// The scan's state, as the scan surfaces show it.
@@ -724,7 +728,16 @@ impl SkillScanService {
                     looking.collected = collected;
                     looking.last_new_page = now;
                 } else if now - looking.last_new_page >= self.providers.idle_limit.as_secs_f64() {
-                    self.end(scan, ScanStop::NoNewPage);
+                    // What the player was last shown, or this look saw, is
+                    // why no page came: an interface size the app cannot
+                    // read is said as that, not as a wait to retry.
+                    let unreadable = Some(ScanHint::InterfaceSizeUnreadable);
+                    let stop = if hint == unreadable || looking.steady.shown() == unreadable {
+                        ScanStop::InterfaceSizeUnreadable
+                    } else {
+                        ScanStop::NoNewPage
+                    };
+                    self.end(scan, stop);
                     return false;
                 }
                 ScanProgress {

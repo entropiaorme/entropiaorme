@@ -31,6 +31,8 @@ export const HINT_TEXT: Record<SkillScanHint, string> = {
 	pageNotRead: 'This page did not read. Show it again, or carry on and come back to it.',
 	otherListing:
 		'This page is from another category or page count than those collected. Switch back, or cancel and scan again.',
+	interfaceSizeUnreadable:
+		'The Skills window is drawn at an interface size this app cannot read yet.',
 };
 
 /** Why the last scan stopped by itself. */
@@ -38,6 +40,8 @@ export const STOP_TEXT: Record<SkillScanStop, string> = {
 	readFailed: 'The scan stopped: the Skills window could not be read. Start it again to retry.',
 	captureNotAllowed: 'Screen capture was not allowed. Start the scan again to be asked once more.',
 	noNewPage: 'The scan stopped after a while with no new page. Start it again.',
+	interfaceSizeUnreadable:
+		'The scan stopped: the Skills window is drawn at an interface size this app cannot read yet.',
 };
 
 /** Why a request about the scan was refused. */

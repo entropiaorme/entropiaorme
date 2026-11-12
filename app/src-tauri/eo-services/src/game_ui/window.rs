@@ -299,11 +299,41 @@ fn has_marker<P: Pixels>(image: &P, x0: i32, y0: i32, marker: &MarkerProfile) ->
     // The marker is a thin upright bar. Counting warm pixels alone
     // would also accept an item icon or a coloured tab that happens to
     // sit in the same corner of a pane, so its shape is checked too.
-    marker_extent(image, x0, y0, marker).is_some_and(|(count, bounds)| {
-        count >= marker.min_pixels
-            && bounds.x1 - bounds.x0 < marker.max_width
-            && bounds.height() >= marker.min_height
-    })
+    marker_extent(image, x0, y0, marker)
+        .is_some_and(|(count, bounds)| marker_shaped(count, bounds, marker))
+}
+
+/// Whether `count` pixels of the marker's colour within `bounds` make the
+/// marker's shape: enough of them, in a bar narrow and tall enough.
+fn marker_shaped(count: i32, bounds: Rect, marker: &MarkerProfile) -> bool {
+    count >= marker.min_pixels
+        && bounds.x1 - bounds.x0 < marker.max_width
+        && bounds.height() >= marker.min_height
+}
+
+/// The box the title marker of the window whose top-left corner is
+/// `corner` is looked for in, in the frame's coordinates.
+pub fn marker_area(corner: (i32, i32), marker: &MarkerProfile) -> Rect {
+    let [x0, y0, x1, y1] = marker.search;
+    Rect::new(corner.0 + x0, corner.1 + y0, corner.0 + x1, corner.1 + y1)
+}
+
+/// The whole title marker of the window whose top-left corner is
+/// `corner`: the bounds of its colour in the frame. The client sizes the
+/// marker with the interface scale, so its height tells the scale the
+/// window is drawn at. `None` when its box shows no marker's shape, or
+/// when the marker reaches an edge of its box: the box cuts it there, and
+/// a marker cut short would measure as a smaller scale's.
+pub fn title_marker<P: Pixels>(
+    image: &P,
+    corner: (i32, i32),
+    marker: &MarkerProfile,
+) -> Option<Rect> {
+    let area = marker_area(corner, marker);
+    let (count, bounds) = marker_extent(image, corner.0, corner.1, marker)?;
+    let inside =
+        bounds.x0 > area.x0 && bounds.y0 > area.y0 && bounds.x1 < area.x1 && bounds.y1 < area.y1;
+    (inside && marker_shaped(count, bounds, marker)).then_some(bounds)
 }
 
 /// The pixels of the marker's colour in its search box at the corner
@@ -1045,8 +1075,8 @@ mod tests {
         assert_eq!(
             got.marker,
             Some(MarkerMeasurement {
-                rect: Rect::new(25, 18, 29, 37),
-                pixels: 100,
+                rect: Rect::new(25, 17, 29, 38),
+                pixels: 110,
             })
         );
         // What it measures is what the finder's thresholds must admit.

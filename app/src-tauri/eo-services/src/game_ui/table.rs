@@ -220,6 +220,23 @@ pub struct TableShape {
     pub pitch: i32,
 }
 
+impl TableShape {
+    /// The row height measured rule to rule: the pitch, when a row in view
+    /// lies between two of the table's row rules. Every row but the last
+    /// does; the last is bounded below by whatever ends the view, which
+    /// `last_closed` says is a rule of the table itself (the row's own
+    /// bottom rule) rather than the view's end, a window's edge or a pane.
+    /// So a lone row measures the pitch only when it is closed by its own
+    /// rule, and no row measures nothing.
+    pub fn ruled_pitch(&self, last_closed: bool) -> Option<i32> {
+        match self.rows.len() {
+            0 => None,
+            1 => last_closed.then_some(self.pitch),
+            _ => Some(self.pitch),
+        }
+    }
+}
+
 /// Sort the bands under the header into rows. The rows are the ruled
 /// bands from the header down. Every row but the last lies between two
 /// row rules, so those give the row's height; the last is bounded by
@@ -431,7 +448,28 @@ mod tests {
         ];
         let shape = table_shape(&below, 0.05);
         assert_eq!(shape.pitch, 57);
+        assert_eq!(shape.ruled_pitch(false), Some(57));
         assert_eq!(fits(&shape), vec![true, true, true]);
+    }
+
+    #[test]
+    fn a_lone_row_or_none_measures_no_pitch() {
+        // A single row cut by the bottom of the view: its height is the
+        // view's, not the table's.
+        let cut = table_shape(&[band(100, 130, true), band(132, 400, false)], 0.05);
+        assert_eq!((cut.rows.len(), cut.pitch), (1, 31));
+        assert_eq!(cut.ruled_pitch(false), None);
+        // The same lone row closed by its own rule measures its height.
+        let closed = table_shape(&[band(100, 156, true), band(158, 400, false)], 0.05);
+        assert_eq!(closed.ruled_pitch(true), Some(57));
+        assert_eq!(closed.ruled_pitch(false), None);
+        // No row ruled at all, whatever bounds the view.
+        let none = table_shape(&[band(100, 400, false)], 0.05);
+        assert_eq!((none.rows.len(), none.pitch), (0, 0));
+        for closed in [false, true] {
+            assert_eq!(none.ruled_pitch(closed), None);
+            assert_eq!(table_shape(&[], 0.05).ruled_pitch(closed), None);
+        }
     }
 
     #[test]

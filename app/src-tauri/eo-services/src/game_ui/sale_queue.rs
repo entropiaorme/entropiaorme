@@ -64,7 +64,7 @@ use super::field::{
 };
 use super::geometry::{brightened, chroma, near, Pixels, Rect};
 use super::locate::{locate, Located, ReadError};
-use super::profile::{claiming, ScaleError, UiProfile};
+use super::profile::{claiming, nearest_to_measure, ScaleError, UiProfile};
 use super::table::{
     column_rules, enclosed_regions, row_rules, rule_extent, table_shape, Band, Panel,
 };
@@ -1824,10 +1824,11 @@ pub fn measure_sale_queue(
     let scale = claiming(&queue.scales, header_height, |s| s.header_height).map(|(i, _)| i);
     // The figures under the spinners are found with the lettering of the
     // scale that claims the queue, or failing one, the nearest listed.
-    let nearest = scale.unwrap_or_else(|_| nearest_scale(&queue.scales, header_height));
+    let base = scale
+        .unwrap_or_else(|_| nearest_to_measure(&queue.scales, header_height, |s| s.header_height));
     let lettering = queue
         .scales
-        .get(nearest)
+        .get(base)
         .ok_or_else(|| SaleQueueError::NotInProfile("no sale_queue scale".into()))?;
     let reader = table.reader(image, profile, queue, recogniser);
     let mut rows = Vec::new();
@@ -1870,20 +1871,10 @@ pub fn measure_sale_queue(
     Ok(QueueMeasure {
         header_height,
         scale,
-        lettering: nearest,
+        lettering: base,
         rows,
         count,
     })
-}
-
-/// The listed scale whose claimed header heights lie nearest `measured`.
-pub fn nearest_scale(scales: &[SaleQueueScale], measured: i32) -> usize {
-    (0..scales.len())
-        .min_by_key(|i| {
-            let [least, most] = scales[*i].header_height;
-            (least - measured).abs().min((most - measured).abs())
-        })
-        .unwrap_or(0)
 }
 
 /// One row: every field read, then the checks between them. A row read
@@ -2152,8 +2143,8 @@ fn confirm_by_list(
 mod tests {
     use super::*;
     use crate::game_ui::test_support::{
-        bundled_profile, draw_window, sale_scene, sale_window, standard_sale_layout, Lettering,
-        SaleLayout, SALE_HEADER_HEIGHT,
+        bundled_profile, draw_window, sale_scene, sale_window, standard_sale_layout, widened,
+        Lettering, SaleLayout, SALE_HEADER_HEIGHT,
     };
 
     fn catalogue() -> ItemCatalogue {
@@ -3040,25 +3031,6 @@ mod tests {
         assert_eq!(catalogue.find("Sollomate Opalo"), Some(Some(4.5)));
         assert_eq!(catalogue.find("Vivo T1"), Some(None));
         assert_eq!(catalogue.find("Atrox"), None);
-    }
-
-    /// `numerals` with every advance and the bias `factor` times as wide:
-    /// how one lettering size measures at another interface scale, its
-    /// width following the scale and its height hinted.
-    fn widened(numerals: &NumeralMetrics, factor: f32) -> NumeralMetrics {
-        let scale = |v: f32| v * factor;
-        NumeralMetrics {
-            digit: scale(numerals.digit),
-            one: scale(numerals.one),
-            comma: scale(numerals.comma),
-            period: scale(numerals.period),
-            ped_suffix: scale(numerals.ped_suffix),
-            above_tt_prefix: numerals.above_tt_prefix.map(scale),
-            percent: numerals.percent.map(scale),
-            bracket: numerals.bracket.map(scale),
-            bias: scale(numerals.bias),
-            ..numerals.clone()
-        }
     }
 
     /// The bundled profile's entry for the drawn queue's scale, and a

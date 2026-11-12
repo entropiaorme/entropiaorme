@@ -85,6 +85,10 @@ pub enum ScaleError {
     /// More than one entry claims it.
     #[error("the interface scale is ambiguous: more than one entry claims {measured} px")]
     Ambiguous { measured: i32 },
+    /// What the scale is told by is covered or out of view, so the scale
+    /// is not known and no entry can be chosen.
+    #[error("the interface scale could not be measured: what tells it is covered or out of view")]
+    Unmeasured,
 }
 
 /// The one entry of `entries` whose claimed range (inclusive, in pixels)
@@ -103,6 +107,23 @@ pub fn claiming<T>(
         (None, _) => Err(ScaleError::NotListed { measured }),
         (Some(_), Some(_)) => Err(ScaleError::Ambiguous { measured }),
     }
+}
+
+/// The index of the entry of `entries` whose claimed range lies nearest
+/// `measured`: what a measuring tool starts from at a scale no entry
+/// claims. Never a reader's choice, which is [`claiming`]'s or none.
+#[doc(hidden)]
+pub fn nearest_to_measure<T>(
+    entries: &[T],
+    measured: i32,
+    claim: impl Fn(&T) -> [i32; 2],
+) -> usize {
+    (0..entries.len())
+        .min_by_key(|i| {
+            let [least, most] = claim(&entries[*i]);
+            (least - measured).max(measured - most).max(0)
+        })
+        .unwrap_or(0)
 }
 
 /// Whether the claimed ranges of a per-scale list are each well formed
@@ -130,6 +151,13 @@ pub fn claims_apart<T>(
                     "{what}[{i}] and {what}[{j}] claim overlapping ranges"
                 ));
             }
+            // A pixel left unclaimed between two entries: a measure one
+            // pixel off its scale's is refused, never taken for the next.
+            if least == other_most + 1 || other_least == most + 1 {
+                return Err(format!(
+                    "{what}[{i}] and {what}[{j}] claim adjacent ranges, with no pixel between them"
+                ));
+            }
         }
     }
     Ok(())
@@ -145,7 +173,19 @@ impl UiProfile {
                 expected: PROFILE_FORMAT,
             });
         }
+        claims_apart(&profile.read.field_scales, "read.field_scales", |s| {
+            s.marker_height
+        })
+        .map_err(ProfileError::Inconsistent)?;
         for (key, window) in &profile.windows {
+            if let Some(table) = &window.skills_table {
+                claims_apart(
+                    &table.scales,
+                    &format!("windows.{key}.skills_table.scales"),
+                    |s| s.row_pitch,
+                )
+                .map_err(ProfileError::Inconsistent)?;
+            }
             if let Some(queue) = &window.sale_queue {
                 claims_apart(
                     &queue.scales,
@@ -250,31 +290,54 @@ mod tests {
         );
         assert!(claims_apart(&entries, "scales", claim).is_ok());
         assert!(claims_apart(&overlapping, "scales", claim).is_err());
+        // Ranges that meet with no pixel between them are refused in
+        // either order; one pixel between them is enough.
+        let adjacent = [[29, 31], [32, 34]];
+        for pair in [adjacent, [adjacent[1], adjacent[0]]] {
+            assert!(claims_apart(&pair, "scales", claim).is_err_and(|why| why.contains("adjacent")));
+        }
+        assert!(claims_apart(&[[29, 31], [33, 35]], "scales", claim).is_ok());
         assert!(claims_apart(&[[31, 29]], "scales", claim).is_err());
         assert!(claims_apart::<[i32; 2]>(&[], "scales", claim).is_err());
+        // Measuring starts from the entry nearest a scale none claims.
+        assert_eq!(nearest_to_measure(&entries, 33, claim), 0);
+        assert_eq!(nearest_to_measure(&entries, 35, claim), 1);
+        assert_eq!(nearest_to_measure(&entries, 30, claim), 0);
+        assert_eq!(nearest_to_measure(&entries, 60, claim), 1);
     }
 
     #[test]
     fn a_profile_whose_scale_entries_overlap_is_refused() {
         let bundled: serde_json::Value = serde_json::from_str(&bundled_text()).unwrap();
-        let scales = "/windows/auction_sell/sale_queue/scales";
-        let mut twice = bundled.clone();
-        let first = twice.pointer(&format!("{scales}/0")).unwrap().clone();
-        twice
-            .pointer_mut(scales)
-            .and_then(serde_json::Value::as_array_mut)
-            .unwrap()
-            .push(first);
-        assert!(matches!(
-            UiProfile::from_json(&twice.to_string()),
-            Err(ProfileError::Inconsistent(why)) if why.contains("overlapping")
-        ));
-        let mut none = bundled;
-        *none.pointer_mut(scales).unwrap() = serde_json::json!([]);
-        assert!(matches!(
-            UiProfile::from_json(&none.to_string()),
-            Err(ProfileError::Inconsistent(why)) if why.contains("lists no scale")
-        ));
+        for scales in [
+            "/windows/auction_sell/sale_queue/scales",
+            "/read/field_scales",
+            "/windows/skills/skills_table/scales",
+        ] {
+            let mut twice = bundled.clone();
+            let first = twice.pointer(&format!("{scales}/0")).unwrap().clone();
+            twice
+                .pointer_mut(scales)
+                .and_then(serde_json::Value::as_array_mut)
+                .unwrap()
+                .push(first);
+            assert!(
+                matches!(
+                    UiProfile::from_json(&twice.to_string()),
+                    Err(ProfileError::Inconsistent(why)) if why.contains("overlapping")
+                ),
+                "{scales}"
+            );
+            let mut none = bundled.clone();
+            *none.pointer_mut(scales).unwrap() = serde_json::json!([]);
+            assert!(
+                matches!(
+                    UiProfile::from_json(&none.to_string()),
+                    Err(ProfileError::Inconsistent(why)) if why.contains("lists no scale")
+                ),
+                "{scales}"
+            );
+        }
     }
 
     #[test]

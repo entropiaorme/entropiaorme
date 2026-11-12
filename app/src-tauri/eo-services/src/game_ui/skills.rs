@@ -30,12 +30,12 @@ use crate::game_ui::geometry::BgrImage;
 use super::field::{first_label, label_key, read_run, Recogniser, Remembering};
 use super::geometry::{chroma, Pixels, Rect};
 use super::locate::{locate, ReadError};
-use super::profile::UiProfile;
+use super::profile::{claiming, nearest_to_measure, ScaleError, UiProfile};
 use super::table::{
-    carries_across, column_rules, row_rules, rule_extent, table_shape, Band, Panel,
+    carries_across, column_rules, row_rules, rule_extent, table_shape, Band, Panel, TableShape,
 };
 use super::text::{ink_groups, run_right_of, text_runs, TextRun};
-use super::validate::{pager, parse, width_agrees, Grammar};
+use super::validate::{pager, parse, width_agrees, Grammar, NumeralMetrics};
 use super::window::Side;
 
 /// The profile key of the skills window.
@@ -90,6 +90,25 @@ pub struct SkillsTableProfile {
     pub near_miss: NearMissProfile,
     /// What the table's scrollbar looks like.
     pub scrollbar: ScrollbarProfile,
+    /// The points' numerals, one entry per interface scale measured.
+    /// Exactly one entry must claim the scale the table is drawn at, told
+    /// from its row pitch, or the page is refused.
+    pub scales: Vec<SkillsScale>,
+}
+
+/// The table's numerals at one interface scale. The client hints a
+/// glyph's height to whole pixels while its width follows the scale, so
+/// a figure's width in digit heights differs from one scale to the next.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillsScale {
+    /// The scale this entry is for, by the table's row pitch in pixels:
+    /// the height of a row between its two rule lines (both ends
+    /// included). The client spaces the rules by the scale, so the pitch
+    /// tells it before anything is read.
+    pub row_pitch: [i32; 2],
+    /// How wide the points' numerals are.
+    pub numerals: NumeralMetrics,
 }
 
 /// When a name that spells no skill is taken as a slip of one.
@@ -267,6 +286,10 @@ pub enum SkillsError {
     NotSkillsTab,
     #[error("the table's rule lines could not be found")]
     TableNotFound,
+    /// The table is drawn at an interface scale the profile lists no
+    /// numerals for (or lists twice), told from its row pitch in pixels.
+    #[error("{0}, the table's row pitch")]
+    Scale(ScaleError),
 }
 
 impl From<ReadError> for SkillsError {
@@ -597,6 +620,80 @@ pub fn read_skills_page(
     vocabulary: &SkillVocabulary,
     recogniser: &dyn Recogniser,
 ) -> Result<SkillsPage, SkillsError> {
+    read_page(image, profile, vocabulary, recogniser, ScalePick::Claimed).map(|(page, _)| page)
+}
+
+/// The table as the reader measures it, for measuring the numerals of a
+/// scale the profile may not list yet.
+#[derive(Debug, Clone)]
+pub struct SkillsMeasure {
+    /// The table's row pitch in pixels: what tells the interface scale.
+    pub row_pitch: i32,
+    /// The profile's scale entry that claims it, or why none does.
+    pub scale: Result<usize, ScaleError>,
+    /// The scale entry whose numerals the page below was read with: the
+    /// one claiming the table, or the nearest listed.
+    pub numerals: usize,
+    /// The points' ink of every whole row in view whose points sit on
+    /// its text line, top to bottom, in the frame's coordinates.
+    pub points: Vec<Rect>,
+}
+
+/// Find the table and measure its row pitch and where each whole row's
+/// points are: what an operator measures a new scale entry from. Nothing
+/// it answers is a reading; a page is read only by [`read_skills_page`].
+pub fn measure_skills_page(
+    image: &BgrImage,
+    profile: &UiProfile,
+    vocabulary: &SkillVocabulary,
+    recogniser: &dyn Recogniser,
+) -> Result<SkillsMeasure, SkillsError> {
+    // The page is read with the nearest entry's numerals where none
+    // claims the table, so it is dropped here: only the geometry leaves.
+    let (_, measured) = read_page(image, profile, vocabulary, recogniser, ScalePick::Nearest)?;
+    let (row_pitch, scale, numerals, points) = measured;
+    Ok(SkillsMeasure {
+        row_pitch,
+        scale,
+        numerals,
+        points,
+    })
+}
+
+/// The entry of `scales` claiming the table's row pitch measured rule to
+/// rule, or why none does; `last_closed` says whether the last row in
+/// view is closed below by a rule of the table.
+fn scale_by_pitch(
+    shape: &TableShape,
+    last_closed: bool,
+    scales: &[SkillsScale],
+) -> Result<usize, ScaleError> {
+    let pitch = shape
+        .ruled_pitch(last_closed)
+        .ok_or(ScaleError::Unmeasured)?;
+    claiming(scales, pitch, |s| s.row_pitch).map(|(i, _)| i)
+}
+
+/// Which scale entry a page is read with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScalePick {
+    /// The one entry claiming the table's row pitch, or a refusal.
+    Claimed,
+    /// That entry, or failing one the nearest listed: for measuring only.
+    Nearest,
+}
+
+/// The row pitch, the entry claiming it (or why none does), the entry
+/// the page was read with, and each whole row's points ink.
+type PageMeasure = (i32, Result<usize, ScaleError>, usize, Vec<Rect>);
+
+fn read_page(
+    image: &BgrImage,
+    profile: &UiProfile,
+    vocabulary: &SkillVocabulary,
+    recogniser: &dyn Recogniser,
+    pick: ScalePick,
+) -> Result<(SkillsPage, PageMeasure), SkillsError> {
     let table = profile
         .windows
         .get(WINDOW)
@@ -794,6 +891,41 @@ pub fn read_skills_page(
         .collect();
     let shape = table_shape(&below, table.row_slack);
     let row_slack = table.row_slack * shape.pitch as f32;
+    // The scale is decided from the table's rule lines alone, before any
+    // value is read: never by trying each entry's numerals on a reading.
+    // Only a row between two of the table's rules measures the pitch. The
+    // last row in view is closed below by one when the line under it spans
+    // the table as the header's own rule does: a window's edge, a pane's
+    // frame or a window in front spans something else.
+    let last_closed = lines
+        .get(header_index + 1 + shape.rows.len())
+        .and_then(|&(y, _)| {
+            rule_extent(
+                image,
+                y,
+                (window.rect.x0, window.rect.x1),
+                panel,
+                &profile.rules,
+            )
+        })
+        .is_some_and(|(left, right)| {
+            (left - extent.0).abs() <= profile.rules.merge
+                && (right - extent.1).abs() <= profile.rules.merge
+        });
+    let claimed = scale_by_pitch(&shape, last_closed, &table.scales);
+    let chosen = match (claimed, pick) {
+        (Ok(index), _) => index,
+        (Err(why), ScalePick::Claimed) => return Err(SkillsError::Scale(why)),
+        (Err(_), ScalePick::Nearest) => {
+            nearest_to_measure(&table.scales, shape.pitch, |s| s.row_pitch)
+        }
+    };
+    let numerals: &NumeralMetrics = &table
+        .scales
+        .get(chosen)
+        .ok_or(SkillsError::NotInProfile)?
+        .numerals;
+    let mut measured_points = Vec::new();
     // The scrollbar's thumb is rule-coloured too, and where it lies
     // against a rule it lengthens it; a thumb shorter than its track
     // leaves some rule in view unlengthened, and one that fills its track
@@ -860,6 +992,7 @@ pub fn read_skills_page(
             partial += 1;
             continue;
         }
+        measured_points.push(points_rect);
         let text_height = points_rect.height() as f32;
         let raw_points = read(points_rect)?;
         // Right-aligned points that crowd their column's left divider may
@@ -896,7 +1029,7 @@ pub fn read_skills_page(
         // wide for what was read.
         let points = parse(Grammar::GroupedDecimal, &raw_points)
             .filter(|_| clear_of_divider)
-            .filter(|p| width_agrees(image, points_rect, &p.text, &profile.read.numerals));
+            .filter(|p| width_agrees(image, points_rect, &p.text, numerals));
         match (name, points) {
             (Some(name), Some(points)) => rows.push(SkillRow {
                 name,
@@ -973,7 +1106,7 @@ pub fn read_skills_page(
         && partial == 0
         && unread.is_empty()
         && !covered(table_area);
-    Ok(SkillsPage {
+    let page = SkillsPage {
         category,
         total,
         page,
@@ -982,7 +1115,8 @@ pub fn read_skills_page(
         partial,
         whole,
         overflows,
-    })
+    };
+    Ok((page, (shape.pitch, claimed, chosen, measured_points)))
 }
 
 /// What a name cell holds beside the icon.
@@ -1414,8 +1548,9 @@ mod tests {
     use super::*;
     use crate::game_ui::test_support::{
         blank, bundled_profile, draw_window, fill, skills_drawing_vocabulary, skills_window,
-        standard_skills_layout, SkillsLayout, SKILLS_ROW_PITCH, THUMB,
+        standard_skills_layout, widened, SkillsLayout, SKILLS_ROW_PITCH, THUMB,
     };
+    use crate::game_ui::validate::expected_width;
 
     fn table_profile() -> SkillsTableProfile {
         bundled_profile().windows[WINDOW]
@@ -2142,5 +2277,303 @@ mod tests {
         let mut layout = standard_skills_layout();
         layout.window = Rect::new(400, 30, 1360, 860);
         assert_eq!(read(&layout), Err(SkillsError::WindowClipped));
+    }
+
+    /// The drawn table's band between two rules: the row pitch measured.
+    const DRAWN_PITCH: i32 = SKILLS_ROW_PITCH - 1;
+
+    /// The drawn table's pitch rule to rule at a larger interface scale.
+    const LARGER_ROW_PITCH: i32 = 72;
+
+    /// The bundled profile's entry for the drawn table's scale, and a
+    /// second scale's: a taller row, and numerals as wide as the drawn
+    /// lettering measures at a larger scale.
+    fn two_scales() -> (SkillsScale, SkillsScale) {
+        let drawn = table_profile().scales[0].clone();
+        assert!((drawn.row_pitch[0]..=drawn.row_pitch[1]).contains(&DRAWN_PITCH));
+        let band = LARGER_ROW_PITCH - 1;
+        let larger = SkillsScale {
+            row_pitch: [band - 1, band + 1],
+            numerals: widened(&drawn.numerals, 1.12),
+        };
+        (drawn, larger)
+    }
+
+    /// The bundled profile with its skills table's scales replaced.
+    fn with_scales(scales: Vec<SkillsScale>) -> UiProfile {
+        let mut profile = bundled_profile();
+        profile
+            .windows
+            .get_mut(WINDOW)
+            .and_then(|w| w.skills_table.as_mut())
+            .expect("the bundled profile describes the skills table")
+            .scales = scales;
+        profile
+    }
+
+    /// The drawn page read under `profile`, each reading passed through
+    /// `change`; every text the recogniser was asked for is kept in
+    /// `asked`.
+    fn read_under(
+        profile: &UiProfile,
+        layout: &SkillsLayout,
+        change: impl Fn(String) -> String + Send + Sync,
+        asked: &std::sync::Mutex<Vec<String>>,
+    ) -> Result<SkillsPage, SkillsError> {
+        let d = skills_window(layout);
+        let inner = d.recogniser();
+        let recogniser = move |crop: &BgrImage| {
+            inner(crop).map(|(text, c)| {
+                asked.lock().unwrap().push(text.clone());
+                (change(text), c)
+            })
+        };
+        read_skills_page(&d.image, profile, &skills_drawing_vocabulary(), &recogniser)
+    }
+
+    /// The standard page drawn at the larger scale: taller rows, its
+    /// points as wide as the larger scale's numerals make them.
+    fn larger_layout(larger: &SkillsScale) -> SkillsLayout {
+        SkillsLayout {
+            row_pitch: LARGER_ROW_PITCH,
+            numerals: larger.numerals.clone(),
+            ..standard_skills_layout()
+        }
+    }
+
+    fn points(page: &SkillsPage) -> Vec<&str> {
+        page.rows.iter().map(|r| r.points_text.as_str()).collect()
+    }
+
+    #[test]
+    fn the_scale_entry_is_the_one_the_row_pitch_claims_wherever_it_is_listed() {
+        let (drawn, larger) = two_scales();
+        let alone = read(&standard_skills_layout()).expect("the page reads");
+        let asked = std::sync::Mutex::new(Vec::new());
+        for scales in [
+            vec![drawn.clone(), larger.clone()],
+            vec![larger.clone(), drawn.clone()],
+        ] {
+            let profile = with_scales(scales);
+            for (layout, pitch, entry) in [
+                (standard_skills_layout(), DRAWN_PITCH, &drawn),
+                (larger_layout(&larger), LARGER_ROW_PITCH - 1, &larger),
+            ] {
+                let d = skills_window(&layout);
+                let measured = measure_skills_page(
+                    &d.image,
+                    &profile,
+                    &skills_drawing_vocabulary(),
+                    &d.recogniser(),
+                )
+                .expect("the table is found");
+                assert_eq!(measured.row_pitch, pitch);
+                let claimed = measured.scale.expect("one entry claims the table");
+                assert_eq!(
+                    profile.windows[WINDOW]
+                        .skills_table
+                        .as_ref()
+                        .unwrap()
+                        .scales[claimed]
+                        .row_pitch,
+                    entry.row_pitch
+                );
+                assert_eq!(measured.points.len(), 4);
+                let page = read_under(&profile, &layout, |t| t, &asked).expect("the page reads");
+                assert_eq!(page, alone, "pitch {pitch}");
+            }
+        }
+        assert_eq!(points(&alone), vec!["1", "73.71", "1,268.53", "3,068.94"]);
+    }
+
+    #[test]
+    fn a_table_at_a_scale_the_profile_does_not_list_is_refused_before_a_row_is_read() {
+        let (drawn, larger) = two_scales();
+        for (layout, pitch, listed) in [
+            (standard_skills_layout(), DRAWN_PITCH, larger.clone()),
+            (larger_layout(&larger), LARGER_ROW_PITCH - 1, drawn.clone()),
+        ] {
+            let asked = std::sync::Mutex::new(Vec::new());
+            assert_eq!(
+                read_under(&with_scales(vec![listed]), &layout, |t| t, &asked),
+                Err(SkillsError::Scale(ScaleError::NotListed {
+                    measured: pitch
+                }))
+            );
+            // Only what the headings were looked for among was recognised:
+            // no row's points.
+            let asked = asked.lock().unwrap();
+            for row in &layout.rows {
+                assert!(!asked.iter().any(|t| t == row.1), "{asked:?}");
+            }
+        }
+        // Two entries claiming one pitch are a fault of the profile, which
+        // loading refuses; a profile built in code is refused here too.
+        let both = SkillsScale {
+            row_pitch: [50, 75],
+            ..larger
+        };
+        let asked = std::sync::Mutex::new(Vec::new());
+        assert_eq!(
+            read_under(
+                &with_scales(vec![drawn, both]),
+                &standard_skills_layout(),
+                |t| t,
+                &asked
+            ),
+            Err(SkillsError::Scale(ScaleError::Ambiguous {
+                measured: DRAWN_PITCH
+            }))
+        );
+        // Measuring still finds the table, to measure the missing entry
+        // from, with the nearest scale's numerals.
+        let (_, larger) = two_scales();
+        let d = skills_window(&standard_skills_layout());
+        let measured = measure_skills_page(
+            &d.image,
+            &with_scales(vec![larger]),
+            &skills_drawing_vocabulary(),
+            &d.recogniser(),
+        )
+        .expect("the table is found");
+        assert_eq!(
+            measured.scale,
+            Err(ScaleError::NotListed {
+                measured: DRAWN_PITCH
+            })
+        );
+        assert_eq!((measured.row_pitch, measured.numerals), (DRAWN_PITCH, 0));
+        assert_eq!(measured.points.len(), 4);
+    }
+
+    #[test]
+    fn a_page_holding_one_skill_reads_by_its_own_rules() {
+        // One row, closed below by its own rule: rule to rule, its height
+        // is the pitch, and the page reads.
+        let layout = SkillsLayout {
+            rows: vec![(Some("Agility"), "73.71")],
+            ..standard_skills_layout()
+        };
+        let page = read(&layout).expect("the page reads");
+        assert_eq!(names(&page), vec![Some("Agility")]);
+        assert_eq!(points(&page), vec!["73.71"]);
+        assert!(page.whole);
+        let d = skills_window(&layout);
+        let measured = measure_skills_page(
+            &d.image,
+            &bundled_profile(),
+            &skills_drawing_vocabulary(),
+            &d.recogniser(),
+        )
+        .expect("the table is found");
+        assert_eq!((measured.row_pitch, measured.scale), (DRAWN_PITCH, Ok(0)));
+    }
+
+    #[test]
+    fn a_lone_row_the_view_cuts_tells_no_scale() {
+        // The window ends inside the first row: what bounds the row below
+        // is the window's own edge, not a rule of the table, so its height
+        // measures the window, and the page is refused rather than read
+        // under whichever entry that height might fall in.
+        let standard = standard_skills_layout();
+        let layout = SkillsLayout {
+            window: Rect::new(
+                standard.window.x0,
+                standard.window.y0,
+                standard.window.x1,
+                standard.window.y0 + 150 + 33 + 40,
+            ),
+            rows: vec![(Some("Agility"), "73.71"), (Some("Aim"), "1,268.53")],
+            ..standard
+        };
+        let asked = std::sync::Mutex::new(Vec::new());
+        assert_eq!(
+            read_under(&bundled_profile(), &layout, |t| t, &asked),
+            Err(SkillsError::Scale(ScaleError::Unmeasured))
+        );
+        assert!(!asked.lock().unwrap().iter().any(|t| t == "73.71"));
+    }
+
+    #[test]
+    fn points_are_never_held_to_another_scales_numerals() {
+        let (drawn, larger) = two_scales();
+        // The hazard: points drawn at the default scale, read a digit
+        // short, are as wide as the larger scale's numerals make the short
+        // text. Held to those, the misreading would pass its width.
+        let (text, short) = ("1,268.53", "1,268.5");
+        let units = expected_width(text, &drawn.numerals).expect("covered");
+        let mut image = blank(400, 60, [8, 11, 11]);
+        let ink = Rect::new(20, 20, 20 + (units * 14.0).round() as i32 - 1, 33);
+        fill(&mut image, ink, [200, 200, 200]);
+        assert!(width_agrees(&image, ink.padded(3), short, &larger.numerals));
+        assert!(!width_agrees(&image, ink.padded(3), short, &drawn.numerals));
+        // In the table, with the larger scale listed first: the short
+        // reading is refused under the drawn scale's numerals.
+        let profile = with_scales(vec![larger.clone(), drawn.clone()]);
+        let asked = std::sync::Mutex::new(Vec::new());
+        let page = read_under(
+            &profile,
+            &standard_skills_layout(),
+            move |t| if t == text { short.to_string() } else { t },
+            &asked,
+        )
+        .expect("the page reads");
+        assert_eq!(points(&page), vec!["1", "73.71", "3,068.94"]);
+        assert_eq!(page.unread.len(), 1);
+        assert_eq!(page.unread[0].raw_points.as_deref(), Some(short));
+        assert!(!page.whole);
+        // A reading a digit long is refused the same way.
+        let page = read_under(
+            &profile,
+            &standard_skills_layout(),
+            |t| {
+                if t == "73.71" {
+                    "773.71".to_string()
+                } else {
+                    t
+                }
+            },
+            &asked,
+        )
+        .expect("the page reads");
+        assert_eq!(points(&page), vec!["1", "1,268.53", "3,068.94"]);
+        // The recogniser's known failure on every reading: one of each
+        // repeated pair of digits dropped. No damaged points are returned,
+        // and the rows with nothing to damage still read.
+        let dropping = |text: String| {
+            let chars: Vec<char> = text.chars().collect();
+            let mut out = String::new();
+            let mut i = 0;
+            while i < chars.len() {
+                out.push(chars[i]);
+                let pair =
+                    i + 1 < chars.len() && chars[i].is_ascii_digit() && chars[i] == chars[i + 1];
+                i += if pair { 2 } else { 1 };
+            }
+            out
+        };
+        let mut layout = standard_skills_layout();
+        layout.rows[1] = (Some("Agility"), "88.53");
+        layout.rows[3] = (Some("Alertness"), "3,077.94");
+        let page = read_under(&profile, &layout, dropping, &asked).expect("the page reads");
+        assert_eq!(points(&page), vec!["1", "1,268.53"]);
+        assert_eq!(
+            page.unread
+                .iter()
+                .map(|u| u.raw_points.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("8.53"), Some("3,07.94")]
+        );
+        // Held to the larger scale's numerals, the drawn table's true
+        // readings are the wrong width: the entry the pitch claims is the
+        // one that measures it.
+        let swapped = with_scales(vec![SkillsScale {
+            row_pitch: drawn.row_pitch,
+            numerals: larger.numerals.clone(),
+        }]);
+        let page =
+            read_under(&swapped, &standard_skills_layout(), |t| t, &asked).expect("the page reads");
+        assert_eq!(points(&page), vec!["1"]);
+        assert_eq!(page.unread.len(), 3);
     }
 }

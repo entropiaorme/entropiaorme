@@ -3927,7 +3927,7 @@ export interface SkillScanGuess {
 /**
  * What stops the game's view, as it is now, being collected.
  */
-export type SkillScanHint = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'skillsWindowNotOpen' | 'skillsWindowCovered' | 'skillsWindowOffScreen' | 'notSkillsTab' | 'windowTooShort' | 'pageNotRead' | 'otherListing';
+export type SkillScanHint = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'skillsWindowNotOpen' | 'skillsWindowCovered' | 'skillsWindowOffScreen' | 'notSkillsTab' | 'windowTooShort' | 'pageNotRead' | 'otherListing' | 'interfaceSizeUnreadable';
 
 /**
  * A saved skill whose name was not read exactly.
@@ -4003,7 +4003,7 @@ export type SkillScanStatus = {
 /**
  * Why a scan stopped collecting by itself, with no review.
  */
-export type SkillScanStop = 'readFailed' | 'captureNotAllowed' | 'noNewPage';
+export type SkillScanStop = 'readFailed' | 'captureNotAllowed' | 'noNewPage' | 'interfaceSizeUnreadable';
 
 /**
  * Whether a scan's figures add up to the game's own total.

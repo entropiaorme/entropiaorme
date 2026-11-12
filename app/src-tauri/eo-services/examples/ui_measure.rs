@@ -32,12 +32,20 @@
 //!   solid nameplates in view.
 //! - `measure-numerals <frame> <window kind> <field> <expected text>`, or
 //!   `measure-numerals <frame> --rect x0,y0,x1,y1 <expected text>`
-//!   (`--numerals sale-queue` or `sale-queue-figures` with `--scale
-//!   <index>` for the sell queue's metrics at one of its scales): one figure's ink against the numeral
-//!   metrics, and a sample line for `fit-numerals`.
+//!   (`--numerals fields`, `skills`, `sale-queue` or `sale-queue-figures`,
+//!   with `--scale <index>` where the surface's list holds more than one
+//!   scale):
+//!   one figure's ink against the numeral metrics, and a sample line for
+//!   `fit-numerals`.
 //! - `measure-sale-queue <frame> --labels <labels.json>`: a complete entry
 //!   of the sell queue's `scales` measured from a frame and its true texts,
 //!   with the header band's height that identifies the scale.
+//! - `measure-skills <frame> --labels <labels.json>`: a complete entry of
+//!   the skills table's `scales`, with the row pitch that identifies the
+//!   scale.
+//! - `measure-fields <frame> --labels <labels.json>`: a complete entry of
+//!   the labelled fields' `read.field_scales`, from the terminals' figures,
+//!   with the title marker's height that identifies the scale.
 //! - `timing <frame> [--repeat <n>] [--planet <name>]`: how long the reads
 //!   that run live take.
 //!
@@ -46,8 +54,8 @@
 //! was found drawn on it; `--overlay-area x0,y0,x1,y1` saves only that
 //! part of it, at native size.
 //!
-//! - `fit-numerals <samples file> [--numerals sale-queue [--scale <index>]]
-//!   [--fit <entry>,...]` (or `--numerals sale-queue-figures`): numeral
+//! - `fit-numerals <samples file> [--numerals fields|skills|sale-queue|
+//!   sale-queue-figures [--scale <index>]] [--fit <entry>,...]`: numeral
 //!   metrics fitted to sample lines by least squares, every entry the
 //!   samples hold or only those `--fit` names.
 //! - `replay <corpus dir> [--profile <path>] [--held-out]`: every reader
@@ -77,7 +85,7 @@ use eo_services::game_ui::plates::{
     find_locked_plate, find_plates, measure_plates, plate_line, read_locked_plate, PlateKind,
     PlateScratch,
 };
-use eo_services::game_ui::profile::UiProfile;
+use eo_services::game_ui::profile::{claiming, nearest_to_measure, ScaleError, UiProfile};
 use eo_services::game_ui::radar::{
     find_radar, find_rings, read_coordinates, read_planet_label, ring_scale, CoordinateBounds,
 };
@@ -85,7 +93,7 @@ use eo_services::game_ui::sale_queue::{
     measure_sale_queue, read_sale_queue, ItemCatalogue, QueueField, SaleQueueProfile,
 };
 use eo_services::game_ui::seams::{frame_reader, GameFrame};
-use eo_services::game_ui::skills::read_skills_page;
+use eo_services::game_ui::skills::{measure_skills_page, read_skills_page, SkillsTableProfile};
 use eo_services::game_ui::table::{column_rules, row_rules, rows, Panel};
 use eo_services::game_ui::validate::{expected_width, ink_size, NumeralMetrics};
 use eo_services::game_ui::window::{find_windows, measure_chrome, FoundWindow, Side};
@@ -994,8 +1002,18 @@ fn cmd_sale_queue(s: Session) -> Result<(), String> {
 
 fn cmd_skills(s: Session) -> Result<(), String> {
     let read = recogniser();
+    let read = Remembering::new(&*read);
     let vocabulary = replay::skill_vocabulary();
-    match read_skills_page(&s.image, &s.profile, &vocabulary, &*read) {
+    if let Ok(measured) = measure_skills_page(&s.image, &s.profile, &vocabulary, &read) {
+        match measured.scale {
+            Ok(index) => println!(
+                "row pitch {} px: the profile's skills_table.scales[{index}]",
+                measured.row_pitch
+            ),
+            Err(why) => println!("row pitch {} px: {why}", measured.row_pitch),
+        }
+    }
+    match read_skills_page(&s.image, &s.profile, &vocabulary, &read) {
         Ok(page) => {
             println!(
                 "category {:?}, total {:?}, page {:?}; whole {}, overflows {}, {} partly in view",
@@ -1023,6 +1041,18 @@ fn cmd_terminal(s: Session) -> Result<(), String> {
     let read = recogniser();
     let profile = Arc::new(s.profile.clone());
     for (name, terminal) in [("repair", Terminal::Repair), ("trade", Terminal::Trade)] {
+        let remembering = Remembering::new(&*read);
+        if let Ok(located) = locate(&s.image, &s.profile, terminal.window(), &remembering) {
+            match located.marker_height(&s.image, &s.profile) {
+                Ok(height) => match located.field_scale(&s.image, &s.profile) {
+                    Ok((index, _)) => println!(
+                        "{name} terminal: title marker {height} px: the profile's read.field_scales[{index}]"
+                    ),
+                    Err(why) => println!("{name} terminal: title marker {height} px: {why}"),
+                },
+                Err(why) => println!("{name} terminal: {why}"),
+            }
+        }
         let image = s.image.clone();
         let service = RepairOcrService::new(RepairProviders {
             frame: Arc::new(move |_| Ok(GameFrame::whole(image.clone(), (0, 0)))),
@@ -1171,34 +1201,46 @@ fn sale_queue_profile(profile: &UiProfile) -> Result<&SaleQueueProfile, String> 
         .ok_or_else(|| "the profile describes no sell queue".to_string())
 }
 
-/// The numeral metrics a subcommand measures against: the labelled
-/// fields', or with `--numerals sale-queue` (`sale-queue-figures` for the
-/// figures under its spinners) the sell queue's at the scale `--scale
-/// <index>` names, which may be left out where the profile lists one.
+/// The skills table's profile entry.
+fn skills_table_profile(profile: &UiProfile) -> Result<&SkillsTableProfile, String> {
+    profile
+        .windows
+        .values()
+        .find_map(|w| w.skills_table.as_ref())
+        .ok_or_else(|| "the profile describes no skills table".to_string())
+}
+
+/// The numeral metrics a subcommand measures against: with `--numerals
+/// fields` (the default) the labelled fields', with `skills` the skills
+/// table's points', with `sale-queue` the sell queue's (`sale-queue-figures`
+/// for the figures under its spinners), each at the scale `--scale
+/// <index>` names in that surface's list, which may be left out where the
+/// list holds one entry.
 fn numeral_metrics(args: &Args, profile: &UiProfile) -> Result<NumeralMetrics, String> {
-    match args.option("numerals") {
-        None | Some("read") => {
-            if args.option("scale").is_some() {
-                return Err(
-                    "--scale names a sell queue scale entry: add --numerals sale-queue".into(),
-                );
-            }
-            Ok(profile.read.numerals.clone())
-        }
-        Some(which @ ("sale-queue" | "sale-queue-figures")) => {
-            let scales = &sale_queue_profile(profile)?.scales;
-            let index = match (args.number::<usize>("scale")?, scales.len()) {
-                (Some(index), _) => index,
-                (None, 1) => 0,
-                (None, n) => {
-                    return Err(format!(
-                        "the profile lists {n} sell queue scales: name one with --scale <index> \
-                         (`sale-queue` and `measure-sale-queue` print which claims a frame)"
-                    ))
-                }
-            };
-            scales
-                .get(index)
+    let which = args.option("numerals").unwrap_or("fields");
+    let (what, scales): (&str, Vec<NumeralMetrics>) = match which {
+        "fields" => (
+            "read.field_scales (the terminal subcommand prints which claims a frame)",
+            profile
+                .read
+                .field_scales
+                .iter()
+                .map(|s| s.numerals.clone())
+                .collect(),
+        ),
+        "skills" => (
+            "skills_table.scales (the skills subcommand prints which claims a frame)",
+            skills_table_profile(profile)?
+                .scales
+                .iter()
+                .map(|s| s.numerals.clone())
+                .collect(),
+        ),
+        "sale-queue" | "sale-queue-figures" => (
+            "sale_queue.scales (sale-queue and measure-sale-queue print which claims a frame)",
+            sale_queue_profile(profile)?
+                .scales
+                .iter()
                 .map(|entry| {
                     if which == "sale-queue" {
                         entry.numerals.clone()
@@ -1206,17 +1248,29 @@ fn numeral_metrics(args: &Args, profile: &UiProfile) -> Result<NumeralMetrics, S
                         entry.figure_numerals.clone()
                     }
                 })
-                .ok_or_else(|| {
-                    format!(
-                        "--scale {index}: the profile lists sell queue scales 0 to {}",
-                        scales.len().saturating_sub(1)
-                    )
-                })
+                .collect(),
+        ),
+        other => {
+            return Err(format!(
+            "--numerals {other:?} is not `fields`, `skills`, `sale-queue` or `sale-queue-figures`"
+        ))
         }
-        Some(other) => Err(format!(
-            "--numerals {other:?} is not `read`, `sale-queue` or `sale-queue-figures`"
-        )),
-    }
+    };
+    let index = match (args.number::<usize>("scale")?, scales.len()) {
+        (Some(index), _) => index,
+        (None, 1) => 0,
+        (None, n) => {
+            return Err(format!(
+                "the profile lists {n} entries in {what}: name one with --scale <index>"
+            ))
+        }
+    };
+    scales.get(index).cloned().ok_or_else(|| {
+        format!(
+            "--scale {index}: the profile lists entries 0 to {} in {what}",
+            scales.len().saturating_sub(1)
+        )
+    })
 }
 
 /// How many of each glyph the metrics measure `text` has, in the order
@@ -1574,33 +1628,289 @@ const SALE_SAMPLE_FIELDS: [(QueueField, &str); 9] = [
     (QueueField::Markup, "markup"),
 ];
 
-/// Measure a sell queue scale entry from a frame and its true texts: the
-/// header band's height that identifies the scale, a sample of every
-/// figure the labels transcribe, the word gap the names admit, and the
-/// numerals of the nearest listed scale fitted to the samples by one
-/// common factor.
-fn cmd_measure_sale_queue(mut s: Session) -> Result<(), String> {
+/// The frame's true texts: its entry in the labels file `--labels`
+/// names, by the frame's file name less `.png`, and within it `surface`.
+fn frame_truth(s: &Session, subcommand: &str, surface: &str) -> Result<Value, String> {
     let frame_path = Path::new(s.args.word(1, "the frame's path")?);
     let stem = frame_path
         .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or("the frame's file has no name")?
         .to_string();
-    let labels_path = s
-        .args
-        .option("labels")
-        .ok_or("measure-sale-queue needs --labels <labels.json>, the corpus's ground truth")?;
+    let labels_path = s.args.option("labels").ok_or(format!(
+        "{subcommand} needs --labels <labels.json>, the corpus's ground truth"
+    ))?;
     let labels: Value = serde_json::from_str(
         &std::fs::read_to_string(labels_path).map_err(|error| format!("{labels_path}: {error}"))?,
     )
     .map_err(|error| format!("{labels_path}: {error}"))?;
-    let truth = labels["frames"][stem.as_str()]["sale_queue"].clone();
+    let truth = labels["frames"][stem.as_str()][surface].clone();
     if truth.is_null() {
         return Err(format!(
-            "{labels_path} has no sale_queue entry for {stem} (the frame's file name, less \
+            "{labels_path} has no {surface} entry for {stem} (the frame's file name, less \
              .png, names its labels)"
         ));
     }
+    Ok(truth)
+}
+
+/// One figure's sample: its ink measured against `numerals` and its true
+/// text, or why it is none, printed either way.
+fn figure_sample(
+    image: &BgrImage,
+    rect: Rect,
+    text: &str,
+    numerals: &NumeralMetrics,
+) -> Option<Sample> {
+    let Some((width, height)) = ink_size(image, rect, numerals) else {
+        println!("  {text:?}: no ink at {}", show(rect));
+        return None;
+    };
+    let Some(counts) = glyph_counts(text) else {
+        println!("  {text:?}: holds a character no numeral metric measures; not a sample");
+        return None;
+    };
+    let ratio = f64::from(width) / f64::from(height);
+    println!(
+        "  {text:?}: ink {width}x{height} at {}, {ratio:.4} digit heights",
+        show(rect)
+    );
+    Some((ratio, counts, text.to_string()))
+}
+
+/// The claimed range a new scale entry is given, one pixel either side
+/// of `measured`, and a line for each listed entry it would overlap.
+fn new_claim(measured: i32, listed: &[[i32; 2]], claimed: Option<usize>, key: &str) -> [i32; 2] {
+    let claim = [measured - 1, measured + 1];
+    for (i, [least, most]) in listed.iter().enumerate() {
+        if Some(i) != claimed && *least <= claim[1] && claim[0] <= *most {
+            println!(
+                "{key} [{}, {}] overlaps entry [{i}]'s {:?}: narrow it",
+                claim[0], claim[1], listed[i]
+            );
+        }
+    }
+    claim
+}
+
+/// Measure a skills table scale entry from a frame and its true texts:
+/// the row pitch that identifies the scale, a sample of every whole
+/// row's points, and the numerals of the nearest listed scale fitted to
+/// them by one common factor.
+fn cmd_measure_skills(mut s: Session) -> Result<(), String> {
+    let truth = frame_truth(&s, "measure-skills", "skills")?;
+    let table = skills_table_profile(&s.profile)?.clone();
+    let read = recogniser();
+    let vocabulary = replay::skill_vocabulary();
+    let measured = measure_skills_page(&s.image, &s.profile, &vocabulary, &*read)
+        .map_err(|refusal| format!("the table was not found: {refusal}"))?;
+    let pitch = measured.row_pitch;
+    println!("row pitch: {pitch} px, a row's height between its rules (what identifies the interface scale)");
+    for (i, entry) in table.scales.iter().enumerate() {
+        println!(
+            "  the profile's skills_table.scales[{i}] claims row_pitch {:?}",
+            entry.row_pitch
+        );
+    }
+    let base_index = measured.numerals;
+    let claimed = match measured.scale {
+        Ok(index) => {
+            println!("claimed by scales[{index}]: a scale the profile lists");
+            Some(index)
+        }
+        Err(why) => {
+            println!(
+                "{why}: a scale the profile does not list; starting from the nearest, \
+                 scales[{base_index}]"
+            );
+            None
+        }
+    };
+    let base = &table.scales[base_index].numerals;
+    let wanted: Vec<&Value> = truth["rows"]
+        .as_array()
+        .ok_or("the labels' skills entry has no rows")?
+        .iter()
+        .filter(|row| row["fully_visible"].as_bool() == Some(true))
+        .collect();
+    if wanted.len() != measured.points.len() {
+        return Err(format!(
+            "{} whole rows were found and the labels mark {} rows fully visible: measure a \
+             frame where they agree",
+            measured.points.len(),
+            wanted.len()
+        ));
+    }
+    let mut samples = Vec::new();
+    for (rect, row) in measured.points.iter().zip(&wanted) {
+        let Some(text) = row["points"].as_str() else {
+            continue;
+        };
+        s.overlay.around(*rect, CYAN);
+        samples.extend(figure_sample(&s.image, *rect, text, base));
+    }
+    if samples.is_empty() {
+        return Err("no figure was measured".into());
+    }
+    let (_, numerals) = fit_by_factor("numerals", "skills", &samples, base, base_index);
+    let listed: Vec<[i32; 2]> = table.scales.iter().map(|e| e.row_pitch).collect();
+    let mut entry = serde_json::Map::new();
+    entry.insert(
+        "row_pitch".into(),
+        json!(new_claim(pitch, &listed, claimed, "row_pitch")),
+    );
+    entry.insert("numerals".into(), numerals_json(base, &numerals));
+    println!(
+        "a skills_table.scales[] entry for this scale, in the profile's names: row_pitch measured \
+         here (one pixel either side); numerals scales[{base_index}]'s times a factor fitted to \
+         the points. Where the largest residual is near the tolerance, collect the sample lines \
+         from several frames and refine with fit-numerals --numerals skills --scale <this entry> \
+         --fit <entries>:"
+    );
+    println!("{}", pretty(&Value::Object(entry)));
+    println!("overlay: cyan the points measured");
+    s.overlay.save()
+}
+
+/// The labelled fields the terminals show, each with where the labels
+/// keep its true text: `(window kind, field, labels' surface, labels' key)`.
+const FIELD_SAMPLES: [(&str, &str, &str, &str); 2] = [
+    ("repair_terminal", "repair_cost", "repair", "repair_cost"),
+    ("trade_terminal", "total", "trade", "total"),
+];
+
+/// Measure a labelled fields' scale entry from a frame and its true
+/// texts: the title marker's height that identifies the scale, a sample
+/// of each terminal's figure the frame shows, and the numerals of the
+/// nearest listed scale fitted to them by one common factor.
+fn cmd_measure_fields(mut s: Session) -> Result<(), String> {
+    let frame = s.args.word(1, "the frame's path")?.to_string();
+    if s.args.option("labels").is_none() {
+        return Err(
+            "measure-fields needs --labels <labels.json>, the corpus's ground truth".into(),
+        );
+    }
+    let scales = s.profile.read.field_scales.clone();
+    for (i, entry) in scales.iter().enumerate() {
+        println!(
+            "the profile's read.field_scales[{i}] claims marker_height {:?}",
+            entry.marker_height
+        );
+    }
+    let read = recogniser();
+    let read = Remembering::new(&*read);
+    let mut height: Option<i32> = None;
+    let mut found = Vec::new();
+    for (window, field, surface, key) in FIELD_SAMPLES {
+        let truth = match frame_truth(&s, "measure-fields", surface) {
+            Ok(truth) => truth,
+            Err(why) => {
+                println!("{window}: {why}");
+                continue;
+            }
+        };
+        let Some(text) = truth[key].as_str() else {
+            continue;
+        };
+        let located = match locate(&s.image, &s.profile, window, &read) {
+            Ok(located) => located,
+            Err(why) => {
+                println!("{window}: {why}");
+                continue;
+            }
+        };
+        let marker = located
+            .marker_height(&s.image, &s.profile)
+            .map_err(|why| format!("{window}: {why}"))?;
+        println!("{window}: title marker {marker} px tall (what identifies the interface scale)");
+        if height.is_some_and(|h| h != marker) {
+            return Err(format!(
+                "{window}'s title marker is {marker} px where another window's is {height:?}: \
+                 measure one scale at a time"
+            ));
+        }
+        height = Some(marker);
+        let entry = s
+            .profile
+            .windows
+            .get(window)
+            .and_then(|w| w.fields.get(field))
+            .ok_or_else(|| format!("the profile describes no field {window}.{field}"))?;
+        let runs = located.runs(&s.image, &s.profile);
+        let (label, value) = locate_field(&s.image, &runs, entry, &s.profile.read, &read)
+            .map_err(|why| format!("{window}.{field}: {why}"))?;
+        s.overlay.around(label.rect, YELLOW);
+        s.overlay.around(value.rect, CYAN);
+        found.push((format!("{window}.{field}"), value.rect, text.to_string()));
+    }
+    let Some(height) = height else {
+        return Err(format!(
+            "{frame}: no terminal whose figure the labels transcribe (repair.repair_cost, \
+             trade.total) was found"
+        ));
+    };
+    let claimed = nearest_or_claimed(
+        &scales.iter().map(|e| e.marker_height).collect::<Vec<_>>(),
+        height,
+    );
+    let base_index = match claimed {
+        Ok(index) => {
+            println!("claimed by read.field_scales[{index}]: a scale the profile lists");
+            index
+        }
+        Err((why, index)) => {
+            println!(
+                "{why}: a scale the profile does not list; starting from the nearest, \
+                 read.field_scales[{index}]"
+            );
+            index
+        }
+    };
+    let base = &scales[base_index].numerals;
+    let mut samples = Vec::new();
+    for (what, rect, text) in &found {
+        println!("{what}:");
+        samples.extend(figure_sample(&s.image, *rect, text, base));
+    }
+    if samples.is_empty() {
+        return Err("no figure was measured".into());
+    }
+    let (_, numerals) = fit_by_factor("numerals", "fields", &samples, base, base_index);
+    let listed: Vec<[i32; 2]> = scales.iter().map(|e| e.marker_height).collect();
+    let mut entry = serde_json::Map::new();
+    entry.insert(
+        "marker_height".into(),
+        json!(new_claim(height, &listed, claimed.ok(), "marker_height")),
+    );
+    entry.insert("numerals".into(), numerals_json(base, &numerals));
+    println!(
+        "a read.field_scales[] entry for this scale, in the profile's names: marker_height \
+         measured here (one pixel either side); numerals entry [{base_index}]'s times a factor \
+         fitted to the figures. One frame shows one or two figures: collect the sample lines \
+         from the repair and the trade terminal's frames at this scale (and from measure-numerals \
+         on other labelled figures) and refine with fit-numerals --numerals fields --scale <this \
+         entry> --fit <entries>:"
+    );
+    println!("{}", pretty(&Value::Object(entry)));
+    println!("overlay: yellow the labels, cyan the figures measured");
+    s.overlay.save()
+}
+
+/// The entry of `listed` claiming `measured`, or why none does with the
+/// nearest listed.
+fn nearest_or_claimed(listed: &[[i32; 2]], measured: i32) -> Result<usize, (ScaleError, usize)> {
+    claiming(listed, measured, |c| *c)
+        .map(|(i, _)| i)
+        .map_err(|why| (why, nearest_to_measure(listed, measured, |c| *c)))
+}
+
+/// Measure a sell queue scale entry from a frame and its true texts: the
+/// header band's height that identifies the scale, a sample of every
+/// figure the labels transcribe, the word gap the names admit, and the
+/// numerals of the nearest listed scale fitted to the samples by one
+/// common factor.
+fn cmd_measure_sale_queue(mut s: Session) -> Result<(), String> {
+    let truth = frame_truth(&s, "measure-sale-queue", "sale_queue")?;
     let queue = sale_queue_profile(&s.profile)?.clone();
     let read = recogniser();
     let measured = measure_sale_queue(&s.image, &s.profile, &*read)
@@ -1647,20 +1957,7 @@ fn cmd_measure_sale_queue(mut s: Session) -> Result<(), String> {
     let (mut samples, mut figures): (Vec<Sample>, Vec<Sample>) = (Vec::new(), Vec::new());
     let mut word_gap = (0.0f64, f64::INFINITY);
     let sample = |samples: &mut Vec<Sample>, image: &BgrImage, rect: Rect, text: &str| {
-        let Some((width, height)) = ink_size(image, rect, &base.numerals) else {
-            println!("  {text:?}: no ink at {}", show(rect));
-            return;
-        };
-        let Some(counts) = glyph_counts(text) else {
-            println!("  {text:?}: holds a character no numeral metric measures; not a sample");
-            return;
-        };
-        let ratio = f64::from(width) / f64::from(height);
-        println!(
-            "  {text:?}: ink {width}x{height} at {}, {ratio:.4} digit heights",
-            show(rect)
-        );
-        samples.push((ratio, counts, text.to_string()));
+        samples.extend(figure_sample(image, rect, text, &base.numerals));
     };
     for (k, (fields, row)) in measured.rows.iter().zip(&wanted).enumerate() {
         let name = row["name"].as_str().unwrap_or_default();
@@ -1744,7 +2041,13 @@ fn cmd_measure_sale_queue(mut s: Session) -> Result<(), String> {
     if samples.is_empty() {
         return Err("no figure was measured".into());
     }
-    let numerals = fit_by_factor("numerals", &samples, &base.numerals, base_index);
+    let numerals = fit_by_factor(
+        "numerals",
+        "sale-queue",
+        &samples,
+        &base.numerals,
+        base_index,
+    );
     let figure_numerals = if figures.is_empty() {
         println!(
             "figure_numerals: the labels transcribe no figure under a spinner \
@@ -1756,6 +2059,7 @@ fn cmd_measure_sale_queue(mut s: Session) -> Result<(), String> {
     } else {
         fit_by_factor(
             "figure_numerals",
+            "sale-queue-figures",
             &figures,
             &base.figure_numerals,
             base_index,
@@ -1825,15 +2129,11 @@ fn cmd_measure_sale_queue(mut s: Session) -> Result<(), String> {
 /// returns the factor and the scaled terms.
 fn fit_by_factor(
     what: &str,
+    flag: &str,
     samples: &[Sample],
     base: &NumeralMetrics,
     base_index: usize,
 ) -> (f64, [Option<f64>; TERMS.len()]) {
-    let flag = if what == "numerals" {
-        "sale-queue"
-    } else {
-        "sale-queue-figures"
-    };
     println!(
         "{what}: sample lines for fit-numerals --numerals {flag} (append them to a samples file):"
     );
@@ -1841,7 +2141,7 @@ fn fit_by_factor(
         println!("{ratio:.4}\t{text}");
     }
     let held = term_values(base).map(|v| v.map(f64::from));
-    println!("{what}: under scales[{base_index}]'s:");
+    println!("{what}: under entry [{base_index}]'s:");
     let worst = print_residuals(samples, &held);
     println!(
         "  largest residual {worst:.3} (tolerance {:.3})",
@@ -1855,7 +2155,7 @@ fn fit_by_factor(
         });
     let factor = if den > 0.0 { num / den } else { 1.0 };
     let scaled = held.map(|v| v.map(|v| v * factor));
-    println!("{what}: scales[{base_index}]'s times one common factor {factor:.4}:");
+    println!("{what}: entry [{base_index}]'s times one common factor {factor:.4}:");
     let worst = print_residuals(samples, &scaled);
     let tolerance = f64::from(base.tolerance);
     let narrowest = scaled[2]
@@ -2045,7 +2345,7 @@ fn cmd_replay(args: &Args) -> Result<bool, String> {
 }
 
 /// Every subcommand: its name, its arguments in full, and what it shows.
-const SUBCOMMANDS: [(&str, &str, &str); 17] = [
+const SUBCOMMANDS: [(&str, &str, &str); 19] = [
     ("windows", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "every window found, front to back: rectangle, sides, ridge, scaled or not, kind, and each run of its title strip as read"),
     ("runs", "<frame.png> [--window <kind>] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
@@ -2061,20 +2361,24 @@ const SUBCOMMANDS: [(&str, &str, &str); 17] = [
     ("sale-queue", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "the header band's height and the scale entry claiming it, then the sell queue's whole typed read, row by row"),
     ("skills", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
-     "the skills page's whole typed read, row by row"),
+     "the table's row pitch and the scale entry claiming it, then the skills page's whole typed read, row by row"),
     ("terminal", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
-     "the repair and trade terminals' figures, read as the application reads them"),
+     "each terminal's title marker height and the read.field_scales entry claiming it, then the repair and trade terminals' figures, read as the application reads them"),
     ("measure-chrome", "<frame.png> [--rect x0,y0,x1,y1] [--depth <n>] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "the front-most window's frame (or the window whose outer rectangle --rect gives), measured as a fragment of the profile's `chrome`"),
     ("measure-plate", "<frame.png> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "a `plates.scales[]` entry measured from the solid nameplates in view"),
-    ("measure-numerals", "<frame.png> (<window kind> <field> | --rect x0,y0,x1,y1) <true text> [--numerals read|sale-queue|sale-queue-figures [--scale <index>]] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+    ("measure-numerals", "<frame.png> (<window kind> <field> | --rect x0,y0,x1,y1) <true text> [--numerals fields|skills|sale-queue|sale-queue-figures [--scale <index>]] [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "one figure's ink against the numeral metrics, and a sample line for fit-numerals; take a table cell's --rect from `runs`, one pixel wider all round"),
     ("measure-sale-queue", "<frame.png> --labels <labels.json> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
      "a complete `sale_queue.scales[]` entry measured from a frame and its true texts (the labels' entry for the frame's file name): the header band's height that identifies the scale, every figure's sample line, the word gap the names admit, and the nearest listed scale's numerals fitted by one common factor"),
+    ("measure-skills", "<frame.png> --labels <labels.json> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "a complete `skills_table.scales[]` entry measured from a frame and its true texts (the labels' `skills` entry for the frame's file name): the row pitch that identifies the scale, every whole row's points as a sample line, and the nearest listed scale's numerals fitted by one common factor"),
+    ("measure-fields", "<frame.png> --labels <labels.json> [--profile <path>] [--overlay <out.png> [--overlay-area x0,y0,x1,y1]]",
+     "a complete `read.field_scales[]` entry measured from a frame and its true texts (the labels' `repair.repair_cost` and `trade.total` for the frame's file name): the title marker's height that identifies the scale, each terminal figure's sample line, and the nearest listed scale's numerals fitted by one common factor"),
     ("timing", "<frame.png> [--repeat <n>] [--planet <name>] [--profile <path>]",
      "milliseconds for the reads that run live (build with --release)"),
-    ("fit-numerals", "<samples file> [--numerals read|sale-queue|sale-queue-figures [--scale <index>]] [--fit <entry>,<entry>...] [--profile <path>]",
+    ("fit-numerals", "<samples file> [--numerals fields|skills|sale-queue|sale-queue-figures [--scale <index>]] [--fit <entry>,<entry>...] [--profile <path>]",
      "numeral metrics fitted to sample lines by least squares: every entry the samples hold, or only those --fit names with the rest held at the profile's values"),
     ("replay", "<corpus dir> [--held-out] [--profile <path>]",
      "every reader over every frame of a corpus with its tallies; --held-out replays the held-out frames ONLY (run both). Exits non-zero on a wrong value, an unexplained refusal, or a frame missing a manifest entry it needs"),
@@ -2146,6 +2450,8 @@ fn run(args: &Args) -> Result<bool, String> {
         "measure-chrome" => cmd_measure_chrome,
         "measure-numerals" => cmd_measure_numerals,
         "measure-sale-queue" => cmd_measure_sale_queue,
+        "measure-skills" => cmd_measure_skills,
+        "measure-fields" => cmd_measure_fields,
         "timing" => cmd_timing,
         other => return Err(format!("unknown subcommand {other:?}\n{}", usage())),
     };

@@ -1,6 +1,7 @@
 //! Why the game window, as it is right now, gives the scan nothing to
 //! collect, put as the one thing the player can change.
 
+use crate::game_ui::profile::ScaleError;
 use crate::game_ui::seams::FrameUnavailable;
 use crate::game_ui::skills::{Admission, SkillsError, SkillsPage};
 
@@ -30,6 +31,9 @@ pub enum ScanHint {
     /// The page belongs to another category, or another page count, than
     /// the pages already collected.
     OtherListing,
+    /// The skills window is drawn at an interface size the profile has no
+    /// measurements for: no page can be read until the app learns it.
+    InterfaceSizeUnreadable,
 }
 
 /// What a look that had no frame comes to: a hint while the player can
@@ -69,6 +73,11 @@ impl SteadyHint {
         }
         self.shown
     }
+
+    /// The hint shown now.
+    pub(super) fn shown(&self) -> Option<ScanHint> {
+        self.shown
+    }
 }
 
 impl From<SkillsError> for ScanHint {
@@ -82,10 +91,19 @@ impl From<SkillsError> for ScanHint {
             SkillsError::ExtentUncertain | SkillsError::TableNotFound => {
                 ScanHint::SkillsWindowCovered
             }
+            // No row of the table in view to tell its scale by: the usual
+            // way is another window over it.
+            SkillsError::Scale(ScaleError::Unmeasured) => ScanHint::SkillsWindowCovered,
             // The scan only runs with a profile that describes the table
             // and a recogniser that always answers, so these do not arise;
             // were one to, the page simply did not read.
             SkillsError::NoRecogniser | SkillsError::NotInProfile => ScanHint::PageNotRead,
+            // A table drawn at an interface scale the profile has no
+            // numerals for (or lists twice) cannot be read on any look:
+            // showing the page again will not help.
+            SkillsError::Scale(ScaleError::NotListed { .. } | ScaleError::Ambiguous { .. }) => {
+                ScanHint::InterfaceSizeUnreadable
+            }
         }
     }
 }
@@ -208,6 +226,18 @@ mod tests {
             (SkillsError::TableNotFound, ScanHint::SkillsWindowCovered),
             (SkillsError::NoRecogniser, ScanHint::PageNotRead),
             (SkillsError::NotInProfile, ScanHint::PageNotRead),
+            (
+                SkillsError::Scale(ScaleError::NotListed { measured: 72 }),
+                ScanHint::InterfaceSizeUnreadable,
+            ),
+            (
+                SkillsError::Scale(ScaleError::Ambiguous { measured: 57 }),
+                ScanHint::InterfaceSizeUnreadable,
+            ),
+            (
+                SkillsError::Scale(ScaleError::Unmeasured),
+                ScanHint::SkillsWindowCovered,
+            ),
         ] {
             assert_eq!(ScanHint::from(error.clone()), hint, "{error:?}");
         }

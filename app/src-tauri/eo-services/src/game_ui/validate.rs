@@ -685,9 +685,7 @@ mod tests {
     }
 
     fn metrics() -> NumeralMetrics {
-        crate::game_ui::test_support::bundled_profile()
-            .read
-            .numerals
+        crate::game_ui::test_support::field_numerals()
     }
 
     /// A block of ink as wide as `text` should be at digit height `h`.

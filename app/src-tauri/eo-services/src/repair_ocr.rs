@@ -15,7 +15,7 @@ use std::sync::Arc;
 use crate::game_ui::field::{FieldError, Remembering};
 use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::locate::{read_window_field, ReadError};
-use crate::game_ui::profile::UiProfile;
+use crate::game_ui::profile::{ScaleError, UiProfile};
 use crate::game_ui::seams::{FrameArea, FrameReader, FrameUnavailable, GameWindowFrame};
 use crate::game_ui::validate::without_unit;
 
@@ -71,7 +71,8 @@ pub enum TerminalRefusal {
     #[error("the game window could not be captured")]
     CaptureFailed,
     /// The terminal's title was not found: it is not open, its title is
-    /// covered, or the title did not read.
+    /// covered, or the title did not read. Or the title bar's marker,
+    /// which tells the scale the terminal is drawn at, is covered.
     #[error("the terminal is not open, or its title is covered")]
     TerminalNotOpen,
     /// The terminal is open but its figure, or the label that marks it,
@@ -83,7 +84,9 @@ pub enum TerminalRefusal {
     #[error("the figure did not read as a valid amount")]
     FigureNotRead,
     /// No recogniser was loaded, or the interface profile does not
-    /// describe the terminal. Nothing the player does in the game helps.
+    /// describe the terminal, or not at the interface scale the game
+    /// draws it at. Nothing the player does in the terminal helps: the
+    /// profile needs that scale's measurements.
     #[error("the terminal reader is not available")]
     ReaderUnavailable,
 }
@@ -119,6 +122,17 @@ impl From<ReadError> for TerminalRefusal {
                 TerminalRefusal::FigureNotRead
             }
             ReadError::Field(FieldError::NoRecogniser) => TerminalRefusal::ReaderUnavailable,
+            // The title marker, which tells the scale the terminal is
+            // drawn at, is covered or off the screen: the title bar is
+            // not wholly in view.
+            ReadError::Field(FieldError::Scale(ScaleError::Unmeasured)) => {
+                TerminalRefusal::TerminalNotOpen
+            }
+            // The terminal is drawn at a scale the profile has no numerals
+            // for, so no figure can be held to its width.
+            ReadError::Field(FieldError::Scale(
+                ScaleError::NotListed { .. } | ScaleError::Ambiguous { .. },
+            )) => TerminalRefusal::ReaderUnavailable,
         }
     }
 }
@@ -206,10 +220,14 @@ impl RepairOcrService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game_ui::field::FieldScale;
     use crate::game_ui::geometry::Rect;
+    use crate::game_ui::locate::locate;
     use crate::game_ui::test_support::{
-        blank, bundled_profile, draw_window, window_frame, Lettering,
+        blank, bundled_profile, draw_window, draw_window_with_marker, field_numerals, widened,
+        window_frame, Lettering, DRAWN_MARKER_HEIGHT,
     };
+    use crate::game_ui::validate::{expected_width, width_agrees, NumeralMetrics};
 
     const SCENE: [u8; 3] = [120, 110, 90];
     const FIGURE_HEIGHT: i32 = 14;
@@ -223,20 +241,38 @@ mod tests {
     /// right of its label, the trade total on the line below its label.
     /// The figure's ink is as wide as `drawn` and reads as `reads`.
     fn terminal_frame(terminal: Terminal, drawn: &str, reads: &str) -> Lettering {
+        terminal_frame_at(
+            terminal,
+            drawn,
+            reads,
+            DRAWN_MARKER_HEIGHT,
+            &field_numerals(),
+        )
+    }
+
+    /// A terminal as [`terminal_frame`] draws it, at an interface scale of
+    /// its own: its title marker `marker_height` tall, and its figure as
+    /// wide as `numerals` make `drawn`.
+    fn terminal_frame_at(
+        terminal: Terminal,
+        drawn: &str,
+        reads: &str,
+        marker_height: i32,
+        numerals: &NumeralMetrics,
+    ) -> Lettering {
         let mut frame = Lettering::new(blank(1100, 700, SCENE));
         let window = Rect::new(100, 80, 700, 420);
-        draw_window(&mut frame.image, window);
-        let numerals = bundled_profile().read.numerals;
+        draw_window_with_marker(&mut frame.image, window, marker_height);
         match terminal {
             Terminal::Repair => {
                 frame.text(Rect::new(180, 102, 400, 113), "REPAIR TERMINAL");
                 frame.text(Rect::new(140, 250, 260, 261), "REPAIR COST:");
-                frame.figure((330, 249), FIGURE_HEIGHT, drawn, reads, &numerals);
+                frame.figure((330, 249), FIGURE_HEIGHT, drawn, reads, numerals);
             }
             Terminal::Trade => {
                 frame.text(Rect::new(180, 102, 400, 113), "TRADE TERMINAL");
                 frame.text(Rect::new(140, 250, 270, 261), "TOTAL AMOUNT:");
-                frame.figure((140, 290), FIGURE_HEIGHT, drawn, reads, &numerals);
+                frame.figure((140, 290), FIGURE_HEIGHT, drawn, reads, numerals);
             }
         }
         frame
@@ -244,6 +280,295 @@ mod tests {
 
     fn service(frame: &Lettering) -> RepairOcrService {
         service_reading(frame, frame.recogniser())
+    }
+
+    /// The drawn terminals' marker height at a larger interface scale.
+    const LARGER_MARKER: i32 = 27;
+
+    /// The bundled profile's labelled-field entry for the drawn windows'
+    /// scale, and a second scale's: a taller title marker, and numerals as
+    /// wide as the drawn lettering measures at a larger scale.
+    fn two_scales() -> (FieldScale, FieldScale) {
+        let profile = bundled_profile();
+        let drawn = profile.read.field_scales[0].clone();
+        assert!((drawn.marker_height[0]..=drawn.marker_height[1]).contains(&DRAWN_MARKER_HEIGHT));
+        let larger = FieldScale {
+            marker_height: [LARGER_MARKER - 1, LARGER_MARKER + 1],
+            numerals: widened(&drawn.numerals, 1.12),
+        };
+        (drawn, larger)
+    }
+
+    /// The bundled profile with its labelled fields' scales replaced.
+    fn with_scales(scales: Vec<FieldScale>) -> Arc<UiProfile> {
+        let mut profile = bundled_profile();
+        profile.read.field_scales = scales;
+        Arc::new(profile)
+    }
+
+    /// The service over `frame`'s image under `profile`, recognised by
+    /// `read_text`.
+    fn service_under(
+        frame: &Lettering,
+        profile: Arc<UiProfile>,
+        read_text: impl Fn(&BgrImage) -> Option<(String, f64)> + Send + Sync + 'static,
+    ) -> RepairOcrService {
+        let image = frame.image.clone();
+        RepairOcrService::new(RepairProviders {
+            frame: Arc::new(move |area| window_frame(&image, (0, 0), area)),
+            profile: Some(profile),
+            read_text: Some(Arc::new(read_text)),
+        })
+    }
+
+    /// One of each repeated pair of digits dropped from every reading:
+    /// the recogniser's known failure.
+    fn dropping_repeats(text: String) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let mut out = String::new();
+        let mut i = 0;
+        while i < chars.len() {
+            out.push(chars[i]);
+            let pair = i + 1 < chars.len() && chars[i].is_ascii_digit() && chars[i] == chars[i + 1];
+            i += if pair { 2 } else { 1 };
+        }
+        out
+    }
+
+    #[test]
+    fn the_scale_entry_is_the_one_the_title_marker_claims_wherever_it_is_listed() {
+        let (drawn, larger) = two_scales();
+        for scales in [
+            vec![drawn.clone(), larger.clone()],
+            vec![larger.clone(), drawn.clone()],
+        ] {
+            let profile = with_scales(scales);
+            for (height, numerals, figure) in [
+                (DRAWN_MARKER_HEIGHT, &drawn.numerals, "2.20 PED"),
+                (LARGER_MARKER, &larger.numerals, "27.47542 PED"),
+            ] {
+                let frame = terminal_frame_at(Terminal::Repair, figure, figure, height, numerals);
+                let recogniser = frame.recogniser();
+                let located = locate(&frame.image, &profile, "repair_terminal", &recogniser)
+                    .expect("the terminal is found");
+                assert_eq!(located.marker_height(&frame.image, &profile), Ok(height));
+                let (_, claimed) = located
+                    .field_scale(&frame.image, &profile)
+                    .expect("one entry claims the terminal");
+                assert!((claimed.marker_height[0]..=claimed.marker_height[1]).contains(&height));
+                assert_eq!(claimed.numerals.digit, numerals.digit);
+                let read = service_under(&frame, profile.clone(), frame.recogniser())
+                    .scan_repair_cost()
+                    .expect("the cost reads");
+                assert_eq!(read.raw_text, figure);
+            }
+        }
+    }
+
+    #[test]
+    fn a_terminal_at_a_scale_the_profile_does_not_list_is_refused_before_its_figure_is_read() {
+        let (drawn, larger) = two_scales();
+        // A larger terminal, with only the drawn scale listed; and the
+        // drawn one, with only the larger. Neither figure is ever asked of
+        // the recogniser.
+        for (height, numerals, listed) in [
+            (LARGER_MARKER, &larger.numerals, drawn.clone()),
+            (DRAWN_MARKER_HEIGHT, &drawn.numerals, larger.clone()),
+        ] {
+            let frame =
+                terminal_frame_at(Terminal::Trade, "12.50 PED", "12.50 PED", height, numerals);
+            let profile = with_scales(vec![listed]);
+            let recogniser = frame.recogniser();
+            let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let seen = asked.clone();
+            let watching = move |crop: &BgrImage| {
+                let answer = recogniser(crop);
+                if let Some((text, _)) = &answer {
+                    seen.lock().unwrap().push(text.clone());
+                }
+                answer
+            };
+            assert_eq!(
+                read_window_field(&frame.image, &profile, "trade_terminal", "total", &watching),
+                Err(ReadError::Field(FieldError::Scale(ScaleError::NotListed {
+                    measured: height
+                })))
+            );
+            assert!(
+                !asked.lock().unwrap().iter().any(|t| t == "12.50 PED"),
+                "{asked:?}"
+            );
+            assert_eq!(
+                service_under(&frame, profile, frame.recogniser()).scan_trade_terminal_value(),
+                Err(TerminalRefusal::ReaderUnavailable)
+            );
+        }
+        // Two entries claiming one marker are a fault of the profile,
+        // which loading refuses; a profile built in code is refused here.
+        let both = FieldScale {
+            marker_height: [20, 30],
+            ..larger
+        };
+        let frame = terminal_frame(Terminal::Repair, "2.20 PED", "2.20 PED");
+        assert_eq!(
+            service_under(&frame, with_scales(vec![drawn, both]), frame.recogniser())
+                .scan_repair_cost(),
+            Err(TerminalRefusal::ReaderUnavailable)
+        );
+    }
+
+    #[test]
+    fn a_title_marker_a_window_in_front_reaches_is_not_measured() {
+        let mut frame = terminal_frame(Terminal::Repair, "2.20 PED", "2.20 PED");
+        // A window over the terminal's top-left corner, clear of its title
+        // lettering and its figure: the terminal is still found by its
+        // title, but its marker could be cut short.
+        draw_window(&mut frame.image, Rect::new(20, 20, 140, 160));
+        let profile = profile();
+        let recogniser = frame.recogniser();
+        let located =
+            locate(&frame.image, &profile, "repair_terminal", &recogniser).expect("found by title");
+        assert!(!located.in_front.is_empty());
+        assert_eq!(
+            located.marker_height(&frame.image, &profile),
+            Err(ScaleError::Unmeasured)
+        );
+        assert_eq!(
+            service(&frame).scan_repair_cost(),
+            Err(TerminalRefusal::TerminalNotOpen)
+        );
+    }
+
+    #[test]
+    fn a_title_marker_its_box_cuts_or_a_scaled_window_is_not_measured() {
+        let profile = profile();
+        let search = profile.chrome.marker.search;
+        let window = Rect::new(100, 80, 700, 420);
+        // Drawn past the bottom of its box: the box cuts it to a height a
+        // smaller scale would claim.
+        let past_bottom = search[3] - 16 + 6;
+        // And past the top: the box cuts its upper part.
+        let mut past_top = terminal_frame(Terminal::Repair, "2.20 PED", "2.20 PED");
+        crate::game_ui::test_support::fill(
+            &mut past_top.image,
+            Rect::new(
+                window.x0 + 25,
+                window.y0 + search[1] - 4,
+                window.x0 + 29,
+                window.y0 + 38,
+            ),
+            [255, 200, 90],
+        );
+        for frame in [
+            terminal_frame_at(
+                Terminal::Repair,
+                "2.20 PED",
+                "2.20 PED",
+                past_bottom,
+                &field_numerals(),
+            ),
+            past_top,
+        ] {
+            let recogniser = frame.recogniser();
+            let located =
+                locate(&frame.image, &profile, "repair_terminal", &recogniser).expect("found");
+            assert_eq!(
+                located.marker_height(&frame.image, &profile),
+                Err(ScaleError::Unmeasured)
+            );
+            assert_eq!(
+                service(&frame).scan_repair_cost(),
+                Err(TerminalRefusal::TerminalNotOpen)
+            );
+        }
+        // A window the desktop scaled keeps its lettering's proportions
+        // whatever its marker measures: it claims no scale.
+        let frame = terminal_frame(Terminal::Repair, "2.20 PED", "2.20 PED");
+        let recogniser = frame.recogniser();
+        let mut located =
+            locate(&frame.image, &profile, "repair_terminal", &recogniser).expect("found");
+        assert_eq!(
+            located.marker_height(&frame.image, &profile),
+            Ok(DRAWN_MARKER_HEIGHT)
+        );
+        located.window.scaled_frame = true;
+        assert_eq!(
+            located.marker_height(&frame.image, &profile),
+            Err(ScaleError::Unmeasured)
+        );
+        assert!(located.field_scale(&frame.image, &profile).is_err());
+    }
+
+    #[test]
+    fn a_figure_is_never_held_to_another_scales_numerals() {
+        let (drawn, larger) = two_scales();
+        // The hazard: a figure drawn at the default scale, read a digit
+        // short, is as wide as the larger scale's numerals make the short
+        // text. Held to those, the misreading would pass its width.
+        let (text, short) = ("160.47 PED", "16.47 PED");
+        let units = expected_width(text, &drawn.numerals).expect("covered");
+        let mut image = blank(400, 60, [8, 11, 11]);
+        let ink = Rect::new(
+            20,
+            20,
+            20 + (units * FIGURE_HEIGHT as f32).round() as i32 - 1,
+            19 + FIGURE_HEIGHT,
+        );
+        crate::game_ui::test_support::fill(&mut image, ink, [200, 200, 200]);
+        assert!(width_agrees(&image, ink.padded(3), short, &larger.numerals));
+        assert!(!width_agrees(&image, ink.padded(3), short, &drawn.numerals));
+        // In the terminal, with the larger scale listed first: the short
+        // reading is refused under the drawn scale's numerals.
+        let profile = with_scales(vec![larger.clone(), drawn.clone()]);
+        let frame = terminal_frame(Terminal::Repair, text, short);
+        assert_eq!(
+            service_under(&frame, profile.clone(), frame.recogniser()).scan_repair_cost(),
+            Err(TerminalRefusal::FigureNotRead)
+        );
+        // A reading a digit long is refused the same way.
+        let frame = terminal_frame(Terminal::Repair, "2.20 PED", "22.20 PED");
+        assert_eq!(
+            service_under(&frame, profile.clone(), frame.recogniser()).scan_repair_cost(),
+            Err(TerminalRefusal::FigureNotRead)
+        );
+        // The recogniser dropping a digit of each repeated pair: no
+        // damaged figure is answered, and one with nothing to damage reads.
+        for (figure, reads) in [
+            ("1,444.77 PED", None),
+            ("33.50 PED", None),
+            ("2.20 PED", Some("2.20")),
+        ] {
+            let frame = terminal_frame(Terminal::Trade, figure, figure);
+            let recogniser = frame.recogniser();
+            let damaged = move |crop: &BgrImage| {
+                recogniser(crop).map(|(text, c)| (dropping_repeats(text), c))
+            };
+            let got = service_under(&frame, profile.clone(), damaged).scan_trade_terminal_value();
+            match reads {
+                Some(want) => assert_eq!(got.map(|r| r.text), Ok(want.to_string())),
+                None => assert_eq!(got, Err(TerminalRefusal::FigureNotRead), "{figure}"),
+            }
+        }
+        // Held to the larger scale's numerals, the drawn terminal's true
+        // reading is the wrong width: the entry the marker claims is the
+        // one that measures it.
+        let swapped = with_scales(vec![FieldScale {
+            marker_height: drawn.marker_height,
+            numerals: larger.numerals.clone(),
+        }]);
+        let frame = terminal_frame(Terminal::Repair, "27.47542 PED", "27.47542 PED");
+        assert_eq!(
+            read_window_field(
+                &frame.image,
+                &swapped,
+                "repair_terminal",
+                "repair_cost",
+                &frame.recogniser()
+            ),
+            Err(ReadError::Field(FieldError::WrongWidth {
+                raw: "27.47542 PED".into()
+            }))
+        );
     }
 
     /// The service over `frame`'s image, recognised by `read_text`.

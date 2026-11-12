@@ -68,6 +68,9 @@ pub enum SkillScanStop {
     CaptureNotAllowed,
     /// A while passed with no new page.
     NoNewPage,
+    /// A while passed with the skills window drawn at an interface size
+    /// the app cannot read yet.
+    InterfaceSizeUnreadable,
 }
 
 /// What stops the game's view, as it is now, being collected.
@@ -95,6 +98,9 @@ pub enum SkillScanHint {
     /// The page is from another category, or another page count, than the
     /// pages collected.
     OtherListing,
+    /// The skills window is drawn at an interface size the app cannot read
+    /// yet.
+    InterfaceSizeUnreadable,
 }
 
 /// Why a scan verb was refused. A refused verb changes nothing.
@@ -154,6 +160,7 @@ impl From<ScanHint> for SkillScanHint {
             ScanHint::WindowTooShort => Self::WindowTooShort,
             ScanHint::PageNotRead => Self::PageNotRead,
             ScanHint::OtherListing => Self::OtherListing,
+            ScanHint::InterfaceSizeUnreadable => Self::InterfaceSizeUnreadable,
         }
     }
 }
@@ -164,6 +171,7 @@ impl From<ScanStop> for SkillScanStop {
             ScanStop::ReadFailed => Self::ReadFailed,
             ScanStop::CaptureNotAllowed => Self::CaptureNotAllowed,
             ScanStop::NoNewPage => Self::NoNewPage,
+            ScanStop::InterfaceSizeUnreadable => Self::InterfaceSizeUnreadable,
         }
     }
 }
@@ -497,6 +505,7 @@ mod tests {
             (ScanHint::WindowTooShort, "windowTooShort"),
             (ScanHint::PageNotRead, "pageNotRead"),
             (ScanHint::OtherListing, "otherListing"),
+            (ScanHint::InterfaceSizeUnreadable, "interfaceSizeUnreadable"),
         ] {
             assert_eq!(
                 serde_json::to_value(SkillScanHint::from(hint)).unwrap(),
@@ -507,6 +516,7 @@ mod tests {
             (ScanStop::ReadFailed, "readFailed"),
             (ScanStop::CaptureNotAllowed, "captureNotAllowed"),
             (ScanStop::NoNewPage, "noNewPage"),
+            (ScanStop::InterfaceSizeUnreadable, "interfaceSizeUnreadable"),
         ] {
             assert_eq!(
                 serde_json::to_value(SkillScanStop::from(stop)).unwrap(),

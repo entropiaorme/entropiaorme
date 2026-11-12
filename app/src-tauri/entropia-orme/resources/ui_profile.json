@@ -100,17 +100,25 @@
       2.5
     ],
     "label_aspect_slack": 4.0,
-    "numerals": {
-      "min_ink": 110,
-      "body_row_share": 0.25,
-      "digit": 0.887,
-      "one": 0.8,
-      "comma": 0.363,
-      "period": 0.507,
-      "ped_suffix": 3.2,
-      "bias": -0.296,
-      "tolerance": 0.4
-    }
+    "field_scales": [
+      {
+        "marker_height": [
+          21,
+          23
+        ],
+        "numerals": {
+          "min_ink": 110,
+          "body_row_share": 0.25,
+          "digit": 0.887,
+          "one": 0.8,
+          "comma": 0.363,
+          "period": 0.507,
+          "ped_suffix": 3.2,
+          "bias": -0.296,
+          "tolerance": 0.4
+        }
+      }
+    ]
   },
   "titles": {
     "strip_height": 90,
@@ -184,7 +192,26 @@
           "thumb_min_length": 0.5,
           "max_stray": 0.5,
           "fill_share": 0.97
-        }
+        },
+        "scales": [
+          {
+            "row_pitch": [
+              56,
+              58
+            ],
+            "numerals": {
+              "min_ink": 110,
+              "body_row_share": 0.25,
+              "digit": 0.887,
+              "one": 0.8,
+              "comma": 0.363,
+              "period": 0.507,
+              "ped_suffix": 3.2,
+              "bias": -0.296,
+              "tolerance": 0.4
+            }
+          }
+        ]
       }
     },
     "auction_sell": {

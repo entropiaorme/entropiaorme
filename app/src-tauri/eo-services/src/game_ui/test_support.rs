@@ -86,6 +86,13 @@ pub fn fill(image: &mut BgrImage, rect: Rect, rgb: [u8; 3]) {
 /// the outer edge, and the title marker at the top-left. Parts outside
 /// the frame are clipped, as a window dragged off the screen is.
 pub fn draw_window(image: &mut BgrImage, rect: Rect) {
+    draw_window_with_marker(image, rect, DRAWN_MARKER_HEIGHT);
+}
+
+/// Draw a client window as [`draw_window`] does, its title marker
+/// `marker_height` pixels tall: the marker the client draws at another
+/// interface scale.
+pub fn draw_window_with_marker(image: &mut BgrImage, rect: Rect, marker_height: i32) {
     const PANEL: [u8; 3] = [8, 11, 11];
     const RIDGE_OUTER: [u8; 3] = [45, 49, 49];
     const RIDGE_INNER: [u8; 3] = [76, 82, 84];
@@ -104,9 +111,50 @@ pub fn draw_window(image: &mut BgrImage, rect: Rect) {
     }
     fill(
         image,
-        Rect::new(rect.x0 + 25, rect.y0 + 18, rect.x0 + 29, rect.y0 + 37),
+        Rect::new(
+            rect.x0 + 25,
+            rect.y0 + 17,
+            rect.x0 + 29,
+            rect.y0 + 16 + marker_height,
+        ),
         MARKER,
     );
+}
+
+/// `numerals` with every advance and the bias `factor` times as wide:
+/// how one lettering size measures at another interface scale, its width
+/// following the scale and its height hinted.
+pub fn widened(numerals: &NumeralMetrics, factor: f32) -> NumeralMetrics {
+    let scale = |v: f32| v * factor;
+    NumeralMetrics {
+        digit: scale(numerals.digit),
+        one: scale(numerals.one),
+        comma: scale(numerals.comma),
+        period: scale(numerals.period),
+        ped_suffix: scale(numerals.ped_suffix),
+        above_tt_prefix: numerals.above_tt_prefix.map(scale),
+        percent: numerals.percent.map(scale),
+        bracket: numerals.bracket.map(scale),
+        bias: scale(numerals.bias),
+        ..numerals.clone()
+    }
+}
+
+/// The height of the drawn windows' title marker: the client's at the
+/// default interface scale.
+pub const DRAWN_MARKER_HEIGHT: i32 = 22;
+
+/// The labelled fields' numerals at the scale the drawn windows are
+/// drawn at, as the bundled profile measures them: its entry claiming
+/// the drawn title marker's height.
+pub fn field_numerals() -> NumeralMetrics {
+    bundled_profile()
+        .read
+        .field_scales
+        .into_iter()
+        .find(|s| (s.marker_height[0]..=s.marker_height[1]).contains(&DRAWN_MARKER_HEIGHT))
+        .expect("the bundled profile lists the drawn windows' scale")
+        .numerals
 }
 
 /// Lettering drawn as blocks of ink, each piece of text in a colour no
@@ -333,8 +381,24 @@ const ICON: [u8; 3] = [90, 160, 230];
 /// The grey of the table's scrollbar thumb.
 pub const THUMB: [u8; 3] = [146, 146, 146];
 
-/// The drawn table's row height.
+/// The drawn table's row height, rule to rule; a row's band between
+/// its two one-pixel rules is a pixel less.
 pub const SKILLS_ROW_PITCH: i32 = 58;
+
+/// The skills table's numerals at the scale the drawn table is drawn at,
+/// as the bundled profile measures them: its entry claiming the drawn
+/// rows' pitch between their rules.
+pub fn skills_numerals() -> NumeralMetrics {
+    bundled_profile().windows["skills"]
+        .skills_table
+        .clone()
+        .expect("the bundled profile describes the skills table")
+        .scales
+        .into_iter()
+        .find(|s| (s.row_pitch[0]..=s.row_pitch[1]).contains(&(SKILLS_ROW_PITCH - 1)))
+        .expect("the bundled profile lists the drawn table's scale")
+        .numerals
+}
 
 /// Where the drawn skills window's pieces go, as offsets from its corner.
 pub struct SkillsLayout {
@@ -358,6 +422,12 @@ pub struct SkillsLayout {
     /// A pane drawn directly under the last row, the view ending on
     /// its rule.
     pub pane: bool,
+    /// The rows' height, rule to rule: [`SKILLS_ROW_PITCH`] at the
+    /// default interface scale.
+    pub row_pitch: i32,
+    /// How wide the points are drawn: the profile's numerals for the
+    /// drawn scale unless a test draws them otherwise.
+    pub numerals: NumeralMetrics,
 }
 
 /// The scene a drawn skills window sits on.
@@ -426,10 +496,13 @@ pub fn draw_skills_window(d: &mut Lettering, layout: &SkillsLayout) {
     // bottom until the table is scrolled, when rows slide up under it.
     let first_top = header_top + 33 - layout.scrolled;
     let mut last_rule = header_top;
-    let numerals = bundled_profile().read.numerals;
+    let numerals = &layout.numerals;
+    let pitch = layout.row_pitch;
+    // Lettering 14 pixels tall on the middle of the row's band.
+    let text_top = (pitch - 1) / 2 - 6;
     for (k, (name, points)) in layout.rows.iter().enumerate() {
-        let top = first_top + k as i32 * SKILLS_ROW_PITCH;
-        for y in [top - 1, top + SKILLS_ROW_PITCH - 1] {
+        let top = first_top + k as i32 * pitch;
+        for y in [top - 1, top + pitch - 1] {
             if y > header_top {
                 rule(d, y);
                 last_rule = last_rule.max(y);
@@ -448,22 +521,32 @@ pub fn draw_skills_window(d: &mut Lettering, layout: &SkillsLayout) {
             fill(&mut d.image, icon, ICON);
         }
         if let Some(name) = name {
-            if let Some(r) = visible(Rect::new(w.x0 + 80, top + 22, w.x0 + 230, top + 35)) {
+            if let Some(r) = visible(Rect::new(
+                w.x0 + 80,
+                top + text_top,
+                w.x0 + 230,
+                top + text_top + 13,
+            )) {
                 d.text(r, name);
             }
         }
-        if let Some(r) = visible(Rect::new(w.x0 + 420, top + 22, w.x0 + 500, top + 35)) {
+        if let Some(r) = visible(Rect::new(
+            w.x0 + 420,
+            top + text_top,
+            w.x0 + 500,
+            top + text_top + 13,
+        )) {
             d.text(r, "Newbie");
         }
         let points_x = w.x0 + layout.points_x;
         // As wide as the client's numerals would make this figure.
         let width =
-            expected_width(points, &numerals).map_or(50, |units| (units * 14.0).round() as i32);
+            expected_width(points, numerals).map_or(50, |units| (units * 14.0).round() as i32);
         if let Some(r) = visible(Rect::new(
             points_x,
-            top + 22,
+            top + text_top,
             points_x + width - 1,
-            top + 35,
+            top + text_top + 13,
         )) {
             d.text(r, points);
         }
@@ -532,6 +615,8 @@ pub fn standard_skills_layout() -> SkillsLayout {
         stray_divider: None,
         thumb: None,
         pane: false,
+        row_pitch: SKILLS_ROW_PITCH,
+        numerals: skills_numerals(),
     }
 }
 

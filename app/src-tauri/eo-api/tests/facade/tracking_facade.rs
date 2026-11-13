@@ -2839,7 +2839,7 @@ async fn tool_reading_api(
     // the tracker (a tool read off the screen) and the overlay's picker.
     let items: eo_services::hotbar_listener::ItemResolver = Arc::new(move |id: i64| {
         let index = known.iter().position(|known| *known == id)?;
-        let (name, kind, _) = TOOL_LIBRARY[index];
+        let (name, kind, setup) = TOOL_LIBRARY[index];
         Some(ResolvedHotbarItem {
             equipment_id: id,
             name: name.to_string(),
@@ -2853,7 +2853,7 @@ async fn tool_reading_api(
             healing_profile: None,
             lifesteal_percent: None,
             consumable_profile: None,
-            setup: Default::default(),
+            setup: eo_services::tool_setup::ToolSetup::from_props_json(setup, None),
         })
     });
     let bundled: eo_services::tracker::BundledToolResolver =
@@ -2925,6 +2925,13 @@ async fn tool_source_holding(api: &Api, expected: serde_json::Value) -> serde_js
     );
 }
 
+/// The set-up the overlay is given for a tool of the rig: nothing fitted,
+/// one use (`per`) at the price the rig's resolver declares, TT unknown.
+fn bare(per: &str) -> serde_json::Value {
+    serde_json::json!({"per": per, "parts": [], "enhancers": null,
+                       "costPerUsePed": 0.05, "ttPerUsePed": null})
+}
+
 fn bundled_healer() -> eo_services::tool_watch::ToolSeen {
     eo_services::tool_watch::ToolSeen::Holding(eo_services::tool_watch::HeldTool::Bundled {
         endpoint: "medical_tools".into(),
@@ -2957,14 +2964,26 @@ async fn tracking_snapshot_carries_what_the_screen_shows_in_hand() {
     watcher.show(ToolSeen::Holding(HeldTool::Library { id: rifle }));
     tool_source_holding(
         &api,
-        json!({"kind": "tool", "name": "Rifle", "provisional": false}),
+        json!({"kind": "tool", "name": "Rifle", "provisional": false, "setup": bare("shot")}),
+    )
+    .await;
+
+    // An entry's set-up crosses with it: the amplified pistol names its
+    // amplifier.
+    watcher.show(ToolSeen::Holding(HeldTool::Library { id: amplified }));
+    tool_source_holding(
+        &api,
+        json!({"kind": "tool", "name": "Pistol", "provisional": false, "setup": {
+            "per": "shot", "parts": [{"role": "amplifier", "name": "A101"}],
+            "enhancers": null, "costPerUsePed": 0.05, "ttPerUsePed": null
+        }}),
     )
     .await;
 
     watcher.show(bundled_healer());
     tool_source_holding(
         &api,
-        json!({"kind": "tool", "name": "Old FAP", "provisional": true}),
+        json!({"kind": "tool", "name": "Old FAP", "provisional": true, "setup": bare("heal")}),
     )
     .await;
 
@@ -3032,7 +3051,7 @@ async fn tracking_snapshot_carries_what_the_screen_shows_in_hand() {
     watcher.show(ToolSeen::NotVisible);
     tool_source_holding(
         &api,
-        json!({"kind": "notVisible", "last": null, "provisional": false}),
+        json!({"kind": "notVisible", "last": null, "provisional": false, "setup": null}),
     )
     .await;
 
@@ -3041,7 +3060,7 @@ async fn tracking_snapshot_carries_what_the_screen_shows_in_hand() {
     api.tracking_declare_equipment(plain).await.unwrap();
     let chosen = tool_source_holding(
         &api,
-        json!({"kind": "tool", "name": "Pistol", "provisional": false}),
+        json!({"kind": "tool", "name": "Pistol", "provisional": false, "setup": bare("shot")}),
     )
     .await;
     assert_eq!(chosen["manual"], true);
@@ -3051,14 +3070,14 @@ async fn tracking_snapshot_carries_what_the_screen_shows_in_hand() {
     watcher.show(ToolSeen::Holding(HeldTool::Library { id: rifle }));
     let shown = tool_source_holding(
         &api,
-        json!({"kind": "tool", "name": "Rifle", "provisional": false}),
+        json!({"kind": "tool", "name": "Rifle", "provisional": false, "setup": bare("shot")}),
     )
     .await;
     assert_eq!(shown["manual"], false);
     watcher.show(ToolSeen::NotVisible);
     tool_source_holding(
         &api,
-        json!({"kind": "notVisible", "last": "Rifle", "provisional": false}),
+        json!({"kind": "notVisible", "last": "Rifle", "provisional": false, "setup": bare("shot")}),
     )
     .await;
 }
@@ -3076,13 +3095,13 @@ async fn tracking_snapshot_keeps_the_tool_covered_as_it_was_held() {
     watcher.show(bundled_healer());
     tool_source_holding(
         &api,
-        json!({"kind": "tool", "name": "Old FAP", "provisional": true}),
+        json!({"kind": "tool", "name": "Old FAP", "provisional": true, "setup": bare("heal")}),
     )
     .await;
     watcher.show(ToolSeen::NotVisible);
     tool_source_holding(
         &api,
-        json!({"kind": "notVisible", "last": "Old FAP", "provisional": true}),
+        json!({"kind": "notVisible", "last": "Old FAP", "provisional": true, "setup": bare("heal")}),
     )
     .await;
 
@@ -3090,13 +3109,13 @@ async fn tracking_snapshot_keeps_the_tool_covered_as_it_was_held() {
     watcher.show(ToolSeen::Holding(HeldTool::Library { id: healer }));
     tool_source_holding(
         &api,
-        json!({"kind": "tool", "name": "FAP", "provisional": false}),
+        json!({"kind": "tool", "name": "FAP", "provisional": false, "setup": bare("heal")}),
     )
     .await;
     watcher.show(ToolSeen::NotVisible);
     tool_source_holding(
         &api,
-        json!({"kind": "notVisible", "last": "FAP", "provisional": false}),
+        json!({"kind": "notVisible", "last": "FAP", "provisional": false, "setup": bare("heal")}),
     )
     .await;
 }
@@ -3112,7 +3131,7 @@ async fn tracking_declare_equipment_is_refused_in_the_players_terms_while_the_sc
     watcher.show(ToolSeen::Holding(HeldTool::Library { id: rifle }));
     tool_source_holding(
         &api,
-        serde_json::json!({"kind": "tool", "name": "Rifle", "provisional": false}),
+        serde_json::json!({"kind": "tool", "name": "Rifle", "provisional": false, "setup": bare("shot")}),
     )
     .await;
 

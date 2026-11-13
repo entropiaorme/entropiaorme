@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { keyboardNote } from './keyboardAccess';
+import { hotbarListenerCopy, keyboardNote } from './keyboardAccess';
 
 describe('keyboardNote', () => {
 	it('names where keys are read from', () => {
@@ -29,5 +29,19 @@ describe('keyboardNote', () => {
 
 	it('says nothing while keyless, when the keyboard is never probed', () => {
 		expect(keyboardNote({ observer: null, keyless: true, keylessAvailable: true })).toBeNull();
+	});
+});
+
+describe('hotbarListenerCopy', () => {
+	it('says presses name the tool in hand while the screen does not', () => {
+		expect(hotbarListenerCopy(false)).toMatch(/which weapon or healer is in hand/);
+	});
+
+	it('says presses start consumables alone while the tool in hand is read from the screen', () => {
+		const copy = hotbarListenerCopy(true);
+		expect(copy).toMatch(/pressing a consumable starts its timer/);
+		expect(copy).toMatch(/tool in hand is read from the screen/);
+		expect(copy).not.toMatch(/weapon or healer/);
+		expect(copy).not.toMatch(/damage ranges/);
 	});
 });

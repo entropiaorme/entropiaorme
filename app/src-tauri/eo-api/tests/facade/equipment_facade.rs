@@ -1,7 +1,8 @@
 //! Behavioural pins for the equipment family over the typed facade: the
 //! search gates, the catalogue-less validation ladder, the
 //! custom-consumable write cycle, the type-change and missing-row
-//! refusals, and the unguarded delete.
+//! refusals, the unguarded delete, and the rebuild of the tools the
+//! held-tool watcher matches against after every edit.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1343,4 +1344,87 @@ async fn everything_but_the_flag(api: &Api, db: &Db, ids: Entries) -> Value {
     api.weapon_assignment_undo(correction).await.unwrap();
 
     Value::Object(reads)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_held_tool_catalogue_is_built_only_while_the_reading_is_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = api_over(dir.path()).await;
+    let store = Arc::new(GameDataStore::new(&dir.path().join("snapshot")).expect("snapshot store"));
+    let data_dir = dir.path().join("data");
+    let catalogues = eo_services::tool_catalogue::ToolCatalogues::new(
+        db.clone(),
+        store,
+        Arc::new(move || {
+            eo_services::config_service::load_config_readonly(&data_dir)
+                .is_ok_and(|config| config.tool_reading_on())
+        }),
+    );
+    let cell = catalogues.cell();
+    let api = api.with_tool_reading(catalogues, None);
+    let library = || -> Vec<(String, bool)> {
+        cell.current()
+            .library()
+            .map(|tool| (tool.name.clone(), tool.enabled))
+            .collect()
+    };
+    let turn = |on: bool| eo_api::settings::SettingsPatch {
+        tool_reading_enabled: Some(on),
+        ..Default::default()
+    };
+
+    // Off: an edit builds nothing.
+    let id = add_catalogued(&api, EquipmentKind::Weapon, "w1").await;
+    assert!(library().is_empty(), "an edit while off builds nothing");
+    assert_eq!(cell.current().bundled().count(), 0);
+
+    // Turning it on builds once, from the library as it stands.
+    api.settings_update(turn(true)).await.unwrap();
+    assert_eq!(library(), [("Opalo Rifle (L)".to_string(), true)]);
+    assert!(
+        cell.current().bundled().count() > 0,
+        "with the bundled tools"
+    );
+
+    // Already built: a patch of anything else reads nothing again, so a
+    // row written behind the facade's back is not picked up.
+    db.insert_equipment("Behind".into(), "weapon".into(), None, "{}".into())
+        .await
+        .unwrap();
+    api.settings_update(eo_api::settings::SettingsPatch {
+        session_name: Some("Atrox run".into()),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(library().len(), 1, "built once");
+
+    // On: every edit rebuilds.
+    let mut req = consumable("");
+    req.kind = EquipmentKind::Weapon;
+    req.name = None;
+    req.catalog_id = Some("w2".to_string());
+    api.equipment_update(id, &req).await.unwrap();
+    assert_eq!(
+        library(),
+        [
+            ("Rapid Carbine".to_string(), true),
+            ("Behind".to_string(), true)
+        ],
+        "an edit"
+    );
+
+    api.equipment_set_enabled(id, false).await.unwrap();
+    assert_eq!(
+        library()[0],
+        ("Rapid Carbine".to_string(), false),
+        "turned off"
+    );
+
+    // A consumable is never held, so it is not on the bar.
+    api.equipment_add(&consumable("Pill")).await.unwrap();
+    assert_eq!(library().len(), 2);
+
+    api.equipment_delete(id).await.unwrap();
+    assert_eq!(library(), [("Behind".to_string(), true)], "a deletion");
 }

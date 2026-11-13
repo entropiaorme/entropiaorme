@@ -2,16 +2,22 @@
 //! assembled settings read (defaults, the live db path, the version
 //! stamp, the carried weapons), the overlay-position read/write, and the
 //! partial-update validation ladder (the empty-patch refusal, the
-//! chat-log path checks, the mob-mode gate).
+//! chat-log path checks, the mob-mode gate), and the setting that reads
+//! the held tool off the screen.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use eo_api::settings::SettingsPatch;
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
+use eo_services::config_service::load_config_readonly;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
+use eo_services::screen_watch::WatchEnded;
+use eo_services::tool_catalogue::ToolCatalogues;
+use eo_services::tool_watch::{ToolDetector, ToolPulseSink};
+use eo_services::tracker::{HuntTracker, Providers, TrackingConfig};
 use serde_json::Value;
 
 use crate::common;
@@ -84,6 +90,8 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "repairOcrEnabled",
             "mobDetectionEnabled",
             "mobDetectionCapture",
+            "toolReadingEnabled",
+            "toolReadingCapture",
             "developerModeEnabled",
             "sessionName",
             "declaredSkillBoostPercent",
@@ -523,4 +531,200 @@ async fn the_session_config_facade_keeps_a_declared_zero_apart_from_a_withdrawal
     // A negative is nonsense rather than a fourth state: it withdraws.
     let negative = api.tracking_session_config(None, Some(-5)).await.unwrap();
     assert_eq!(negative.skill_boost_percent, None::<i64>);
+}
+
+/// The tracker's configuration read through the settings file, as the
+/// app's own is: what a settings write turns on or off reaches it.
+struct FileConfig(std::path::PathBuf);
+
+impl TrackingConfig for FileConfig {
+    fn session_name(&self) -> String {
+        String::new()
+    }
+
+    fn session_definition_id(&self) -> Option<i64> {
+        None
+    }
+
+    fn declared_skill_boost_percent(&self) -> Option<i64> {
+        None
+    }
+
+    fn manual_mob(&self) -> Option<(String, String)> {
+        None
+    }
+
+    fn loot_filter_blacklist(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn tool_reading_enabled(&self) -> bool {
+        load_config_readonly(&self.0).is_ok_and(|config| config.tool_reading_on())
+    }
+}
+
+/// A held-tool watcher that records what the tracker asks of it.
+#[derive(Default)]
+struct RecordingToolWatch {
+    starts: Mutex<usize>,
+    stops: Mutex<usize>,
+    permits: Mutex<usize>,
+    watching: Mutex<Option<String>>,
+}
+
+impl ToolDetector for RecordingToolWatch {
+    fn start(&self, session_id: &str, _sink: ToolPulseSink, _ended: WatchEnded) {
+        *self.starts.lock().unwrap() += 1;
+        *self.watching.lock().unwrap() = Some(session_id.to_string());
+    }
+
+    fn stop(&self) {
+        *self.stops.lock().unwrap() += 1;
+        *self.watching.lock().unwrap() = None;
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        self.watching.lock().unwrap().as_deref() == Some(session_id)
+    }
+
+    fn permit_capture(&self) {
+        *self.permits.lock().unwrap() += 1;
+    }
+
+    fn hint(&self) {}
+}
+
+/// The facade over a tracker whose held-tool watcher is `watch`.
+async fn tool_reading_api(dir: &Path, watch: Arc<RecordingToolWatch>) -> (Api, Arc<HuntTracker>) {
+    let snapshot = dir.join("snapshot");
+    std::fs::create_dir_all(&snapshot).unwrap();
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Db::open(&data_dir.join("entropia_orme.db"))
+        .await
+        .expect("migrated database");
+    let game_data = Arc::new(GameDataStore::new(&snapshot).expect("empty game-data store"));
+    let handles = common::producer_handles_with_tracker(
+        &db,
+        &data_dir,
+        tokio::runtime::Handle::current(),
+        Providers {
+            config: Arc::new(FileConfig(data_dir.clone())),
+            tool_detector: watch,
+            ..Providers::default()
+        },
+    )
+    .await;
+    let tracker = handles.tracker.clone();
+    let catalogues = {
+        let data_dir = data_dir.clone();
+        ToolCatalogues::new(
+            db.clone(),
+            game_data.clone(),
+            Arc::new(move || load_config_readonly(&data_dir).is_ok_and(|c| c.tool_reading_on())),
+        )
+    };
+    let api = Api::new(
+        db,
+        game_data,
+        Arc::new(RealClock::new()),
+        data_dir,
+        handles.config_service,
+        handles.tracker,
+        handles.hotbar,
+        handles.watcher,
+        handles.skill_tracker,
+        handles.skill_scan,
+        handles.spacebar,
+        handles.repair_ocr,
+        handles.sale_capture,
+        handles.quests.clone(),
+        None,
+        None,
+        None,
+    )
+    .with_tool_reading(catalogues, None);
+    (api, tracker)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reading_the_held_tool_is_off_until_turned_on_and_turning_it_on_permits_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let watch = Arc::new(RecordingToolWatch::default());
+    let (api, tracker) = tool_reading_api(dir.path(), watch.clone()).await;
+
+    // Off until the player turns it on: their consent to the screen being
+    // read. A session started meanwhile never starts the watcher.
+    let settings = api.settings().await.unwrap();
+    assert!(!settings.tool_reading_enabled);
+    assert_eq!(
+        serde_json::to_value(settings.tool_reading_capture).unwrap(),
+        "unavailable",
+        "a facade with no watcher's status says the reading cannot run"
+    );
+    tracker.start_session().await.unwrap();
+    assert_eq!(*watch.starts.lock().unwrap(), 0, "never started while off");
+    assert_eq!(
+        *watch.permits.lock().unwrap(),
+        0,
+        "no capture permitted while off"
+    );
+
+    let on = api
+        .settings_update(SettingsPatch {
+            tool_reading_enabled: Some(true),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert!(on.tool_reading_enabled);
+    assert!(!on.mob_detection_enabled, "one setting is not the other");
+    assert_eq!(
+        *watch.permits.lock().unwrap(),
+        1,
+        "the player's turning it on is the gesture that may start capture"
+    );
+    assert_eq!(
+        *watch.starts.lock().unwrap(),
+        1,
+        "turned on mid-session, the tracker re-reads its config and starts the watch"
+    );
+    let data_dir = dir.path().join("data");
+    assert_eq!(read_settings(&data_dir)["tool_reading"], true);
+
+    // A patch of another setting while it is on is not the player turning
+    // it on: no capture is permitted again, and the watch runs on.
+    api.settings_update(SettingsPatch {
+        session_name: Some("Atrox run".into()),
+        ..SettingsPatch::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        *watch.permits.lock().unwrap(),
+        1,
+        "only turning it on permits capture"
+    );
+    assert_eq!(*watch.starts.lock().unwrap(), 1);
+
+    let off = api
+        .settings_update(SettingsPatch {
+            tool_reading_enabled: Some(false),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert!(!off.tool_reading_enabled);
+    assert_eq!(read_settings(&data_dir)["tool_reading"], false);
+    assert!(
+        *watch.stops.lock().unwrap() >= 1,
+        "turned off mid-session, the watch stops"
+    );
+
+    // Off: a new session never starts the watcher, and nothing more is
+    // permitted.
+    tracker.stop_session().await.unwrap();
+    tracker.start_session().await.unwrap();
+    assert_eq!(*watch.starts.lock().unwrap(), 1, "never started while off");
+    assert_eq!(*watch.permits.lock().unwrap(), 1);
 }

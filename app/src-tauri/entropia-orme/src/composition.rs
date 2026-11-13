@@ -366,7 +366,9 @@ pub struct ProducerState {
     // starts and stops it with its sessions, and the exit path waits for
     // its look in progress.
     mob_detection: Arc<DetectorSlot>,
-    /// Where a held-tool watcher would be bound; nothing binds it yet.
+    // Reading the held tool, bound once the recogniser has loaded: the
+    // tracker starts and stops it with its sessions while the setting is
+    // on, and the exit path waits for its look in progress.
     tool_detection: Arc<eo_services::tool_watch::ToolDetectorSlot>,
 }
 
@@ -385,9 +387,9 @@ impl ProducerState {
         if self.tracker.is_tracking() {
             let _ = block_on_pool(&self.runtime, self.tracker.stop_session());
         }
-        // Stopping the session stopped the creature watcher; wait, briefly,
-        // for a look still in progress, so nothing captures behind the
-        // closing app.
+        // Stopping the session stopped the creature and held-tool watchers;
+        // wait, briefly, for a look still in progress, so nothing captures
+        // behind the closing app.
         self.mob_detection.shutdown();
         eo_services::tool_watch::ToolDetector::shutdown(self.tool_detection.as_ref());
         self.watcher.stop();
@@ -396,6 +398,11 @@ impl ProducerState {
     /// Where creature detection is bound once the recogniser has loaded.
     pub fn mob_detection_handle(&self) -> Arc<DetectorSlot> {
         self.mob_detection.clone()
+    }
+
+    /// Where reading the held tool is bound once the recogniser has loaded.
+    pub fn tool_detection_handle(&self) -> Arc<eo_services::tool_watch::ToolDetectorSlot> {
+        self.tool_detection.clone()
     }
 
     /// The composed watcher, for tests driving a replay through it.
@@ -845,6 +852,41 @@ async fn compose_with(
     let mob_detector: Arc<dyn MobDetector> = Arc::new(mob_watch);
     producers.mob_detection_handle().bind(mob_detector);
 
+    // Reading the held tool: the game window, the interface profile and the
+    // shared engine, matching names against the player's library, the names
+    // they dismissed and the bundled tools. Composed exactly as creature
+    // detection is, and bound into the slot the tracker was built with.
+    // The catalogue is built only while the reading is on: here, if it is on
+    // already, before the watcher is bound (so before any session can start
+    // it); otherwise when the player turns it on, before the tracker
+    // re-reads its config and starts the watch.
+    let tool_reading_on: eo_services::tool_catalogue::ReadingOn = {
+        let reader = producers
+            .config_service_handle()
+            .lock()
+            .expect("config service")
+            .reader();
+        Arc::new(move || reader.current().tool_reading_on())
+    };
+    let tool_catalogues = eo_services::tool_catalogue::ToolCatalogues::new(
+        db.clone(),
+        game_data.clone(),
+        tool_reading_on.clone(),
+    );
+    if tool_reading_on() {
+        tool_catalogues.ensure_current().await;
+    }
+    let tool_capture = bind_tool_watch(
+        &producers,
+        ToolWatchInputs {
+            focus: navigation_focus.clone(),
+            profile: game_ui.profile.clone(),
+            read_text: frame_reader(ocr_engine.clone()),
+            catalogue: tool_catalogues.cell(),
+            clock: clock.clone(),
+        },
+    );
+
     let (skill_scan, sale_capture, spacebar_listener) = compose_scan_services(ScanInputs {
         bus: producers.bus_handle(),
         ocr_engine: ocr_engine.clone(),
@@ -1051,6 +1093,10 @@ async fn compose_with(
                 .as_ref()
                 .map(|profile| profile.tool_names.clone()),
         )
+        // An edit to the library rebuilds the tools the held-tool watcher
+        // matches against, so its next look matches with the library as it
+        // now stands.
+        .with_tool_reading(tool_catalogues, Some(tool_capture))
         .with_protection_changed({
             // Recording happens in the overlay's Cost popup while Equipment,
             // History, and the dashboard may be open elsewhere: each re-reads
@@ -1135,6 +1181,61 @@ async fn compose_with(
         coord_confirm,
         radar_confirm: navigation.1,
     })
+}
+
+/// What the held-tool watcher reads with, beside the producers it is bound
+/// into.
+struct ToolWatchInputs {
+    focus: Option<GameFocusProbe>,
+    profile: Option<Arc<UiProfile>>,
+    read_text: Option<FrameReader>,
+    catalogue: Arc<eo_services::tool_watch::ToolCatalogueCell>,
+    clock: Arc<dyn Clock>,
+}
+
+/// The held-tool watcher's seams. It captures only from a capture already
+/// running (never the shared seam, which may start capture), starts one only
+/// for the player's turning the reading on, and is on only while the
+/// player's setting is, read live from `reader` before every look.
+fn tool_watch_providers(
+    reader: ConfigReader,
+    inputs: ToolWatchInputs,
+) -> eo_services::tool_watch::ToolWatchProviders {
+    eo_services::tool_watch::ToolWatchProviders {
+        frame: Arc::new(eu_window::capture_game_window_running),
+        capture_running: Arc::new(eo_services::screen_capture::capture_running),
+        start_capture: Arc::new(eo_services::screen_capture::start_capture),
+        enabled: Arc::new(move || reader.current().tool_reading_on()),
+        focus: inputs.focus,
+        profile: inputs.profile,
+        read_text: inputs.read_text,
+        catalogue: inputs.catalogue,
+        wait: None,
+    }
+}
+
+/// Build the held-tool watcher and bind it into the tracker's slot; its
+/// capture status, for the settings. It captures under the one lock every
+/// watcher of the game window shares.
+fn bind_tool_watch(
+    producers: &ProducerState,
+    inputs: ToolWatchInputs,
+) -> eo_services::screen_watch::CaptureStatusProbe {
+    use eo_services::tool_watch::{ToolDetector, ToolWatch};
+    let reader = producers
+        .config_service_handle()
+        .lock()
+        .expect("config service")
+        .reader();
+    let clock = inputs.clock.clone();
+    let tool_watch = ToolWatch::new(tool_watch_providers(reader, inputs), clock);
+    let capture: eo_services::screen_watch::CaptureStatusProbe = {
+        let tool_watch = tool_watch.clone();
+        Arc::new(move || tool_watch.capture_status())
+    };
+    let detector: Arc<dyn ToolDetector> = Arc::new(tool_watch);
+    producers.tool_detection_handle().bind(detector);
+    capture
 }
 
 /// Construct the OCR engine off the async runtime worker, then warm it up
@@ -2030,10 +2131,8 @@ impl TrackingConfig for LiveTrackingConfig {
         self.reader.current().mob_detection_on()
     }
 
-    /// Not offered yet: no setting turns it on, and no held-tool watcher is
-    /// bound to the tracker's slot.
     fn tool_reading_enabled(&self) -> bool {
-        false
+        self.reader.current().tool_reading_on()
     }
 }
 
@@ -2783,6 +2882,146 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ended_set, 1, "the closed session carries an ended_at stamp");
+    }
+
+    /// A spine over a fresh database, for the held-tool watcher's tests.
+    async fn held_tool_spine(dir: &std::path::Path) -> (ProducerState, Arc<dyn Clock>) {
+        let db = Db::open_adopted(&dir.join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(None, 0.0));
+        let chatlog = dir.join("chat_replay.log");
+        std::fs::File::create(&chatlog).expect("empty chatlog exists before the watcher starts");
+        let producers = compose_producers_for_test(db, clock.clone(), dir, chatlog);
+        (producers, clock)
+    }
+
+    fn turn_tool_reading(producers: &ProducerState, on: bool) {
+        let mut updates = serde_json::Map::new();
+        updates.insert("tool_reading".into(), Value::Bool(on));
+        producers
+            .config_service_handle()
+            .lock()
+            .unwrap()
+            .update(&updates)
+            .unwrap();
+    }
+
+    fn bare_inputs(clock: Arc<dyn Clock>) -> ToolWatchInputs {
+        ToolWatchInputs {
+            focus: None,
+            profile: None,
+            read_text: None,
+            catalogue: Arc::new(eo_services::tool_watch::ToolCatalogueCell::default()),
+            clock,
+        }
+    }
+
+    /// The held-tool watcher is bound into the slot the tracker was built
+    /// with, and says it cannot run without the recogniser and the profile.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_held_tool_watcher_is_bound_into_the_trackers_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let (producers, clock) = held_tool_spine(dir.path()).await;
+        assert!(producers.tool_detection_handle().bound().is_none());
+        let capture = bind_tool_watch(&producers, bare_inputs(clock));
+        assert!(
+            producers.tool_detection_handle().bound().is_some(),
+            "bound into the slot the tracker was built with"
+        );
+        assert_eq!(
+            capture(),
+            eo_services::screen_watch::CaptureStatus::Unavailable,
+            "without the recogniser and the profile it cannot run"
+        );
+        producers.stop();
+    }
+
+    /// The watcher's own setting probe, and the tracker's, both follow a
+    /// live write of the player's setting.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_held_tool_watcher_and_the_tracker_follow_the_live_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let (producers, clock) = held_tool_spine(dir.path()).await;
+        let reader = producers.config_service_handle().lock().unwrap().reader();
+        let providers = tool_watch_providers(reader.clone(), bare_inputs(clock));
+        let config = LiveTrackingConfig {
+            reader,
+            machine_id: None,
+        };
+        assert!(!(providers.enabled)(), "the watcher is off until chosen");
+        assert!(!config.tool_reading_enabled(), "and so is the tracker");
+        turn_tool_reading(&producers, true);
+        assert!(
+            (providers.enabled)(),
+            "the watcher follows the player's word"
+        );
+        assert!(config.tool_reading_enabled());
+        turn_tool_reading(&producers, false);
+        assert!(!(providers.enabled)(), "and off again");
+        assert!(!config.tool_reading_enabled());
+        producers.stop();
+    }
+
+    /// A held-tool watcher that records what is asked of it.
+    #[derive(Default)]
+    struct RecordingToolWatch {
+        watching: Mutex<Option<String>>,
+        shutdowns: Mutex<usize>,
+    }
+
+    impl eo_services::tool_watch::ToolDetector for RecordingToolWatch {
+        fn start(
+            &self,
+            session_id: &str,
+            _sink: eo_services::tool_watch::ToolPulseSink,
+            _ended: eo_services::screen_watch::WatchEnded,
+        ) {
+            *self.watching.lock().unwrap() = Some(session_id.to_string());
+        }
+
+        fn stop(&self) {
+            *self.watching.lock().unwrap() = None;
+        }
+
+        fn watches(&self, session_id: &str) -> bool {
+            self.watching.lock().unwrap().as_deref() == Some(session_id)
+        }
+
+        fn permit_capture(&self) {}
+
+        fn hint(&self) {}
+
+        fn shutdown(&self) {
+            *self.shutdowns.lock().unwrap() += 1;
+            self.stop();
+        }
+    }
+
+    /// A watch running for a session at exit is stopped, and the exit path
+    /// reaches the watcher's shutdown, which waits for a look in progress.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_held_tool_watch_is_stopped_and_shut_down_with_the_spine() {
+        let dir = tempfile::tempdir().unwrap();
+        let (producers, _clock) = held_tool_spine(dir.path()).await;
+        let watch = Arc::new(RecordingToolWatch::default());
+        let detector: Arc<dyn eo_services::tool_watch::ToolDetector> = watch.clone();
+        producers.tool_detection_handle().bind(detector);
+        turn_tool_reading(&producers, true);
+        producers.tracker().reload_config().await;
+        producers
+            .tracker()
+            .start_session()
+            .await
+            .expect("composed session starts");
+        assert!(
+            watch.watching.lock().unwrap().is_some(),
+            "with the setting on, a session starts the watch"
+        );
+
+        producers.stop();
+        assert_eq!(watch.watching.lock().unwrap().as_deref(), None, "stopped");
+        assert_eq!(*watch.shutdowns.lock().unwrap(), 1, "shut down at exit");
     }
 
     /// Seed a weapon row directly through the shared handle, the same

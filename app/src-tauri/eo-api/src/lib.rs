@@ -165,6 +165,12 @@ pub struct Api {
     /// cannot tell apart by it. `None` without a profile (the library then
     /// reports no groups).
     tool_names: Option<eo_services::game_ui::tool_names::ToolNameProfile>,
+    /// The tools the held-tool watcher matches names against, rebuilt when
+    /// the library changes; `None` without a watcher.
+    tool_catalogues: Option<eo_services::tool_catalogue::ToolCatalogues>,
+    /// Whether reading the held tool can capture the game window, for the
+    /// settings; `None` without a watcher (the reading then cannot run).
+    tool_capture: Option<eo_services::screen_watch::CaptureStatusProbe>,
     /// The session-definition service (definition + roster lifecycle), built
     /// over the facade's shared db and clock; the tracking family's
     /// selection verb validates against it.
@@ -305,6 +311,8 @@ impl Api {
             mob_review,
             mob_capture: None,
             tool_names: None,
+            tool_catalogues: None,
+            tool_capture: None,
             weapon_pricing,
             session_definitions,
             definition_transition: tokio::sync::Mutex::new(()),
@@ -345,6 +353,19 @@ impl Api {
         names: Option<eo_services::game_ui::tool_names::ToolNameProfile>,
     ) -> Self {
         self.tool_names = names;
+        self
+    }
+
+    /// Rebuild `catalogues`, the tools the held-tool watcher matches names
+    /// against, whenever the library changes. `capture` tells the settings
+    /// whether the watcher can capture.
+    pub fn with_tool_reading(
+        mut self,
+        catalogues: eo_services::tool_catalogue::ToolCatalogues,
+        capture: Option<eo_services::screen_watch::CaptureStatusProbe>,
+    ) -> Self {
+        self.tool_catalogues = Some(catalogues);
+        self.tool_capture = capture;
         self
     }
 

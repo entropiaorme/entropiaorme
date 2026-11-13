@@ -4,7 +4,7 @@
 	import { theme, setTheme, type Theme } from '$lib/theme.svelte';
 	import { newsOptIn, setNewsOptIn } from '$lib/news.svelte';
 	import AuctionFeeResearchSettings from '$lib/features/settings/AuctionFeeResearchSettings.svelte';
-	import { keyboardNote } from '$lib/features/settings/keyboardAccess';
+	import { hotbarListenerCopy, keyboardNote } from '$lib/features/settings/keyboardAccess';
 	import { autoUpdateEnabled, setAutoUpdateEnabled } from '$lib/updater.svelte';
 	import { goto } from '$app/navigation';
 	import {
@@ -16,7 +16,8 @@
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
 	import { inDevelopment } from '$lib/inDevelopment';
-	import MobDetectionSetting from '$lib/features/settings/MobDetectionSetting.svelte';
+	import ScreenReadingSetting from '$lib/features/settings/ScreenReadingSetting.svelte';
+	import { SCREEN_READINGS, type ScreenReading } from '$lib/features/settings/screenReadingSetting';
 
 	let settings = $state<AppSettings | null>(null);
 	let loading = $state(true);
@@ -166,15 +167,15 @@
 		}
 	}
 
-	async function handleMobDetection(checked: boolean) {
+	async function handleScreenReading(reading: ScreenReading, checked: boolean) {
 		if (!settings) return;
-		savingField = 'mobDetection';
+		savingField = reading.mark;
 		capabilityError = null;
 		try {
-			settings = await updateSettings({ mob_detection_enabled: checked });
-			flashSaved('mobDetection');
+			settings = await updateSettings(reading.patch(checked));
+			flashSaved(reading.mark);
 		} catch (e) {
-			capabilityError = e instanceof Error ? e.message : 'Failed to update creature detection';
+			capabilityError = e instanceof Error ? e.message : reading.failure;
 		} finally {
 			savingField = null;
 		}
@@ -304,9 +305,7 @@
 					<div>
 						<p class="text-sm text-text">Hotbar key listener</p>
 						<p class="text-xs text-text-tertiary mt-0.5 max-w-xl">
-							Reads your number hotbar (1-9, 0) while a session runs, so each press tells the
-							app which weapon or healer is in hand. When off, weapon costs follow damage
-							ranges alone and healing is not billed.
+							{hotbarListenerCopy(settings.toolReadingEnabled)}
 						</p>
 					</div>
 					<Toggle
@@ -377,14 +376,16 @@
 			<Divider />
 
 			{#if inDevelopment.visible}
-				<MobDetectionSetting
-					enabled={settings.mobDetectionEnabled}
-					capture={settings.mobDetectionCapture}
-					disabled={savingField !== null}
-					saved={savedIndicator === 'mobDetection'}
-					onchange={handleMobDetection}
-				/>
-				<Divider />
+				{#each SCREEN_READINGS as reading (reading.mark)}
+					<ScreenReadingSetting
+						{reading}
+						{...reading.state(settings)}
+						disabled={savingField !== null}
+						saved={savedIndicator === reading.mark}
+						onchange={(checked) => handleScreenReading(reading, checked)}
+					/>
+					<Divider />
+				{/each}
 			{/if}
 
 			<!-- Loot filter -->

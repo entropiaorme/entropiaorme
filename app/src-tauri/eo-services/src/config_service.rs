@@ -37,10 +37,11 @@ pub fn published_build() -> bool {
     option_env!("ENTROPIAORME_STABLE_CHANNEL") == Some("1")
 }
 
-/// Whether creature detection runs: only when the player has turned it on,
-/// which is their consent to the screen being read; and, while the feature
-/// is in development, never in a published build whatever is stored.
-pub fn mob_detection_decision(published: bool, stored: Option<bool>) -> bool {
+/// Whether a feature that reads the game screen runs (creature detection,
+/// reading the held tool): only when the player has turned it on, which is
+/// their consent to the screen being read; and, while such a feature is in
+/// development, never in a published build whatever is stored.
+pub fn screen_reading_decision(published: bool, stored: Option<bool>) -> bool {
     !published && stored == Some(true)
 }
 
@@ -81,6 +82,10 @@ pub struct AppConfig {
     /// they fight read off the game screen while a session runs); `None`
     /// until they choose, which is off (see [`AppConfig::mob_detection_on`]).
     pub mob_detection: Option<bool>,
+    /// Whether the player has turned on reading the held tool (the tool in
+    /// hand read off the game's own bar instead of the hotbar keys); `None`
+    /// until they choose, which is off (see [`AppConfig::tool_reading_on`]).
+    pub tool_reading: Option<bool>,
     pub developer_mode_enabled: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
     /// across sessions so a declaration outlives the session that set it.
@@ -141,6 +146,7 @@ impl Default for AppConfig {
             keyless_input_host: None,
             repair_ocr_enabled: false,
             mob_detection: None,
+            tool_reading: None,
             developer_mode_enabled: false,
             manual_mob_species: String::new(),
             manual_mob_maturity: String::new(),
@@ -176,9 +182,15 @@ impl AppConfig {
         self.hotbar_hooks_enabled && !self.keyless_input_on(machine_id)
     }
 
-    /// Whether creature detection runs (see [`mob_detection_decision`]).
+    /// Whether creature detection runs (see [`screen_reading_decision`]).
     pub fn mob_detection_on(&self) -> bool {
-        mob_detection_decision(published_build(), self.mob_detection)
+        screen_reading_decision(published_build(), self.mob_detection)
+    }
+
+    /// Whether the held tool is read off the screen (see
+    /// [`screen_reading_decision`]).
+    pub fn tool_reading_on(&self) -> bool {
+        screen_reading_decision(published_build(), self.tool_reading)
     }
 
     /// The default chat-log location under the user's home directory.
@@ -483,6 +495,7 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         repair_ocr_enabled: toggle("repair_ocr_enabled"),
         // Anything but a stored boolean reads as no choice made.
         mob_detection: data.get("mob_detection").and_then(Value::as_bool),
+        tool_reading: data.get("tool_reading").and_then(Value::as_bool),
         developer_mode_enabled: toggle("developer_mode_enabled"),
         manual_mob_species: string_or("manual_mob_species", ""),
         manual_mob_maturity: string_or("manual_mob_maturity", ""),
@@ -564,13 +577,14 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // hotbar and every carried weapon's damage band. They stay unknown and
 // carry through untouched, and a store written before `carried_weapon_ids`
 // seeds it once from them (see `carried_weapons_from_stored`).
-const KNOWN_KEYS: [&str; 22] = [
+const KNOWN_KEYS: [&str; 23] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
     "keyless_input_host",
     "repair_ocr_enabled",
     "mob_detection",
+    "tool_reading",
     "developer_mode_enabled",
     "manual_mob_species",
     "manual_mob_maturity",
@@ -784,6 +798,11 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
                     config.mob_detection = Some(on);
                 }
             }
+            "tool_reading" => {
+                if let Some(on) = value.as_bool() {
+                    config.tool_reading = Some(on);
+                }
+            }
             "developer_mode_enabled" => assign_bool(&mut config.developer_mode_enabled, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
             "manual_mob_maturity" => assign_string(&mut config.manual_mob_maturity, value),
@@ -851,48 +870,90 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn creature_detection_runs_only_on_the_players_word_and_never_in_a_published_build() {
-        assert!(!mob_detection_decision(false, None), "off until chosen");
-        assert!(!mob_detection_decision(false, Some(false)));
+    fn a_screen_reading_feature_runs_only_on_the_players_word_and_never_in_a_published_build() {
+        assert!(!screen_reading_decision(false, None), "off until chosen");
+        assert!(!screen_reading_decision(false, Some(false)));
         assert!(
-            mob_detection_decision(false, Some(true)),
+            screen_reading_decision(false, Some(true)),
             "the player's consent"
         );
-        assert!(!mob_detection_decision(true, Some(true)), "never published");
-        assert!(!mob_detection_decision(true, None));
-        assert!(!mob_detection_decision(true, Some(false)));
+        assert!(
+            !screen_reading_decision(true, Some(true)),
+            "never published"
+        );
+        assert!(!screen_reading_decision(true, None));
+        assert!(!screen_reading_decision(true, Some(false)));
         // A test build is not a published one.
         assert!(!published_build());
-        let unset = from_stored(&Map::new());
-        assert_eq!(unset.mob_detection, None);
-        assert!(!unset.mob_detection_on());
-        for (stored, read) in [
-            (json!(true), Some(true)),
-            (json!(false), Some(false)),
-            (json!("yes"), None),
-            (Value::Null, None),
-        ] {
-            let mut data = Map::new();
-            data.insert("mob_detection".into(), stored);
-            let config = from_stored(&data);
-            assert_eq!(config.mob_detection, read);
-            assert!(!config.extra.contains_key("mob_detection"));
+    }
+
+    /// The two screen-reading settings: the stored key, the field it reads
+    /// into, and whether the feature runs.
+    type ScreenSetting = (
+        &'static str,
+        fn(&AppConfig) -> Option<bool>,
+        fn(&AppConfig) -> bool,
+    );
+
+    const SCREEN_SETTINGS: [ScreenSetting; 2] = [
+        (
+            "mob_detection",
+            |config| config.mob_detection,
+            AppConfig::mob_detection_on,
+        ),
+        (
+            "tool_reading",
+            |config| config.tool_reading,
+            AppConfig::tool_reading_on,
+        ),
+    ];
+
+    #[test]
+    fn each_screen_reading_setting_is_off_until_chosen_and_takes_only_a_boolean() {
+        for (key, field, on) in SCREEN_SETTINGS {
+            let unset = from_stored(&Map::new());
+            assert_eq!(field(&unset), None, "{key}");
+            assert!(!on(&unset), "{key} is off until chosen");
+            assert!(!on(&AppConfig::default()), "{key}");
+            for (stored, read) in [
+                (json!(true), Some(true)),
+                (json!(false), Some(false)),
+                (json!("yes"), None),
+                (Value::Null, None),
+            ] {
+                let mut data = Map::new();
+                data.insert(key.into(), stored);
+                let config = from_stored(&data);
+                assert_eq!(field(&config), read, "{key}");
+                assert!(!config.extra.contains_key(key), "{key} is a known key");
+            }
+            let mut config = AppConfig::default();
+            let mut updates = Map::new();
+            updates.insert(key.into(), json!(true));
+            apply_updates(&mut config, &updates);
+            assert!(on(&config), "{key} turned on by the player");
+            updates.insert(key.into(), json!(false));
+            apply_updates(&mut config, &updates);
+            assert!(!on(&config), "{key} and off again");
+            updates.insert(key.into(), json!(1));
+            apply_updates(&mut config, &updates);
+            assert_eq!(
+                field(&config),
+                Some(false),
+                "{key}: only a boolean is a choice"
+            );
         }
+    }
+
+    #[test]
+    fn the_two_screen_reading_settings_are_independent() {
         let mut config = AppConfig::default();
         let mut updates = Map::new();
-        updates.insert("mob_detection".into(), json!(true));
+        updates.insert("tool_reading".into(), json!(true));
         apply_updates(&mut config, &updates);
-        assert!(config.mob_detection_on(), "turned on by the player");
-        updates.insert("mob_detection".into(), json!(false));
-        apply_updates(&mut config, &updates);
-        assert!(!config.mob_detection_on(), "and off again");
-        updates.insert("mob_detection".into(), json!(1));
-        apply_updates(&mut config, &updates);
-        assert_eq!(
-            config.mob_detection,
-            Some(false),
-            "only a boolean is a choice"
-        );
+        assert!(config.tool_reading_on());
+        assert!(!config.mob_detection_on(), "one choice is not the other");
+        assert_eq!(config.mob_detection, None);
     }
 
     fn service(dir: &Path) -> ConfigService {

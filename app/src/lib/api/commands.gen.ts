@@ -275,7 +275,11 @@ export interface AppSettings {
 	/** Whether the creature being fought is read off the game screen while a session runs (the player's choice, or the build's default until they make one). */
 	mobDetectionEnabled: boolean;
 	/** Whether detection can capture the game window when a session wants it: what the settings say beside the toggle when it cannot. */
-	mobDetectionCapture: MobDetectionCapture;
+	mobDetectionCapture: ScreenCapture;
+	/** Whether the tool in hand is read off the game's own bar while a session runs, instead of from the hotbar keys (the player's choice; off until they make one, and never in a published build). */
+	toolReadingEnabled: boolean;
+	/** Whether reading the held tool can capture the game window when a session wants it. */
+	toolReadingCapture: ScreenCapture;
 	developerModeEnabled: boolean;
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
 	sessionName: string;
@@ -2389,12 +2393,6 @@ export interface MobComparison {
 }
 
 /**
- * Whether creature detection can capture the game window when a session
- * wants it, as the settings show it beside the toggle.
- */
-export type MobDetectionCapture = 'ready' | 'notRunning' | 'refused' | 'unavailable';
-
-/**
  * How detection named a creature. The upper four are the screen's own
  * evidence and stamped the kills; the latest-read two are suggestions the
  * kills did not take; the continuity two are the creature being hunted,
@@ -3603,6 +3601,14 @@ export type SaleQueueCapture = {
 export type SaleQueueRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'captureNotAllowed' | 'sellWindowNotOpen' | 'sellWindowNotWhole' | 'queueNotVisible' | 'priceModeUnread' | 'otherPriceMode' | 'queueEmpty' | 'readerUnavailable';
 
 /**
+ * Whether a feature that reads the game screen (creature detection,
+ * reading the held tool) can capture the game window when a session wants
+ * it, as the settings show it beside the feature's toggle. Each feature's
+ * watcher answers for itself.
+ */
+export type ScreenCapture = 'ready' | 'notRunning' | 'refused' | 'unavailable';
+
+/**
  * A catalogue vocabulary the equipment pickers search; each maps to one snapshot
  * endpoint. An out-of-vocabulary value cannot be constructed (the
  * bindings expose the closed union), so the old unknown-type reply
@@ -3828,6 +3834,8 @@ export interface SettingsPatch {
 	repair_ocr_enabled?: boolean | null;
 	/** Turn creature detection on or off. */
 	mob_detection_enabled?: boolean | null;
+	/** Turn reading the held tool off the screen on or off. */
+	tool_reading_enabled?: boolean | null;
 	developer_mode_enabled?: boolean | null;
 	session_name?: string | null;
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */

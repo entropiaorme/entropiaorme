@@ -193,6 +193,42 @@ impl InputAccess {
     }
 }
 
+/// Whether a feature that reads the game screen (creature detection,
+/// reading the held tool) can capture the game window when a session wants
+/// it, as the settings show it beside the feature's toggle. Each feature's
+/// watcher answers for itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenCapture {
+    /// Capture is running, needs nothing started, or will be asked for at
+    /// the next look after the player turned the feature on.
+    Ready,
+    /// Capture needs starting and is not running.
+    NotRunning,
+    /// The desktop refused capture, or it stopped while watching.
+    Refused,
+    /// The feature cannot run on this installation (no recogniser or
+    /// interface profile was loaded).
+    Unavailable,
+}
+
+impl From<eo_services::screen_watch::CaptureStatus> for ScreenCapture {
+    fn from(status: eo_services::screen_watch::CaptureStatus) -> Self {
+        use eo_services::screen_watch::CaptureStatus;
+        match status {
+            CaptureStatus::Ready => Self::Ready,
+            CaptureStatus::NotRunning => Self::NotRunning,
+            CaptureStatus::Refused => Self::Refused,
+            CaptureStatus::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+/// What a watcher's capture probe says, or unavailable without a watcher.
+fn screen_capture(probe: Option<&eo_services::screen_watch::CaptureStatusProbe>) -> ScreenCapture {
+    probe.map_or(ScreenCapture::Unavailable, |status| status().into())
+}
+
 /// The full assembled settings response. Field order is the wire order
 /// the frontend contract expects (and the HTTP body carried).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -208,7 +244,14 @@ pub struct AppSettings {
     pub mob_detection_enabled: bool,
     /// Whether detection can capture the game window when a session wants
     /// it: what the settings say beside the toggle when it cannot.
-    pub mob_detection_capture: crate::mob_detection::MobDetectionCapture,
+    pub mob_detection_capture: ScreenCapture,
+    /// Whether the tool in hand is read off the game's own bar while a
+    /// session runs, instead of from the hotbar keys (the player's choice;
+    /// off until they make one, and never in a published build).
+    pub tool_reading_enabled: bool,
+    /// Whether reading the held tool can capture the game window when a
+    /// session wants it.
+    pub tool_reading_capture: ScreenCapture,
     pub developer_mode_enabled: bool,
     /// The session facets the next session snapshots: the designated
     /// name (empty: not declared) and the skill boost (null: not
@@ -296,6 +339,9 @@ pub struct SettingsPatch {
     /// Turn creature detection on or off.
     #[serde(default)]
     pub mob_detection_enabled: Option<bool>,
+    /// Turn reading the held tool off the screen on or off.
+    #[serde(default)]
+    pub tool_reading_enabled: Option<bool>,
     #[serde(default)]
     pub developer_mode_enabled: Option<bool>,
     #[serde(default)]
@@ -354,6 +400,9 @@ impl SettingsPatch {
         }
         if let Some(value) = self.mob_detection_enabled {
             updates.insert("mob_detection".into(), Value::Bool(value));
+        }
+        if let Some(value) = self.tool_reading_enabled {
+            updates.insert("tool_reading".into(), Value::Bool(value));
         }
         if let Some(value) = self.developer_mode_enabled {
             updates.insert("developer_mode_enabled".into(), Value::Bool(value));
@@ -417,10 +466,9 @@ impl Api {
             keyboard: self.input.access(&config),
             repair_ocr_enabled: config.repair_ocr_enabled,
             mob_detection_enabled: config.mob_detection_on(),
-            mob_detection_capture: self.mob_capture.as_ref().map_or(
-                crate::mob_detection::MobDetectionCapture::Unavailable,
-                |status| status().into(),
-            ),
+            mob_detection_capture: screen_capture(self.mob_capture.as_ref()),
+            tool_reading_enabled: config.tool_reading_on(),
+            tool_reading_capture: screen_capture(self.tool_capture.as_ref()),
             developer_mode_enabled: config.developer_mode_enabled,
             session_name: config.session_name.clone(),
             declared_skill_boost_percent: config
@@ -527,7 +575,10 @@ impl Api {
     /// fields, signal the producers (the watcher on a `chatlog_path`
     /// change, the hotbar gate on a `hotbar_hooks_enabled` change, the
     /// tracker unconditionally so an in-flight session re-reads its
-    /// config), and reply with the full assembled settings.
+    /// config), and reply with the full assembled settings. The tracker's
+    /// re-read is also what starts or stops a screen-reading watcher when
+    /// its setting changes, and lets a watcher turned on ask for capture
+    /// (the player's gesture).
     pub async fn settings_update(&self, patch: SettingsPatch) -> Result<AppSettings, ApiError> {
         let disables_developer_mode = patch.developer_mode_enabled == Some(false);
         if let Some(sources) = patch.passive_effect_sources.as_deref() {
@@ -612,6 +663,15 @@ impl Api {
         }
         if disables_developer_mode {
             self.stop_auction_fee_research_for_shell();
+        }
+        // The held-tool catalogue is built only while the reading is on.
+        // Built here, before the tracker re-reads its config, because that
+        // re-read is what starts the watcher: its first look then matches
+        // against the library as it stands.
+        if config_after.tool_reading_on() {
+            if let Some(catalogues) = &self.tool_catalogues {
+                catalogues.ensure_current().await;
+            }
         }
         self.tracker.reload_config().await;
         self.settings().await

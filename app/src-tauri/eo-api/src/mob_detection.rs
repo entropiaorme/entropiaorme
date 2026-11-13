@@ -437,32 +437,3 @@ impl Api {
         self.tracker.unpin().await.map_err(tracker_conflict)
     }
 }
-
-/// Whether creature detection can capture the game window when a session
-/// wants it, as the settings show it beside the toggle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum MobDetectionCapture {
-    /// Capture is running, needs nothing started, or will be asked for at
-    /// the next look after the player turned detection on.
-    Ready,
-    /// Capture needs starting and is not running.
-    NotRunning,
-    /// The desktop refused capture, or it stopped while watching.
-    Refused,
-    /// Detection cannot run on this installation (no recogniser or
-    /// interface profile was loaded).
-    Unavailable,
-}
-
-impl From<eo_services::mob_watch::CaptureStatus> for MobDetectionCapture {
-    fn from(status: eo_services::mob_watch::CaptureStatus) -> Self {
-        use eo_services::mob_watch::CaptureStatus;
-        match status {
-            CaptureStatus::Ready => Self::Ready,
-            CaptureStatus::NotRunning => Self::NotRunning,
-            CaptureStatus::Refused => Self::Refused,
-            CaptureStatus::Unavailable => Self::Unavailable,
-        }
-    }
-}

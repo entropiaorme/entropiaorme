@@ -23,8 +23,9 @@ use eo_services::expected_hunting::{
     self, HuntingLooterLevels, LooterSource, OffensiveLoadoutEvidence,
 };
 use eo_services::game_data_store::GameDataStore;
-use eo_services::game_ui::tool_names::{indistinguishable, LibraryTool, ToolKind, ToolNameProfile};
+use eo_services::game_ui::tool_names::{indistinguishable, LibraryTool, ToolNameProfile};
 use eo_services::passive_effects::reload_seconds_under;
+use eo_services::tool_catalogue::holdable;
 use eo_services::weapon_effect::{
     effect_profile_from_props, WeaponEffectProfile, EFFECT_PROFILE_KEY,
 };
@@ -1319,6 +1320,7 @@ impl Api {
             )
             .await
             .map_err(ApiError::internal("equipment insert"))?;
+        self.equipment_changed().await;
         let Some(row) = self
             .db
             .equipment_row(inserted)
@@ -1359,6 +1361,7 @@ impl Api {
             .update_equipment(item_id, built.name, built.stored_catalog_id, props_json)
             .await
             .map_err(ApiError::internal("equipment update"))?;
+        self.equipment_changed().await;
         let Some(row) = self
             .db
             .equipment_row(item_id)
@@ -1391,6 +1394,7 @@ impl Api {
                 "Equipment item {item_id} not found"
             )));
         };
+        self.equipment_changed().await;
         summary_from_parts(row, &self.game_data, &self.weapon_pricing)
     }
 
@@ -1402,7 +1406,18 @@ impl Api {
             .delete_equipment(item_id)
             .await
             .map_err(ApiError::internal("equipment delete"))?;
+        self.equipment_changed().await;
         Ok(())
+    }
+
+    /// The library changed: the tools a name read off the held-tool bar is
+    /// matched against are rebuilt while the reading is on, so the
+    /// watcher's next look matches with the library as it now stands.
+    /// Called once the write has succeeded, whatever follows it.
+    async fn equipment_changed(&self) {
+        if let Some(catalogues) = &self.tool_catalogues {
+            catalogues.changed().await;
+        }
     }
 
     /// The expanded detail for a stored entry.
@@ -1733,25 +1748,6 @@ fn summary_from_parts(
     let props = serde_json::from_str::<Value>(&raw_props)
         .map_err(ApiError::internal("stored equipment props parse"))?;
     row_to_summary(id, &name, &item_type, enabled, &props, game_data, pricing)
-}
-
-/// A library row as the held-tool bar names it, when it is one a player
-/// can hold (consumables never are).
-fn holdable(
-    (id, name, item_type, _, enabled): &(i64, String, String, String, bool),
-) -> Option<LibraryTool> {
-    let kind = match item_type.as_str() {
-        "weapon" => ToolKind::Weapon,
-        "healing" => ToolKind::Healing,
-        "tool" => ToolKind::Tool,
-        _ => return None,
-    };
-    Some(LibraryTool {
-        id: *id,
-        name: name.clone(),
-        kind,
-        enabled: *enabled,
-    })
 }
 
 /// The groups of library `rows` the held-tool bar cannot tell apart under

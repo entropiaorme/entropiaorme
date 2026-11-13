@@ -137,6 +137,16 @@ export const getMobDetections = commands.trackingMobDetections;
 /** Settle every kill of one group: name the creature, or put back the
  * declared mob each kill had. Answers with the refreshed review. */
 export const settleMobDetection = commands.trackingMobDetectionSettle;
+/** The creatures kept for the name reader beside the bundled list. */
+export const getCreatureEntries = commands.creatureEntries;
+/** What keeping a creature typed as its plate prints it would come to:
+ * ready (and as what), already known, or refused with the reason. */
+export const checkCreatureEntry = commands.creatureEntryCheck;
+/** Keep a creature typed as its plate prints it, in place of the one being
+ * edited; answers with the list as it now stands. */
+export const saveCreatureEntry = commands.creatureEntrySave;
+/** Stop keeping a creature; answers with the list as it now stands. */
+export const removeCreatureEntry = commands.creatureEntryRemove;
 /** What the screen read as the tool in hand during a session that is not
  * in the library: tools of the game's data held without an entry, and
  * names that matched no tool. The ones still to be settled come first. */

@@ -29,14 +29,19 @@
 //! every kill keeps the stamp it was recorded with.
 //!
 //! Each look also moves what the overlay shows of the screen: the creature
-//! read now (held through a moment's unclear reading, for as long as a
-//! reading would still join its fight) and the one the latest kills were.
+//! read now (held through a moment with no plate or no name read, for as
+//! long as a reading would still join its fight, but never over a plate
+//! whose name read and named nothing) and the one the latest kills were.
+//!
+//! Every kill answered, named or not, keeps a trace beside it: what the
+//! screen's readings came to, whether the creature being hunted was carried
+//! onto it, and the readings round it.
 //! The readouts are told to re-read only when either changes.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::game_ui::mob_history::{
-    Creature, KillReport, KillStamp, MobHistory, MobIdentity, MobStamp,
+    Creature, KillReport, KillStamp, KillTrace, MobHistory, MobIdentity, MobStamp,
 };
 use crate::mob_watch::{MobPulse, PulseSink, WatchEnded};
 use crate::time::clock_epoch_ms;
@@ -123,6 +128,9 @@ impl SessionDetection {
         let hold = self.history.profile().join_gap_ms;
         match self.history.current_creature() {
             Some(who) => self.reading = Some((who, at_ms)),
+            // A plate whose name read and named nothing is a creature the
+            // reader cannot name: the one read before is not held over it.
+            None if self.history.current_unrecognised() => self.reading = None,
             None => {
                 if self
                     .reading
@@ -603,13 +611,22 @@ impl TrackerActor {
             return;
         };
         let mut answers = Vec::new();
+        let mut traces = Vec::new();
         let asked = catch_unwind(AssertUnwindSafe(|| {
-            pending.retain(|kill| match history.stamp_for_kill(kill.report, now_ms) {
-                KillStamp::NotYet => true,
-                KillStamp::Unnamed(_) => false,
-                KillStamp::Stamped(stamp) => {
-                    answers.push(KillDetection::of(kill, &session_id, stamp));
-                    false
+            pending.retain(|kill| {
+                let answer = history.stamp_for_kill(kill.report, now_ms);
+                if !matches!(answer, KillStamp::NotYet) {
+                    if let Some(trace) = history.take_trace() {
+                        traces.push((kill.kill_id.clone(), trace));
+                    }
+                }
+                match answer {
+                    KillStamp::NotYet => true,
+                    KillStamp::Unnamed(_) => false,
+                    KillStamp::Stamped(stamp) => {
+                        answers.push(KillDetection::of(kill, &session_id, stamp));
+                        false
+                    }
                 }
             })
         }));
@@ -617,8 +634,31 @@ impl TrackerActor {
             self.detection_failed();
             return;
         }
+        if !traces.is_empty() {
+            self.keep_traces(&session_id, traces).await;
+        }
         for answer in answers {
             self.apply_detection(answer).await;
+        }
+    }
+
+    /// Keep why each kill answered was answered so. A trace is a diagnostic:
+    /// one that cannot be written is let go.
+    async fn keep_traces(&mut self, session_id: &str, traces: Vec<(String, KillTrace)>) {
+        let session_id = session_id.to_string();
+        let result = self
+            .db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                for (kill_id, trace) in &traces {
+                    write_trace(&tx, &session_id, kill_id, trace)?;
+                }
+                tx.commit()?;
+                Ok(())
+            })
+            .await;
+        if let Err(error) = result {
+            tracing::warn!(target: "eo::tracker", %error, "a detection trace could not be saved");
         }
     }
 
@@ -670,6 +710,39 @@ impl TrackerActor {
             Some(&session_id),
         );
     }
+}
+
+/// Keep `trace` beside the kill `kill_id`.
+pub(crate) fn write_trace(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    kill_id: &str,
+    trace: &KillTrace,
+) -> Result<(), crate::db::DbError> {
+    let reads: Vec<serde_json::Value> = trace
+        .reads
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "at_ms": r.at_ms,
+                "fill": r.fill,
+                "text": r.text,
+                "named": r.named,
+            })
+        })
+        .collect();
+    tx.execute(
+        "INSERT OR REPLACE INTO kill_mob_traces (kill_id, session_id, screen, continuity, reads) \
+         VALUES (?, ?, ?, ?, ?)",
+        rusqlite::params![
+            kill_id,
+            session_id,
+            trace.screen,
+            trace.continuity,
+            serde_json::Value::Array(reads).to_string()
+        ],
+    )?;
+    Ok(())
 }
 
 /// Keep `answer`, and for a grade that stamps re-stamp its kill: an

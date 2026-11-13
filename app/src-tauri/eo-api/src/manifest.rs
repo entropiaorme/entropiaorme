@@ -57,8 +57,8 @@ use crate::market::{
     MarketPastePreview, MarketUnitPriceResult,
 };
 use crate::mob_detection::{
-    MobDetectionGroupRef, MobDetectionReview, MobDetectionSettleResult, MobDetectionTarget, MobPin,
-    MobPinTarget,
+    CreatureEntry, CreatureEntryCheck, MobDetectionGroupRef, MobDetectionReview,
+    MobDetectionSettleResult, MobDetectionTarget, MobPin, MobPinTarget,
 };
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1689,6 +1689,51 @@ pub fn manifest() -> Vec<CommandSpec> {
                 },
             ],
             returns: Some(schema(schema_for!(MobDetectionSettleResult))),
+        },
+        CommandSpec {
+            name: "creature_entries",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<CreatureEntry>))),
+        },
+        CommandSpec {
+            name: "creature_entry_check",
+            args: vec![
+                ArgSpec {
+                    name: "text",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "replacing",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(CreatureEntryCheck))),
+        },
+        CommandSpec {
+            name: "creature_entry_save",
+            args: vec![
+                ArgSpec {
+                    name: "text",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "species",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+                ArgSpec {
+                    name: "replacing",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(Vec<CreatureEntry>))),
+        },
+        CommandSpec {
+            name: "creature_entry_remove",
+            args: vec![ArgSpec {
+                name: "name",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<CreatureEntry>))),
         },
         CommandSpec {
             name: "tracking_tool_sightings",

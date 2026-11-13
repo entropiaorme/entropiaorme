@@ -2,15 +2,11 @@
  * The settings that read the game screen while a session runs: creature
  * detection and reading the held tool. Both are one control (a toggle, a
  * line of copy, and a note when capture cannot run), so they share one
- * component and are described here. Creature detection is still in
- * development: it carries its registered mark and the settings show it only
- * where in-development surfaces show. Reading the held tool is not: it is
- * unmarked and shown in every build, beside the hotbar key listener whose
- * part it takes over.
+ * component and are described here. Both are ordinary settings, shown in
+ * every build beside the hotbar key listener whose part they take over.
  */
 
 import type { ScreenCapture, SettingsPatch } from '$lib/api';
-import { inDevelopmentSurface } from '$lib/inDevelopment';
 import type { AppSettings } from '$lib/types';
 
 export interface ScreenReading {
@@ -31,10 +27,9 @@ export interface ScreenReading {
 
 export const CREATURE_DETECTION: ScreenReading = {
 	key: 'creatureDetection',
-	mark: inDevelopmentSurface('creature-detection').id,
 	title: 'Detect the creature I am fighting',
 	description:
-		'While you hunt with the game in front, reads the name over the creature you are locked on to about once a second and records which creature each kill was. A kill it cannot tell takes the creature you have been hunting, else the mob you typed; pin a creature on the overlay to stop reading.',
+		'While you hunt with the game in front, reads the name over the creature you are locked on to about once a second and records which creature each kill was. A kill it misses between looks takes the creature you have been hunting while you hunt only one, else the mob you typed; pin a creature on the overlay to stop reading.',
 	failure: 'Failed to update creature detection',
 	state: (settings) => ({
 		enabled: settings.mobDetectionEnabled,

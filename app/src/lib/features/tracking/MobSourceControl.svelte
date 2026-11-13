@@ -10,7 +10,6 @@
 	// clicks reach the game everywhere else (the shared expanding shell).
 	import type { MobSourceView } from '$lib/api';
 	import HoverFacet from '$lib/components/overlay/HoverFacet.svelte';
-	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import { NO_DATA } from '$lib/utils/format';
 	import { expandedLines, primaryAction, standing } from './mobSource';
 	import type { MobSourceModel } from './mobSourceModel.svelte';
@@ -191,9 +190,6 @@
 						{/if}
 					</div>
 				{/if}
-			</div>
-			<div class="mob-line">
-				<InDevelopmentMark id="creature-detection" inSurface />
 			</div>
 		{/snippet}
 	</HoverFacet>

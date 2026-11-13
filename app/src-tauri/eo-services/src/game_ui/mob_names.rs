@@ -22,9 +22,22 @@
 //! that one creature and no other. The level printed beside the name,
 //! when it reads, decides between creatures equally close and vetoes a
 //! near miss whose maturity has another level.
+//!
+//! Many creatures are graded by a number rather than a word (`4`, `S01`,
+//! `Gen 04`, `THR-01`): an event instance's difficulty, a robot's
+//! generation. For such a creature the reading is taken apart into its name
+//! and its number. The name may be a character or two off, as any name may;
+//! the number, and the fixed part printed before it, must be read exactly,
+//! since one digit is another creature. `04` and `4` are the same number,
+//! printed as the creature's own maturities print it. A number the list
+//! does not have is still that creature at that number: the list is a
+//! snapshot, and an instance can run to difficulties it never saw. The
+//! level then decides nothing, since an instance sets it.
 
 use serde::Deserialize;
 use serde_json::Value;
+
+use rapidfuzz::distance::levenshtein;
 
 use crate::fuzzy_match::{ratio, PERFECT};
 use crate::game_data_store::GameDataStore;
@@ -59,6 +72,121 @@ pub struct MobNameProfile {
     /// creature has no real maturity: such a creature is also known by its
     /// name alone.
     pub placeholder_maturities: Vec<String>,
+    /// A creature graded by number is read by its name and its number
+    /// apart. Its name may be misread by one character in this many (and
+    /// always by one),
+    pub letters_per_edit: usize,
+    /// and is that creature only when it comes at least this many
+    /// characters nearer to it than to any other.
+    pub edit_margin: usize,
+    /// A maturity is a number when it ends in at most this many digits
+    pub number_digits: usize,
+    /// after a fixed part of at most this many letters (`S`, `Gen`, `THR`).
+    pub number_prefix: usize,
+}
+
+/// A maturity printed as a number after a fixed part, perhaps empty: `4`,
+/// `S01`, `Gen 04`, `THR-01`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NumberedMaturity {
+    /// The fixed part as printed (`S`, `Gen `, `THR-`).
+    pub before: String,
+    pub value: u32,
+    /// The digits printed, zeros leading included.
+    pub digits: usize,
+    /// Whether it is printed with zeros leading (`01`).
+    pub padded: bool,
+}
+
+/// `maturity` as a number after a fixed part, when it is one.
+pub fn numbered_maturity(maturity: &str, profile: &MobNameProfile) -> Option<NumberedMaturity> {
+    let trimmed = maturity.trim();
+    let start = trimmed
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_digit())
+        .last()
+        .map(|(i, _)| i)?;
+    let (before, digits) = trimmed.split_at(start);
+    if digits.len() > profile.number_digits || before.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if label_key(before).len() > profile.number_prefix {
+        return None;
+    }
+    Some(NumberedMaturity {
+        before: before.to_string(),
+        value: digits.parse().ok()?,
+        digits: digits.len(),
+        padded: digits.len() > 1 && digits.starts_with('0'),
+    })
+}
+
+/// A creature's name typed as its plate prints it, taken apart into its
+/// name and the number it ends in (`Survival Zombie 04`, `Kal-Rahm The
+/// Cannibal S04`): the last word, when it is a maturity graded by number.
+/// `None` when the text does not end in one, or is nothing else.
+pub fn split_numbered(text: &str, profile: &MobNameProfile) -> Option<(String, String)> {
+    let trimmed = text.trim();
+    let (name, last) = trimmed.rsplit_once(char::is_whitespace)?;
+    let number = numbered_maturity(last, profile)?;
+    let fixed = number.before.chars().all(|c| c.is_alphabetic() || c == '-');
+    let name = name.trim();
+    (fixed && !name.is_empty()).then(|| (name.to_string(), last.to_string()))
+}
+
+/// Whether two names read off plates (as keys) can be one name misread:
+/// the numbers they end in, if any, the same number, and their letters at
+/// most a character in `letters_per_edit` apart, and always two (each of
+/// the two readings may be a character off). A word more or less, or
+/// another number, is another creature.
+pub fn misread_of(a: &[char], b: &[char], profile: &MobNameProfile) -> bool {
+    let split = |k: &[char]| -> (Vec<char>, Option<u32>) {
+        let digits = k.iter().rev().take_while(|c| c.is_ascii_digit()).count();
+        let (letters, number) = k.split_at(k.len() - digits);
+        (
+            letters.to_vec(),
+            (!number.is_empty())
+                .then(|| number.iter().collect::<String>().parse().ok())
+                .flatten(),
+        )
+    };
+    let (a_letters, a_number) = split(a);
+    let (b_letters, b_number) = split(b);
+    if a_number != b_number {
+        return false;
+    }
+    let longer = a_letters.len().max(b_letters.len());
+    let allowed = (longer / profile.letters_per_edit.max(1)).max(2);
+    levenshtein::distance(a_letters.iter().copied(), b_letters.iter().copied()) <= allowed
+}
+
+/// One way a creature graded by number prints its maturity: the fixed part,
+/// how many digits the number is padded to, and the maturities the list has.
+#[derive(Debug, Clone)]
+struct Shape {
+    before: String,
+    before_key: Vec<char>,
+    /// Zero for numbers printed unpadded.
+    width: usize,
+    /// The listed maturities' numbers, and the creature each is.
+    listed: Vec<(u32, usize)>,
+}
+
+/// A creature graded by number, under the name its plate prints.
+#[derive(Debug, Clone)]
+struct Family {
+    name: String,
+    species: Option<String>,
+    stem: Vec<char>,
+    shapes: Vec<Shape>,
+}
+
+impl Shape {
+    /// The maturity `value` printed as this shape prints it.
+    fn maturity(&self, value: u32) -> String {
+        format!("{}{:0width$}", self.before, value, width = self.width)
+    }
 }
 
 /// One creature the bundled list knows, at one maturity.
@@ -95,18 +223,46 @@ impl Key {
     }
 }
 
+/// A creature the player keeps for the name reader beside the bundled
+/// list: a name confirmed in a session's review, or one entered in the
+/// creature list. With a maturity that is a number it is a creature graded
+/// by number, read at whatever number its plate prints.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeptCreature {
+    pub name: String,
+    pub species: Option<String>,
+    pub maturity: Option<String>,
+}
+
+impl From<String> for KeptCreature {
+    fn from(name: String) -> Self {
+        KeptCreature {
+            name,
+            species: None,
+            maturity: None,
+        }
+    }
+}
+
 /// The creatures a reading is matched against: the bundled list, and
-/// names the player has confirmed for creatures it lacks.
+/// creatures the player keeps for those it lacks.
 ///
-/// A confirmed name that spells a listed creature, or comes within the
-/// loose band of one, is dropped: it would shadow or blur that creature.
-/// The caller must not confirm a provisional name that is a misspelling of
-/// a listed creature as it stands; it is that listed creature, misread.
+/// A kept name that spells a listed creature, or comes within the loose
+/// band of one, is dropped: it would shadow or blur that creature. So is a
+/// kept creature graded by number whose name comes within a misreading of
+/// another such creature's without being it; one whose name is that
+/// creature's only adds the way it prints its number. The caller must not
+/// confirm a provisional name that is a misspelling of a listed creature as
+/// it stands; it is that listed creature, misread.
 #[derive(Default)]
 pub struct MobCatalogue {
     mobs: Vec<CatalogueMob>,
     confirmed: Vec<String>,
     keys: Vec<Key>,
+    /// The creatures graded by number, read by name and number apart.
+    families: Vec<Family>,
+    /// Whether each of `mobs` is a maturity of one of `families`.
+    numbered: Vec<bool>,
 }
 
 /// A name without the bracketed part the bundled list adds to tell
@@ -149,11 +305,11 @@ pub fn plate_strings(name: &str, maturity: Option<&str>, profile: &MobNameProfil
 }
 
 impl MobCatalogue {
-    /// A catalogue of `mobs`, and of the names in `confirmed` (names the
-    /// player has confirmed for creatures the list does not know).
+    /// A catalogue of `mobs`, and of the creatures in `kept` (those the
+    /// player keeps for creatures the list does not know).
     pub fn new(
         mobs: impl IntoIterator<Item = CatalogueMob>,
-        confirmed: impl IntoIterator<Item = String>,
+        kept: impl IntoIterator<Item = impl Into<KeptCreature>>,
         profile: &MobNameProfile,
     ) -> Self {
         let mut catalogue = MobCatalogue::default();
@@ -164,25 +320,113 @@ impl MobCatalogue {
                     .iter()
                     .filter_map(|p| Key::new(p, Who::Mob(index))),
             );
+            let numbered = mob
+                .maturity
+                .as_deref()
+                .and_then(|m| numbered_maturity(m, profile));
+            catalogue.numbered.push(numbered.is_some());
+            if let Some(number) = numbered {
+                catalogue.add_numbered(&mob, index, number);
+            }
             catalogue.mobs.push(mob);
         }
-        for name in confirmed {
-            let key = label_key(&name);
-            let shadows = key.is_empty()
-                || catalogue
-                    .keys
-                    .iter()
-                    .any(|k| ratio(&key, &k.chars) >= profile.guess_score);
+        for kept in kept {
+            let kept: KeptCreature = kept.into();
+            if let Some(number) = kept
+                .maturity
+                .as_deref()
+                .and_then(|m| numbered_maturity(m, profile))
+            {
+                catalogue.keep_numbered(&kept, number, profile);
+                continue;
+            }
+            let plates = plate_strings(&kept.name, kept.maturity.as_deref(), profile);
+            let keys: Vec<Vec<char>> = plates.iter().map(|p| label_key(p)).collect();
+            let shadows = keys.iter().any(Vec::is_empty)
+                || catalogue.keys.iter().any(|k| {
+                    keys.iter()
+                        .any(|key| ratio(key, &k.chars) >= profile.guess_score)
+                });
             if shadows {
                 continue;
             }
-            let index = catalogue.confirmed.len();
-            catalogue
-                .keys
-                .extend(Key::new(&name, Who::Confirmed(index)));
-            catalogue.confirmed.push(name);
+            match kept.maturity {
+                // A creature at one maturity is known as the list's are.
+                Some(maturity) => {
+                    let index = catalogue.mobs.len();
+                    catalogue
+                        .keys
+                        .extend(plates.iter().filter_map(|p| Key::new(p, Who::Mob(index))));
+                    catalogue.numbered.push(false);
+                    catalogue.mobs.push(CatalogueMob {
+                        name: kept.name,
+                        species: kept.species,
+                        maturity: Some(maturity),
+                        level: None,
+                    });
+                }
+                None => {
+                    let index = catalogue.confirmed.len();
+                    catalogue
+                        .keys
+                        .extend(Key::new(&kept.name, Who::Confirmed(index)));
+                    catalogue.confirmed.push(kept.name);
+                }
+            }
         }
         catalogue
+    }
+
+    /// Keep `kept`, whose maturity is `number`, as a creature graded by
+    /// number: with a creature of the same name, only the way it prints its
+    /// number; near another's name without being it, not at all.
+    fn keep_numbered(
+        &mut self,
+        kept: &KeptCreature,
+        number: NumberedMaturity,
+        profile: &MobNameProfile,
+    ) {
+        let stem = label_key(&kept.name);
+        if stem.is_empty() {
+            return;
+        }
+        let blurs = self.families.iter().any(|f| {
+            let allowed = (f.stem.len() / profile.letters_per_edit.max(1)).max(1);
+            f.stem != stem
+                && levenshtein::distance(stem.iter().copied(), f.stem.iter().copied()) <= allowed
+        });
+        if blurs {
+            return;
+        }
+        let family = match self.families.iter().position(|f| f.stem == stem) {
+            Some(i) => &mut self.families[i],
+            None => {
+                self.families.push(Family {
+                    name: kept.name.clone(),
+                    species: kept.species.clone(),
+                    stem,
+                    shapes: Vec::new(),
+                });
+                self.families.last_mut().expect("just pushed")
+            }
+        };
+        let before_key = label_key(&number.before);
+        if let Some(shape) = family
+            .shapes
+            .iter_mut()
+            .find(|s| s.before_key == before_key)
+        {
+            if number.padded && shape.listed.is_empty() {
+                shape.width = shape.width.max(number.digits);
+            }
+            return;
+        }
+        family.shapes.push(Shape {
+            before: number.before,
+            before_key,
+            width: if number.padded { number.digits } else { 0 },
+            listed: Vec::new(),
+        });
     }
 
     /// From the bundled game data's creature entities: one creature per
@@ -191,7 +435,7 @@ impl MobCatalogue {
     /// none.
     pub fn from_entities(
         entities: &[Value],
-        confirmed: impl IntoIterator<Item = String>,
+        kept: impl IntoIterator<Item = impl Into<KeptCreature>>,
         profile: &MobNameProfile,
     ) -> Self {
         let mut mobs = Vec::new();
@@ -244,20 +488,164 @@ impl MobCatalogue {
                 });
             }
         }
-        Self::new(mobs, confirmed, profile)
+        Self::new(mobs, kept, profile)
     }
 
     /// From the bundled game data's `mobs` collection.
     pub fn from_store(
         store: &GameDataStore,
-        confirmed: impl IntoIterator<Item = String>,
+        kept: impl IntoIterator<Item = impl Into<KeptCreature>>,
         profile: &MobNameProfile,
     ) -> Self {
-        Self::from_entities(store.get_entities("mobs"), confirmed, profile)
+        Self::from_entities(store.get_entities("mobs"), kept, profile)
     }
 
     pub fn mobs(&self) -> &[CatalogueMob] {
         &self.mobs
+    }
+
+    /// Note `mob` (the list's creature `index`), whose maturity is
+    /// `number`, under its creature graded by number.
+    fn add_numbered(&mut self, mob: &CatalogueMob, index: usize, number: NumberedMaturity) {
+        let printed = without_qualifier(&mob.name).unwrap_or(&mob.name);
+        let family = match self
+            .families
+            .iter()
+            .position(|f| f.name == mob.name && f.species == mob.species)
+        {
+            Some(i) => &mut self.families[i],
+            None => {
+                self.families.push(Family {
+                    name: mob.name.clone(),
+                    species: mob.species.clone(),
+                    stem: label_key(printed),
+                    shapes: Vec::new(),
+                });
+                self.families.last_mut().expect("just pushed")
+            }
+        };
+        let before_key = label_key(&number.before);
+        let shape = match family
+            .shapes
+            .iter()
+            .position(|s| s.before_key == before_key)
+        {
+            Some(i) => &mut family.shapes[i],
+            None => {
+                family.shapes.push(Shape {
+                    before: number.before.clone(),
+                    before_key,
+                    width: 0,
+                    listed: Vec::new(),
+                });
+                family.shapes.last_mut().expect("just pushed")
+            }
+        };
+        if number.padded {
+            shape.width = shape.width.max(number.digits);
+        }
+        shape.listed.push((number.value, index));
+    }
+
+    /// `text` read as a creature graded by number: its name the one such
+    /// creature's (a character or two off at most, and clearly nearer it
+    /// than any other), the fixed part before its number exactly that
+    /// creature's, and its number exact. `None` when the reading carries no
+    /// number or comes near no such creature. A number the list has, read
+    /// beside a level the list gives another of its numbers and not this
+    /// one, may be that other number misread: unclear.
+    fn read_numbered(
+        &self,
+        text: &str,
+        level: Option<u32>,
+        profile: &MobNameProfile,
+    ) -> Option<Resolved> {
+        let key = label_key(text);
+        let digits_at = |chars: &[char]| chars.iter().take_while(|c| c.is_ascii_digit()).count();
+        let trailing = key.iter().rev().take_while(|c| c.is_ascii_digit()).count();
+        let leading = digits_at(&key);
+        // The number after the name, or else before it (with no fixed part).
+        let (letters, digits, after_name) = if trailing > 0 && trailing < key.len() {
+            (
+                &key[..key.len() - trailing],
+                &key[key.len() - trailing..],
+                true,
+            )
+        } else if leading > 0 && leading < key.len() {
+            (&key[leading..], &key[..leading], false)
+        } else {
+            return None;
+        };
+        if digits.len() > profile.number_digits {
+            return None;
+        }
+        let value: u32 = digits.iter().collect::<String>().parse().ok()?;
+        // Each creature graded by number at its nearest shape: (distance,
+        // family, shape), ties between two of its shapes deciding nothing.
+        let mut nearest: Vec<(usize, usize, Option<usize>)> = Vec::new();
+        for (f, family) in self.families.iter().enumerate() {
+            let mut best: Option<(usize, Option<usize>)> = None;
+            for (s, shape) in family.shapes.iter().enumerate() {
+                if !after_name && !shape.before_key.is_empty() {
+                    continue;
+                }
+                let Some(name) = letters.strip_suffix(shape.before_key.as_slice()) else {
+                    continue;
+                };
+                let allowed = (family.stem.len() / profile.letters_per_edit.max(1)).max(1);
+                let distance =
+                    levenshtein::distance(name.iter().copied(), family.stem.iter().copied());
+                if distance > allowed {
+                    continue;
+                }
+                best = match best {
+                    Some((d, _)) if d == distance => Some((d, None)),
+                    Some((d, held)) if d < distance => Some((d, held)),
+                    _ => Some((distance, Some(s))),
+                };
+            }
+            if let Some((distance, shape)) = best {
+                nearest.push((distance, f, shape));
+            }
+        }
+        let closest = nearest.iter().map(|n| n.0).min()?;
+        let near: Vec<&(usize, usize, Option<usize>)> = nearest
+            .iter()
+            .filter(|n| n.0 < closest + profile.edit_margin.max(1))
+            .collect();
+        let [(distance, f, Some(s))] = near.as_slice() else {
+            return Some(Resolved::Unclear);
+        };
+        let family = &self.families[*f];
+        let shape = &family.shapes[*s];
+        let listed = shape
+            .listed
+            .iter()
+            .find(|(v, _)| *v == value)
+            .map(|(_, i)| *i);
+        if let (Some(read), Some(i)) = (level, listed) {
+            let another = family
+                .shapes
+                .iter()
+                .flat_map(|sh| sh.listed.iter())
+                .any(|(v, j)| *v != value && self.mobs[*j].level == Some(read));
+            if self.mobs[i].level.is_some_and(|l| l != read) && another {
+                return Some(Resolved::Unclear);
+            }
+        }
+        let maturity = listed
+            .and_then(|i| self.mobs[i].maturity.clone())
+            .unwrap_or_else(|| shape.maturity(value));
+        Some(Resolved::Known {
+            name: family.name.clone(),
+            species: family.species.clone(),
+            maturity: Some(maturity),
+            spelling: if *distance == 0 {
+                Spelling::Exact
+            } else {
+                Spelling::Near
+            },
+        })
     }
 }
 
@@ -432,11 +820,19 @@ pub fn resolve(
     {
         return answer(catalogue, Who::Confirmed(i), PERFECT, profile);
     }
+    if let Some(numbered) = catalogue.read_numbered(text, level, profile) {
+        return numbered;
+    }
+    // A reading carrying a number never names a creature graded by number
+    // here: its number was not that creature's, or its name not near enough.
+    let carries_number = key.first().is_some_and(char::is_ascii_digit)
+        || key.last().is_some_and(char::is_ascii_digit);
     let read_counts = key_counts(&key);
     let floor = profile.guess_score - profile.margin;
     let candidates: Vec<(Who, f64)> = catalogue
         .keys
         .iter()
+        .filter(|k| !(carries_number && matches!(k.who, Who::Mob(i) if catalogue.numbered[i])))
         .filter(|k| similarity_bound(&k.counts, k.chars.len(), &read_counts, key.len()) >= floor)
         .filter_map(|k| {
             let score = ratio(&key, &k.chars);
@@ -530,6 +926,10 @@ mod tests {
 
     fn bundled(confirmed: Vec<String>) -> MobCatalogue {
         MobCatalogue::from_entities(&bundled_mobs(), confirmed, &names())
+    }
+
+    fn bundled_vec(kept: Vec<KeptCreature>) -> MobCatalogue {
+        MobCatalogue::from_entities(&bundled_mobs(), kept, &names())
     }
 
     fn of(mobs: Vec<CatalogueMob>, confirmed: Vec<String>) -> MobCatalogue {
@@ -805,7 +1205,8 @@ mod tests {
     fn the_bundled_itumatrox_pair_is_one_species_at_each_maturity_whatever_the_level() {
         // The two planets' `Old` and `Mature` swap levels (17 and 16) on
         // the list: the level read never picks between them.
-        let catalogue = MobCatalogue::from_entities(&bundled_mobs(), Vec::new(), &names());
+        let catalogue =
+            MobCatalogue::from_entities(&bundled_mobs(), Vec::<String>::new(), &names());
         for (text, maturity) in [("Itumatrox Old", "Old"), ("Itumatrox Mature", "Mature")] {
             for level in [Some(16), Some(17), None] {
                 assert_eq!(
@@ -918,7 +1319,7 @@ mod tests {
             ]"#,
         )
         .expect("json");
-        let catalogue = MobCatalogue::from_entities(&entities, Vec::new(), &names());
+        let catalogue = MobCatalogue::from_entities(&entities, Vec::<String>::new(), &names());
         assert_eq!(
             catalogue.mobs(),
             &[
@@ -954,9 +1355,12 @@ mod tests {
                 .filter(|(j, _)| *j != i)
                 .map(|(_, e)| e.clone())
                 .collect();
-            let catalogue = MobCatalogue::from_entities(&rest, Vec::new(), &names());
-            let alone =
-                MobCatalogue::from_entities(std::slice::from_ref(left_out), Vec::new(), &names());
+            let catalogue = MobCatalogue::from_entities(&rest, Vec::<String>::new(), &names());
+            let alone = MobCatalogue::from_entities(
+                std::slice::from_ref(left_out),
+                Vec::<String>::new(),
+                &names(),
+            );
             for mob in alone.mobs().iter().take(2) {
                 let text = match &mob.maturity {
                     Some(m) => format!("{} {m}", mob.name),
@@ -993,6 +1397,142 @@ mod tests {
         assert!(
             (strict + loose) * 10 <= tried,
             "{strict} + {loose} of {tried}"
+        );
+    }
+
+    /// A survival instance prints its difficulty as two digits after the
+    /// creature's name (`Survival Zombie Dog 04`), with a level the instance
+    /// sets; the bundled list has some difficulties of some of these
+    /// creatures, unpadded, with other levels. Each reads as its creature at
+    /// the difficulty printed, listed or not.
+    #[test]
+    fn a_creature_graded_by_number_is_read_by_its_name_and_its_exact_number() {
+        let catalogue = bundled(vec![]);
+        let at =
+            |text: &str, level: Option<u32>| named(&resolve(text, level, &catalogue, &names()));
+        let exact = Spelling::Exact;
+        // Listed difficulties, printed padded: spelled whole.
+        assert_eq!(
+            at("Survival Zombie Dog 04", Some(8)),
+            known("Survival Zombie Dog", Some("4"), exact)
+        );
+        assert_eq!(
+            at("Survival Zombie04", Some(8)),
+            known("Survival Zombie", Some("4"), exact)
+        );
+        // Difficulties the list lacks: the creature at the number printed.
+        assert_eq!(
+            at("Survival Rage Zombie 04", Some(8)),
+            known("Survival Rage Zombie", Some("4"), exact)
+        );
+        assert_eq!(
+            at("Survival Acid Zombie 04", Some(8)),
+            known("Survival Acid Zombie", Some("4"), exact)
+        );
+        assert_eq!(
+            at("Survival Zombie Dog 14", Some(30)),
+            known("Survival Zombie Dog", Some("14"), exact)
+        );
+        // A fixed part before the number is part of the maturity, padded as
+        // the list pads it.
+        assert_eq!(
+            at("Kal-Rahm The Cannibal S04", None),
+            known("Kal-Rahm The Cannibal", Some("S04"), exact)
+        );
+        // A misread letter in the name is a near miss of the same creature.
+        assert_eq!(
+            at("Survival Zornbie Dog 04", Some(8)),
+            known("Survival Zombie Dog", Some("4"), Spelling::Near)
+        );
+        // A whole word more or less is another creature, never this one.
+        assert_ne!(
+            at("Survival Rage Zombie 04", Some(8)),
+            at("Survival Zombie 04", Some(8))
+        );
+        assert_ne!(
+            at("Survival Zombie 04", Some(8)),
+            at("Survival Zombie Dog 04", Some(8))
+        );
+        // A name as near one creature as another names neither.
+        assert_eq!(
+            resolve("Survival Zombie D 04", Some(8), &catalogue, &names()),
+            Resolved::Unclear
+        );
+    }
+
+    #[test]
+    fn two_readings_are_one_name_misread_only_a_few_letters_apart_at_one_number() {
+        let names = names();
+        let one = |a: &str, b: &str| misread_of(&label_key(a), &label_key(b), &names);
+        // A letter or two off, either way, is the same name.
+        assert!(one("Zombie Fleshripper", "Zornbie Flesbripper"));
+        assert!(one("Qwerl Alpha", "QwerI Alrha"));
+        // A word more or less is another creature, however long the name.
+        assert!(!one("Survival Zombie 04", "Survival Rage Zombie 04"));
+        assert!(!one("Survival Zombie 04", "Survival Zombie Dog 04"));
+        // Another number is another creature; the same number padded or
+        // not is the same.
+        assert!(!one("Survival Zombie 04", "Survival Zombie 05"));
+        assert!(!one("Survival Zombie 04", "Survival Zombie"));
+        assert!(one("Survival Zombie 04", "Survival Zornbie 4"));
+    }
+
+    #[test]
+    fn a_name_typed_as_its_plate_prints_it_splits_at_the_number_it_ends_in() {
+        let names = names();
+        let split = |text: &str| split_numbered(text, &names);
+        assert_eq!(
+            split("Survival Zombie Hound 04"),
+            Some(("Survival Zombie Hound".into(), "04".into()))
+        );
+        assert_eq!(
+            split("Kal-Rahm The Cannibal S04"),
+            Some(("Kal-Rahm The Cannibal".into(), "S04".into()))
+        );
+        assert_eq!(
+            split("DSEC FURY THR-01"),
+            Some(("DSEC FURY".into(), "THR-01".into()))
+        );
+        // No number at the end, a number alone, or one too long: no split.
+        assert_eq!(split("Atrox Old"), None);
+        assert_eq!(split("04"), None);
+        assert_eq!(split("Zombie Kong 4944"), None);
+    }
+
+    #[test]
+    fn a_kept_creature_graded_by_number_is_read_at_any_number_and_never_blurs_another() {
+        let kept = |name: &str, maturity: &str| KeptCreature {
+            name: name.into(),
+            species: None,
+            maturity: Some(maturity.into()),
+        };
+        let catalogue = bundled_vec(vec![kept("Survival Zombie Hound", "04")]);
+        let at = |text: &str| named(&resolve(text, Some(8), &catalogue, &names()));
+        // At the number kept and any other, padded as it was kept.
+        assert_eq!(
+            at("Survival Zombie Hound 04"),
+            known("Survival Zombie Hound", Some("04"), Spelling::Exact)
+        );
+        assert_eq!(
+            at("Survival Zombie Hound 12"),
+            known("Survival Zombie Hound", Some("12"), Spelling::Exact)
+        );
+        // The bundle's creatures read as before beside it.
+        assert_eq!(
+            at("Survival Zombie Dog 04"),
+            known("Survival Zombie Dog", Some("4"), Spelling::Exact)
+        );
+        // A kept name a letter off a creature graded by number would blur
+        // it: it is not kept, and the bundle's creature reads as itself.
+        let blurred = bundled_vec(vec![kept("Survival Zombie Doq", "04")]);
+        assert_eq!(
+            named(&resolve(
+                "Survival Zombie Doq 04",
+                Some(8),
+                &blurred,
+                &names()
+            )),
+            known("Survival Zombie Dog", Some("4"), Spelling::Near)
         );
     }
 }

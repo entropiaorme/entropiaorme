@@ -23,10 +23,10 @@ function view(overrides: Partial<MobSourceView> = {}): MobSourceView {
 	};
 }
 
-function mount(source: MobSourceView | null, enabled = true) {
+function mount(source: MobSourceView | null, steerable = true) {
 	const deps = {
 		view: () => source,
-		enabled: () => enabled,
+		steerable: () => steerable,
 		pin: vi.fn(async () => ({})),
 		unpin: vi.fn(async () => true),
 		setTyped: vi.fn(async () => ({})),
@@ -108,10 +108,15 @@ describe('what the control shows by default', () => {
 		expect(screen.getByPlaceholderText('Mob...')).toBeTruthy();
 	});
 
-	it('is the typed mob alone on a build that hides surfaces in development', () => {
+	it('is the typed mob alone where the control cannot steer', () => {
 		mount(view({ reading: atrox, typed: young }), false);
 		expect(screen.queryByTestId('mob-shown')).toBeNull();
 		expect(screen.getByText('Young Atrox')).toBeTruthy();
+	});
+
+	it('steers on any build: nothing but the control itself decides it', () => {
+		mount(view({ reading: atrox, typed: young }));
+		expect(shown().textContent).toContain('Old Atrox');
 	});
 });
 
@@ -192,14 +197,13 @@ describe('expanding the control', () => {
 		expect(deps.pin).toHaveBeenCalledWith({ kind: 'typed', species: 'Atrox', maturity: 'Old' });
 	});
 
-	it('carries the shared in-development mark, and draws its explanation inside the panel', async () => {
+	it('carries no in-development mark, and draws its panel inside the strip surface', async () => {
 		// The strip the control sits in is itself a surface: render inside one.
 		const strip = document.createElement('div');
 		strip.setAttribute(OVERLAY_SURFACE_ATTRIBUTE, '');
 		document.body.appendChild(strip);
 		const deps = {
 			view: () => view({ reading: atrox }),
-			enabled: () => true,
 			pin: vi.fn(async () => ({})),
 			unpin: vi.fn(async () => true),
 			setTyped: vi.fn(async () => ({})),
@@ -210,10 +214,9 @@ describe('expanding the control', () => {
 		render(MobSourceControl, { target: strip, props: { view: deps.view(), model } });
 		await fireEvent.click(shown());
 		const panel = screen.getByTestId('mob-source-panel');
-		const mark = screen.getByTestId('in-development-mark');
-		expect(panel.contains(mark)).toBe(true);
-		await fireEvent.pointerEnter(mark.querySelector('button') as HTMLButtonElement);
-		expect(panel.textContent).toMatch(/Reads the name over the creature/);
+		expect(panel.closest(`[${OVERLAY_SURFACE_ATTRIBUTE}]`)).not.toBeNull();
+		expect(screen.queryByTestId('in-development-mark')).toBeNull();
+		expect(screen.queryByText('In development')).toBeNull();
 		// Nothing drawn anywhere but on a marked surface.
 		const outside = Array.from(document.body.querySelectorAll('*')).filter(
 			(el) =>

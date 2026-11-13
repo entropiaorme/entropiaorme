@@ -1961,10 +1961,11 @@ mod tests {
         // + kill mob detection's 2 tables and session index
         // + kill mob routes' carried table and session index
         // + tool sightings' 2 tables and 2 indexes
+        // + kill mob traces' table and session index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 246);
+        assert_eq!(master.len(), 248);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

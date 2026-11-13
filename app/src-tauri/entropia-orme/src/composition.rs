@@ -814,7 +814,7 @@ async fn compose_with(
                     );
                     CatalogueCell::new(eo_services::game_ui::mob_names::MobCatalogue::from_store(
                         &game_data,
-                        Vec::new(),
+                        Vec::<String>::new(),
                         &profile.mob_names,
                     ))
                 }

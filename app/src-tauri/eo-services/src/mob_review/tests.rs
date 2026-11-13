@@ -210,8 +210,11 @@ impl Rig {
 
     fn confirmed(&self) -> Vec<String> {
         self.runtime
-            .block_on(self.db.with_reader(|conn| confirmed_names(conn)))
+            .block_on(self.db.with_reader(|conn| kept_creatures(conn)))
             .unwrap()
+            .into_iter()
+            .map(|k| k.name)
+            .collect()
     }
 }
 
@@ -735,6 +738,11 @@ fn a_settlement_is_kept_with_its_answer_and_repairs_the_session_figures() {
 fn deleting_a_session_removes_its_detections() {
     let rig = rig();
     hunt(&rig);
+    rig.execute(
+        "INSERT INTO kill_mob_traces (kill_id, session_id, screen, continuity, reads) \
+         SELECT id, session_id, 'no_fight', 'mixed', '[]' FROM kills WHERE session_id = 's1'",
+    );
+    assert!(rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_traces") > 0);
     rig.runtime
         .block_on(crate::tracking_reads::delete_session_impl(&rig.db, "s1"))
         .unwrap();
@@ -742,6 +750,140 @@ fn deleting_a_session_removes_its_detections() {
         rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_detections"),
         0
     );
+    assert_eq!(rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_traces"), 0);
+}
+
+impl Rig {
+    fn entries(&self) -> Vec<KeptEntry> {
+        self.runtime.block_on(self.review.entries()).unwrap()
+    }
+
+    fn check(&self, text: &str, replacing: Option<&str>) -> EntryCheck {
+        self.runtime
+            .block_on(self.review.check_entry(text, replacing))
+            .unwrap()
+    }
+
+    fn keep(
+        &self,
+        text: &str,
+        species: Option<&str>,
+        replacing: Option<&str>,
+    ) -> Result<Vec<KeptEntry>, MobReviewError> {
+        self.runtime
+            .block_on(self.review.save_entry(text, species, replacing))
+    }
+
+    fn reads(&self, text: &str) -> Option<(String, Option<String>)> {
+        match resolve(
+            text,
+            None,
+            &self.catalogue.current(),
+            &bundled_profile().mob_names,
+        ) {
+            Resolved::Known { name, maturity, .. } => Some((name, maturity)),
+            Resolved::Confirmed { name, .. } => Some((name, None)),
+            _ => None,
+        }
+    }
+}
+
+#[test]
+fn the_creature_list_keeps_what_the_player_enters_and_the_reader_reads_it_at_any_number() {
+    let rig = rig();
+    assert!(rig.entries().is_empty());
+    // Typed as its plate prints it: ready, at any number.
+    assert_eq!(
+        rig.check("Gloomrat Brute 04", None),
+        EntryCheck::Ready {
+            name: "Gloomrat Brute".into(),
+            maturity: Some("04".into()),
+            any_number: true,
+        }
+    );
+    // A creature the reader knows already is said so, by its own name.
+    match rig.check("Atrox Old", None) {
+        EntryCheck::Known { name, maturity, .. } => {
+            assert_eq!((name.as_str(), maturity.as_deref()), ("Atrox", Some("Old")))
+        }
+        other => panic!("{other:?}"),
+    }
+    // Kept: listed as the player's, and the reader takes it at any number,
+    // printed as it was kept.
+    let entries = rig.keep("Gloomrat Brute 04", None, None).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].added_by, AddedBy::Player);
+    assert!(entries[0].any_number);
+    assert_eq!(
+        rig.reads("Gloomrat Brute 11"),
+        Some(("Gloomrat Brute".into(), Some("11".into())))
+    );
+    // Kept again it is known; edited in place, it is not.
+    assert!(matches!(
+        rig.check("Gloomrat Brute 04", None),
+        EntryCheck::Known { .. }
+    ));
+    assert!(matches!(
+        rig.check("Gloomrat Brute 04", Some("Gloomrat Brute")),
+        EntryCheck::Ready { .. }
+    ));
+    let entries = rig
+        .keep(
+            "Gloomrat Brute 04",
+            Some("Gloomrats"),
+            Some("Gloomrat Brute"),
+        )
+        .unwrap();
+    assert_eq!(entries[0].species.as_deref(), Some("Gloomrats"));
+    // Something already known is refused, saying what it is.
+    assert!(matches!(
+        rig.keep("Atrox Old", None, None),
+        Err(MobReviewError::Invalid(reason)) if reason.contains("Atrox")
+    ));
+    // Removed: the reader no longer knows it.
+    let entries = rig
+        .runtime
+        .block_on(rig.review.remove_entry("Gloomrat Brute"))
+        .unwrap();
+    assert!(entries.is_empty());
+    assert_eq!(rig.reads("Gloomrat Brute 11"), None);
+    assert!(matches!(
+        rig.runtime
+            .block_on(rig.review.remove_entry("Gloomrat Brute")),
+        Err(MobReviewError::NotFound(_))
+    ));
+}
+
+#[test]
+fn a_name_confirmed_with_a_number_is_kept_at_any_number_and_a_players_entry_is_never_retired() {
+    let rig = rig();
+    hunt(&rig);
+    let group = rig.groups("s1")[1].group.clone();
+    // Confirmed in the review with the number its plate printed: kept at
+    // every number, as the review's.
+    rig.settle("s1", &group, ReviewTarget::Creature("Gloomrat 04".into()))
+        .unwrap();
+    let entries = rig.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        (
+            entries[0].name.as_str(),
+            entries[0].maturity.as_deref(),
+            entries[0].added_by
+        ),
+        ("Gloomrat", Some("04"), AddedBy::Review)
+    );
+    assert_eq!(
+        rig.reads("Gloomrat 07"),
+        Some(("Gloomrat".into(), Some("07".into())))
+    );
+    // The player takes it over in the list: settled back, no kill carries
+    // it, and still it is kept.
+    rig.keep("Gloomrat 04", None, Some("Gloomrat")).unwrap();
+    rig.settle("s1", &group, ReviewTarget::Declared).unwrap();
+    let entries = rig.entries();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].added_by, AddedBy::Player);
 }
 
 /// The hunt above, then kills given the creature being hunted (two of a

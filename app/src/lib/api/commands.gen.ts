@@ -953,6 +953,42 @@ export interface CrashReportingStatus {
 }
 
 /**
+ * A creature the player keeps for the name reader beside the bundled list.
+ */
+export interface CreatureEntry {
+	name: string;
+	species: string | null;
+	/** The maturity as entered; a number stands for every number. */
+	maturity: string | null;
+	/** The maturity is a number: read at whatever number the plate prints. */
+	anyNumber: boolean;
+	source: CreatureEntrySource;
+}
+
+/**
+ * What keeping a typed creature would come to.
+ */
+export type CreatureEntryCheck = {
+		name: string;
+		maturity: string | null;
+		anyNumber: boolean;
+		kind: 'ready';
+	} | {
+		name: string;
+		maturity: string | null;
+		recordedAs: DetectedCreature;
+		kind: 'known';
+	} | {
+		reason: string;
+		kind: 'refused';
+	};
+
+/**
+ * Where a kept creature came from.
+ */
+export type CreatureEntrySource = 'review' | 'player';
+
+/**
  * The per-family cycled-cost split. Its lines partition `trackingCost`:
  * every family the Overview sums into Cycled has exactly one line here.
  */
@@ -6002,6 +6038,35 @@ export async function trackingMobDetectionSettle(sessionId: string, group: MobDe
 		kind: 'didYouMean';
 	}> {
 	return invokeCommand('tracking_mob_detection_settle', { session_id: sessionId, group, target });
+}
+
+export async function creatureEntries(): Promise<CreatureEntry[]> {
+	return invokeCommand('creature_entries', {});
+}
+
+export async function creatureEntryCheck(text: string, replacing: string | null): Promise<{
+		name: string;
+		maturity: string | null;
+		anyNumber: boolean;
+		kind: 'ready';
+	} | {
+		name: string;
+		maturity: string | null;
+		recordedAs: DetectedCreature;
+		kind: 'known';
+	} | {
+		reason: string;
+		kind: 'refused';
+	}> {
+	return invokeCommand('creature_entry_check', { text, replacing });
+}
+
+export async function creatureEntrySave(text: string, species: string | null, replacing: string | null): Promise<CreatureEntry[]> {
+	return invokeCommand('creature_entry_save', { text, species, replacing });
+}
+
+export async function creatureEntryRemove(name: string): Promise<CreatureEntry[]> {
+	return invokeCommand('creature_entry_remove', { name });
 }
 
 export async function trackingToolSightings(sessionId: string): Promise<ToolSightingReview> {

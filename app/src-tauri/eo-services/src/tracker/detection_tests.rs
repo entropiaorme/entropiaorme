@@ -402,6 +402,25 @@ impl Hunt {
         self.idle(at + 1_000, 6)
     }
 
+    /// Each answered kill's trace, in kill order: what the screen came to,
+    /// whether continuity carried it, and how many readings round it.
+    fn traces(&self) -> Vec<(String, String, i64)> {
+        self.settle();
+        self.rig
+            .wait(self.rig.db.with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT t.screen, t.continuity, json_array_length(t.reads) \
+                     FROM kill_mob_traces t JOIN kills k ON k.id = t.kill_id \
+                     ORDER BY k.timestamp, k.rowid",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            }))
+            .unwrap()
+    }
+
     fn kept(&self) -> Vec<(String, String, String)> {
         self.settle();
         self.rig
@@ -938,6 +957,25 @@ fn each_kill_is_named_by_the_screen_then_continuity_then_the_backstop_then_nothi
         hunt.continued(),
         [("Mature Daikiba".to_string(), "Young Atrox".to_string())]
     );
+    // Every kill answered keeps a trace of why, named or not.
+    let traces = hunt.traces();
+    let why: Vec<(&str, &str)> = traces
+        .iter()
+        .map(|(screen, continuity, _)| (screen.as_str(), continuity.as_str()))
+        .collect();
+    assert_eq!(
+        why,
+        [
+            ("named", "not_needed"),
+            ("named", "not_needed"),
+            ("named", "not_needed"),
+            ("no_fight", "given"),
+            ("no_fight", "disagree"),
+            ("no_fight", "disagree"),
+        ]
+    );
+    assert!(traces[..3].iter().all(|(_, _, reads)| *reads == 4));
+    assert!(traces[3..].iter().all(|(_, _, reads)| *reads == 0));
 }
 
 #[test]
@@ -1050,7 +1088,7 @@ fn a_kill_answered_after_the_last_look_still_moves_the_creature_recent_kills_sho
 }
 
 #[test]
-fn the_view_holds_a_moments_unclear_reading_and_withholds_a_contradicted_continuity() {
+fn the_view_holds_a_moment_with_nothing_read_and_never_an_unrecognised_plate() {
     let mut hunt = hunt(true);
     hunt.start();
     let updates = Arc::new(Mutex::new(0usize));
@@ -1067,14 +1105,15 @@ fn the_view_holds_a_moments_unclear_reading_and_withholds_a_contradicted_continu
         t = hunt.fight(t, &["Daikiba Mature"; 4], 9);
         t = hunt.idle(t, 8);
     }
-    // Nothing read now; the latest kills were all one creature.
+    // Nothing read now; the latest kills, and every plate read, were one
+    // creature.
     let view = hunt.view();
     assert_eq!(view.reading, None);
     assert_eq!(view.continuity, Some(mob("Daikiba", "Mature")));
     let before = *updates.lock().unwrap();
 
-    // Another creature read: the continuity creature is not shown beside
-    // it, and the readout was told once.
+    // Another creature read: the hunt is no longer of one creature, so the
+    // continuity creature is not shown, and the readout was told once.
     hunt.look(t, Some(("Atrox Old", 12, 1.0)));
     let view = hunt.view();
     assert_eq!(view.reading, Some(mob("Atrox", "Old")));
@@ -1085,18 +1124,21 @@ fn the_view_holds_a_moments_unclear_reading_and_withholds_a_contradicted_continu
     hunt.look(t + 2_000, None);
     assert_eq!(hunt.view().reading, Some(mob("Atrox", "Old")));
     assert_eq!(*updates.lock().unwrap(), before + 1);
-    // Unread for longer than a reading joins its fight: it is let go.
+    // Unread for longer than a reading joins its fight: it is let go, and
+    // the continuity creature stays withheld while the Atrox is within the
+    // span continuity looks back over.
     hunt.idle(t + 3_000, 6);
     let view = hunt.view();
     assert_eq!(view.reading, None);
-    assert_eq!(view.continuity, Some(mob("Daikiba", "Mature")));
+    assert_eq!(view.continuity, None);
     assert_eq!(*updates.lock().unwrap(), before + 2);
 
-    // The same creature read again: both are shown.
+    // The same creature read again is shown; a plate whose name reads as
+    // nothing then lets it go at once, without waiting out the hold.
     hunt.look(t + 10_000, Some(("Daikiba Mature", 9, 1.0)));
-    let view = hunt.view();
-    assert_eq!(view.reading, Some(mob("Daikiba", "Mature")));
-    assert_eq!(view.continuity, Some(mob("Daikiba", "Mature")));
+    assert_eq!(hunt.view().reading, Some(mob("Daikiba", "Mature")));
+    hunt.look(t + 11_000, Some(("Xq", 9, 0.9)));
+    assert_eq!(hunt.view().reading, None);
 }
 
 #[test]

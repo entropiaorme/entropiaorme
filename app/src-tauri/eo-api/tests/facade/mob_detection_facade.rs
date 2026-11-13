@@ -1,14 +1,16 @@
 //! Behavioural pins for creature detection over the typed facade: the
 //! setting that turns it on and off (and, off, never starts the watcher),
-//! and the after-session review that lists every detected creature and
-//! suggestion and settles a group in one action.
+//! the after-session review that lists every detected creature and
+//! suggestion and settles a group in one action, and the creature list the
+//! player keeps beside the bundled one.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use eo_api::mob_detection::{
-    DetectedCreature, MobDetectionGrade, MobDetectionGroupRef, MobDetectionSettleResult,
-    MobDetectionSettled, MobDetectionTarget, MobPin, MobPinTarget, MobPinnedBy, MobSourceView,
+    CreatureEntryCheck, CreatureEntrySource, DetectedCreature, MobDetectionGrade,
+    MobDetectionGroupRef, MobDetectionSettleResult, MobDetectionSettled, MobDetectionTarget,
+    MobPin, MobPinTarget, MobPinnedBy, MobSourceView,
 };
 use eo_api::settings::SettingsPatch;
 use eo_api::{Api, ApiError};
@@ -533,4 +535,80 @@ async fn a_creature_is_pinned_by_typing_and_released_through_the_facade() {
     assert_eq!(*watcher.starts.lock().unwrap(), 2, "released: read again");
     assert!(!api.tracking_mob_unpin().await.unwrap());
     assert!(mob_source(&api).await.reading_screen);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_creature_list_checks_keeps_edits_and_removes_a_creature_typed_as_its_plate_prints_it()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let (api, _db, _) = detection_api(dir.path(), Arc::default()).await;
+    assert!(api.creature_entries().await.unwrap().is_empty());
+    // A creature ending in a number: ready, at any number.
+    let check = api
+        .creature_entry_check("Gloomrat Brute 04".into(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        check,
+        CreatureEntryCheck::Ready {
+            name: "Gloomrat Brute".into(),
+            maturity: Some("04".to_string()).into(),
+            any_number: true,
+        }
+    );
+    // One the bundled list has: known, by its own name and as its kills
+    // are recorded.
+    match api
+        .creature_entry_check("Atrox Old".into(), None)
+        .await
+        .unwrap()
+    {
+        CreatureEntryCheck::Known {
+            name,
+            maturity,
+            recorded_as,
+        } => {
+            assert_eq!(name, "Atrox");
+            assert_eq!(maturity.0.as_deref(), Some("Old"));
+            assert_eq!(recorded_as.name, "Old Atrox");
+        }
+        other => panic!("{other:?}"),
+    }
+    let kept = api
+        .creature_entry_save("Gloomrat Brute 04".into(), Some("Gloomrats".into()), None)
+        .await
+        .unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].name, "Gloomrat Brute");
+    assert_eq!(kept[0].species.0.as_deref(), Some("Gloomrats"));
+    assert_eq!(kept[0].maturity.0.as_deref(), Some("04"));
+    assert!(kept[0].any_number);
+    assert_eq!(kept[0].source, CreatureEntrySource::Player);
+    // Kept again: refused as already known, and nothing changes.
+    let refused = api
+        .creature_entry_save("Gloomrat Brute 04".into(), None, None)
+        .await;
+    assert!(
+        matches!(refused, Err(ApiError::BadRequest { .. })),
+        "{refused:?}"
+    );
+    // Edited in place, under another name.
+    let kept = api
+        .creature_entry_save(
+            "Gloomrat Bruiser 04".into(),
+            None,
+            Some("Gloomrat Brute".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].name, "Gloomrat Bruiser");
+    // Removed; removing it again finds nothing.
+    assert!(api
+        .creature_entry_remove("Gloomrat Bruiser".into())
+        .await
+        .unwrap()
+        .is_empty());
+    let again = api.creature_entry_remove("Gloomrat Bruiser".into()).await;
+    assert!(matches!(again, Err(ApiError::NotFound { .. })), "{again:?}");
 }

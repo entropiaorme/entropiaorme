@@ -8,7 +8,6 @@
 	// click away. Shown for an ended session only (the model gives no groups
 	// otherwise).
 	import { Button, Input } from '$lib/components';
-	import { inDevelopmentSurface } from '$lib/inDevelopment';
 	import SessionReviewBlock from './SessionReviewBlock.svelte';
 	import {
 		continuityLine,
@@ -67,7 +66,6 @@
 	<SessionReviewBlock
 		id="mob-detections"
 		heading="Detected creatures"
-		mark={inDevelopmentSurface('creature-detection').id}
 		error={model.error}
 		onDismissError={model.dismissError}
 		notice={model.notice}

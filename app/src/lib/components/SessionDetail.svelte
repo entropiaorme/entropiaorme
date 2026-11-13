@@ -33,7 +33,6 @@
 	import ToolSightings from '$lib/features/tracking/ToolSightings.svelte';
 	import { createToolSightingModel } from '$lib/features/tracking/toolSightingModel.svelte';
 	import { describeCertainty } from '$lib/features/tracking/mobDetection';
-	import { inDevelopment } from '$lib/inDevelopment';
 	import { TRACKING_TOPIC } from '$lib/realtime/trackingTopic';
 	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
 	import { describeUnpriced, hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
@@ -102,7 +101,7 @@
 	const toolSightings = createToolSightingModel({ sessionId: () => detail.sessionId });
 	$effect(() => {
 		void detail.sessionId;
-		if (inDevelopment.visible) void mobDetections.refresh();
+		void mobDetections.refresh();
 		void toolSightings.refresh();
 	});
 
@@ -500,9 +499,7 @@
 
 	<SessionDoses model={sessionDoses} />
 
-	{#if inDevelopment.visible}
-		<MobDetections model={mobDetections} />
-	{/if}
+	<MobDetections model={mobDetections} />
 	<ToolSightings model={toolSightings} />
 
 	<!-- 1b2. Harvesting strip (shown only when the session harvested) -->

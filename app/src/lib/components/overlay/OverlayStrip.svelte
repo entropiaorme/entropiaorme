@@ -131,7 +131,7 @@
 	// alone, with nothing to write through.
 	const typedOnly = createMobSourceModel({
 		view: () => data.mobSource ?? null,
-		enabled: () => false,
+		steerable: () => false,
 		pin: settled,
 		unpin: settled,
 		setTyped: settled,

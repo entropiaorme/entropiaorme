@@ -15,6 +15,7 @@
 	import GuardrailsTab from './GuardrailsTab.svelte';
 	import EffectsTab from './EffectsTab.svelte';
 	import HotbarTab from './HotbarTab.svelte';
+	import MobsTab from './MobsTab.svelte';
 
 	const model = createLibraryModel();
 	const protection = createProtectionModel();
@@ -25,7 +26,8 @@
 		...(inDevelopment.visible ? [{ id: 'protection', label: 'Armour' }] : []),
 		{ id: 'effects', label: 'Effects' },
 		{ id: 'hotbar', label: 'Hotbar' },
-		{ id: 'guardrails', label: 'Guardrails' }
+		{ id: 'guardrails', label: 'Guardrails' },
+		{ id: 'mobs', label: 'Mobs' }
 	]);
 	let activeTab = $state('library');
 
@@ -127,6 +129,8 @@
 			reloadSpeed={model.reloadSpeed}
 			onchange={(settings) => model.effectsSaved(settings)}
 		/>
+	{:else if activeTab === 'mobs'}
+		<MobsTab />
 	{:else if activeTab === 'compare'}
 		<CompareTab />
 	{:else if activeTab === 'protection' && inDevelopment.visible}

@@ -795,7 +795,11 @@
     "min_letter_share": 0.7,
     "placeholder_maturities": [
       "Default"
-    ]
+    ],
+    "letters_per_edit": 6,
+    "edit_margin": 2,
+    "number_digits": 3,
+    "number_prefix": 4
   },
   "mob_history": {
     "pulse_ms": 1000,
@@ -817,7 +821,6 @@
     "min_votes": 1,
     "provisional_reads": 2,
     "vote_share": 0.66,
-    "consolidate_score": 80.0,
     "retain_ms": 20000,
     "max_pulses": 600,
     "max_reads": 120,
@@ -827,7 +830,7 @@
     "spelling_texts": 4,
     "continuity_kills": 3,
     "continuity_horizon_ms": 120000,
-    "continuity_run": 10
+    "continuity_share": 0.5
   },
   "tool_bar": {
     "scales": [

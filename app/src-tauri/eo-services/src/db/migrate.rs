@@ -453,6 +453,16 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "tool sighting entry created",
         sql: include_str!("../../migrations/0083_tool_sighting_entry_created.sql"),
     },
+    Migration {
+        version: 84,
+        description: "creature entries",
+        sql: include_str!("../../migrations/0084_creature_entries.sql"),
+    },
+    Migration {
+        version: 85,
+        description: "kill mob traces",
+        sql: include_str!("../../migrations/0085_kill_mob_traces.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -544,6 +554,8 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "99EC7258E17AB5E1D67033BCF86345280355575B168DEBA9CB9678D3FC3DF4FBEE8B3D3AF35984470EAB58D344A8EB66",
     "1D1E642AF6D220266FE2DE6A462A4417B66D2667D3115FB9B5A6EAEC9465A3A84902D4B84A58F76ADCFC4EDE2BDEB371",
     "B35280BC61A020150DEDE28A53D5D05DA3FAEE077F1E04A499B8B8E41C5A2EE9EB7E4D77349F0821C02B2734957D89E7",
+    "42CCCDE5B527719553984F721E3D11BAC66258E449766691417364F160179C038E7F6EC463124FB1925AFCF433A568CE",
+    "4D18A05CD1C1105E14C93A170A5642DF3E8641903465474BA9EB272B56ECFAEE72E9541BE9B973F612F8C61A8A5FF659",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as

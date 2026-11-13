@@ -845,7 +845,8 @@ fn cmd_plates(mut s: Session) -> Result<(), String> {
                 println!("name: {name:?}");
                 let store = GameDataStore::new(&resources().join("snapshot"))
                     .map_err(|error| format!("the bundled game data: {error}"))?;
-                let catalogue = MobCatalogue::from_store(&store, Vec::new(), &s.profile.mob_names);
+                let catalogue =
+                    MobCatalogue::from_store(&store, Vec::<String>::new(), &s.profile.mob_names);
                 println!(
                     "resolved against the bundled creatures: {:?}",
                     resolve(

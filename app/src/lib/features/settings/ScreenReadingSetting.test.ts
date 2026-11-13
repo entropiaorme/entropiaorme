@@ -27,10 +27,10 @@ describe('a screen-reading setting', () => {
 		expect(screen.queryByText('In development')).toBeNull();
 	});
 
-	it('marks creature detection as in development', () => {
+	it('shows creature detection with no in-development mark', () => {
 		render(ScreenReadingSetting, { props: props({ reading: CREATURE_DETECTION }) });
 		expect(screen.getByText('Detect the creature I am fighting')).toBeTruthy();
-		expect(screen.getByText('In development')).toBeTruthy();
+		expect(screen.queryByText('In development')).toBeNull();
 	});
 
 	it('says nothing about capture while it is off', () => {

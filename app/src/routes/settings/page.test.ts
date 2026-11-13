@@ -76,17 +76,24 @@ describe('the screen-reading settings', () => {
 		const order = toggles();
 		expect(order.indexOf(HELD_TOOL)).toBe(order.indexOf('Enable hotbar key listener') + 1);
 		expect(screen.queryByText('In development')).toBeNull();
-		expect(screen.queryByText(CREATURES)).toBeNull();
 	});
 
-	it('keeps creature detection marked, where surfaces in development show', async () => {
+	it('shows creature detection in a published build too, unmarked, right after the held tool', async () => {
+		channel.visible = false;
+		render(SettingsPage);
+		expect(await screen.findByText(CREATURES)).toBeTruthy();
+		expect(screen.queryByText('In development')).toBeNull();
+		const order = toggles();
+		expect(order.indexOf(CREATURES)).toBe(order.indexOf(HELD_TOOL) + 1);
+	});
+
+	it('shows both unmarked where surfaces in development show', async () => {
 		render(SettingsPage);
 		expect(await screen.findByText(CREATURES)).toBeTruthy();
 		expect(screen.getByText(HELD_TOOL)).toBeTruthy();
-		// One mark: creature detection's alone.
-		expect(screen.getAllByText('In development')).toHaveLength(1);
+		expect(screen.queryByText('In development')).toBeNull();
 		const order = toggles();
 		expect(order.indexOf(HELD_TOOL)).toBe(order.indexOf('Enable hotbar key listener') + 1);
-		expect(order.indexOf(CREATURES)).toBeGreaterThan(order.indexOf('Enable repair-cost OCR'));
+		expect(order.indexOf(CREATURES)).toBe(order.indexOf(HELD_TOOL) + 1);
 	});
 });

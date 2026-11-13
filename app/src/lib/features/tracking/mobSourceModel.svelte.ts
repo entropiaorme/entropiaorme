@@ -25,9 +25,9 @@ export { HOVER_CLOSE_MS } from '$lib/components/overlay/hoverPanel.svelte';
 export interface MobSourceDeps {
 	/** The session's mob source as the snapshot last read it. */
 	view: () => MobSourceView | null;
-	/** Whether surfaces still in development are shown on this build: the
-	 * steered control is one; without it the control is the typed mob. */
-	enabled: () => boolean;
+	/** Whether the control can steer at all; a control with nothing to
+	 * write through is the typed mob alone. Steerable unless said. */
+	steerable?: () => boolean;
 	pin: (target: MobPinTarget) => Promise<unknown>;
 	unpin: () => Promise<unknown>;
 	/** Set the typed creature (the backstop while the screen is read). */
@@ -45,7 +45,7 @@ export function createMobSourceModel(deps: MobSourceDeps) {
 	let busy = $state<MobSourceBusy | null>(null);
 	let error = $state<string | null>(null);
 
-	const steered = $derived(deps.enabled() && isSteered(deps.view()));
+	const steered = $derived((deps.steerable?.() ?? true) && isSteered(deps.view()));
 	const panel = createHoverPanel({
 		available: () => steered,
 		onClose: () => {

@@ -825,6 +825,12 @@ const OTHER_COMMANDS: &[&str] = &[
     // not in the library, and how each was settled.
     "tracking_mob_detections",
     "tracking_mob_detection_settle",
+    // The creatures the player keeps for the name reader: a list of
+    // names, not a statistic.
+    "creature_entries",
+    "creature_entry_check",
+    "creature_entry_save",
+    "creature_entry_remove",
     "tracking_tool_sightings",
     "tracking_tool_sighting_settle",
     "tracking_tool_sighting_undo",

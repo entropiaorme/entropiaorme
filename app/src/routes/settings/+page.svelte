@@ -15,7 +15,6 @@
 	} from '$lib/api';
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
-	import { inDevelopment } from '$lib/inDevelopment';
 	import ScreenReadingSetting from '$lib/features/settings/ScreenReadingSetting.svelte';
 	import {
 		CREATURE_DETECTION,
@@ -344,6 +343,10 @@
 
 			<Divider />
 
+			{@render screenReading(CREATURE_DETECTION, settings)}
+
+			<Divider />
+
 			<!-- Keyless tracking: this machine cannot read keys -->
 			<div class="py-5 flex items-start justify-between gap-6">
 				<div>
@@ -393,11 +396,6 @@
 			</div>
 
 			<Divider />
-
-			{#if inDevelopment.visible}
-				{@render screenReading(CREATURE_DETECTION, settings)}
-				<Divider />
-			{/if}
 
 			<!-- Loot filter -->
 			<div class="py-5 space-y-3">

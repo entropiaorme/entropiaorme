@@ -32,7 +32,6 @@
 	import { createActivitiesModel } from '$lib/features/tracking/activitiesModel.svelte';
 	import { createMobSourceModel } from '$lib/features/tracking/mobSourceModel.svelte';
 	import { createMobEntry } from '$lib/features/tracking/mobEntry.svelte';
-	import { inDevelopment } from '$lib/inDevelopment';
 	import { createOverlayNotices } from '$lib/features/tracking/overlayNotices.svelte';
 	import { createOverlayArmourCostModel } from '$lib/features/protection/overlayArmourCostModel.svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -179,7 +178,6 @@
 	// The mob source: what the strip shows of it, and the writes that steer it.
 	const mobSource = createMobSourceModel({
 		view: () => data.mobSource ?? null,
-		enabled: () => inDevelopment.visible,
 		pin: pinMob,
 		unpin: unpinMob,
 		setTyped: lockManualMob,

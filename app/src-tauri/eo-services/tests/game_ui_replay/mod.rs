@@ -1807,7 +1807,7 @@ pub fn plates(r: &Replay, shard: Shard) -> Outcome {
     let read = r.reader();
     let store =
         GameDataStore::new(&resources().join("snapshot")).expect("the bundled game data loads");
-    let catalogue = MobCatalogue::from_store(&store, Vec::new(), &profile.mob_names);
+    let catalogue = MobCatalogue::from_store(&store, Vec::<String>::new(), &profile.mob_names);
     let (mut found, mut missed, mut false_plates) = (0usize, Vec::new(), Vec::new());
     let mut level = Tally::default();
     let mut problems = Vec::new();

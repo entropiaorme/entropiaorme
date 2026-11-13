@@ -13,8 +13,8 @@
 //! refreshed review.
 
 use eo_services::mob_review::{
-    DetectedCreature as ServiceCreature, DetectionGroup, DetectionGroupRef, MobReviewError,
-    ReviewTarget, SettleOutcome, Settled,
+    AddedBy, DetectedCreature as ServiceCreature, DetectionGroup, DetectionGroupRef, EntryCheck,
+    KeptEntry, MobReviewError, ReviewTarget, SettleOutcome, Settled,
 };
 use eo_services::tracker::{
     DeclaredMob, MobDetectionGrade as ServiceGrade, MobSourceView as ServiceSourceView,
@@ -282,6 +282,139 @@ impl Api {
             settled,
             review: self.tracking_mob_detections(session_id).await?,
         })
+    }
+}
+
+/// Where a kept creature came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CreatureEntrySource {
+    /// Confirmed in a session's review: retired once no kill carries it.
+    Review,
+    /// Entered or edited in the creature list: kept until removed.
+    Player,
+}
+
+/// A creature the player keeps for the name reader beside the bundled list.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatureEntry {
+    pub name: String,
+    pub species: Nullable<String>,
+    /// The maturity as entered; a number stands for every number.
+    pub maturity: Nullable<String>,
+    /// The maturity is a number: read at whatever number the plate prints.
+    pub any_number: bool,
+    pub source: CreatureEntrySource,
+}
+
+impl From<KeptEntry> for CreatureEntry {
+    fn from(entry: KeptEntry) -> Self {
+        Self {
+            name: entry.name,
+            species: entry.species.into(),
+            maturity: entry.maturity.into(),
+            any_number: entry.any_number,
+            source: match entry.added_by {
+                AddedBy::Review => CreatureEntrySource::Review,
+                AddedBy::Player => CreatureEntrySource::Player,
+            },
+        }
+    }
+}
+
+/// What keeping a typed creature would come to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CreatureEntryCheck {
+    /// Ready to keep as this name, at this maturity when one was typed.
+    #[serde(rename_all = "camelCase")]
+    Ready {
+        name: String,
+        maturity: Nullable<String>,
+        any_number: bool,
+    },
+    /// The reader already knows it: by its own name (with the maturity
+    /// read, when it has one), and as its kills are recorded.
+    #[serde(rename_all = "camelCase")]
+    Known {
+        name: String,
+        maturity: Nullable<String>,
+        recorded_as: DetectedCreature,
+    },
+    /// It cannot be kept, and why.
+    Refused { reason: String },
+}
+
+impl Api {
+    /// The creatures the player keeps for the name reader, oldest first.
+    pub async fn creature_entries(&self) -> Result<Vec<CreatureEntry>, ApiError> {
+        let entries = self.mob_review.entries().await.map_err(review_error)?;
+        Ok(entries.into_iter().map(Into::into).collect())
+    }
+
+    /// What keeping `text` (as its plate prints it) would come to, in place
+    /// of the kept creature `replacing` when one is being edited.
+    pub async fn creature_entry_check(
+        &self,
+        text: String,
+        replacing: Option<String>,
+    ) -> Result<CreatureEntryCheck, ApiError> {
+        let check = self
+            .mob_review
+            .check_entry(&text, replacing.as_deref())
+            .await
+            .map_err(review_error)?;
+        Ok(match check {
+            EntryCheck::Ready {
+                name,
+                maturity,
+                any_number,
+            } => CreatureEntryCheck::Ready {
+                name,
+                maturity: maturity.into(),
+                any_number,
+            },
+            EntryCheck::Known {
+                name,
+                maturity,
+                creature,
+            } => CreatureEntryCheck::Known {
+                name,
+                maturity: maturity.into(),
+                recorded_as: creature.into(),
+            },
+            EntryCheck::Refused { reason } => CreatureEntryCheck::Refused { reason },
+        })
+    }
+
+    /// Keep `text` (as its plate prints it), with `species` when given, in
+    /// place of the kept creature `replacing`; the list as it now stands.
+    pub async fn creature_entry_save(
+        &self,
+        text: String,
+        species: Option<String>,
+        replacing: Option<String>,
+    ) -> Result<Vec<CreatureEntry>, ApiError> {
+        let entries = self
+            .mob_review
+            .save_entry(&text, species.as_deref(), replacing.as_deref())
+            .await
+            .map_err(review_error)?;
+        Ok(entries.into_iter().map(Into::into).collect())
+    }
+
+    /// Stop keeping the creature `name`; the list as it now stands.
+    pub async fn creature_entry_remove(
+        &self,
+        name: String,
+    ) -> Result<Vec<CreatureEntry>, ApiError> {
+        let entries = self
+            .mob_review
+            .remove_entry(&name)
+            .await
+            .map_err(review_error)?;
+        Ok(entries.into_iter().map(Into::into).collect())
     }
 }
 

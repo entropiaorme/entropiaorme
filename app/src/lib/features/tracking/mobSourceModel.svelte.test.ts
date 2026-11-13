@@ -17,11 +17,11 @@ function reading(overrides: Partial<MobSourceView> = {}): MobSourceView {
 	};
 }
 
-function rig(initial: MobSourceView | null, enabled = true) {
+function rig(initial: MobSourceView | null, steerable?: boolean) {
 	let current = $state<MobSourceView | null>(initial);
 	const deps = {
 		view: () => current,
-		enabled: () => enabled,
+		...(steerable === undefined ? {} : { steerable: () => steerable }),
 		pin: vi.fn(async () => ({})),
 		unpin: vi.fn(async () => true),
 		setTyped: vi.fn(async () => ({})),
@@ -104,11 +104,18 @@ describe('expanding the control', () => {
 		off.model.toggle();
 		off.model.pointerEnter();
 		expect(off.model.expanded).toBe(false);
-		// Nor on a build that hides surfaces in development.
-		const hidden = rig(reading(), false);
-		expect(hidden.model.steered).toBe(false);
-		hidden.model.toggle();
-		expect(hidden.model.expanded).toBe(false);
+		// Nor when the control is told it cannot steer.
+		const fixed = rig(reading(), false);
+		expect(fixed.model.steered).toBe(false);
+		fixed.model.toggle();
+		expect(fixed.model.expanded).toBe(false);
+	});
+
+	it('steers a steered view unless told otherwise', () => {
+		const open = rig(reading());
+		expect(open.model.steered).toBe(true);
+		open.model.toggle();
+		expect(open.model.expanded).toBe(true);
 	});
 
 	it('shows the typed input in the panel while steered, in the strip while nothing is typed otherwise', () => {

@@ -216,14 +216,14 @@ describe('the after-session reviews in a build that hides surfaces in developmen
 		}
 	});
 
-	it('keeps creature detection hidden', async () => {
+	it('still reads creature detection', async () => {
 		channel.visible = false;
 		render(SessionDetail, { props: { detail: detail() } });
-		await waitFor(() => expect(api.getToolSightings).toHaveBeenCalled());
-		expect(api.getMobDetections).not.toHaveBeenCalled();
+		await waitFor(() => expect(api.getMobDetections).toHaveBeenCalled());
+		expect(api.getToolSightings).toHaveBeenCalled();
 	});
 
-	it('reads creature detection where surfaces in development show', async () => {
+	it('reads creature detection wherever surfaces in development show too', async () => {
 		render(SessionDetail, { props: { detail: detail() } });
 		await waitFor(() => expect(api.getMobDetections).toHaveBeenCalled());
 		expect(api.getToolSightings).toHaveBeenCalled();

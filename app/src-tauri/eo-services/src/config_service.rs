@@ -30,7 +30,8 @@ use crate::passive_effects::{PassiveEffect, PassiveEffectKind, PassiveEffectSour
 
 /// Whether this build is a published release. The release pipeline stamps
 /// it into every build it publishes; the same stamp hides the frontend's
-/// in-development surfaces, so a feature still in development stays off
+/// in-development surfaces, and a backend feature still in development is
+/// held off a published build through this read alone, so it stays off
 /// exactly where its controls are hidden. The `in-development` guard holds
 /// this read to the stamp's name.
 pub fn published_build() -> bool {
@@ -39,18 +40,10 @@ pub fn published_build() -> bool {
 
 /// Whether a feature that reads the game screen runs on the player's word
 /// alone: only when they have turned it on, which is their consent to the
-/// screen being read. An unset choice is off. Reading the held tool follows
-/// this rule in every build.
+/// screen being read. An unset choice is off. Creature detection and reading
+/// the held tool both follow this rule, in every build.
 pub fn screen_reading_consented(stored: Option<bool>) -> bool {
     stored == Some(true)
-}
-
-/// Whether creature detection runs: on the player's word (see
-/// [`screen_reading_consented`]), and never in a published build whatever is
-/// stored, because creature detection is still in development and its
-/// controls are hidden there. This rule is creature detection's alone.
-pub fn creature_detection_decision(published: bool, stored: Option<bool>) -> bool {
-    !published && screen_reading_consented(stored)
 }
 
 pub const HOTBAR_SLOTS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
@@ -190,9 +183,10 @@ impl AppConfig {
         self.hotbar_hooks_enabled && !self.keyless_input_on(machine_id)
     }
 
-    /// Whether creature detection runs (see [`creature_detection_decision`]).
+    /// Whether creature detection runs: exactly when the player has turned
+    /// it on, in any build (see [`screen_reading_consented`]).
     pub fn mob_detection_on(&self) -> bool {
-        creature_detection_decision(published_build(), self.mob_detection)
+        screen_reading_consented(self.mob_detection)
     }
 
     /// Whether the held tool is read off the screen: exactly when the player
@@ -878,61 +872,25 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn creature_detection_runs_only_on_the_players_word_and_never_in_a_published_build() {
-        assert!(
-            !creature_detection_decision(false, None),
-            "off until chosen"
-        );
-        assert!(!creature_detection_decision(false, Some(false)));
-        assert!(
-            creature_detection_decision(false, Some(true)),
-            "the player's consent"
-        );
-        assert!(
-            !creature_detection_decision(true, Some(true)),
-            "never published"
-        );
-        assert!(!creature_detection_decision(true, None));
-        assert!(!creature_detection_decision(true, Some(false)));
-        // A test build is not a published one.
-        assert!(!published_build());
-    }
-
-    #[test]
-    fn reading_the_held_tool_runs_on_the_players_word_in_every_build() {
-        // (published build, stored choice, held tool read, creature detection runs)
-        for (published, stored, held_tool, creature) in [
-            (false, None, false, false),
-            (false, Some(false), false, false),
-            (false, Some(true), true, true),
-            (true, None, false, false),
-            (true, Some(false), false, false),
-            (true, Some(true), true, false),
-        ] {
+    fn each_screen_reading_feature_runs_on_the_players_word_in_every_build() {
+        for (stored, runs) in [(None, false), (Some(false), false), (Some(true), true)] {
+            assert_eq!(screen_reading_consented(stored), runs, "{stored:?}");
             let config = AppConfig {
                 tool_reading: stored,
                 mob_detection: stored,
                 ..AppConfig::default()
             };
+            // Neither reads the build stamp: the answer is the same in a
+            // published build.
+            assert_eq!(config.tool_reading_on(), runs, "held tool, {stored:?}");
             assert_eq!(
-                screen_reading_consented(config.tool_reading),
-                held_tool,
-                "held tool, published {published}, stored {stored:?}"
+                config.mob_detection_on(),
+                runs,
+                "creature detection, {stored:?}"
             );
-            assert_eq!(
-                creature_detection_decision(published, config.mob_detection),
-                creature,
-                "creature detection, published {published}, stored {stored:?}"
-            );
-            // The held-tool setting reads no build stamp, so it gives the
-            // published answer here too.
-            assert_eq!(config.tool_reading_on(), held_tool);
-            if !published {
-                // This build is not published: creature detection agrees with
-                // the unpublished rows.
-                assert_eq!(config.mob_detection_on(), creature);
-            }
         }
+        // A test build is not a published one.
+        assert!(!published_build());
     }
 
     /// The two screen-reading settings: the stored key, the field it reads

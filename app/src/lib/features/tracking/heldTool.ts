@@ -15,8 +15,16 @@
  * one marker saying so.
  */
 
-import type { ToolEntry, ToolSourceView, ToolUncertainty, WeaponHitMargin } from '$lib/api';
-import { listNames, NO_DATA } from '$lib/utils/format';
+import type {
+	ToolEntry,
+	ToolPartRole,
+	ToolSetupView,
+	ToolSourceView,
+	ToolUncertainty,
+	ToolUse,
+	WeaponHitMargin,
+} from '$lib/api';
+import { formatPec, listNames, NO_DATA } from '$lib/utils/format';
 
 /** How the tool shown reads: each maps to one of the strip's tones. */
 export type HeldToolTone = 'normal' | 'provisional' | 'muted' | 'quiet' | 'attention';
@@ -29,6 +37,31 @@ export type HeldToolAction =
 	/** Open the equipment picker. */
 	| { kind: 'choose'; label: string };
 
+/** One part of the set-up the expanded control lists. */
+export interface HeldToolSetupRow {
+	label: string;
+	value: string;
+}
+
+/** The set-up of the tool in hand and what a use of it is priced at, as
+ * the strip marks it and the expanded control lists it. */
+export interface HeldToolSetup {
+	/** The tool's name in full: the strip may cut it short. */
+	name: string;
+	/** How many attachments are fitted, for the strip's marks; null where
+	 * the declaration did not say. */
+	fitted: number | null;
+	/** Said for the marks, which are only seen. */
+	fittedText: string | null;
+	rows: HeldToolSetupRow[];
+	/** The price of one use, markup included ("12.84 PEC"). */
+	cost: string;
+	/** What one use is ("per shot"). */
+	per: string;
+	/** What one use consumes at TT, where markup moves the price. */
+	tt: string | null;
+}
+
 export interface HeldToolDisplay {
 	/** What the strip shows in the tool's place. */
 	label: string;
@@ -38,6 +71,8 @@ export interface HeldToolDisplay {
 	/** What expanding it says, line by line. */
 	lines: string[];
 	actions: HeldToolAction[];
+	/** The set-up of the tool shown, where the reading knows it. */
+	setup: HeldToolSetup | null;
 }
 
 /** The quiet line under the tool: a hit cue, or the activity it implies. */
@@ -51,6 +86,57 @@ export interface HeldToolFeedback {
 }
 
 const CHOOSE: HeldToolAction = { kind: 'choose', label: 'Choose a tool' };
+
+const PER: Record<ToolUse, string> = { shot: 'per shot', heal: 'per heal', swing: 'per swing' };
+
+const ROLE: Record<ToolPartRole, string> = {
+	amplifier: 'Amplifier',
+	scope: 'Scope',
+	absorber: 'Absorber',
+	implant: 'Implant',
+};
+
+const pec = (ped: number) => `${formatPec(ped * 100)} PEC`;
+
+/**
+ * The set-up of the tool named `name`, as the strip marks it and the
+ * expanded control lists it: each part fitted, a weapon's enhancers (as
+ * many as are still fitted, of those set up, once any wear out), and what
+ * a use is priced at, with its TT beside it where markup moves the price.
+ */
+export function heldToolSetup(name: string, setup: ToolSetupView | null): HeldToolSetup | null {
+	if (!setup) return null;
+	const parts = setup.parts;
+	const rows: HeldToolSetupRow[] = (parts ?? []).map((part) => ({
+		label: ROLE[part.role],
+		value: part.name,
+	}));
+	const enhancers = setup.enhancers;
+	if (enhancers && enhancers.fitted > 0) {
+		rows.push({
+			label: 'Enhancers',
+			value:
+				enhancers.active === enhancers.fitted
+					? `${enhancers.fitted} damage`
+					: `${enhancers.active} of ${enhancers.fitted} damage`,
+		});
+	}
+	const cost = pec(setup.costPerUsePed);
+	const tt = setup.ttPerUsePed === null ? null : pec(setup.ttPerUsePed);
+	const fitted = parts?.length ?? null;
+	return {
+		name,
+		fitted,
+		fittedText:
+			fitted === null || fitted === 0
+				? null
+				: `${fitted} ${fitted === 1 ? 'attachment' : 'attachments'}`,
+		rows,
+		cost,
+		per: PER[setup.per],
+		tt: tt !== null && tt !== cost ? `${tt} at TT` : null,
+	};
+}
 
 const UNREADABLE = { lines: ['The tool bar cannot be read.'], actions: [CHOOSE] };
 
@@ -124,12 +210,21 @@ export function heldToolDisplay(source: ToolSourceView | null | undefined): Held
 			marker: 'Chosen',
 			lines: ['Chosen by you until the screen shows what is held.'],
 			actions: [],
+			setup: heldToolSetup(held.name, held.setup),
 		};
 	}
 	switch (held.kind) {
 		case 'notRead':
-			return { label: NO_DATA, tone: 'quiet', marker: null, lines: ['Not read yet.'], actions: [] };
-		case 'tool':
+			return {
+				label: NO_DATA,
+				tone: 'quiet',
+				marker: null,
+				lines: ['Not read yet.'],
+				actions: [],
+				setup: null,
+			};
+		case 'tool': {
+			const setup = heldToolSetup(held.name, held.setup);
 			return held.provisional
 				? {
 						label: held.name,
@@ -137,10 +232,12 @@ export function heldToolDisplay(source: ToolSourceView | null | undefined): Held
 						marker: null,
 						lines: ['Not in your equipment: costed without attachments.'],
 						actions: [],
+						setup,
 					}
-				: { label: held.name, tone: 'normal', marker: null, lines: [], actions: [] };
+				: { label: held.name, tone: 'normal', marker: null, lines: [], actions: [], setup };
+		}
 		case 'nothing':
-			return { label: 'No tool', tone: 'quiet', marker: null, lines: [], actions: [] };
+			return { label: 'No tool', tone: 'quiet', marker: null, lines: [], actions: [], setup: null };
 		case 'notTracked':
 			return {
 				label: held.name,
@@ -148,9 +245,16 @@ export function heldToolDisplay(source: ToolSourceView | null | undefined): Held
 				marker: null,
 				lines: ['Not a tracked tool.'],
 				actions: [],
+				setup: null,
 			};
 		case 'uncertain':
-			return { label: 'Tool unclear', tone: 'attention', marker: null, ...unclear(held.why) };
+			return {
+				label: 'Tool unclear',
+				tone: 'attention',
+				marker: null,
+				...unclear(held.why),
+				setup: null,
+			};
 		case 'notVisible':
 			return {
 				label: held.last ?? NO_DATA,
@@ -158,6 +262,7 @@ export function heldToolDisplay(source: ToolSourceView | null | undefined): Held
 				marker: 'Covered',
 				lines: ['The tool bar is covered.'],
 				actions: [CHOOSE],
+				setup: held.last === null ? null : heldToolSetup(held.last, held.setup),
 			};
 	}
 }

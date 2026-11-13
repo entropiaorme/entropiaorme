@@ -1,9 +1,10 @@
 <script lang="ts">
 	// The strip's tool in hand while it is read off the game screen: what the
-	// screen shows, quietly, in the shared expanding shell. Expanding it, by
-	// hover or by its toggle, says what the state means and offers the action
-	// that settles it: declaring an entry, which stands until the screen
-	// shows what is held, or the equipment picker.
+	// screen shows, quietly, in the shared expanding shell, with a mark per
+	// attachment fitted. Expanding it, by hover or by its toggle, names the
+	// set-up in full with what a use is priced at, says what the state means,
+	// and offers the action that settles it: declaring an entry, which stands
+	// until the screen shows what is held, or the equipment picker.
 	import HoverFacet from '$lib/components/overlay/HoverFacet.svelte';
 	import type { HoverPanel } from '$lib/components/overlay/hoverPanel.svelte';
 	import type { HeldToolDisplay, HeldToolFeedback, HeldToolTone } from './heldTool';
@@ -49,6 +50,16 @@
 				: feedback),
 	);
 	const lines = $derived(hitCue?.detail ? [...display.lines, hitCue.detail] : display.lines);
+	const setup = $derived(display.setup);
+	const marks = $derived(Array.from({ length: setup?.fitted ?? 0 }, (_, index) => index));
+	// The name in full reads in the strip's tone, a step brighter.
+	const NAME_TONES: Record<HeldToolTone, string> = {
+		normal: 'text-white/85',
+		provisional: 'text-sky-300/90',
+		muted: 'text-white/55',
+		quiet: 'text-white/45',
+		attention: 'text-amber-300/90',
+	};
 
 	function declare(equipmentId: number) {
 		panel.close();
@@ -60,6 +71,21 @@
 	<span class="truncate text-xs {TONES[display.tone]}" data-testid="held-tool-label" data-tone={display.tone}>
 		{display.label}
 	</span>
+	{#if setup?.fitted}
+		<!-- One mark per attachment fitted: the set-up at a glance, named in
+			 full when expanded. Never cut: the name gives way instead. -->
+		<span
+			class="flex shrink-0 items-center gap-[3px] {display.tone === 'muted' ? 'text-white/25' : 'text-white/40'}"
+			aria-hidden="true"
+			data-testid="held-tool-fitted"
+			data-count={setup.fitted}
+		>
+			{#each marks as mark (mark)}
+				<span class="h-[3px] w-[3px] rounded-full bg-current"></span>
+			{/each}
+		</span>
+		<span class="sr-only">, {setup.fittedText}</span>
+	{/if}
 {/snippet}
 
 <HoverFacet
@@ -90,9 +116,36 @@
 	{/snippet}
 	{#snippet content()}
 		<span class="facet-label mb-2 block">Tool</span>
+		{#if setup}
+			<p class="text-sm leading-snug break-words {NAME_TONES[display.tone]}" data-testid="held-tool-name">
+				{setup.name}
+			</p>
+		{/if}
 		{#each lines as line (line)}
 			<p class="text-[11px] leading-snug text-white/70" data-testid="held-tool-line">{line}</p>
 		{/each}
+		{#if setup}
+			{#if setup.rows.length > 0}
+				<dl
+					class="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-[11px] leading-snug"
+					data-testid="held-tool-setup"
+				>
+					{#each setup.rows as row (row.label)}
+						<dt class="text-white/40">{row.label}</dt>
+						<dd class="break-words text-white/75">{row.value}</dd>
+					{/each}
+				</dl>
+			{/if}
+			<div class="mt-2 border-t border-white/10 pt-2 tabular-nums" data-testid="held-tool-cost">
+				<p class="leading-snug">
+					<span class="text-sm text-white/85">{setup.cost}</span>
+					<span class="text-[11px] text-white/45">{setup.per}</span>
+				</p>
+				{#if setup.tt}
+					<p class="text-[10px] leading-snug text-white/40">{setup.tt}</p>
+				{/if}
+			</div>
+		{/if}
 		{#if display.actions.length > 0}
 			<div class="mt-2 flex flex-col gap-1.5">
 				{#each display.actions as action, index (index)}

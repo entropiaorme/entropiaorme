@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { ToolEntry, ToolHeld, ToolSourceView } from '$lib/api';
+import type { ToolEntry, ToolHeld, ToolSetupView, ToolSourceView } from '$lib/api';
 import { NO_DATA } from '$lib/utils/format';
 import {
 	cueCopy,
 	type HeldToolDisplay,
 	heldToolDisplay,
+	heldToolSetup,
 	SCREEN_NOT_READ_MARKER,
 	SCREEN_SHOWS_TOOL,
 	screenNotReadLine,
@@ -29,6 +30,23 @@ function entry(id: number, label: string, name = label): ToolEntry {
 
 const CHOOSE = { kind: 'choose', label: 'Choose a tool' };
 
+/** A weapon with an amplifier, an absorber and an implant, two of three
+ * enhancers still fitted, at a marked-up price. */
+function fullSetup(overrides: Partial<ToolSetupView> = {}): ToolSetupView {
+	return {
+		per: 'shot',
+		parts: [
+			{ role: 'amplifier', name: 'Mayhem MF-Amplifier Delta (L)' },
+			{ role: 'absorber', name: 'ArMatrix Extender P20 (L)' },
+			{ role: 'implant', name: 'NeoPsion 85-B Mindforce Implant (L)' },
+		],
+		enhancers: { active: 2, fitted: 3 },
+		costPerUsePed: 0.128_4,
+		ttPerUsePed: 0.036_2,
+		...overrides,
+	};
+}
+
 /** Words that belong to the implementation, never to what the player reads. */
 const TELEMETRY =
 	/pulse|regime|retention|catalogue|contended|provisional|generation|bundled|twins|notread|uncertain|hotbar intent|screen source/i;
@@ -36,13 +54,14 @@ const TELEMETRY =
 /** Every state the feature can show, with an entry in each list. */
 const EVERY_STATE: ToolSourceView[] = [
 	reading({ kind: 'notRead' }),
-	reading({ kind: 'tool', name: 'Pistol', provisional: true }),
-	reading({ kind: 'tool', name: 'Pistol', provisional: false }),
-	reading({ kind: 'tool', name: 'Pistol', provisional: false }, true),
+	reading({ kind: 'tool', name: 'Pistol', provisional: true, setup: null }),
+	reading({ kind: 'tool', name: 'Pistol', provisional: false, setup: null }),
+	reading({ kind: 'tool', name: 'Pistol', provisional: false, setup: fullSetup() }),
+	reading({ kind: 'tool', name: 'Pistol', provisional: false, setup: fullSetup() }, true),
 	reading({ kind: 'nothing' }),
 	reading({ kind: 'notTracked', name: 'Chip' }),
-	reading({ kind: 'notVisible', last: 'Pistol', provisional: false }),
-	reading({ kind: 'notVisible', last: null, provisional: false }),
+	reading({ kind: 'notVisible', last: 'Pistol', provisional: false, setup: null }),
+	reading({ kind: 'notVisible', last: null, provisional: false, setup: null }),
 	reading({ kind: 'uncertain', why: { kind: 'unreadable' } }),
 	reading({ kind: 'uncertain', why: { kind: 'unknown', text: 'x' } }),
 	reading({
@@ -62,6 +81,16 @@ function allText(display: HeldToolDisplay | null): string[] {
 		...display.actions.flatMap((action) =>
 			action.kind === 'declare' ? [action.label, action.accessibleName] : [action.label],
 		),
+		...(display.setup
+			? [
+					display.setup.name,
+					display.setup.fittedText ?? '',
+					...display.setup.rows.flatMap((row) => [row.label, row.value]),
+					display.setup.cost,
+					display.setup.per,
+					display.setup.tt ?? '',
+				]
+			: []),
 	];
 }
 
@@ -74,18 +103,21 @@ describe('heldToolDisplay', () => {
 	});
 
 	it('shows a tool read off the screen by name, in the ordinary tone, with nothing to settle', () => {
-		expect(heldToolDisplay(reading({ kind: 'tool', name: 'Pistol', provisional: false }))).toEqual({
+		expect(
+			heldToolDisplay(reading({ kind: 'tool', name: 'Pistol', provisional: false, setup: null })),
+		).toEqual({
 			label: 'Pistol',
 			tone: 'normal',
 			marker: null,
 			lines: [],
 			actions: [],
+			setup: null,
 		});
 	});
 
 	it('shows a tool known only from the game data in the provisional tone, saying how it is costed', () => {
 		const display = heldToolDisplay(
-			reading({ kind: 'tool', name: 'Rusty Rifle', provisional: true }),
+			reading({ kind: 'tool', name: 'Rusty Rifle', provisional: true, setup: null }),
 		);
 		expect(display?.label).toBe('Rusty Rifle');
 		expect(display?.tone).toBe('provisional');
@@ -115,32 +147,40 @@ describe('heldToolDisplay', () => {
 
 	it('keeps the tool before a cover, marked, in its own tone, and offers the picker', () => {
 		expect(
-			heldToolDisplay(reading({ kind: 'notVisible', last: 'Pistol', provisional: false })),
+			heldToolDisplay(
+				reading({ kind: 'notVisible', last: 'Pistol', provisional: false, setup: null }),
+			),
 		).toEqual({
 			label: 'Pistol',
 			tone: 'muted',
 			marker: 'Covered',
 			lines: ['The tool bar is covered.'],
 			actions: [CHOOSE],
+			setup: null,
 		});
 		expect(
-			heldToolDisplay(reading({ kind: 'notVisible', last: 'Rusty Rifle', provisional: true }))
-				?.tone,
+			heldToolDisplay(
+				reading({ kind: 'notVisible', last: 'Rusty Rifle', provisional: true, setup: null }),
+			)?.tone,
 		).toBe('provisional');
 		expect(
-			heldToolDisplay(reading({ kind: 'notVisible', last: null, provisional: false }))?.label,
+			heldToolDisplay(reading({ kind: 'notVisible', last: null, provisional: false, setup: null }))
+				?.label,
 		).toBe(NO_DATA);
 	});
 
 	it('marks a tool the player chose, standing until the screen shows what is held', () => {
 		expect(
-			heldToolDisplay(reading({ kind: 'tool', name: 'Pistol', provisional: false }, true)),
+			heldToolDisplay(
+				reading({ kind: 'tool', name: 'Pistol', provisional: false, setup: null }, true),
+			),
 		).toEqual({
 			label: 'Pistol',
 			tone: 'normal',
 			marker: 'Chosen',
 			lines: ['Chosen by you until the screen shows what is held.'],
 			actions: [],
+			setup: null,
 		});
 	});
 
@@ -152,6 +192,7 @@ describe('heldToolDisplay', () => {
 				marker: null,
 				lines: ['The tool bar cannot be read.'],
 				actions: [CHOOSE],
+				setup: null,
 			});
 		});
 
@@ -304,18 +345,20 @@ describe('the screen not being read', () => {
 
 describe('screenShowsTool', () => {
 	it('is true only while the screen shows outright what is held', () => {
-		expect(screenShowsTool(reading({ kind: 'tool', name: 'P', provisional: false }))).toBe(true);
+		expect(
+			screenShowsTool(reading({ kind: 'tool', name: 'P', provisional: false, setup: null })),
+		).toBe(true);
 		expect(screenShowsTool(reading({ kind: 'nothing' }))).toBe(true);
 		expect(screenShowsTool(reading({ kind: 'notTracked', name: 'C' }))).toBe(true);
-		expect(screenShowsTool(reading({ kind: 'tool', name: 'P', provisional: false }, true))).toBe(
-			false,
-		);
+		expect(
+			screenShowsTool(reading({ kind: 'tool', name: 'P', provisional: false, setup: null }, true)),
+		).toBe(false);
 		expect(screenShowsTool(reading({ kind: 'uncertain', why: { kind: 'unreadable' } }))).toBe(
 			false,
 		);
-		expect(screenShowsTool(reading({ kind: 'notVisible', last: 'P', provisional: false }))).toBe(
-			false,
-		);
+		expect(
+			screenShowsTool(reading({ kind: 'notVisible', last: 'P', provisional: false, setup: null })),
+		).toBe(false);
 		expect(screenShowsTool(reading({ kind: 'notRead' }))).toBe(false);
 		expect(screenShowsTool(keys)).toBe(false);
 	});
@@ -355,20 +398,141 @@ describe('cueCopy', () => {
 
 describe('toolInHand', () => {
 	it('is what the screen shows while it is the source, never a weapon guessed from damage', () => {
-		expect(toolInHand(reading({ kind: 'tool', name: 'Rifle', provisional: false }), 'Pistol')).toBe(
-			'Rifle',
-		);
+		expect(
+			toolInHand(
+				reading({ kind: 'tool', name: 'Rifle', provisional: false, setup: null }),
+				'Pistol',
+			),
+		).toBe('Rifle');
 		expect(toolInHand(reading({ kind: 'nothing' }), 'Pistol')).toBeNull();
 		expect(
 			toolInHand(reading({ kind: 'uncertain', why: { kind: 'unreadable' } }), 'Pistol'),
 		).toBeNull();
 		expect(
-			toolInHand(reading({ kind: 'notVisible', last: 'Rifle', provisional: false }), 'Pistol'),
+			toolInHand(
+				reading({ kind: 'notVisible', last: 'Rifle', provisional: false, setup: null }),
+				'Pistol',
+			),
 		).toBe('Rifle');
 	});
 
 	it('is the readout tool while the keys are the source', () => {
 		expect(toolInHand(keys, 'Pistol')).toBe('Pistol');
 		expect(toolInHand(null, undefined)).toBeNull();
+	});
+});
+
+describe('heldToolSetup', () => {
+	it('lists the parts fitted in order, the enhancers left, and the price with its TT', () => {
+		expect(heldToolSetup('Chip 15', fullSetup())).toEqual({
+			name: 'Chip 15',
+			fitted: 3,
+			fittedText: '3 attachments',
+			rows: [
+				{ label: 'Amplifier', value: 'Mayhem MF-Amplifier Delta (L)' },
+				{ label: 'Absorber', value: 'ArMatrix Extender P20 (L)' },
+				{ label: 'Implant', value: 'NeoPsion 85-B Mindforce Implant (L)' },
+				{ label: 'Enhancers', value: '2 of 3 damage' },
+			],
+			cost: '12.84 PEC',
+			per: 'per shot',
+			tt: '3.62 PEC at TT',
+		});
+	});
+
+	it('says the enhancers plainly while none has worn out', () => {
+		const rows = heldToolSetup('Chip', fullSetup({ enhancers: { active: 3, fitted: 3 } }))?.rows;
+		expect(rows?.at(-1)).toEqual({ label: 'Enhancers', value: '3 damage' });
+		expect(
+			heldToolSetup('Chip', fullSetup({ enhancers: null }))?.rows.map((row) => row.label),
+		).toEqual(['Amplifier', 'Absorber', 'Implant']);
+	});
+
+	it('marks one attachment in the singular, and a bare tool with none', () => {
+		const one = heldToolSetup(
+			'Chip',
+			fullSetup({ parts: [{ role: 'scope', name: 'Scope A' }], enhancers: null }),
+		);
+		expect(one?.fitted).toBe(1);
+		expect(one?.fittedText).toBe('1 attachment');
+		expect(one?.rows).toEqual([{ label: 'Scope', value: 'Scope A' }]);
+		const bare = heldToolSetup('Chip', fullSetup({ parts: [], enhancers: null }));
+		expect(bare?.fitted).toBe(0);
+		expect(bare?.fittedText).toBeNull();
+		expect(bare?.rows).toEqual([]);
+	});
+
+	it('marks nothing where the parts are not known, and still gives the price', () => {
+		const unknown = heldToolSetup(
+			'FAP',
+			fullSetup({
+				per: 'heal',
+				parts: null,
+				enhancers: null,
+				costPerUsePed: 0.03,
+				ttPerUsePed: null,
+			}),
+		);
+		expect(unknown?.fitted).toBeNull();
+		expect(unknown?.fittedText).toBeNull();
+		expect(unknown?.rows).toEqual([]);
+		expect(unknown?.cost).toBe('3.00 PEC');
+		expect(unknown?.per).toBe('per heal');
+		expect(unknown?.tt).toBeNull();
+	});
+
+	it('leaves the TT out where markup does not move the price, and keeps slow decay honest', () => {
+		expect(
+			heldToolSetup('Finder', fullSetup({ per: 'swing', costPerUsePed: 0.02, ttPerUsePed: 0.02 }))
+				?.tt,
+		).toBeNull();
+		const slow = heldToolSetup(
+			'Pistol',
+			fullSetup({ parts: [], enhancers: null, costPerUsePed: 0.000_5, ttPerUsePed: 0.000_4 }),
+		);
+		expect(slow?.cost).toBe('0.0500 PEC');
+		expect(slow?.tt).toBe('0.0400 PEC at TT');
+	});
+
+	it('has nothing to say without a set-up', () => {
+		expect(heldToolSetup('Pistol', null)).toBeNull();
+	});
+
+	it('travels with the tool shown: read, chosen, or covered, and with no other state', () => {
+		const setup = fullSetup();
+		expect(
+			heldToolDisplay(reading({ kind: 'tool', name: 'Chip', provisional: false, setup }))?.setup
+				?.name,
+		).toBe('Chip');
+		expect(
+			heldToolDisplay(reading({ kind: 'tool', name: 'Chip', provisional: false, setup }, true))
+				?.setup?.cost,
+		).toBe('12.84 PEC');
+		expect(
+			heldToolDisplay(reading({ kind: 'notVisible', last: 'Chip', provisional: false, setup }))
+				?.setup?.fitted,
+		).toBe(3);
+		expect(
+			heldToolDisplay(reading({ kind: 'notVisible', last: null, provisional: false, setup }))
+				?.setup,
+		).toBeNull();
+		const bare = heldToolDisplay(
+			reading({
+				kind: 'tool',
+				name: 'Rusty Rifle',
+				provisional: true,
+				setup: fullSetup({ parts: [], enhancers: null, costPerUsePed: 0.021, ttPerUsePed: null }),
+			}),
+		);
+		expect(bare?.lines).toEqual(['Not in your equipment: costed without attachments.']);
+		expect(bare?.setup?.cost).toBe('2.10 PEC');
+		expect(bare?.setup?.fitted).toBe(0);
+		for (const held of [
+			{ kind: 'nothing' },
+			{ kind: 'notTracked', name: 'Chip' },
+			{ kind: 'uncertain', why: { kind: 'unreadable' } },
+		] satisfies ToolHeld[]) {
+			expect(heldToolDisplay(reading(held))?.setup).toBeNull();
+		}
 	});
 });

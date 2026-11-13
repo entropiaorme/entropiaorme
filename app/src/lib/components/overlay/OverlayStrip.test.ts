@@ -703,7 +703,7 @@ describe('the tool in hand read off the screen', () => {
 		return { readingScreen: true, notReading: null, manual: false, held, ...overrides };
 	}
 
-	const pistol = source({ kind: 'tool', name: 'Pistol', provisional: false });
+	const pistol = source({ kind: 'tool', name: 'Pistol', provisional: false, setup: null });
 
 	it('shows what the screen shows, and the undeclared cue stands down', () => {
 		render(OverlayStrip, {
@@ -755,7 +755,7 @@ describe('the tool in hand read off the screen', () => {
 				data: liveData({
 					...fallback,
 					currentToolKind: 'harvesting',
-					toolSource: source({ kind: 'tool', name: 'Finder', provisional: false }),
+					toolSource: source({ kind: 'tool', name: 'Finder', provisional: false, setup: null }),
 					harvestGuardrail: {
 						expectedTool: 'Axe',
 						observedTool: 'Finder',

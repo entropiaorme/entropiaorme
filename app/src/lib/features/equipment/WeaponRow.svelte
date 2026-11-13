@@ -2,8 +2,8 @@
 	import { Badge, Button, DataTable, StatDisplay } from '$lib/components';
 	import ExpectedReturnInfoTip from '$lib/components/ExpectedReturnInfoTip.svelte';
 	import type { Equipment } from '$lib/types';
-	import { NO_DATA, formatPercent } from '$lib/utils/format';
-	import { enrichmentColor, enrichmentLabel, formatPec } from './display';
+	import { NO_DATA, formatPec, formatPercent } from '$lib/utils/format';
+	import { enrichmentColor, enrichmentLabel } from './display';
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { LibraryModel } from './libraryModel.svelte';

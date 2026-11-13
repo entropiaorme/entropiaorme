@@ -2,8 +2,7 @@
 	import type { ComparedSetup } from '$lib/api/comparison';
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
 	import { looterBasisCaption } from '$lib/looterBasis.svelte';
-	import { NO_DATA } from '$lib/utils/format';
-	import { formatPec } from '../display';
+	import { NO_DATA, formatPec } from '$lib/utils/format';
 	import SetupCell from './SetupCell.svelte';
 	import type { Comparator, SetupDraft } from './compareModel.svelte';
 	import {

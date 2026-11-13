@@ -3,7 +3,7 @@
 	import { IconConsumables, IconHealing, IconWeapons } from '$lib/icons';
 	import { describeEffects, formatDuration } from '$lib/features/consumables/doses';
 	import { formatReload } from './attackRate';
-	import { formatPec } from './display';
+	import { formatPec } from '$lib/utils/format';
 	import type { LibraryModel } from './libraryModel.svelte';
 	import WeaponRow from './WeaponRow.svelte';
 	import EntrySwitch from './EntrySwitch.svelte';

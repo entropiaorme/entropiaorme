@@ -5,7 +5,7 @@
 	import { doseFieldsError } from '$lib/features/consumables/doseForm';
 	import type { EquipmentSearchResult } from '$lib/api';
 	import { formatFactor } from './attackRate';
-	import { formatPec } from './display';
+	import { formatPec } from '$lib/utils/format';
 	import type { EquipmentFormType, LibraryModel } from './libraryModel.svelte';
 	import { WEAPON_EFFECT_OPTIONS, type WeaponEffectForm } from './weaponEffect';
 

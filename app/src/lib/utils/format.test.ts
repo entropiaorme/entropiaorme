@@ -7,6 +7,7 @@ import {
 	formatLedgerDate,
 	formatMultiplier,
 	formatOrdinal,
+	formatPec,
 	formatPed,
 	formatPedHalfEven,
 	formatPercent,
@@ -247,5 +248,18 @@ describe('listNames', () => {
 		expect(listNames(['A'])).toBe('A');
 		expect(listNames(['A', 'B'])).toBe('A and B');
 		expect(listNames(['A', 'B', 'C'])).toBe('A, B and C');
+	});
+});
+
+describe('formatPec', () => {
+	it('renders two decimal places at ordinary magnitudes', () => {
+		expect(formatPec(0.426)).toBe('0.43');
+		expect(formatPec(4)).toBe('4.00');
+	});
+
+	it('keeps four decimals for slow-decay amounts below 0.1', () => {
+		expect(formatPec(0.011)).toBe('0.0110');
+		expect(formatPec(0.0002)).toBe('0.0002');
+		expect(formatPec(0)).toBe('0.00');
 	});
 });

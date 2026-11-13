@@ -3,7 +3,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
-import type { ToolHeld, ToolSourceView } from '$lib/api';
+import type { ToolHeld, ToolSetupView, ToolSourceView } from '$lib/api';
 import { createHoverPanel } from '$lib/components/overlay/hoverPanel.svelte';
 import { overlaySurfaces } from '$lib/windows/windowSize';
 import HeldToolControl from './HeldToolControl.svelte';
@@ -42,6 +42,20 @@ const boosted: HeldToolFeedback = {
 	testId: 'weapon-hit-cue',
 };
 
+const chip: ToolSetupView = {
+	per: 'shot',
+	parts: [
+		{ role: 'amplifier', name: 'Mayhem MF-Amplifier Delta (L)' },
+		{ role: 'absorber', name: 'ArMatrix Extender P20 (L)' },
+		{ role: 'implant', name: 'NeoPsion 85-B Mindforce Implant (L)' },
+	],
+	enhancers: null,
+	costPerUsePed: 0.128_4,
+	ttPerUsePed: 0.036_2,
+};
+
+const CHIP = 'Exceptional Mayhem Electric Attack Chip 15, Perfected (L)';
+
 function mount(shown: HeldToolDisplay, feedback: HeldToolFeedback | null = null) {
 	const panel = createHoverPanel();
 	const onDeclare = vi.fn();
@@ -58,14 +72,17 @@ function label(): HTMLElement {
 
 describe('what the control shows by default', () => {
 	it('shows a tool by name in the ordinary tone, with the activity it implies under it', () => {
-		mount(display({ kind: 'tool', name: 'Pistol', provisional: false }), hunting);
+		mount(display({ kind: 'tool', name: 'Pistol', provisional: false, setup: null }), hunting);
 		expect(label().textContent?.trim()).toBe('Pistol');
 		expect(label().className).toContain('text-white/70');
 		expect(screen.getByTestId('activity-feedback').textContent?.trim()).toBe('Hunting');
 	});
 
 	it('puts a standing hit cue ahead of the state marker, and says it in the panel', async () => {
-		mount(display({ kind: 'notVisible', last: 'Pistol', provisional: false }), boosted);
+		mount(
+			display({ kind: 'notVisible', last: 'Pistol', provisional: false, setup: null }),
+			boosted,
+		);
 		expect(screen.getByTestId('weapon-hit-cue').textContent?.trim()).toBe('Boosted');
 		expect(screen.queryByTestId('held-tool-marker')).toBeNull();
 		await fireEvent.click(screen.getByTestId('held-tool'));
@@ -73,10 +90,12 @@ describe('what the control shows by default', () => {
 	});
 
 	it('shows a provisional tool in the strip informational tone, covered or not', () => {
-		const { unmount } = mount(display({ kind: 'tool', name: 'Rusty Rifle', provisional: true }));
+		const { unmount } = mount(
+			display({ kind: 'tool', name: 'Rusty Rifle', provisional: true, setup: null }),
+		);
 		expect(label().className).toContain('text-sky-300/90');
 		unmount();
-		mount(display({ kind: 'notVisible', last: 'Rusty Rifle', provisional: true }));
+		mount(display({ kind: 'notVisible', last: 'Rusty Rifle', provisional: true, setup: null }));
 		expect(label().dataset.tone).toBe('provisional');
 	});
 
@@ -88,11 +107,13 @@ describe('what the control shows by default', () => {
 	});
 
 	it('marks a covered bar quietly, and a chosen tool', () => {
-		const { unmount } = mount(display({ kind: 'notVisible', last: 'Pistol', provisional: false }));
+		const { unmount } = mount(
+			display({ kind: 'notVisible', last: 'Pistol', provisional: false, setup: null }),
+		);
 		expect(screen.getByTestId('held-tool-marker').textContent?.trim()).toBe('Covered');
 		expect(screen.getByTestId('held-tool-marker').className).toContain('text-white/35');
 		unmount();
-		mount(display({ kind: 'tool', name: 'Pistol', provisional: false }, true));
+		mount(display({ kind: 'tool', name: 'Pistol', provisional: false, setup: null }, true));
 		expect(screen.getByTestId('held-tool-marker').textContent?.trim()).toBe('Chosen');
 	});
 
@@ -103,7 +124,7 @@ describe('what the control shows by default', () => {
 	});
 
 	it('has a title true in every state', () => {
-		mount(display({ kind: 'tool', name: 'Pistol', provisional: false }, true));
+		mount(display({ kind: 'tool', name: 'Pistol', provisional: false, setup: null }, true));
 		expect(screen.getByTestId('held-tool').getAttribute('title')).toBe('The tool in hand');
 	});
 });
@@ -132,7 +153,7 @@ describe('expanding it', () => {
 	});
 
 	it('offers the picker over a covered bar', async () => {
-		mount(display({ kind: 'notVisible', last: 'Pistol', provisional: false }));
+		mount(display({ kind: 'notVisible', last: 'Pistol', provisional: false, setup: null }));
 		await fireEvent.click(screen.getByTestId('held-tool'));
 		expect(screen.getByText('The tool bar is covered.')).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Choose a tool' })).toBeTruthy();
@@ -173,5 +194,83 @@ describe('expanding it', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+});
+
+describe('the set-up of the tool in hand', () => {
+	it('marks each attachment fitted beside the name, said for the marks', () => {
+		mount(display({ kind: 'tool', name: CHIP, provisional: false, setup: chip }));
+		const marks = screen.getByTestId('held-tool-fitted');
+		expect(marks.dataset.count).toBe('3');
+		expect(marks.children).toHaveLength(3);
+		expect(marks.getAttribute('aria-hidden')).toBe('true');
+		expect(screen.getByText(', 3 attachments').className).toContain('sr-only');
+	});
+
+	it('marks nothing on a bare tool, or where the parts are not known', () => {
+		const { unmount } = mount(
+			display({
+				kind: 'tool',
+				name: 'Rusty Rifle',
+				provisional: true,
+				setup: { ...chip, parts: [] },
+			}),
+		);
+		expect(screen.queryByTestId('held-tool-fitted')).toBeNull();
+		unmount();
+		mount(
+			display({ kind: 'tool', name: 'FAP', provisional: false, setup: { ...chip, parts: null } }),
+		);
+		expect(screen.queryByTestId('held-tool-fitted')).toBeNull();
+	});
+
+	it('dims the marks with the name while the bar is covered', () => {
+		mount(display({ kind: 'notVisible', last: CHIP, provisional: false, setup: chip }));
+		expect(screen.getByTestId('held-tool-fitted').className).toContain('text-white/25');
+	});
+
+	it('names the tool in full, each part, and the price of a shot with its TT when expanded', async () => {
+		mount(display({ kind: 'tool', name: CHIP, provisional: false, setup: chip }));
+		expect(screen.queryByTestId('held-tool-setup')).toBeNull();
+		await fireEvent.click(screen.getByTestId('held-tool'));
+		expect(screen.getByTestId('held-tool-name').textContent?.trim()).toBe(CHIP);
+		const setup = screen.getByTestId('held-tool-setup');
+		expect([...setup.querySelectorAll('dt')].map((term) => term.textContent?.trim())).toEqual([
+			'Amplifier',
+			'Absorber',
+			'Implant',
+		]);
+		expect([...setup.querySelectorAll('dd')].map((value) => value.textContent?.trim())).toEqual([
+			'Mayhem MF-Amplifier Delta (L)',
+			'ArMatrix Extender P20 (L)',
+			'NeoPsion 85-B Mindforce Implant (L)',
+		]);
+		const cost = screen.getByTestId('held-tool-cost').textContent?.replace(/\s+/g, ' ').trim();
+		expect(cost).toBe('12.84 PEC per shot 3.62 PEC at TT');
+	});
+
+	it('gives a bare tool its price under the line saying how it is costed, with no parts listed', async () => {
+		mount(
+			display({
+				kind: 'tool',
+				name: 'Rusty Rifle',
+				provisional: true,
+				setup: { ...chip, parts: [], costPerUsePed: 0.021, ttPerUsePed: null },
+			}),
+		);
+		await fireEvent.click(screen.getByTestId('held-tool'));
+		expect(screen.getByTestId('held-tool-name').className).toContain('text-sky-300/90');
+		expect(screen.getByText('Not in your equipment: costed without attachments.')).toBeTruthy();
+		expect(screen.queryByTestId('held-tool-setup')).toBeNull();
+		expect(screen.getByTestId('held-tool-cost').textContent?.replace(/\s+/g, ' ').trim()).toBe(
+			'2.10 PEC per shot',
+		);
+	});
+
+	it('has no set-up to show while the tool is unclear', async () => {
+		mount(display(twins));
+		await fireEvent.click(screen.getByTestId('held-tool'));
+		expect(screen.queryByTestId('held-tool-name')).toBeNull();
+		expect(screen.queryByTestId('held-tool-cost')).toBeNull();
 	});
 });

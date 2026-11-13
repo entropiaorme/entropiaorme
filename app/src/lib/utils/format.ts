@@ -22,6 +22,14 @@ export function formatPedHalfEven(value: number): string {
 	return (cents / 100).toFixed(2);
 }
 
+/** Format a PEC amount (a cost per use). Two decimals reads best at
+ *  ordinary magnitudes, but very slow decays (below 0.1 PEC per use) would
+ *  collapse to "0.01" or "0.00"; those get four decimals so the figure stays
+ *  honest. */
+export function formatPec(pec: number): string {
+	return pec.toFixed(pec !== 0 && Math.abs(pec) < 0.1 ? 4 : 2);
+}
+
 /** Format a ratio as a percentage (0.917 → "91.7%") */
 export function formatPercent(ratio: number): string {
 	return `${(ratio * 100).toFixed(1)}%`;

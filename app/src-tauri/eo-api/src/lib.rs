@@ -55,6 +55,7 @@ pub mod dev;
 pub mod equipment;
 mod error;
 pub mod healing;
+pub mod held_tool;
 pub mod loadout_comparison;
 pub mod manifest;
 pub mod maps;

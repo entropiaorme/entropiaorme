@@ -183,6 +183,49 @@ input[type="number"] {
 	color: var(--color-error);
 }
 
+/* The overlay strip's facet chrome: the small-caps label over a facet,
+   and the chip a facet's value or action sits in. One definition for
+   every control the strip and its panels draw. */
+.facet-label {
+	font-size: 9px;
+	font-weight: 700;
+	line-height: 1;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: rgba(255, 255, 255, 0.3);
+	padding-left: 4px;
+	margin-bottom: 2px;
+}
+.facet-chip {
+	display: flex;
+	align-items: center;
+	padding: 2px 8px;
+	border-radius: 4px;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: rgba(255, 255, 255, 0.05);
+	color: rgba(255, 255, 255, 0.7);
+	font-size: 11px;
+	line-height: 1.35;
+	cursor: pointer;
+	transition: all 150ms ease-out;
+}
+.facet-chip:hover:not(:disabled),
+.facet-chip:focus-visible {
+	background: rgba(255, 255, 255, 0.1);
+	color: rgba(255, 255, 255, 0.9);
+	border-color: rgba(255, 255, 255, 0.25);
+	outline: none;
+}
+.facet-chip-open {
+	background: rgba(56, 189, 248, 0.2);
+	border-color: rgba(56, 189, 248, 0.4);
+	color: rgb(125, 211, 252);
+}
+.facet-chip:disabled {
+	opacity: 0.35;
+	cursor: default;
+}
+
 /* Refined surface "island" — subtle border + faint inner-edge highlight,
    sits over the base color. The shape used by dashboard panels. */
 .panel {

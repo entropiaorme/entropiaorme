@@ -70,6 +70,8 @@
 	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
 	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
+	import { toolInHand } from '$lib/features/tracking/heldTool';
+	import { createHeldToolModel } from '$lib/features/tracking/heldToolModel.svelte';
 	import { doseState } from '$lib/features/consumables/doses';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
 	import { attachLifetimeLootValuation } from '$lib/features/dashboard/lifetimeLootValuation.svelte';
@@ -185,6 +187,9 @@
 		refresh: () => snapshot.hydrate()
 	});
 	$effect(() => () => mobSource.destroy());
+	// The tool in hand's panels, closed with the creature's when the overlay hides.
+	const heldTool = createHeldToolModel({ source: () => data.toolSource });
+	$effect(() => () => heldTool.destroy());
 	// Its typed entry: the catalogue typeahead and the suggestion menu.
 	const mobEntry = createMobEntry({
 		source: mobSource,
@@ -379,11 +384,17 @@
 		}
 		try {
 			const width = anchor.getBoundingClientRect().width;
-			const state = await equipment.menuState(width, data.currentTool ?? null, status?.healing?.toolName ?? null);
+			const inHand = toolInHand(data.toolSource, data.currentTool);
+			const state = await equipment.menuState(width, inHand, status?.healing?.toolName ?? null);
 			await showOverlayMenu('equipment', anchor, state, { focusPopup: true });
 		} catch (error) {
 			notices.push(describeOverlayMenuError(error));
 		}
+	}
+
+	/** "Choose a tool": open the picker, never closing one already open. */
+	async function openEquipmentMenu(anchor: HTMLElement) {
+		if (overlayMenuKind !== 'equipment') await toggleEquipmentMenu(anchor);
 	}
 
 	async function openQuestHandIn(key: string) {
@@ -488,6 +499,7 @@
 					void hideOverlayMenu();
 				}
 				mobSource.close();
+				heldTool.close();
 				void armourCost.hide();
 			}
 		};
@@ -710,6 +722,7 @@
 			trackProtectionCosts: snap.trackProtectionCosts,
 			skillBoostPercent: snap.skillBoostPercent,
 			mobSource: snap.mobSource,
+			toolSource: snap.toolSource,
 			currentTool: snap.currentTool,
 			currentToolKind: snap.currentToolKind,
 			currentActivity: snap.currentActivity,
@@ -817,6 +830,9 @@
 		equipmentMenuOpen={overlayMenuKind === 'equipment'}
 		declaringEquipment={equipment.declaring}
 		onEquipmentTrigger={toggleEquipmentMenu}
+		onDeclareTool={equipment.declare}
+		onChooseTool={openEquipmentMenu}
+		{heldTool}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>

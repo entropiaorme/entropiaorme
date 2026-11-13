@@ -56,6 +56,9 @@ pub(super) enum TrackerMsg {
     /// session aggregate (None when idle). The session-scoped database
     /// reads run on the caller's side, off the actor.
     Aggregate(Box<AggregateReply>),
+    /// The in-memory half of the snapshot together with where the tool in
+    /// hand comes from, read in one turn so the two agree.
+    AggregateWithTool(Box<AggregateWithToolReply>),
     ReloadConfig(oneshot::Sender<()>),
     /// The player's decision on a standing weapon mismatch.
     DecideWeaponMismatch(
@@ -155,6 +158,15 @@ type AggregateReply = oneshot::Sender<(
     Option<String>,
     Option<crate::bus_events::HotbarItemKind>,
     Option<SessionAggregate>,
+)>;
+
+type AggregateWithToolReply = oneshot::Sender<(
+    (
+        Option<String>,
+        Option<crate::bus_events::HotbarItemKind>,
+        Option<SessionAggregate>,
+    ),
+    super::held_tool::ToolDisplay,
 )>;
 
 tokio::task_local! {
@@ -294,6 +306,9 @@ impl TrackerActor {
             }
             TrackerMsg::Aggregate(reply) => {
                 let _ = reply.send(self.aggregate());
+            }
+            TrackerMsg::AggregateWithTool(reply) => {
+                let _ = reply.send((self.aggregate(), self.tool_display()));
             }
             TrackerMsg::ReloadConfig(reply) => {
                 self.reload_config();

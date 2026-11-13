@@ -1136,6 +1136,8 @@ export interface EquipmentLibrary {
 	entries: EquipmentSummary[];
 	/** The groups of entries a player can hold (weapons, healing tools and harvesting tools) whose names read the same on the held-tool bar: one name kept in two set-ups, or long names the game client cuts short alike. Each group lists two entry ids or more, on or off alike; no entry is in two groups. Empty when every entry stands apart, or when the interface profile is unavailable. */
 	indistinguishable: string[][];
+	/** How the player tells each member of those groups apart, by entry id: its name, then its set-up, then its place (the one rule the overlay names such entries by too). */
+	lookalikeLabels: Record<string, string>;
 }
 
 /**
@@ -4386,6 +4388,70 @@ export interface TimelineDay {
 export type ToolActivity = 'hunting' | 'treecutting';
 
 /**
+ * A tool the name read could be.
+ */
+export interface ToolCandidate {
+	name: string;
+	/** The library entry it is, when the library holds exactly one entry of it in use; null for a tool known only from the game's data, or one kept in several entries. */
+	libraryId: number | null;
+}
+
+/**
+ * A library entry, by id and name, with the label the player tells it
+ * apart from the others listed with it by (see [`lookalike_labels`]).
+ */
+export interface ToolEntry {
+	id: number;
+	name: string;
+	label: string;
+}
+
+/**
+ * What the screen shows is in hand.
+ */
+export type ToolHeld = {
+		kind: 'notRead';
+	} | {
+		name: string;
+		provisional: boolean;
+		kind: 'tool';
+	} | {
+		kind: 'nothing';
+	} | {
+		name: string;
+		kind: 'notTracked';
+	} | {
+		why: ToolUncertainty;
+		kind: 'uncertain';
+	} | {
+		last: string | null;
+		provisional: boolean;
+		kind: 'notVisible';
+	};
+
+/**
+ * Why the keys are the source of the tool in hand while reading it off
+ * the screen is turned on.
+ */
+export type ToolScreenUnread = 'stopped' | 'notStarted';
+
+/**
+ * Where the tool in hand comes from, as the overlay shows it. While the
+ * keys are the source (the setting off, or no session running) only
+ * `notReading` says anything, and the snapshot's `currentTool` keeps its
+ * meaning.
+ */
+export interface ToolSourceView {
+	/** The screen is the source of the tool in hand for the running session. */
+	readingScreen: boolean;
+	/** Reading the screen is turned on, but the keys are the source, and why. Null otherwise. */
+	notReading: ToolScreenUnread | null;
+	/** The tool held is the player's own declaration, standing until the screen next shows something conclusive. */
+	manual: boolean;
+	held: ToolHeld;
+}
+
+/**
  * One per-tool aggregate.
  */
 export interface ToolStat {
@@ -4395,6 +4461,26 @@ export interface ToolStat {
 	crits: number;
 	costAttributed: number;
 }
+
+/**
+ * Why the bar does not say which tool is in hand.
+ */
+export type ToolUncertainty = {
+		entries: ToolEntry[];
+		kind: 'twins';
+	} | {
+		entries: ToolEntry[];
+		kind: 'disabled';
+	} | {
+		candidates: ToolCandidate[];
+		more: number;
+		kind: 'contended';
+	} | {
+		text: string;
+		kind: 'unknown';
+	} | {
+		kind: 'unreadable';
+	};
 
 /**
  * One row of the session list.
@@ -4439,6 +4525,8 @@ export interface TrackingSnapshot {
 	skillBoostPercent?: number | null;
 	/** The session's one source for its kills' creature: the typed creature (idle: the one the next session starts with), the pin, and what the screen reads. */
 	mobSource?: MobSourceView | null;
+	/** Where the tool in hand comes from (the hotbar keys, or the game screen) and, while it is the screen, what the screen shows of it. While the screen is the source, the tool held is this one, never `current_tool`, which may then be only what the damage last pointed to. */
+	toolSource?: ToolSourceView | null;
 	currentTool?: string | null;
 	currentToolKind?: HeldItemKind | null;
 	/** What the held tool implies the next action is recorded as. */

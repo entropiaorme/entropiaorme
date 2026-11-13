@@ -2706,3 +2706,459 @@ async fn a_planet_following_session_offers_that_planets_quests() {
         "Cyrene"
     );
 }
+
+/// The tracker's configuration with the tool in hand read off the screen.
+struct ToolReadingConfig;
+
+impl eo_services::tracker::TrackingConfig for ToolReadingConfig {
+    fn session_name(&self) -> String {
+        String::new()
+    }
+
+    fn session_definition_id(&self) -> Option<i64> {
+        None
+    }
+
+    fn declared_skill_boost_percent(&self) -> Option<i64> {
+        None
+    }
+
+    fn manual_mob(&self) -> Option<(String, String)> {
+        None
+    }
+
+    fn loot_filter_blacklist(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn tool_reading_enabled(&self) -> bool {
+        true
+    }
+}
+
+/// A held-tool watcher that looks at no screen: the test hands the tracker
+/// each look through the sink it was given.
+#[derive(Default)]
+struct ScriptedToolWatcher {
+    sink: std::sync::Mutex<Option<(String, eo_services::tool_watch::ToolPulseSink)>>,
+    ended: std::sync::Mutex<Option<eo_services::screen_watch::WatchEnded>>,
+    /// While set, a start does not take: capture is not running.
+    refuse: std::sync::Mutex<bool>,
+}
+
+impl eo_services::tool_watch::ToolDetector for ScriptedToolWatcher {
+    fn start(
+        &self,
+        session_id: &str,
+        sink: eo_services::tool_watch::ToolPulseSink,
+        ended: eo_services::screen_watch::WatchEnded,
+    ) {
+        if *self.refuse.lock().unwrap() {
+            return;
+        }
+        *self.ended.lock().unwrap() = Some(ended);
+        *self.sink.lock().unwrap() = Some((session_id.to_string(), sink));
+    }
+
+    fn stop(&self) {
+        *self.sink.lock().unwrap() = None;
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        self.sink
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(watched, _)| watched == session_id)
+    }
+
+    fn permit_capture(&self) {}
+
+    fn hint(&self) {}
+}
+
+impl ScriptedToolWatcher {
+    /// Hand the tracker one look, seen now.
+    fn show(&self, seen: eo_services::tool_watch::ToolSeen) {
+        let (session_id, sink) = self.sink.lock().unwrap().clone().expect("a watch");
+        let at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert!(sink(eo_services::tool_watch::ToolPulse {
+            session_id,
+            at_ms,
+            seen,
+        }));
+    }
+}
+
+/// The library the tool-reading facade runs over: one pistol kept in two
+/// set-ups (one amplified), a rifle and a healer.
+const TOOL_LIBRARY: [(&str, &str, &str); 4] = [
+    ("Pistol", "weapon", r#"{"amp_entity": {"name": "A101"}}"#),
+    ("Pistol", "weapon", "{}"),
+    ("Rifle", "weapon", "{}"),
+    ("FAP", "healing", "{}"),
+];
+
+/// The facade over a tracker reading the tool in hand off the screen, over
+/// [`TOOL_LIBRARY`] and one bundled healer (`medical_tools` 901, "Old FAP");
+/// answers the facade, the tracker, the watcher and the library ids. With
+/// `refuse`, screen capture is not running.
+async fn tool_reading_api(
+    dir: &Path,
+    refuse: bool,
+) -> (
+    Api,
+    Arc<eo_services::tracker::HuntTracker>,
+    Arc<ScriptedToolWatcher>,
+    [i64; 4],
+) {
+    use eo_services::bus_events::HotbarItemKind;
+    use eo_services::hotbar_listener::ResolvedHotbarItem;
+
+    let snapshot = dir.join("snapshot");
+    std::fs::create_dir_all(&snapshot).unwrap();
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Db::open(&data_dir.join("entropia_orme.db"))
+        .await
+        .expect("migrated database");
+    let mut ids = [0; 4];
+    for (slot, (name, kind, setup)) in ids.iter_mut().zip(TOOL_LIBRARY) {
+        *slot = db
+            .insert_equipment(name.into(), kind.into(), None, setup.into())
+            .await
+            .unwrap();
+    }
+    let watcher = Arc::new(ScriptedToolWatcher::default());
+    *watcher.refuse.lock().unwrap() = refuse;
+    let known = ids;
+    // One resolver of library entries, as the app composes it for both
+    // the tracker (a tool read off the screen) and the overlay's picker.
+    let items: eo_services::hotbar_listener::ItemResolver = Arc::new(move |id: i64| {
+        let index = known.iter().position(|known| *known == id)?;
+        let (name, kind, _) = TOOL_LIBRARY[index];
+        Some(ResolvedHotbarItem {
+            equipment_id: id,
+            name: name.to_string(),
+            kind: if kind == "healing" {
+                HotbarItemKind::Healing
+            } else {
+                HotbarItemKind::Weapon
+            },
+            cost_per_use_ped: 0.05,
+            reload_seconds: 1.0,
+            healing_profile: None,
+            lifesteal_percent: None,
+            consumable_profile: None,
+        })
+    });
+    let bundled: eo_services::tracker::BundledToolResolver =
+        Arc::new(|endpoint: &str, item_id: &str| {
+            (endpoint == "medical_tools" && item_id == "901").then(|| {
+                eo_services::tracker::BundledTool {
+                    name: "Old FAP".into(),
+                    kind: HotbarItemKind::Healing,
+                    cost_per_use_ped: 0.05,
+                    weapon: None,
+                }
+            })
+        });
+    let handles = common::producer_handles_with_tracker(
+        &db,
+        &data_dir,
+        tokio::runtime::Handle::current(),
+        eo_services::tracker::Providers {
+            config: Arc::new(ToolReadingConfig),
+            tool_detector: watcher.clone(),
+            items: Some(items.clone()),
+            bundled_tools: Some(bundled),
+            ..eo_services::tracker::Providers::default()
+        },
+    )
+    .await;
+    handles.hotbar.set_item_resolver(items);
+    let tracker = handles.tracker.clone();
+    let api = Api::new(
+        db,
+        Arc::new(GameDataStore::new(&snapshot).expect("empty game-data store")),
+        Arc::new(RealClock::new()),
+        data_dir,
+        handles.config_service,
+        handles.tracker,
+        handles.hotbar,
+        handles.watcher,
+        handles.skill_tracker,
+        handles.skill_scan,
+        handles.spacebar,
+        handles.repair_ocr,
+        handles.sale_capture,
+        handles.quests.clone(),
+        None,
+        None,
+        None,
+    );
+    (api, tracker, watcher, ids)
+}
+
+/// The snapshot's tool source, as the wire carries it.
+async fn tool_source(api: &Api) -> serde_json::Value {
+    serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap()["toolSource"].clone()
+}
+
+/// The snapshot's tool source once what it holds is `expected` (a look is
+/// applied by the tracker on its own time).
+async fn tool_source_holding(api: &Api, expected: serde_json::Value) -> serde_json::Value {
+    for _ in 0..200 {
+        let source = tool_source(api).await;
+        if source["held"] == expected {
+            return source;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!(
+        "the tool source never held {expected}: {}",
+        tool_source(api).await
+    );
+}
+
+fn bundled_healer() -> eo_services::tool_watch::ToolSeen {
+    eo_services::tool_watch::ToolSeen::Holding(eo_services::tool_watch::HeldTool::Bundled {
+        endpoint: "medical_tools".into(),
+        item_id: "901".into(),
+        name: "Old FAP".into(),
+    })
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_snapshot_carries_what_the_screen_shows_in_hand() {
+    use eo_services::tool_watch::{HeldTool, ToolSeen, Why};
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, tracker, watcher, [amplified, plain, rifle, _]) =
+        tool_reading_api(dir.path(), false).await;
+
+    // Idle, the keys are the source and nothing is read.
+    assert_eq!(
+        tool_source(&api).await,
+        json!({"readingScreen": false, "notReading": null, "manual": false,
+               "held": {"kind": "notRead"}})
+    );
+
+    tracker.start_session().await.unwrap();
+    // Before the first look the screen is the source and has read nothing.
+    let started = tool_source_holding(&api, json!({"kind": "notRead"})).await;
+    assert_eq!(started["readingScreen"], true);
+
+    watcher.show(ToolSeen::Holding(HeldTool::Library { id: rifle }));
+    tool_source_holding(
+        &api,
+        json!({"kind": "tool", "name": "Rifle", "provisional": false}),
+    )
+    .await;
+
+    watcher.show(bundled_healer());
+    tool_source_holding(
+        &api,
+        json!({"kind": "tool", "name": "Old FAP", "provisional": true}),
+    )
+    .await;
+
+    watcher.show(ToolSeen::Nothing);
+    tool_source_holding(&api, json!({"kind": "nothing"})).await;
+
+    watcher.show(ToolSeen::NotTracked {
+        name: "Teleport Chip".into(),
+    });
+    tool_source_holding(&api, json!({"kind": "notTracked", "name": "Teleport Chip"})).await;
+
+    // Twins are told apart by their set-up.
+    watcher.show(ToolSeen::Uncertain(Why::Twins {
+        ids: vec![amplified, plain],
+    }));
+    tool_source_holding(
+        &api,
+        json!({"kind": "uncertain", "why": {"kind": "twins", "entries": [
+            {"id": amplified, "name": "Pistol", "label": "Pistol + A101"},
+            {"id": plain, "name": "Pistol", "label": "Pistol"}
+        ]}}),
+    )
+    .await;
+
+    watcher.show(ToolSeen::Uncertain(Why::Disabled { ids: vec![rifle] }));
+    tool_source_holding(
+        &api,
+        json!({"kind": "uncertain", "why": {"kind": "disabled", "entries": [
+            {"id": rifle, "name": "Rifle", "label": "Rifle"}
+        ]}}),
+    )
+    .await;
+
+    watcher.show(ToolSeen::Uncertain(Why::Contended {
+        candidates: vec![eo_services::game_ui::tool_names::Candidate::Library {
+            ids: vec![rifle],
+            name: "Rifle".into(),
+        }],
+        more: 2,
+    }));
+    tool_source_holding(
+        &api,
+        json!({"kind": "uncertain", "why": {"kind": "contended",
+            "candidates": [{"name": "Rifle", "libraryId": rifle}], "more": 2}}),
+    )
+    .await;
+
+    watcher.show(ToolSeen::Uncertain(Why::Unreadable));
+    tool_source_holding(
+        &api,
+        json!({"kind": "uncertain", "why": {"kind": "unreadable"}}),
+    )
+    .await;
+
+    watcher.show(ToolSeen::Uncertain(Why::Unknown {
+        text: "Pstl".into(),
+    }));
+    tool_source_holding(
+        &api,
+        json!({"kind": "uncertain", "why": {"kind": "unknown", "text": "Pstl"}}),
+    )
+    .await;
+
+    // Unclear, then covered: no tool was in hand when it went.
+    watcher.show(ToolSeen::NotVisible);
+    tool_source_holding(
+        &api,
+        json!({"kind": "notVisible", "last": null, "provisional": false}),
+    )
+    .await;
+
+    // Where the screen cannot say, the player's declaration stands, and
+    // the view says it was chosen.
+    api.tracking_declare_equipment(plain).await.unwrap();
+    let chosen = tool_source_holding(
+        &api,
+        json!({"kind": "tool", "name": "Pistol", "provisional": false}),
+    )
+    .await;
+    assert_eq!(chosen["manual"], true);
+
+    // A tool shown ends the declaration; out of view, the tool in hand is
+    // still taken to be held.
+    watcher.show(ToolSeen::Holding(HeldTool::Library { id: rifle }));
+    let shown = tool_source_holding(
+        &api,
+        json!({"kind": "tool", "name": "Rifle", "provisional": false}),
+    )
+    .await;
+    assert_eq!(shown["manual"], false);
+    watcher.show(ToolSeen::NotVisible);
+    tool_source_holding(
+        &api,
+        json!({"kind": "notVisible", "last": "Rifle", "provisional": false}),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_snapshot_keeps_the_tool_covered_as_it_was_held() {
+    use eo_services::tool_watch::{HeldTool, ToolSeen};
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, tracker, watcher, [.., healer]) = tool_reading_api(dir.path(), false).await;
+    tracker.start_session().await.unwrap();
+
+    // A tool known only from the game's data keeps its tone when covered.
+    watcher.show(bundled_healer());
+    tool_source_holding(
+        &api,
+        json!({"kind": "tool", "name": "Old FAP", "provisional": true}),
+    )
+    .await;
+    watcher.show(ToolSeen::NotVisible);
+    tool_source_holding(
+        &api,
+        json!({"kind": "notVisible", "last": "Old FAP", "provisional": true}),
+    )
+    .await;
+
+    // A healer from the library, covered.
+    watcher.show(ToolSeen::Holding(HeldTool::Library { id: healer }));
+    tool_source_holding(
+        &api,
+        json!({"kind": "tool", "name": "FAP", "provisional": false}),
+    )
+    .await;
+    watcher.show(ToolSeen::NotVisible);
+    tool_source_holding(
+        &api,
+        json!({"kind": "notVisible", "last": "FAP", "provisional": false}),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_declare_equipment_is_refused_in_the_players_terms_while_the_screen_shows_the_tool(
+) {
+    use eo_services::tool_watch::{HeldTool, ToolSeen};
+
+    let dir = tempfile::tempdir().unwrap();
+    let (api, tracker, watcher, [first, _, rifle, _]) = tool_reading_api(dir.path(), false).await;
+    tracker.start_session().await.unwrap();
+    watcher.show(ToolSeen::Holding(HeldTool::Library { id: rifle }));
+    tool_source_holding(
+        &api,
+        serde_json::json!({"kind": "tool", "name": "Rifle", "provisional": false}),
+    )
+    .await;
+
+    let refused = api.tracking_declare_equipment(first).await.unwrap_err();
+    assert_eq!(
+        serde_json::to_value(&refused).unwrap(),
+        serde_json::json!({"kind": "conflict", "message": "The screen shows what is held"})
+    );
+    assert_eq!(
+        refused.to_string(),
+        eo_api::tracking::SCREEN_SHOWS_TOOL,
+        "the message is the one the overlay shows"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_snapshot_says_why_the_screen_is_not_read_while_the_setting_is_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, tracker, watcher, _) = tool_reading_api(dir.path(), false).await;
+    tracker.start_session().await.unwrap();
+    tool_source_holding(&api, serde_json::json!({"kind": "notRead"})).await;
+
+    // The watch ends by itself: the keys are the source again.
+    let ended = watcher.ended.lock().unwrap().clone().expect("a watch");
+    let session_id = watcher.sink.lock().unwrap().clone().expect("a watch").0;
+    eo_services::tool_watch::ToolDetector::stop(watcher.as_ref());
+    ended(&session_id);
+    for _ in 0..200 {
+        let source = tool_source(&api).await;
+        if source["notReading"] == "stopped" {
+            assert_eq!(source["readingScreen"], false);
+            assert_eq!(source["held"], serde_json::json!({"kind": "notRead"}));
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the source never said the screen stopped being read");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tracking_snapshot_says_screen_capture_is_not_running() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, tracker, _watcher, _) = tool_reading_api(dir.path(), true).await;
+    tracker.start_session().await.unwrap();
+    assert_eq!(
+        tool_source(&api).await,
+        serde_json::json!({"readingScreen": false, "notReading": "notStarted",
+                           "manual": false, "held": {"kind": "notRead"}})
+    );
+}

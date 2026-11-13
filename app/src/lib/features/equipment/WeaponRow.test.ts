@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen } from '@testing-library/svelte';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EquipmentExpectedReturn, ExpectedLooterSource } from '$lib/api/commands.gen';
 import { looterBasis, setLooterBasis } from '$lib/looterBasis.svelte';
 import type { Equipment, EquipmentDetail } from '$lib/types';
@@ -208,5 +208,58 @@ describe('the weapon detail looter basis', () => {
 		render(WeaponRow, { props: { model: expandedWith(jesterDetail), item } });
 		expect(screen.getByTestId('looter-basis-trigger').textContent).toContain('Robot Looter 37.5');
 		expect(screen.getByText('1.29 PEC')).toBeTruthy();
+	});
+});
+
+describe('switching the weapon on and off while the tool in hand is read off the screen', () => {
+	function readingModel(toolReading: boolean, lookalikeLabels: Record<string, string> = {}) {
+		return {
+			expandedId: null,
+			detailCache: {},
+			toggleExpand: () => {},
+			toolReading,
+			lookalikeLabels,
+			setEnabled: vi.fn(async () => {}),
+		} as unknown as LibraryModel & { setEnabled: ReturnType<typeof vi.fn> };
+	}
+
+	it('shows no switch, and the row as it was, while the reading is off', () => {
+		const { container } = render(WeaponRow, { props: { model: readingModel(false), item } });
+		expect(screen.queryByRole('switch')).toBeNull();
+		expect(screen.queryByTestId('lookalike-note')).toBeNull();
+		expect(container.querySelector('button')?.className).toContain('w-full');
+		expect(screen.getByText('Jester D-1').className).toContain('text-text');
+	});
+
+	it('switches the entry, beside the row and outside its button', async () => {
+		const model = readingModel(true);
+		render(WeaponRow, { props: { model, item } });
+		const toggle = screen.getByRole('switch', { name: 'Jester D-1 in use' });
+		expect(toggle.getAttribute('aria-checked')).toBe('true');
+		expect(toggle.closest('button[class*="w-full"]')).toBeNull();
+		await fireEvent.click(toggle);
+		expect(model.setEnabled).toHaveBeenCalledWith('1', false);
+	});
+
+	it('names the switch as the player tells the entry apart', () => {
+		render(WeaponRow, {
+			props: { model: readingModel(true, { '1': 'Jester D-1 + A101' }), item },
+		});
+		expect(screen.getByRole('switch', { name: 'Jester D-1 + A101 in use' })).toBeTruthy();
+	});
+
+	it('mutes an entry that is off, and flags one the bar cannot tell apart', () => {
+		render(WeaponRow, {
+			props: {
+				model: readingModel(true),
+				item: { ...item, enabled: false },
+				note: { text: "Looks the same as Jester D-1 + A101 on the game's bar.", leaveOne: true },
+			},
+		});
+		expect(screen.getByText('Jester D-1').className).toContain('text-text-tertiary');
+		expect(screen.getByTestId('lookalike-note').textContent).toContain(
+			"Looks the same as Jester D-1 + A101 on the game's bar.",
+		);
+		expect(screen.getByTestId('lookalike-leave-one').className).toContain('text-warning');
 	});
 });

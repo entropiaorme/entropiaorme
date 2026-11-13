@@ -684,3 +684,217 @@ describe('activities control', () => {
 		expect(onActivitiesTrigger).toHaveBeenCalledTimes(1);
 	});
 });
+
+describe('the tool in hand read off the screen', () => {
+	const fallback = {
+		status: 'active' as const,
+		// What the damage last pointed to: never shown as held while the
+		// screen is the source.
+		currentTool: 'Sollomate Opalo',
+		currentToolKind: 'weapon' as const,
+		currentActivity: 'hunting' as const,
+		weaponDeclared: false,
+		hotbarListenerActive: true,
+	};
+
+	type Source = NonNullable<TrackingLive['toolSource']>;
+
+	function source(held: Source['held'], overrides: Partial<Source> = {}): Source {
+		return { readingScreen: true, notReading: null, manual: false, held, ...overrides };
+	}
+
+	const pistol = source({ kind: 'tool', name: 'Pistol', provisional: false });
+
+	it('shows what the screen shows, and the undeclared cue stands down', () => {
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					...fallback,
+					toolSource: source({ kind: 'uncertain', why: { kind: 'unreadable' } }),
+				}),
+			},
+		});
+		expect(screen.getByTestId('held-tool-label').textContent?.trim()).toBe('Tool unclear');
+		expect(screen.queryByText('Sollomate Opalo')).toBeNull();
+		expect(screen.queryByTestId('weapon-undeclared-cue')).toBeNull();
+	});
+
+	it('shows a tool the screen shows with the activity it implies', () => {
+		render(OverlayStrip, {
+			props: { data: liveData({ ...fallback, weaponDeclared: true, toolSource: pistol }) },
+		});
+		expect(screen.getByTestId('held-tool-label').textContent?.trim()).toBe('Pistol');
+		expect(screen.getByTestId('activity-feedback').textContent?.trim()).toBe('Hunting');
+	});
+
+	it('keeps the weapon mismatch, with its decision, worded for the screen', async () => {
+		const onWeaponDecision = vi.fn();
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					...fallback,
+					toolSource: pistol,
+					weaponGuardrail: { hotbarTool: 'Pistol', recordingTool: 'Rifle', since: 1, shots: 3 },
+				}),
+				onWeaponDecision,
+			},
+		});
+		const alert = screen.getByTestId('weapon-guardrail-alert');
+		expect(alert.querySelector('[title]')?.getAttribute('title')).toBe(
+			'Damage fits Rifle; the screen shows Pistol',
+		);
+		expect(screen.queryByTestId('held-tool-facet')).toBeNull();
+		await fireEvent.click(screen.getByRole('button', { name: 'Confirm Rifle' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Keep Pistol' }));
+		expect(onWeaponDecision.mock.calls).toEqual([['confirm'], ['keep']]);
+	});
+
+	it('keeps the harvest mismatch, worded for the screen', () => {
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					...fallback,
+					currentToolKind: 'harvesting',
+					toolSource: source({ kind: 'tool', name: 'Finder', provisional: false }),
+					harvestGuardrail: {
+						expectedTool: 'Axe',
+						observedTool: 'Finder',
+						treeSize: 'huge',
+						atEpoch: 1,
+					},
+				}),
+			},
+		});
+		expect(screen.getByTestId('guardrail-alert').getAttribute('title')).toBe(
+			'Board output says Axe; the screen shows Finder',
+		);
+	});
+
+	it('keeps the hit cue under the tool, saying which set-up to check', () => {
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					...fallback,
+					weaponDeclared: true,
+					toolSource: pistol,
+					weaponHitCue: 'reduced',
+				}),
+			},
+		});
+		const cue = screen.getByTestId('weapon-hit-cue');
+		expect(cue.textContent?.trim()).toBe('Reduced');
+		expect(cue.getAttribute('title')).toMatch(/check which set-up is on in Equipment\.$/);
+		expect(screen.queryByTestId('activity-feedback')).toBeNull();
+	});
+
+	it('declares an entry the player picks where the screen cannot say', async () => {
+		const onDeclareTool = vi.fn();
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					...fallback,
+					toolSource: source({
+						kind: 'uncertain',
+						why: { kind: 'disabled', entries: [{ id: 7, name: 'Rifle', label: 'Rifle' }] },
+					}),
+				}),
+				onDeclareTool,
+			},
+		});
+		await fireEvent.click(screen.getByTestId('held-tool'));
+		expect(screen.getByText('Rifle is turned off in your equipment.')).toBeTruthy();
+		await fireEvent.click(screen.getByRole('button', { name: 'Use Rifle' }));
+		expect(onDeclareTool).toHaveBeenCalledWith(7);
+	});
+
+	it('opens the picker from "Choose a tool" through its own action', async () => {
+		const onChooseTool = vi.fn();
+		const onEquipmentTrigger = vi.fn();
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					...fallback,
+					toolSource: source({ kind: 'uncertain', why: { kind: 'unreadable' } }),
+				}),
+				onChooseTool,
+				onEquipmentTrigger,
+			},
+		});
+		await fireEvent.click(screen.getByTestId('held-tool'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Choose a tool' }));
+		expect(onChooseTool).toHaveBeenCalledTimes(1);
+		expect(onEquipmentTrigger).not.toHaveBeenCalled();
+	});
+
+	it('does not offer the picker while the screen shows what is held', () => {
+		render(OverlayStrip, { props: { data: liveData({ ...fallback, toolSource: pistol }) } });
+		const glyph = screen.getByTestId('equipment-icon') as HTMLButtonElement;
+		expect(glyph.disabled).toBe(true);
+		expect(glyph.getAttribute('title')).toBe('The screen shows what is held');
+	});
+
+	it('keeps the hotbar display and all its cues while the screen is not being read, with one marker', async () => {
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					...fallback,
+					toolSource: source(
+						{ kind: 'notRead' },
+						{ readingScreen: false, notReading: 'notStarted' },
+					),
+				}),
+			},
+		});
+		expect(screen.getByText('Sollomate Opalo')).toBeTruthy();
+		expect(screen.getByTestId('weapon-undeclared-cue').textContent?.trim()).toBe(
+			'Press weapon slot',
+		);
+		expect(screen.queryByTestId('held-tool-facet')).toBeNull();
+		expect(screen.getByTestId('screen-unread-marker').textContent?.trim()).toBe('Screen not read');
+		await fireEvent.click(screen.getByTestId('screen-unread'));
+		expect(
+			screen.getByText(
+				'Screen capture is not running: turn the setting off and on to start it. Hotbar keys are in use.',
+			),
+		).toBeTruthy();
+	});
+
+	it('keeps the healer display while the screen is not being read', () => {
+		render(OverlayStrip, {
+			props: {
+				data: liveData({
+					status: 'active',
+					currentTool: 'FAP',
+					currentToolKind: 'healing',
+					toolSource: source({ kind: 'notRead' }, { readingScreen: false, notReading: 'stopped' }),
+				}),
+			},
+		});
+		expect(screen.getByText('FAP')).toBeTruthy();
+		expect(screen.getByTestId('screen-unread')).toBeTruthy();
+	});
+
+	it('changes nothing while the keys are the source', () => {
+		const keys = source({ kind: 'notRead' }, { readingScreen: false });
+		const cases: Partial<TrackingLive>[] = [
+			fallback,
+			{ ...fallback, weaponDeclared: true, weaponHitCue: 'boosted' },
+			{
+				...fallback,
+				weaponGuardrail: { hotbarTool: 'Pistol', recordingTool: 'Rifle', since: 1, shots: 3 },
+			},
+		];
+		for (const data of cases) {
+			const { container: withSource, unmount: a } = render(OverlayStrip, {
+				props: { data: liveData({ ...data, toolSource: keys }) },
+			});
+			const marked = withSource.innerHTML;
+			a();
+			const { container: without, unmount: b } = render(OverlayStrip, {
+				props: { data: liveData(data) },
+			});
+			expect(without.innerHTML).toBe(marked);
+			b();
+		}
+	});
+});

@@ -17,6 +17,7 @@ vi.mock('$lib/api', async () => {
 		addToLibrary: vi.fn(),
 		updateLibrary: vi.fn(),
 		removeFromLibrary: vi.fn(),
+		setLibraryEnabled: vi.fn(),
 		getEquipmentDetail: vi.fn(),
 	};
 });
@@ -48,7 +49,7 @@ function summary(overrides: Partial<Equipment> = {}): Equipment {
 
 /** The library read over `entries`, none of them indistinguishable. */
 function library(entries: Equipment[]): EquipmentLibrary {
-	return { entries, indistinguishable: [] };
+	return { entries, indistinguishable: [], lookalikeLabels: {} };
 }
 
 function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
@@ -149,6 +150,7 @@ describe('loadData', () => {
 		expect(model.healingTools[1]).toEqual({
 			id: '2',
 			name: 'Vivo T1',
+			enabled: true,
 			costPerHeal: 0.18,
 			isLimited: true,
 			reloadSeconds: 2.5,
@@ -869,5 +871,136 @@ describe('liveCostPreview', () => {
 		const before = model.liveCostPreview;
 		model.absorberPicker.select({ ...weaponHit, catalogId: 'abs-1', name: 'Absorber' });
 		expect(model.liveCostPreview).toBe(before);
+	});
+});
+
+describe('switching entries on and off while the tool in hand is read off the screen', () => {
+	async function loaded(entries: Equipment[], extra: Partial<EquipmentLibrary> = {}) {
+		mocked.getEquipmentLibrary.mockResolvedValue({ ...library(entries), ...extra });
+		mocked.getSettings.mockResolvedValue(settings({ toolReadingEnabled: true }));
+		const model = createLibraryModel();
+		await model.loadData();
+		return model;
+	}
+
+	it('reads the setting, the groups the bar cannot tell apart and how they are told apart', async () => {
+		const model = await loaded([summary({ id: '1' }), summary({ id: '2' })], {
+			indistinguishable: [['1', '2']],
+			lookalikeLabels: { '1': 'Jester D-1 + A101', '2': 'Jester D-1' },
+		});
+		expect(model.toolReading).toBe(true);
+		expect(model.indistinguishable).toEqual([['1', '2']]);
+		expect(model.lookalikeLabels['1']).toBe('Jester D-1 + A101');
+	});
+
+	it('is off as the settings stand by default', async () => {
+		mocked.getSettings.mockResolvedValue(settings({ toolReadingEnabled: false }));
+		const model = createLibraryModel();
+		await model.loadData();
+		expect(model.toolReading).toBe(false);
+	});
+
+	it('shows the switch at once, persists it, and settles on what was stored', async () => {
+		const model = await loaded([
+			summary({ id: '1' }),
+			summary({ id: '2', name: 'FAP', type: 'healing' }),
+		]);
+		const write = deferred<Equipment>();
+		mocked.setLibraryEnabled.mockReturnValue(write.promise);
+		const pending = model.setEnabled('2', false);
+		await Promise.resolve();
+		expect(mocked.setLibraryEnabled).toHaveBeenCalledWith('2', false);
+		expect(model.healingTools[0].enabled).toBe(false);
+		write.resolve(summary({ id: '2', name: 'FAP', type: 'healing', enabled: false }));
+		await pending;
+		expect(model.healingTools[0].enabled).toBe(false);
+		expect(model.error).toBeNull();
+	});
+
+	it('puts back the value last stored when the write fails', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		mocked.setLibraryEnabled.mockRejectedValue(new Error('locked'));
+		await model.setEnabled('1', false);
+		expect(model.allEquipment[0].enabled).toBe(true);
+		expect(model.sortedEquipment[0].enabled).toBe(true);
+		expect(model.error).toBeTruthy();
+	});
+
+	it('stored on, off then on quickly, both failing: shows on', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		mocked.setLibraryEnabled.mockRejectedValue(new Error('locked'));
+		const off = model.setEnabled('1', false);
+		const on = model.setEnabled('1', true);
+		await Promise.all([off, on]);
+		expect(model.allEquipment[0].enabled).toBe(true);
+	});
+
+	it('stored on, off (which lands) then on (which fails): shows off, as stored', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		mocked.setLibraryEnabled
+			.mockResolvedValueOnce(summary({ id: '1', enabled: false }))
+			.mockRejectedValueOnce(new Error('locked'));
+		const off = model.setEnabled('1', false);
+		const on = model.setEnabled('1', true);
+		await Promise.all([off, on]);
+		expect(model.allEquipment[0].enabled).toBe(false);
+		expect(model.error).toBeTruthy();
+	});
+
+	it('sends one write for an entry at a time, in the order made, so the database and the view agree', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		const first = deferred<Equipment>();
+		const second = deferred<Equipment>();
+		mocked.setLibraryEnabled.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const off = model.setEnabled('1', false);
+		const on = model.setEnabled('1', true);
+		await Promise.resolve();
+		// The second waits for the first.
+		expect(mocked.setLibraryEnabled).toHaveBeenCalledTimes(1);
+		expect(mocked.setLibraryEnabled).toHaveBeenLastCalledWith('1', false);
+		first.resolve(summary({ id: '1', enabled: false }));
+		await off;
+		expect(mocked.setLibraryEnabled).toHaveBeenCalledTimes(2);
+		expect(mocked.setLibraryEnabled).toHaveBeenLastCalledWith('1', true);
+		// The view keeps the latest asked meanwhile.
+		expect(model.allEquipment[0].enabled).toBe(true);
+		second.resolve(summary({ id: '1', enabled: true }));
+		await on;
+		expect(model.allEquipment[0].enabled).toBe(true);
+	});
+
+	it('writes nothing for an entry already as asked, or one the library does not hold', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		await model.setEnabled('1', true);
+		await model.setEnabled('9', false);
+		expect(mocked.setLibraryEnabled).not.toHaveBeenCalled();
+	});
+
+	it('re-reads the look-alike groups once an entry is added, removed or switched', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		expect(model.indistinguishable).toEqual([]);
+		// An entry saved makes a second look-alike: the group appears at once.
+		const grouped = {
+			...library([summary({ id: '1' }), summary({ id: '2' })]),
+			indistinguishable: [['1', '2']],
+			lookalikeLabels: { '1': 'Jester D-1 (1)', '2': 'Jester D-1 (2)' },
+		};
+		mocked.getEquipmentLibrary.mockResolvedValue(grouped);
+		mocked.getEquipmentDetail.mockResolvedValue(detail());
+		mocked.updateLibrary.mockResolvedValue(summary({ id: '1' }));
+		await model.openEditModal('1');
+		await model.saveEquipment();
+		await vi.waitFor(() => expect(model.indistinguishable).toEqual([['1', '2']]));
+		expect(model.lookalikeLabels['2']).toBe('Jester D-1 (2)');
+		// Removed: the group goes.
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1' })]));
+		mocked.removeFromLibrary.mockResolvedValue(undefined);
+		await model.removeEquipment('2');
+		await vi.waitFor(() => expect(model.indistinguishable).toEqual([]));
+		// Switched: re-read too.
+		mocked.getEquipmentLibrary.mockClear();
+		mocked.setLibraryEnabled.mockResolvedValue(summary({ id: '1', enabled: false }));
+		await model.setEnabled('1', false);
+		expect(mocked.getEquipmentLibrary).toHaveBeenCalledTimes(1);
 	});
 });

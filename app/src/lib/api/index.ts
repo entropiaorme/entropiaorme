@@ -92,6 +92,12 @@ export type {
 	StockConversionInput,
 	StockPosition,
 	StockRemovalInput,
+	ToolCandidate,
+	ToolEntry,
+	ToolHeld,
+	ToolScreenUnread,
+	ToolSourceView,
+	ToolUncertainty,
 	UnresolvedQuestReward,
 } from './commands.gen';
 export * from './comparison';

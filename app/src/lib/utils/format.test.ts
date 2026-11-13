@@ -10,6 +10,7 @@ import {
 	formatPed,
 	formatPedHalfEven,
 	formatPercent,
+	listNames,
 	todayDate,
 } from '$lib/utils/format';
 
@@ -237,5 +238,14 @@ describe('formatLedgerDate', () => {
 		vi.setSystemTime(new Date('2026-06-03T12:00:00Z'));
 		// Same month/day as "today" but a year earlier: must be a date, not a time.
 		expect(formatLedgerDate('2025-06-03T08:30:00Z')).toBe('Jun 3');
+	});
+});
+
+describe('listNames', () => {
+	it('joins names in a sentence', () => {
+		expect(listNames([])).toBe('');
+		expect(listNames(['A'])).toBe('A');
+		expect(listNames(['A', 'B'])).toBe('A and B');
+		expect(listNames(['A', 'B', 'C'])).toBe('A, B and C');
 	});
 });

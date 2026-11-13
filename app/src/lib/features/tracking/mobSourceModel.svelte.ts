@@ -6,8 +6,9 @@
  * Expanded is either sticky (the player opened it, by click or keyboard,
  * and it stays until they close it) or held by the pointer resting on the
  * control or its panel; the pointer leaving lets it close after a short
- * grace, so crossing from the control into the panel does not close it.
- * Nothing is expanded while the control is the typed mob alone.
+ * grace, so crossing from the control into the panel does not close it (the
+ * strip's shared hover panel). Nothing is expanded while the control is the
+ * typed mob alone.
  *
  * Saving is a phase: while a write runs every other one is refused, and the
  * controls say so by being disabled. Each write re-reads the snapshot after
@@ -15,12 +16,11 @@
  */
 
 import type { ManualMobSuggestion, MobPinTarget, MobSourceView } from '$lib/api';
+import { createHoverPanel } from '$lib/components/overlay/hoverPanel.svelte';
 import { describeError } from '$lib/view/errorState';
 import { isSteered, pinShownTarget } from './mobSource';
 
-/** How long the panel stays after the pointer leaves it, so the pointer can
- * cross from the control into the panel below it. */
-export const HOVER_CLOSE_MS = 250;
+export { HOVER_CLOSE_MS } from '$lib/components/overlay/hoverPanel.svelte';
 
 export interface MobSourceDeps {
 	/** The session's mob source as the snapshot last read it. */
@@ -41,24 +41,21 @@ export interface MobSourceDeps {
 export type MobSourceBusy = 'pin' | 'release' | 'backstop' | 'clear' | 'typed';
 
 export function createMobSourceModel(deps: MobSourceDeps) {
-	let sticky = $state(false);
-	let hovered = $state(false);
 	let draft = $state<ManualMobSuggestion | null>(null);
 	let busy = $state<MobSourceBusy | null>(null);
 	let error = $state<string | null>(null);
-	let closeTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const steered = $derived(deps.enabled() && isSteered(deps.view()));
-	const expanded = $derived(steered && (sticky || hovered));
+	const panel = createHoverPanel({
+		available: () => steered,
+		onClose: () => {
+			draft = null;
+		},
+	});
+	const expanded = $derived(panel.expanded);
 	// The typeahead's input: in the panel while steered, else in the strip
 	// while no creature is typed (a typed one shows as a label instead).
 	const inputShown = $derived(steered ? expanded : !deps.view()?.typed);
-
-	function clearCloseTimer() {
-		if (closeTimer === undefined) return;
-		clearTimeout(closeTimer);
-		closeTimer = undefined;
-	}
 
 	async function write(kind: MobSourceBusy, action: () => Promise<unknown>, failure: string) {
 		if (busy !== null) return false;
@@ -99,43 +96,11 @@ export function createMobSourceModel(deps: MobSourceDeps) {
 			error = null;
 		},
 
-		/** The toggle (a click or a key): open it for good, or close it once
-		 * it is open for good. Open only under the pointer, a click keeps it
-		 * open rather than closing what the player just reached for. */
-		toggle() {
-			clearCloseTimer();
-			if (expanded && sticky) {
-				sticky = false;
-				hovered = false;
-				draft = null;
-			} else {
-				sticky = true;
-			}
-		},
-		/** Close it (Escape, or an action that is done with it). */
-		close() {
-			clearCloseTimer();
-			sticky = false;
-			hovered = false;
-			draft = null;
-		},
-		pointerEnter() {
-			clearCloseTimer();
-			hovered = true;
-		},
-		pointerLeave() {
-			clearCloseTimer();
-			closeTimer = setTimeout(() => {
-				closeTimer = undefined;
-				hovered = false;
-			}, HOVER_CLOSE_MS);
-		},
-		/** The player is working in the panel (typing, picking): keep it open
-		 * whatever the pointer does. */
-		hold() {
-			clearCloseTimer();
-			if (steered) sticky = true;
-		},
+		toggle: panel.toggle,
+		close: panel.close,
+		pointerEnter: panel.pointerEnter,
+		pointerLeave: panel.pointerLeave,
+		hold: panel.hold,
 
 		/** Pin what the control shows. */
 		async pinShown() {
@@ -192,9 +157,7 @@ export function createMobSourceModel(deps: MobSourceDeps) {
 			return write('clear', () => deps.clearTyped(), 'Could not clear the creature.');
 		},
 
-		destroy() {
-			clearCloseTimer();
-		},
+		destroy: panel.destroy,
 	};
 }
 

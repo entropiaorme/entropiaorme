@@ -6,8 +6,22 @@
 	import { formatPec } from './display';
 	import type { LibraryModel } from './libraryModel.svelte';
 	import WeaponRow from './WeaponRow.svelte';
+	import EntrySwitch from './EntrySwitch.svelte';
+	import LookalikeNote from './LookalikeNote.svelte';
+	import { InDevelopmentMark } from '$lib/inDevelopment';
+	import { type LookalikeNote as LookalikeNoteText, lookalikeNotes } from './toolReading';
 
 	let { model }: { model: LibraryModel } = $props();
+
+	// While the tool in hand is read off the screen: the entries the bar
+	// cannot tell apart, flagged on each member.
+	const notes = $derived(
+		model.toolReading
+			? lookalikeNotes(model.allEquipment, model.indistinguishable, model.lookalikeLabels)
+			: new Map<string, LookalikeNoteText>(),
+	);
+	const muted = (enabled: boolean) => model.toolReading && !enabled;
+	const labelOf = (id: string, name: string) => model.lookalikeLabels[id] ?? name;
 </script>
 
 <!-- Equipment library -->
@@ -16,6 +30,13 @@
 	<span class="text-text-tertiary" aria-hidden="true">
 		<IconWeapons />
 	</span>
+	{#if model.toolReading}
+		<!-- The switches and look-alike flags below serve reading the held
+			 tool off the screen. -->
+		<span class="ml-auto" data-testid="tool-reading-mark">
+			<InDevelopmentMark id="held-tool-reading" />
+		</span>
+	{/if}
 </div>
 
 {#if model.loading}
@@ -48,7 +69,7 @@
 {:else}
 	<div class="space-y-1">
 		{#each model.sortedEquipment as item (item.id)}
-			<WeaponRow {model} {item} />
+			<WeaponRow {model} {item} note={notes.get(item.id)} />
 		{/each}
 	</div>
 {/if}
@@ -152,7 +173,7 @@
 					</div>
 					<div class="flex-1 min-w-0">
 						<div class="flex items-center gap-2">
-							<span class="text-sm font-medium text-text">{tool.name}</span>
+							<span class="text-sm font-medium {muted(tool.enabled) ? 'text-text-tertiary' : 'text-text'}">{tool.name}</span>
 						</div>
 						<div class="mt-0.5 text-xs text-text-tertiary">
 							{#if tool.profile?.mode === 'compound'}
@@ -166,6 +187,7 @@
 								<span class="ml-2">{formatReload(tool.reloadSeconds, model.reloadSpeed?.effectivePercent ?? 0)}</span>
 							{/if}
 						</div>
+						<LookalikeNote note={notes.get(tool.id)} />
 					</div>
 					<div class="text-right shrink-0">
 						<span class="text-sm font-medium tabular-nums text-text">
@@ -173,6 +195,9 @@
 						</span>
 						<span class="text-xs text-text-tertiary ml-0.5">PEC/heal</span>
 					</div>
+					{#if model.toolReading}
+						<EntrySwitch name={labelOf(tool.id, tool.name)} enabled={tool.enabled} onchange={(on) => void model.setEnabled(tool.id, on)} />
+					{/if}
 					<button
 						type="button" class="linklet shrink-0"
 						onclick={() => model.openEditModal(tool.id)}
@@ -218,11 +243,12 @@
 					</div>
 					<div class="flex-1 min-w-0">
 						<div class="flex items-center gap-2">
-							<span class="text-sm font-medium text-text">{tool.name}</span>
+							<span class="text-sm font-medium {muted(tool.enabled) ? 'text-text-tertiary' : 'text-text'}">{tool.name}</span>
 							{#if tool.isLimited}
 								<span class="text-xs text-text-tertiary">(L)</span>
 							{/if}
 						</div>
+						<LookalikeNote note={notes.get(tool.id)} />
 					</div>
 					<div class="text-right shrink-0">
 						<span class="text-sm font-medium tabular-nums text-text">
@@ -230,6 +256,9 @@
 						</span>
 						<span class="text-xs text-text-tertiary ml-0.5">PEC/swing</span>
 					</div>
+					{#if model.toolReading}
+						<EntrySwitch name={labelOf(tool.id, tool.name)} enabled={tool.enabled} onchange={(on) => void model.setEnabled(tool.id, on)} />
+					{/if}
 					<button
 						type="button" class="linklet linklet-danger shrink-0"
 						aria-label="Remove {tool.name}"

@@ -16,6 +16,7 @@
 	import type { LiveLootValuation } from './liveLootValuation.svelte';
 	import StatTip from './StatTip.svelte';
 	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
+	import { listenerInactiveCopy } from '$lib/features/settings/keyboardAccess';
 	import type { StatsGridModel } from './statsGridModel.svelte';
 
 	let {
@@ -353,7 +354,7 @@
 				<div class="flex flex-col gap-0.5">
 					<p class="text-sm font-medium text-warning tracking-tight">Hotbar key listener not active</p>
 					<p class="text-xs text-text-secondary leading-relaxed">
-						Your hotbar presses are not reaching the app, so weapon costs follow damage ranges alone. Check the hotbar key listener in Settings.
+						{listenerInactiveCopy(status.toolSource?.readingScreen === true)}
 					</p>
 				</div>
 			</div>

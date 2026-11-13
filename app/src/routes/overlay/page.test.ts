@@ -481,6 +481,31 @@ describe('snapshot fields reaching the strip', () => {
 	});
 });
 
+describe('the tool in hand read off the screen', () => {
+	it('closes its panel when the overlay hides, so it is not left over the game', async () => {
+		seams.getTrackingSnapshot.mockResolvedValue({
+			...activeSnapshot,
+			toolSource: {
+				readingScreen: true,
+				notReading: null,
+				manual: false,
+				held: { kind: 'uncertain', why: { kind: 'unreadable' } },
+			},
+		});
+		render(OverlayPage);
+		const toggle = await screen.findByTestId('held-tool');
+		await act(() => toggle.click());
+		expect(screen.getByTestId('held-tool-panel')).toBeTruthy();
+		const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+		try {
+			await act(() => document.dispatchEvent(new Event('visibilitychange')));
+			expect(screen.queryByTestId('held-tool-panel')).toBeNull();
+		} finally {
+			visibility.mockRestore();
+		}
+	});
+});
+
 describe('armour-cost popup', () => {
 	it('hands the popup its state and leaves sizing, placement and reveal to the popup', async () => {
 		render(OverlayPage);

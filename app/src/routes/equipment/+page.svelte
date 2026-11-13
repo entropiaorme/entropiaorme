@@ -105,6 +105,8 @@
 			carriedWeaponIds={model.carriedWeaponIds}
 			hotbarHooksEnabled={model.hotbarHooksEnabled}
 			keyless={model.keyless}
+			toolReading={model.toolReading}
+			lookalikeLabels={model.lookalikeLabels}
 			onassign={(slot, id) => void model.assignHotbarSlot(slot, id)}
 			oncarriedchange={(ids) => {
 				model.carriedWeaponIds = ids;

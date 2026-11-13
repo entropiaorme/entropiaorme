@@ -7,12 +7,28 @@
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { LibraryModel } from './libraryModel.svelte';
+	import EntrySwitch from './EntrySwitch.svelte';
+	import LookalikeNote from './LookalikeNote.svelte';
+	import type { LookalikeNote as LookalikeNoteText } from './toolReading';
 	import { describeAttackRate } from './attackRate';
 	import { describeEffectProfile } from './weaponEffect';
 	import LooterBasisSelect from '$lib/components/LooterBasisSelect.svelte';
 	import { atLooterBasis, looterBasis, looterBasisCaption } from '$lib/looterBasis.svelte';
 
-	let { model, item }: { model: LibraryModel; item: Equipment } = $props();
+	let {
+		model,
+		item,
+		note = undefined,
+	}: {
+		model: LibraryModel;
+		item: Equipment;
+		/** The bar cannot tell this entry from others (while the tool in hand
+		 * is read off the screen). */
+		note?: LookalikeNoteText;
+	} = $props();
+	// While the tool in hand is read off the screen an entry is switched on
+	// or off; one that is off reads muted, and is otherwise as usable.
+	const muted = $derived(model.toolReading && !item.enabled);
 
 	const detail = $derived(model.detailCache[item.id] ?? null);
 	// The expected figures at the app-wide looter basis, and the three
@@ -114,6 +130,7 @@
 {/snippet}
 
 <!-- Equipment row -->
+{#snippet row()}
 <button
 	type="button"
 	class="w-full text-left px-4 py-3 rounded-md transition-colors duration-[var(--duration-fast)]
@@ -132,7 +149,7 @@
 		<!-- Name + amp -->
 		<div class="flex-1 min-w-0">
 			<div class="flex items-center gap-2">
-				<span class="text-sm font-medium text-text truncate">{item.name}</span>
+				<span class="text-sm font-medium {muted ? 'text-text-tertiary' : 'text-text'} truncate">{item.name}</span>
 			</div>
 			{#if item.amplifierName}
 				<p class="text-xs text-text-tertiary mt-0.5 truncate">
@@ -147,11 +164,12 @@
 					{describeEffectProfile(item.effectProfile)}
 				</p>
 			{/if}
+			<LookalikeNote {note} />
 		</div>
 
 		<!-- Cost -->
 		<div class="text-right shrink-0">
-			<span class="text-sm font-medium tabular-nums text-text">
+			<span class="text-sm font-medium tabular-nums {muted ? 'text-text-tertiary' : 'text-text'}">
 				{formatPec(item.costPerUse)}
 			</span>
 			<span class="text-xs text-text-tertiary ml-0.5">PEC</span>
@@ -180,6 +198,16 @@
 		</svg>
 	</div>
 </button>
+{/snippet}
+
+{#if model.toolReading}
+	<div class="flex items-center gap-3">
+		<div class="min-w-0 flex-1">{@render row()}</div>
+		<EntrySwitch name={model.lookalikeLabels[item.id] ?? item.name} enabled={item.enabled} onchange={(on) => void model.setEnabled(item.id, on)} />
+	</div>
+{:else}
+	{@render row()}
+{/if}
 
 <!-- Inline detail panel -->
 {#if model.expandedId === item.id}

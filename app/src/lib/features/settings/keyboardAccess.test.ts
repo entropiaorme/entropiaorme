@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hotbarListenerCopy, keyboardNote } from './keyboardAccess';
+import { hotbarListenerCopy, keyboardNote, listenerInactiveCopy } from './keyboardAccess';
 
 describe('keyboardNote', () => {
 	it('names where keys are read from', () => {
@@ -43,5 +43,20 @@ describe('hotbarListenerCopy', () => {
 		expect(copy).toMatch(/tool in hand is read from the screen/);
 		expect(copy).not.toMatch(/weapon or healer/);
 		expect(copy).not.toMatch(/damage ranges/);
+	});
+});
+
+describe('listenerInactiveCopy', () => {
+	it('says weapon costs are left to damage ranges while the screen does not name the tool', () => {
+		expect(listenerInactiveCopy(false)).toBe(
+			'Your hotbar presses are not reaching the app, so weapon costs follow damage ranges alone. Check the hotbar key listener in Settings.',
+		);
+	});
+
+	it('says only consumable timers are affected while the tool in hand is read from the screen', () => {
+		expect(listenerInactiveCopy(true)).toMatch(
+			/consumables pressed on it do not start their timers/,
+		);
+		expect(listenerInactiveCopy(true)).not.toMatch(/weapon|damage/);
 	});
 });

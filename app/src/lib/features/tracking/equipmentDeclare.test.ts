@@ -26,6 +26,7 @@ describe('createEquipmentDeclare', () => {
 				{ id: '4', name: 'FAP', type: 'healing' },
 			] as unknown as EquipmentSummary[],
 			indistinguishable: [],
+			lookalikeLabels: {},
 		});
 		mocked.getSettings.mockResolvedValue({
 			hotbar: { '1': 1 },

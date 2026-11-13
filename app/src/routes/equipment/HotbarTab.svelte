@@ -2,6 +2,8 @@
 	import type { Equipment } from '$lib/types';
 	import type { Hotbar, HotbarPreset } from '$lib/types/settings';
 	import { Divider, Select } from '$lib/components';
+	import { InDevelopmentMark } from '$lib/inDevelopment';
+	import { NO_DATA } from '$lib/utils/format';
 	import CarriedWeapons from '$lib/features/equipment/CarriedWeapons.svelte';
 	import DamageRanges from '$lib/features/equipment/DamageRanges.svelte';
 	import {
@@ -10,6 +12,11 @@
 		parkedHotbars,
 		weaponBands
 	} from '$lib/features/equipment/carriedWeapons';
+	import {
+		enabledCarried,
+		hotbarReadingNote,
+		slotIdleWhileReading
+	} from '$lib/features/equipment/toolReading';
 
 	let {
 		equipment,
@@ -19,6 +26,8 @@
 		carriedWeaponIds,
 		hotbarHooksEnabled,
 		keyless = false,
+		toolReading = false,
+		lookalikeLabels = {},
 		onassign,
 		oncarriedchange
 	}: {
@@ -32,6 +41,11 @@
 		hotbarHooksEnabled: boolean;
 		/** This machine runs keyless: the overlay declares the weapon. */
 		keyless?: boolean;
+		/** The tool in hand is read off the screen: the keys start consumables
+		 * only, and the weapons on are the ones carried. */
+		toolReading?: boolean;
+		/** How entries the held-tool bar cannot tell apart are told apart. */
+		lookalikeLabels?: Record<string, string>;
 		onassign: (slot: string, equipmentId: number | null) => void;
 		oncarriedchange?: (ids: number[]) => void;
 	} = $props();
@@ -44,7 +58,11 @@
 	// The weapons attribution chooses among: every preset's and the ones
 	// carried without a hotkey, with the damage band each is checked against.
 	let parked = $derived(parkedHotbars(hotbarPresets, activeHotbarPreset));
-	let carried = $derived(carriedWeapons(equipment, hotbar, carriedWeaponIds, parked));
+	let carried = $derived(
+		toolReading
+			? enabledCarried(equipment)
+			: carriedWeapons(equipment, hotbar, carriedWeaponIds, parked)
+	);
 	let unslotted = $derived(
 		carried.filter((entry) => entry.slot === null && entry.parked === null).map((entry) => entry.weapon)
 	);
@@ -76,19 +94,28 @@
 </script>
 
 <div class="space-y-4">
-	<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
-		{#if keyless}
-			Keyless tracking is on for this machine: pick the weapon in hand from the overlay's
-			equipment glyph, and each weapon's damage range checks it.
-		{:else if hotbarHooksEnabled}
-			The hotbar key listener is on: a press tells the app which weapon is in hand, and each
-			weapon's damage range checks it.
-		{:else}
-			The hotbar key listener is off, so shots are attributed by damage range alone.
-			<a href="/settings#cost-attribution" class="linklet">Turn it on in Settings</a> for exact
-			switching.
-		{/if}
-	</p>
+	{#if toolReading}
+		<div class="flex items-center gap-2 max-w-2xl">
+			<p class="text-xs text-text-tertiary" data-testid="hotbar-listener-state">
+				{hotbarReadingNote({ keyless, hotbarHooksEnabled })}
+			</p>
+			<InDevelopmentMark id="held-tool-reading" align="left" />
+		</div>
+	{:else}
+		<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
+			{#if keyless}
+				Keyless tracking is on for this machine: pick the weapon in hand from the overlay's
+				equipment glyph, and each weapon's damage range checks it.
+			{:else if hotbarHooksEnabled}
+				The hotbar key listener is on: a press tells the app which weapon is in hand, and each
+				weapon's damage range checks it.
+			{:else}
+				The hotbar key listener is off, so shots are attributed by damage range alone.
+				<a href="/settings#cost-attribution" class="linklet">Turn it on in Settings</a> for exact
+				switching.
+			{/if}
+		</p>
+	{/if}
 
 	<div>
 		{#if weapons.length === 0 && healingTools.length === 0 && consumablesList.length === 0 && harvestingToolsList.length === 0}
@@ -101,6 +128,7 @@
 					{@const name = slotName(slot)}
 					{@const cost = slotCost(slot)}
 					{@const type = slotType(slot)}
+					{@const idle = toolReading && slotIdleWhileReading(type)}
 					<div
 						class="flex items-center gap-3 px-3 py-2.5 rounded-md
 							{name ? 'bg-surface-hover/30' : 'hover:bg-surface-hover/20'}
@@ -109,7 +137,9 @@
 						<!-- Slot key badge -->
 						<div
 							class="shrink-0 h-7 w-7 rounded-md flex items-center justify-center text-xs font-bold
-								{name
+								{idle
+								? 'bg-surface text-text-tertiary border border-border'
+								: name
 								? type === 'healing'
 									? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
 									: type === 'consumable'
@@ -127,7 +157,13 @@
 								onchange={(e) => assignSlot(slot, e.currentTarget.value)}
 							>
 								<option value="">— Empty slot —</option>
-								{#if weapons.length > 0}
+								{#if toolReading}
+									<!-- The keys start consumables only; a weapon or tool
+										 already here stays for when the reading is off. -->
+									{#if idle}
+										<option value={String(hotbar[slot])}>{lookalikeLabels[String(hotbar[slot])] ?? name}</option>
+									{/if}
+								{:else if weapons.length > 0}
 									<optgroup label="Weapons">
 										{#each weapons as w}
 											<option value={w.id}>
@@ -144,7 +180,7 @@
 										{/each}
 									</optgroup>
 								{/if}
-								{#if harvestingToolsList.length > 0}
+								{#if !toolReading && harvestingToolsList.length > 0}
 									<optgroup label="Harvesting Tools">
 										{#each harvestingToolsList as t}
 											<option value={t.id}>{t.name}</option>
@@ -159,11 +195,18 @@
 									</optgroup>
 								{/if}
 							</Select>
+							{#if idle}
+								<p class="mt-1 text-xs text-text-tertiary" data-testid="slot-idle">
+									not used while the screen is read
+								</p>
+							{/if}
 						</div>
 
 						<!-- Cost display -->
 						<div class="shrink-0 w-20 text-right">
-							{#if type === 'consumable'}
+							{#if idle}
+								<span class="text-xs text-text-tertiary">{NO_DATA}</span>
+							{:else if type === 'consumable'}
 								<!-- The key is the dose: what one press books. -->
 								{#if cost !== null && cost > 0}
 									<span class="text-sm font-medium tabular-nums text-text">{(cost / 100).toFixed(2)}</span>
@@ -188,13 +231,16 @@
 
 	{#if weapons.length > 0}
 		<Divider />
-		<CarriedWeapons
-			carried={unslotted}
-			{addable}
-			carriedIds={carriedWeaponIds}
-			onchange={oncarriedchange}
-		/>
-		<Divider />
+		{#if !toolReading}
+			<!-- While the screen is read the weapons on are the carried ones. -->
+			<CarriedWeapons
+				carried={unslotted}
+				{addable}
+				carriedIds={carriedWeaponIds}
+				onchange={oncarriedchange}
+			/>
+			<Divider />
+		{/if}
 		<DamageRanges banded={bands.banded} bandless={bands.bandless} />
 	{/if}
 </div>

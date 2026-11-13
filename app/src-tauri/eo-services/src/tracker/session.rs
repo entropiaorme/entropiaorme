@@ -1303,7 +1303,30 @@ impl HuntTracker {
     /// the actor; the two session-scoped reads (skill-gain total,
     /// notable-event feed) run here, keyed on the captured session id.
     pub async fn snapshot(&self) -> Result<TrackingReadout, DbError> {
-        let (current_tool, current_tool_kind, aggregate) = self.aggregate().await;
+        let aggregate = self.aggregate().await;
+        self.readout(aggregate).await
+    }
+
+    /// [`Self::snapshot`] with where the tool in hand comes from, both read
+    /// in one turn of the tracker so they describe the same moment.
+    pub async fn snapshot_with_tool(
+        &self,
+    ) -> Result<(TrackingReadout, super::held_tool::ToolDisplay), DbError> {
+        let (aggregate, display) = self
+            .call(|reply| super::actor::TrackerMsg::AggregateWithTool(Box::new(reply)))
+            .await;
+        Ok((self.readout(aggregate).await?, display))
+    }
+
+    /// The readout over the actor's in-memory half.
+    async fn readout(
+        &self,
+        (current_tool, current_tool_kind, aggregate): (
+            Option<String>,
+            Option<crate::bus_events::HotbarItemKind>,
+            Option<SessionAggregate>,
+        ),
+    ) -> Result<TrackingReadout, DbError> {
         let Some(aggregated) = aggregate else {
             return Ok(TrackingReadout {
                 current_tool,

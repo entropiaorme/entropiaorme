@@ -181,6 +181,33 @@ pub struct ManualDeclaration {
     pub at_ms: i64,
 }
 
+/// The tool in hand as the reading knows it, for display: its name, its
+/// library entry, or that it is known only from the game's data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandView {
+    pub name: String,
+    /// The library entry it is; None for a tool known only from the game's
+    /// data.
+    pub library_id: Option<i64>,
+}
+
+impl HandView {
+    /// Known only from the game's data, costed as the bare tool.
+    pub fn provisional(&self) -> bool {
+        self.library_id.is_none()
+    }
+}
+
+/// Where the tool in hand comes from, with the reading's own knowledge of
+/// the hand: the tool in hand now, and the one in hand when the bar went
+/// out of view (while it is).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolDisplay {
+    pub source: ToolSource,
+    pub hand: Option<HandView>,
+    pub unseen_hand: Option<HandView>,
+}
+
 /// What became of a tool the player declared by hand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolDeclared {
@@ -229,6 +256,16 @@ impl InHand {
     fn name(&self) -> &str {
         match self {
             InHand::Library { name, .. } | InHand::Provisional { name, .. } => name,
+        }
+    }
+
+    fn view(&self) -> HandView {
+        HandView {
+            name: self.name().to_string(),
+            library_id: match self {
+                InHand::Library { id, .. } => Some(*id),
+                InHand::Provisional { .. } => None,
+            },
         }
     }
 }
@@ -354,6 +391,22 @@ impl TrackerActor {
             (None, Some(ScreenOff::Stopped { at_ms })) => ToolSource::ScreenStopped { at_ms },
             (None, Some(ScreenOff::NotStarted)) => ToolSource::ScreenNotStarted,
             (None, None) => ToolSource::Keys,
+        }
+    }
+
+    /// Where the tool in hand comes from now, with the reading's knowledge
+    /// of the hand (none while the keys are the source).
+    pub(super) fn tool_display(&self) -> ToolDisplay {
+        let state = self
+            .session
+            .active()
+            .and_then(|active| active.held_tool.as_ref());
+        ToolDisplay {
+            source: self.tool_source(),
+            hand: state.and_then(|state| state.hand.as_ref().map(InHand::view)),
+            unseen_hand: state
+                .and_then(|state| state.hold.as_ref())
+                .and_then(|hold| hold.hand.as_ref().map(InHand::view)),
         }
     }
 

@@ -117,3 +117,9 @@ export function formatLedgerDate(iso: string): string {
 	}
 	return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
+
+/** Names in a sentence: "A", "A and B", "A, B and C". */
+export function listNames(names: readonly string[]): string {
+	if (names.length <= 1) return names.join('');
+	return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}

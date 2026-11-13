@@ -58,7 +58,7 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 58] = [
+const SNAPSHOT_FIELDS: [&str; 59] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
@@ -69,6 +69,7 @@ const SNAPSHOT_FIELDS: [&str; 58] = [
     "trackProtectionCosts",
     "skillBoostPercent",
     "mobSource",
+    "toolSource",
     "currentTool",
     "currentToolKind",
     "currentActivity",
@@ -125,6 +126,10 @@ const SNAPSHOT_FIELDS: [&str; 58] = [
 pub(crate) fn tracker_conflict(error: TrackerCommandError) -> ApiError {
     ApiError::conflict(error.to_string())
 }
+
+/// Why an equipment declaration was refused while the tool in hand is
+/// read off the screen and the screen shows it: said to the player as is.
+pub const SCREEN_SHOWS_TOOL: &str = "The screen shows what is held";
 
 fn edit_error(context: &'static str) -> impl Fn(EditError) -> ApiError {
     move |error| match error {
@@ -782,6 +787,13 @@ pub struct TrackingSnapshot {
     /// what the screen reads.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mob_source: Option<crate::mob_detection::MobSourceView>,
+    /// Where the tool in hand comes from (the hotbar keys, or the game
+    /// screen) and, while it is the screen, what the screen shows of it.
+    /// While the screen is the source, the tool held is this one, never
+    /// `current_tool`, which may then be only what the damage last
+    /// pointed to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_source: Option<crate::held_tool::ToolSourceView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_tool: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1522,7 +1534,10 @@ impl Api {
             .tracker
             .declare_tool(item.clone(), occurred_at)
             .await
-            .map_err(tracker_conflict)?;
+            .map_err(|error| match error {
+                TrackerCommandError::ScreenShowsTool => ApiError::conflict(SCREEN_SHOWS_TOOL),
+                other => tracker_conflict(other),
+            })?;
         if declared == ToolDeclared::KeysAreSource {
             self.hotbar
                 .declare_resolved(&session_id, &item, occurred_at)
@@ -2017,14 +2032,19 @@ pub(crate) async fn build_snapshot_value(
     definitions: Option<&SessionDefinitionService>,
     now: f64,
 ) -> Result<Value, ApiError> {
-    let readout = tracker
-        .snapshot()
+    // The readout and where the tool in hand comes from, read in one turn
+    // of the tracker so the two describe the same moment.
+    let (readout, tool_display) = tracker
+        .snapshot_with_tool()
         .await
         .map_err(ApiError::internal("snapshot readout"))?;
     let current_tool = match &readout.current_tool {
         Some(tool) => Value::String(tool.clone()),
         None => Value::Null,
     };
+    let tool_source = crate::held_tool::tool_source_view(db, tool_display).await?;
+    let tool_source =
+        serde_json::to_value(tool_source).map_err(ApiError::internal("tool source shaping"))?;
     // The derived-activity feedback: what the held tool implies the
     // next action is recorded as (absent when no tool is known).
     let current_activity = match readout.current_tool_kind {
@@ -2126,6 +2146,7 @@ pub(crate) async fn build_snapshot_value(
                 "mobSource": mob_source_value(crate::mob_detection::MobSourceView::idle(
                     declared_mob(config),
                 ))?,
+                "toolSource": tool_source,
                 "activities": activities,
                 "lifetime": lifetime,
                 "recentEvents": [],
@@ -2231,6 +2252,7 @@ pub(crate) async fn build_snapshot_value(
                 "trackProtectionCosts": active.track_protection_costs,
                 "skillBoostPercent": boost_value(active.skill_boost_percent),
                 "mobSource": mob_source_value(active.mob_source.clone().into())?,
+                "toolSource": tool_source,
                 "recentEvents": recent_events,
                 "warnings": warnings,
             });

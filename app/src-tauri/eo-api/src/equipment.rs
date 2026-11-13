@@ -412,6 +412,10 @@ pub struct EquipmentLibrary {
     /// alike; no entry is in two groups. Empty when every entry stands
     /// apart, or when the interface profile is unavailable.
     pub indistinguishable: Vec<Vec<String>>,
+    /// How the player tells each member of those groups apart, by entry
+    /// id: its name, then its set-up, then its place (the one rule the
+    /// overlay names such entries by too).
+    pub lookalike_labels: std::collections::BTreeMap<String, String>,
 }
 
 /// One configured component of a stored weapon setup.
@@ -1289,6 +1293,7 @@ impl Api {
             .await
             .map_err(ApiError::internal("equipment library read"))?;
         let indistinguishable = indistinguishable_groups(&rows, self.tool_names.as_ref());
+        let lookalike_labels = crate::held_tool::group_labels(&rows, &indistinguishable);
         let mut entries = Vec::with_capacity(rows.len());
         for row in rows {
             entries.push(summary_from_parts(
@@ -1300,6 +1305,7 @@ impl Api {
         Ok(EquipmentLibrary {
             entries,
             indistinguishable,
+            lookalike_labels,
         })
     }
 

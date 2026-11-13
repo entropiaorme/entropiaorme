@@ -9,6 +9,20 @@
 	import type { DosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { NO_DATA } from '$lib/utils/format';
 	import MobSourceControl from '$lib/features/tracking/MobSourceControl.svelte';
+	import HeldToolControl from '$lib/features/tracking/HeldToolControl.svelte';
+	import ScreenUnreadNote from '$lib/features/tracking/ScreenUnreadNote.svelte';
+	import {
+		cueCopy,
+		type HeldToolFeedback,
+		heldToolDisplay,
+		SCREEN_SHOWS_TOOL,
+		screenNotReadLine,
+		screenShowsTool,
+	} from '$lib/features/tracking/heldTool';
+	import {
+		createHeldToolModel,
+		type HeldToolModel,
+	} from '$lib/features/tracking/heldToolModel.svelte';
 	import {
 		createMobSourceModel,
 		type MobSourceModel,
@@ -52,6 +66,9 @@
 		onArmourCostToggle = noop,
 		onDosesTrigger = noop,
 		onEquipmentTrigger = noop,
+		onDeclareTool = noop,
+		onChooseTool = undefined,
+		heldTool = null,
 		statContext = {}
 	}: {
 		data: TrackingLive;
@@ -95,6 +112,14 @@
 		onArmourCostToggle?: (event: MouseEvent) => void | Promise<void>;
 		onDosesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 		onEquipmentTrigger?: (anchor: HTMLElement) => void | Promise<void>;
+		/** Declare a library entry in hand where the screen cannot say which
+		 * tool it is. */
+		onDeclareTool?: (equipmentId: number) => void | Promise<void>;
+		/** Open the equipment picker from the tool control, never closing it
+		 * when it is already open; the glyph's own trigger without one. */
+		onChooseTool?: (anchor: HTMLElement) => void | Promise<void>;
+		/** The tool control's panels; without one the strip keeps its own. */
+		heldTool?: HeldToolModel | null;
 	} = $props();
 
 	// The Activities menu's anchor: the section, which survives the chip
@@ -148,11 +173,47 @@
 	// A keyless session has no press to wait for: the weapon is picked from
 	// the equipment glyph instead.
 	const keyless = $derived(data.keylessInput === true);
+	// While the tool in hand is read off the screen, the strip shows what the
+	// screen shows (never a weapon guessed from damage) and the undeclared
+	// cue stands down: the screen, not a press, declares the tool. The damage
+	// cues stand ahead of it as they stand ahead of the hotbar's display,
+	// worded for the screen. Reading turned on but the screen not read, the
+	// hotbar's display and all its cues stand, with one marker beside them.
+	const readingScreen = $derived(data.toolSource?.readingScreen === true);
+	const toolScreen = $derived(heldToolDisplay(data.toolSource));
+	const unreadLine = $derived(screenNotReadLine(data.toolSource));
+	const cues = $derived(cueCopy(readingScreen));
 	const weaponUndeclared = $derived(
-		data.weaponDeclared === false &&
+		!readingScreen &&
+			data.weaponDeclared === false &&
 			(data.hotbarListenerActive === true || keyless) &&
 			data.currentToolKind !== 'harvesting' &&
 			(Boolean(data.currentTool) || (data.unpricedShots ?? 0) > 0),
+	);
+	// The picker's declarations are refused while the screen shows what is
+	// held, so it is not offered then.
+	const pickerRefused = $derived(screenShowsTool(data.toolSource));
+	const ownHeldTool = createHeldToolModel({ source: () => data.toolSource });
+	$effect(() => () => ownHeldTool.destroy());
+	const toolModel = $derived(heldTool ?? ownHeldTool);
+	// Under a tool the screen shows: a standing hit cue first, else the
+	// activity the tool implies.
+	const toolFeedback: HeldToolFeedback | null = $derived(
+		data.weaponHitCue
+			? {
+					text: data.weaponHitCue === 'boosted' ? 'Boosted' : 'Reduced',
+					tone: data.weaponHitCue === 'boosted' ? 'text-sky-300/90' : 'text-white/55',
+					detail: cues.hit(data.weaponHitCue),
+					testId: 'weapon-hit-cue',
+				}
+			: activityLabel && toolScreen && (toolScreen.tone === 'normal' || toolScreen.tone === 'provisional')
+				? {
+						text: activityLabel,
+						tone: 'text-white/35',
+						detail: `Held tool: recording as ${activityLabel}`,
+						testId: 'activity-feedback',
+					}
+				: null,
 	);
 	const enabledPills = $derived(enabledStats(overlayStats.current));
 
@@ -382,8 +443,10 @@
 				data-icon={equipmentIcon}
 				aria-label="Declare equipment in hand"
 				aria-expanded={equipmentMenuOpen}
-				title="Declare what is in hand: weapon, healer, or harvesting tool"
-				disabled={declaringEquipment}
+				title={pickerRefused
+					? SCREEN_SHOWS_TOOL
+					: 'Declare what is in hand: weapon, healer, or harvesting tool'}
+				disabled={declaringEquipment || pickerRefused}
 				onclick={(event) => onEquipmentTrigger(event.currentTarget)}
 			>
 				{@render equipmentGlyph()}
@@ -393,7 +456,7 @@
 				{@render equipmentGlyph()}
 			</span>
 		{/if}
-		{#if data.currentToolKind === 'healing'}
+		{#if data.currentToolKind === 'healing' && !toolScreen}
 			<div class="text-xs {data.currentTool ? 'text-white/70' : 'text-white/20'} truncate max-w-[120px]">
 				{data.currentTool || NO_DATA}
 			</div>
@@ -409,7 +472,7 @@
 			<div class="flex items-center gap-1.5" data-testid="weapon-guardrail-alert">
 				<div
 					class="flex flex-col min-w-0"
-					title={`Damage fits ${cue.recordingTool}; the hotbar shows ${cue.hotbarTool}`}
+					title={cues.weaponMismatch(cue.recordingTool, cue.hotbarTool)}
 				>
 					<div class="text-xs text-red-400 animate-pulse truncate max-w-[120px]">
 						{cue.hotbarTool}
@@ -424,7 +487,7 @@
 					type="button"
 					class="cue-btn cue-btn-confirm"
 					aria-label={`Confirm ${cue.recordingTool}`}
-					title={`Confirm ${cue.recordingTool}: record it from now and reprice the shots since your last hotbar press`}
+					title={cues.confirm(cue.recordingTool)}
 					disabled={decidingWeapon}
 					onclick={() => onWeaponDecision('confirm')}
 				>
@@ -452,7 +515,7 @@
 				 hotbar press or agreeing loot resolves it. -->
 			<div
 				class="flex flex-col min-w-0"
-				title={`Board output says ${data.harvestGuardrail.expectedTool}; hotbar shows ${data.harvestGuardrail.observedTool ?? 'no tool'}`}
+				title={cues.harvestMismatch(data.harvestGuardrail.expectedTool, data.harvestGuardrail.observedTool)}
 				data-testid="guardrail-alert"
 			>
 				<div class="text-xs text-red-400 animate-pulse truncate max-w-[120px]">
@@ -464,6 +527,15 @@
 					Recording: {data.harvestGuardrail.expectedTool}
 				</div>
 			</div>
+		{:else if toolScreen}
+			<HeldToolControl
+				display={toolScreen}
+				panel={toolModel.screen}
+				feedback={toolFeedback}
+				declaring={declaringEquipment}
+				onDeclare={onDeclareTool}
+				onChoose={onChooseTool ?? onEquipmentTrigger}
+			/>
 		{:else}
 			<div class="flex flex-col min-w-0">
 				<div
@@ -492,9 +564,7 @@
 						 a state they cannot account for. -->
 					<div
 						class="text-[9px] leading-tight uppercase tracking-wider whitespace-nowrap {data.weaponHitCue === 'boosted' ? 'text-sky-300/90' : 'text-white/55'}"
-						title={data.weaponHitCue === 'boosted'
-							? "Recent hits are above this weapon's listed damage, so they are priced as boosted. If you have no damage buff running, press the slot of the weapon you are firing."
-							: "Recent hits are below this weapon's listed damage, so they are priced as reduced. If that looks wrong, press the slot of the weapon you are firing."}
+						title={cues.hit(data.weaponHitCue)}
 						data-testid="weapon-hit-cue"
 					>
 						{data.weaponHitCue === 'boosted' ? 'Boosted' : 'Reduced'}
@@ -513,6 +583,9 @@
 					</div>
 				{/if}
 			</div>
+		{/if}
+		{#if unreadLine}
+			<ScreenUnreadNote line={unreadLine} panel={toolModel.unread} />
 		{/if}
 	</div>
 
@@ -604,44 +677,7 @@
 		border: 1px solid rgba(255, 255, 255, 0.08);
 	}
 
-	.facet-label {
-		font-size: 9px;
-		font-weight: 700;
-		line-height: 1;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: rgba(255, 255, 255, 0.3);
-		padding-left: 4px;
-		margin-bottom: 2px;
-	}
 
-	.facet-chip {
-		display: flex;
-		align-items: center;
-		padding: 2px 8px;
-		border-radius: 4px;
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		background: rgba(255, 255, 255, 0.05);
-		color: rgba(255, 255, 255, 0.7);
-		font-size: 11px;
-		line-height: 1.35;
-		cursor: pointer;
-		transition: all 150ms ease-out;
-	}
-	.facet-chip:hover:not(:disabled) {
-		background: rgba(255, 255, 255, 0.1);
-		color: rgba(255, 255, 255, 0.9);
-		border-color: rgba(255, 255, 255, 0.25);
-	}
-	.facet-chip-open {
-		background: rgba(56, 189, 248, 0.2);
-		border-color: rgba(56, 189, 248, 0.4);
-		color: rgb(125, 211, 252);
-	}
-	.facet-chip:disabled {
-		opacity: 0.35;
-		cursor: default;
-	}
 
 	/* The equipment glyph as a control: borderless, so it reads as the
 	   glyph it was, brightening on hover and while its picker is open. */

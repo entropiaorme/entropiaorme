@@ -14,6 +14,7 @@ import type {
 	NotableEventType,
 	RecentEvent,
 	ToolActivity,
+	ToolSourceView,
 	TrackingSnapshot,
 	TrackingState,
 	Warning,
@@ -57,6 +58,10 @@ export interface TrackingLive {
 	 * creature (idle: the one the next session starts with), the pin, and
 	 * what the screen reads. */
 	mobSource?: MobSourceView | null;
+	/** Where the tool in hand comes from (the hotbar keys, or the game
+	 * screen) and, while it is the screen, what the screen shows of it:
+	 * then the tool held is this one, never `currentTool`. */
+	toolSource?: ToolSourceView | null;
 	currentTool?: string | null;
 	currentToolKind?: 'weapon' | 'healing' | 'consumable' | 'harvesting' | null;
 	/** What the held tool implies the next action records as. */

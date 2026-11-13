@@ -17,6 +17,7 @@ import {
 	removeFromLibrary,
 	type SettingsPatch,
 	searchEquipmentItems,
+	setLibraryEnabled,
 	updateLibrary,
 	updateSettings,
 } from '$lib/api';
@@ -28,6 +29,7 @@ import {
 	doseRequest,
 	previewDose,
 } from '$lib/features/consumables/doseForm';
+import { inDevelopment } from '$lib/inDevelopment';
 import type { Equipment, EquipmentDetail, HealingMode, HealingTool } from '$lib/types';
 import type {
 	AppSettings,
@@ -76,6 +78,23 @@ export function createLibraryModel() {
 	// This machine cannot read keys: the overlay declares the weapon instead.
 	let keyless = $state(false);
 	let carriedWeaponIds = $state<number[]>([]);
+	// The tool in hand is read off the game screen: holdable entries are
+	// switched on and off, and the hotbar keys start consumables only.
+	let toolReadingSetting = $state(false);
+	// The library's part in reading the held tool is a surface in
+	// development: shown where such surfaces are, and only with the setting on.
+	const toolReading = $derived(toolReadingSetting && inDevelopment.visible);
+	// The groups of entries the held-tool bar cannot tell apart, by id.
+	let indistinguishable = $state<string[][]>([]);
+	// How the player tells apart the members of those groups, by id.
+	let lookalikeLabels = $state<Record<string, string>>({});
+	// Each entry's switch writes run one after another (each waits for the
+	// one before it), so they reach the database in the order made; a
+	// failure puts back the last value stored, and only the latest write
+	// for the entry speaks for it.
+	const enabledChains = new Map<string, Promise<void>>();
+	const enabledLatest = new Map<string, number>();
+	const enabledStored = new Map<string, boolean>();
 	let harvestGuardrail = $state<HarvestGuardrailSettings>({
 		enabled: false,
 		shortToolId: null,
@@ -228,6 +247,7 @@ export function createLibraryModel() {
 			.map((e) => ({
 				id: e.id,
 				name: e.name,
+				enabled: e.enabled,
 				costPerHeal: e.costPerUse,
 				isLimited: e.isLimited,
 				reloadSeconds: e.reloadSeconds,
@@ -244,14 +264,15 @@ export function createLibraryModel() {
 
 	async function loadData(): Promise<void> {
 		try {
-			const [{ entries: library }, settings] = await Promise.all([
-				getEquipmentLibrary(),
-				getSettings(),
-			]);
+			const [{ entries: library, indistinguishable: groups, lookalikeLabels: labels }, settings] =
+				await Promise.all([getEquipmentLibrary(), getSettings()]);
 			allEquipment = library;
+			indistinguishable = groups;
+			lookalikeLabels = labels;
 			splitByKind(library);
 			applyHotbar(settings);
 			hotbarHooksEnabled = settings.hotbarHooksEnabled;
+			toolReadingSetting = settings.toolReadingEnabled;
 			keyless = settings.keyboard.keyless;
 			carriedWeaponIds = [...settings.carriedWeaponIds];
 			harvestGuardrail = settings.harvestGuardrail;
@@ -329,6 +350,56 @@ export function createLibraryModel() {
 			? allEquipment.map((item) => (item.id === updated.id ? updated : item))
 			: [...allEquipment, updated];
 		splitByKind(allEquipment);
+	}
+
+	/** Re-read which entries the held-tool bar cannot tell apart, and how
+	 * they are told apart: an entry saved, added, removed or switched may
+	 * have made or ended a group. Only while the reading is shown. */
+	async function refreshLookalikes() {
+		if (!toolReading) return;
+		try {
+			const read = await getEquipmentLibrary();
+			indistinguishable = read.indistinguishable;
+			lookalikeLabels = read.lookalikeLabels;
+		} catch {
+			// The flags stand until the next load.
+		}
+	}
+
+	/** Show an entry on or off at once and persist it, after any write for
+	 * the entry still in flight. A failure of the latest write puts back the
+	 * value last stored. */
+	function setEnabled(id: string, enabled: boolean): Promise<void> {
+		const entry = allEquipment.find((item) => item.id === id);
+		if (!entry || entry.enabled === enabled) return Promise.resolve();
+		if (!enabledStored.has(id)) enabledStored.set(id, entry.enabled);
+		const ticket = (enabledLatest.get(id) ?? 0) + 1;
+		enabledLatest.set(id, ticket);
+		const show = (value: boolean) => {
+			const current = allEquipment.find((item) => item.id === id);
+			if (current && current.enabled !== value) replaceEquipment({ ...current, enabled: value });
+		};
+		show(enabled);
+		const write = async () => {
+			try {
+				const stored = await setLibraryEnabled(id, enabled);
+				enabledStored.set(id, stored.enabled);
+				if (enabledLatest.get(id) === ticket) {
+					replaceEquipment(stored);
+					await refreshLookalikes();
+				}
+			} catch (e) {
+				if (enabledLatest.get(id) !== ticket) return;
+				show(enabledStored.get(id) ?? !enabled);
+				error = describeError(
+					e,
+					enabled ? `Could not turn ${entry.name} on` : `Could not turn ${entry.name} off`,
+				);
+			}
+		};
+		const next = (enabledChains.get(id) ?? Promise.resolve()).then(write);
+		enabledChains.set(id, next);
+		return next;
 	}
 
 	function openAddModal(prefill?: string, type: EquipmentFormType = 'weapon') {
@@ -550,8 +621,14 @@ export function createLibraryModel() {
 	 * weapon's attack rate and every healer's reload may have. */
 	async function refreshPricing() {
 		try {
-			const { entries: library } = await getEquipmentLibrary();
+			const {
+				entries: library,
+				indistinguishable: groups,
+				lookalikeLabels: labels,
+			} = await getEquipmentLibrary();
 			allEquipment = library;
+			indistinguishable = groups;
+			lookalikeLabels = labels;
 			splitByKind(library);
 			detailCache = {};
 			if (expandedId) detailCache[expandedId] = await getEquipmentDetail(expandedId);
@@ -662,6 +739,7 @@ export function createLibraryModel() {
 				replaceEquipment(item);
 				delete detailCache[item.id];
 			}
+			void refreshLookalikes();
 			showAddModal = false;
 			editingEquipmentId = null;
 		} catch (e) {
@@ -687,6 +765,7 @@ export function createLibraryModel() {
 			}
 			if (expandedId === id) expandedId = null;
 			delete detailCache[id];
+			void refreshLookalikes();
 		} catch (e) {
 			error = describeError(e, 'Failed to remove equipment');
 		}
@@ -736,6 +815,16 @@ export function createLibraryModel() {
 		get carriedWeaponIds() {
 			return carriedWeaponIds;
 		},
+		get toolReading() {
+			return toolReading;
+		},
+		get indistinguishable() {
+			return indistinguishable;
+		},
+		get lookalikeLabels() {
+			return lookalikeLabels;
+		},
+		setEnabled,
 		set carriedWeaponIds(value: number[]) {
 			carriedWeaponIds = value;
 		},

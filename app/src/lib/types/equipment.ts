@@ -23,6 +23,8 @@ export type {
 export interface HealingTool {
 	id: string;
 	name: string;
+	/** Whether the player has the entry in use (see `Equipment.enabled`). */
+	enabled: boolean;
 	costPerHeal: Pec;
 	isLimited: boolean;
 	reloadSeconds: number | null;

@@ -3,18 +3,31 @@ import type {
 	ActivityOptionsResult,
 	ConsumableOption,
 	ManualMobSuggestion,
+	MobSourceView,
 	QuestHandInState,
 	SessionDefinition,
 } from '$lib/api';
 import type { DeclarableOption } from '$lib/features/equipment/declareOptions';
+import type {
+	HeldToolAction,
+	HeldToolDisplay,
+	HeldToolSetup,
+} from '$lib/features/tracking/heldTool';
+import { expandedLines, type MobSourceLine } from '$lib/features/tracking/mobSource';
+import { subWindowChannel } from './subWindow';
 
-export const OVERLAY_MENU_WINDOW_LABEL = 'overlay-menu';
-export const OVERLAY_MENU_READY_EVENT = 'overlay-menu:ready';
-export const OVERLAY_MENU_SHOW_EVENT = 'overlay-menu:show';
-export const OVERLAY_MENU_HIDE_EVENT = 'overlay-menu:hide';
+/** The overlay's sub-window for menus and panels: one window, showing one
+ * of the kinds below at a time (see `subWindow.ts` for how they behave). */
+export const OVERLAY_MENU_CHANNEL = subWindowChannel('overlay-menu', '/overlay-menu');
+/** The overlay's sub-window for an armour recording, which stays while the
+ * player goes to the game: a window of its own, so a menu opened meanwhile
+ * does not take its place. */
+export const OVERLAY_ARMOUR_COST_CHANNEL = subWindowChannel(
+	'overlay-armour-cost',
+	'/overlay-armour-cost',
+);
+/** What the player chose in a menu or panel. */
 export const OVERLAY_MENU_SELECT_EVENT = 'overlay-menu:select';
-export const OVERLAY_MENU_CLOSED_EVENT = 'overlay-menu:closed';
-export const OVERLAY_MENU_INTERACT_EVENT = 'overlay-menu:interact';
 
 export type OverlayMenuKind =
 	| 'definition'
@@ -22,7 +35,10 @@ export type OverlayMenuKind =
 	| 'activities'
 	| 'questHandIn'
 	| 'consumables'
-	| 'equipment';
+	| 'equipment'
+	| 'mobSource'
+	| 'heldTool'
+	| 'note';
 
 export type OverlayMenuState =
 	| OverlayDefinitionMenuState
@@ -30,7 +46,95 @@ export type OverlayMenuState =
 	| OverlayActivitiesMenuState
 	| OverlayQuestHandInMenuState
 	| OverlayConsumablesMenuState
-	| OverlayEquipmentMenuState;
+	| OverlayEquipmentMenuState
+	| OverlayMobSourceState
+	| OverlayHeldToolState
+	| OverlayNoteState;
+
+/** The kinds that are a list of rows to pick from, sized by their count. */
+export type OverlayListMenuState = Exclude<
+	OverlayMenuState,
+	OverlayMobSourceState | OverlayHeldToolState | OverlayNoteState
+>;
+
+/** Whether `state` is a panel that says more about a line, as tall as what
+ * it says, rather than a list of rows. */
+export function isPanelState(
+	state: OverlayMenuState,
+): state is OverlayMobSourceState | OverlayHeldToolState | OverlayNoteState {
+	return state.kind === 'mobSource' || state.kind === 'heldTool' || state.kind === 'note';
+}
+
+/** The lines of the overlay's readout that open a panel saying more. */
+export type ReadoutPanel = 'mobSource' | 'heldTool' | 'screenUnread';
+
+/** The panel for where the session's mob comes from, as the snapshot last
+ * read it. */
+export function buildMobSourceState(
+	view: MobSourceView | null | undefined,
+	canType: boolean,
+	saving: boolean,
+): OverlayMobSourceState {
+	return {
+		kind: 'mobSource',
+		lines: expandedLines(view),
+		canType,
+		pinned: Boolean(view?.pin),
+		saving,
+	};
+}
+
+/** The panel for the tool in hand: what the reading says of it, with the
+ * hit cue's explanation when one stands. */
+export function buildHeldToolState(
+	display: HeldToolDisplay,
+	hitDetail: string | null,
+	declaring: boolean,
+): OverlayHeldToolState {
+	return {
+		kind: 'heldTool',
+		lines: hitDetail ? [...display.lines, hitDetail] : display.lines,
+		setup: display.setup,
+		actions: display.actions,
+		declaring,
+	};
+}
+
+/** What an armour recording is opened with. */
+export interface OverlayArmourCostState {
+	repairOcrEnabled: boolean;
+}
+
+/** Where the session's mob comes from: what the screen reads now, what
+ * recent kills suggest, the typed backstop, and a field to type a mob. */
+export interface OverlayMobSourceState {
+	kind: 'mobSource';
+	lines: MobSourceLine[];
+	/** The session is in a state that takes a typed mob. */
+	canType: boolean;
+	/** A mob is pinned: a typed one can only replace the pin. */
+	pinned: boolean;
+	/** A write is running: the controls wait. */
+	saving: boolean;
+}
+
+/** The tool in hand in full: its name, set-up, price, and what the screen's
+ * reading leaves open. */
+export interface OverlayHeldToolState {
+	kind: 'heldTool';
+	lines: string[];
+	setup: HeldToolSetup | null;
+	actions: HeldToolAction[];
+	/** A declaration is being saved. */
+	declaring: boolean;
+}
+
+/** A line of explanation under a heading. */
+export interface OverlayNoteState {
+	kind: 'note';
+	heading: string;
+	text: string;
+}
 
 /** The equipment picker: declare a weapon, healer, or harvesting tool in
  * hand without its hotbar press. The tool in hand and the healer held are
@@ -116,7 +220,11 @@ export type OverlayMenuSelection =
 	| { kind: 'activities'; action: 'handIn'; key: string }
 	| { kind: 'questHandIn'; action: 'completed' | 'cancelled' }
 	| { kind: 'consumables'; equipmentId: number; untimed: boolean }
-	| { kind: 'equipment'; equipmentId: number };
+	| { kind: 'equipment'; equipmentId: number }
+	| { kind: 'mobSource'; action: 'pin' | 'backstop'; species: string; maturity: string }
+	| { kind: 'mobSource'; action: 'clearBackstop' }
+	| { kind: 'heldTool'; action: 'declare'; equipmentId: number }
+	| { kind: 'heldTool'; action: 'choose' };
 
 /** The widest label's rendered width in the overlay menus' font, for
  * sizing a satellite menu to its content. Falls back to a character
@@ -161,7 +269,7 @@ export function computeMenuHeight(rows: number): number {
  * panel from the same count). Every kind falls back to one row: the
  * loading, error, and empty states each occupy exactly one line. The
  * Activities menu counts its free-text row as one more. */
-export function menuRowCount(state: OverlayMenuState): number {
+export function menuRowCount(state: OverlayListMenuState): number {
 	if (state.kind === 'definition') return Math.max(1, state.definitions.length);
 	if (state.kind === 'activities') {
 		// The free-text row is one more line, and the empty state is one

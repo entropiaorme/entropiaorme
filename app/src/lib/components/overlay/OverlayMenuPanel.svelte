@@ -4,14 +4,14 @@
 	import { formatTimeUntil } from '$lib/features/quests/cooldown';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import type { ActivityOption } from '$lib/api';
-	import type { OverlayMenuSelection, OverlayMenuState } from '$lib/windows/overlayMenu';
+	import type { OverlayListMenuState, OverlayMenuSelection } from '$lib/windows/overlayMenu';
 
 	let {
 		menuState,
 		onSelect,
 		onActivitySelect
 	}: {
-		menuState: OverlayMenuState;
+		menuState: OverlayListMenuState;
 		/** A pick that closes the menu (every kind but an Activities action). */
 		onSelect: (selection: OverlayMenuSelection) => void;
 		/** An Activities action, which keeps the control open (the overlay

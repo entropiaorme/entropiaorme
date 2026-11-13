@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { MobSourceView } from '$lib/api';
-import { createMobSourceModel, HOVER_CLOSE_MS } from './mobSourceModel.svelte';
+import { createMobSourceModel } from './mobSourceModel.svelte';
 
 const young = { name: 'Young Atrox', species: 'Atrox', maturity: 'Young' };
 const atrox = { name: 'Old Atrox', species: 'Atrox', maturity: 'Old' };
@@ -38,91 +38,16 @@ function rig(initial: MobSourceView | null, steerable?: boolean) {
 	};
 }
 
-beforeEach(() => {
-	vi.useFakeTimers();
-});
-
-afterEach(() => {
-	vi.useRealTimers();
-});
-
-describe('expanding the control', () => {
-	it('opens and closes for good on its toggle, and on Escape', () => {
-		const { model } = rig(reading());
-		expect(model.expanded).toBe(false);
-		model.toggle();
-		expect(model.expanded).toBe(true);
-		// Sticky: the pointer leaving does not close it.
-		model.pointerLeave();
-		vi.advanceTimersByTime(HOVER_CLOSE_MS * 4);
-		expect(model.expanded).toBe(true);
-		model.toggle();
-		expect(model.expanded).toBe(false);
-		model.toggle();
-		model.close();
-		expect(model.expanded).toBe(false);
+describe('what the control is', () => {
+	it('steers while the screen is read, unless told it cannot', () => {
+		expect(rig(reading()).model.steered).toBe(true);
+		expect(rig(reading({ readingScreen: false, reading: null })).model.steered).toBe(false);
+		expect(rig(reading(), false).model.steered).toBe(false);
 	});
 
-	it('opens on hover and closes a moment after the pointer leaves, unless it comes back', () => {
-		const { model } = rig(reading());
-		model.pointerEnter();
-		expect(model.expanded).toBe(true);
-		model.pointerLeave();
-		vi.advanceTimersByTime(HOVER_CLOSE_MS - 1);
-		model.pointerEnter();
-		vi.advanceTimersByTime(HOVER_CLOSE_MS * 2);
-		expect(model.expanded).toBe(true);
-		model.pointerLeave();
-		vi.advanceTimersByTime(HOVER_CLOSE_MS);
-		expect(model.expanded).toBe(false);
-	});
-
-	it('keeps a hover-opened panel open when its toggle is clicked', () => {
-		const { model } = rig(reading());
-		model.pointerEnter();
-		model.toggle();
-		expect(model.expanded).toBe(true);
-		model.pointerLeave();
-		vi.advanceTimersByTime(HOVER_CLOSE_MS * 4);
-		expect(model.expanded).toBe(true);
-		model.toggle();
-		expect(model.expanded).toBe(false);
-	});
-
-	it('stays open while the player works in it, whatever the pointer does', () => {
-		const { model } = rig(reading());
-		model.pointerEnter();
-		model.hold();
-		model.pointerLeave();
-		vi.advanceTimersByTime(HOVER_CLOSE_MS * 4);
-		expect(model.expanded).toBe(true);
-	});
-
-	it('never expands while the control is the typed mob alone', () => {
-		const off = rig(reading({ readingScreen: false, reading: null }));
-		expect(off.model.steered).toBe(false);
-		off.model.toggle();
-		off.model.pointerEnter();
-		expect(off.model.expanded).toBe(false);
-		// Nor when the control is told it cannot steer.
-		const fixed = rig(reading(), false);
-		expect(fixed.model.steered).toBe(false);
-		fixed.model.toggle();
-		expect(fixed.model.expanded).toBe(false);
-	});
-
-	it('steers a steered view unless told otherwise', () => {
-		const open = rig(reading());
-		expect(open.model.steered).toBe(true);
-		open.model.toggle();
-		expect(open.model.expanded).toBe(true);
-	});
-
-	it('shows the typed input in the panel while steered, in the strip while nothing is typed otherwise', () => {
-		const steered = rig(reading());
-		expect(steered.model.inputShown).toBe(false);
-		steered.model.toggle();
-		expect(steered.model.inputShown).toBe(true);
+	it('keeps its typed field in the readout only while it is the typed mob alone and none is typed', () => {
+		// Steered, typing is in the control's sub-window.
+		expect(rig(reading()).model.inputShown).toBe(false);
 		const typed = rig(reading({ readingScreen: false, reading: null }));
 		expect(typed.model.inputShown).toBe(false);
 		typed.set(reading({ readingScreen: false, reading: null, typed: null }));
@@ -146,33 +71,28 @@ describe('steering the source', () => {
 		expect(deps.unpin).toHaveBeenCalledTimes(1);
 	});
 
-	it('holds a typed pick while steered until the player pins it or keeps it as the backstop', async () => {
+	it('pins a mob typed in its sub-window, or keeps it as the backstop', async () => {
 		const { model, deps } = rig(reading());
-		model.toggle();
-		expect(await model.choose(daikiba)).toBe(true);
-		expect(model.draft).toEqual(daikiba);
-		expect(deps.setTyped).not.toHaveBeenCalled();
-		expect(deps.pin).not.toHaveBeenCalled();
-
-		expect(await model.pinDraft()).toBe(true);
+		expect(await model.pinTyped('Daikiba', 'Mature')).toBe(true);
 		expect(deps.pin).toHaveBeenCalledWith({
 			kind: 'typed',
 			species: 'Daikiba',
 			maturity: 'Mature',
 		});
-		expect(model.draft).toBeNull();
+		// A mob with no maturity is pinned with none.
+		await model.pinTyped('Atrox', '');
+		expect(deps.pin).toHaveBeenLastCalledWith({ kind: 'typed', species: 'Atrox', maturity: null });
+		expect(deps.setTyped).not.toHaveBeenCalled();
 
-		await model.choose({ display: 'Atrox', species: 'Atrox', maturity: '' });
-		expect(await model.backstopDraft()).toBe(true);
+		expect(await model.backstop('Atrox', '')).toBe(true);
 		expect(deps.setTyped).toHaveBeenCalledWith('Atrox', '');
-		expect(model.draft).toBeNull();
+		expect(deps.refresh).toHaveBeenCalledTimes(3);
 	});
 
-	it('takes a pick as the typed mob at once when not steered, as it always did', async () => {
+	it("takes a pick from the readout's own field as the typed mob at once", async () => {
 		const { model, deps } = rig(reading({ readingScreen: false, reading: null, typed: null }));
 		expect(await model.choose(daikiba)).toBe(true);
 		expect(deps.setTyped).toHaveBeenCalledWith('Daikiba', 'Mature');
-		expect(model.draft).toBeNull();
 	});
 
 	it('edits the backstop: clears it', async () => {

@@ -91,7 +91,8 @@ export interface SatelliteShowOptions {
 	 * Reveal the window after emitting the state (default true). A satellite
 	 * route that measures its content and reveals itself, to avoid a flash at
 	 * a stale position, opts out; `show()` then only delivers the state
-	 * payload (and focus is left to the satellite too).
+	 * payload, having made the window focusable or not as `focus` says, and
+	 * the satellite takes the keyboard itself when it should.
 	 */
 	reveal?: boolean;
 }
@@ -229,9 +230,11 @@ export function createSatelliteWindow(options: SatelliteWindowOptions): Satellit
 			);
 			await satellite.setPosition(new PhysicalPosition(position.x, position.y));
 		}
+		// Whether it may take the keyboard is settled before anyone reveals
+		// it, the satellite itself included.
+		await satellite.setFocusable(opts?.focus === true).catch(() => {});
 		await satellite.emit(options.showEvent, state);
 		if (opts?.reveal === false) return;
-		await satellite.setFocusable(opts?.focus === true).catch(() => {});
 		await satellite.show();
 		if (opts?.focus) {
 			await satellite.setFocus().catch(() => {});

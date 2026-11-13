@@ -9,7 +9,8 @@
 	import { getStatDef, type StatContext } from '$lib/statsRegistry';
 	import { statsScope } from '$lib/statsScope.svelte';
 	import { NO_DATA } from '$lib/utils/format';
-	import HoverFacet from './HoverFacet.svelte';
+	import SubWindowToggle from './SubWindowToggle.svelte';
+	import type { ReadoutPanel } from '$lib/windows/overlayMenu';
 	import ScreenUnreadNote from '$lib/features/tracking/ScreenUnreadNote.svelte';
 	import type { DosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import {
@@ -27,11 +28,7 @@
 		screenNotReadLine,
 		screenShowsTool,
 	} from '$lib/features/tracking/heldTool';
-	import {
-		createHeldToolModel,
-		type HeldToolModel,
-	} from '$lib/features/tracking/heldToolModel.svelte';
-	import { expandedLines, primaryAction, standing } from '$lib/features/tracking/mobSource';
+	import { primaryAction, standing } from '$lib/features/tracking/mobSource';
 	import {
 		createMobSourceModel,
 		type MobSourceModel,
@@ -73,9 +70,8 @@
 		onArmourCostToggle = noop,
 		onDosesTrigger = noop,
 		onEquipmentTrigger = noop,
-		onDeclareTool = noop,
-		onChooseTool = undefined,
-		heldTool = null,
+		openPanel = null,
+		onPanelTrigger = noop,
 	}: {
 		data: TrackingLive;
 		status?: TrackingStatus | null;
@@ -113,9 +109,11 @@
 		onArmourCostToggle?: (event: MouseEvent) => void | Promise<void>;
 		onDosesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 		onEquipmentTrigger?: (anchor: HTMLElement) => void | Promise<void>;
-		onDeclareTool?: (equipmentId: number) => void | Promise<void>;
-		onChooseTool?: (anchor: HTMLElement) => void | Promise<void>;
-		heldTool?: HeldToolModel | null;
+		/** The panel whose sub-window is open, if any. */
+		openPanel?: ReadoutPanel | null;
+		/** A line that says more was clicked: open or close its sub-window,
+		 * hung from `anchor`. */
+		onPanelTrigger?: (panel: ReadoutPanel, anchor: HTMLElement) => void | Promise<void>;
 	} = $props();
 
 	const isActive = $derived(data.status === 'active');
@@ -135,7 +133,6 @@
 	const mobView = $derived(data.mobSource ?? null);
 	const shown = $derived(standing(mobView));
 	const mobAction = $derived(primaryAction(mobView));
-	const mobLines = $derived(expandedLines(mobView));
 	const mobSaving = $derived(mobModel.busy !== null);
 
 	/** A mob as its species and what tells it apart within it. */
@@ -168,9 +165,6 @@
 			(Boolean(data.currentTool) || (data.unpricedShots ?? 0) > 0),
 	);
 	const pickerRefused = $derived(screenShowsTool(data.toolSource));
-	const ownHeldTool = createHeldToolModel({ source: () => data.toolSource });
-	$effect(() => () => ownHeldTool.destroy());
-	const toolModel = $derived(heldTool ?? ownHeldTool);
 	const hitCue: HeldToolFeedback | null = $derived(
 		data.weaponHitCue
 			? {
@@ -199,9 +193,6 @@
 		}
 		return null;
 	});
-	const toolLines = $derived(
-		toolScreen ? (hitCue?.detail ? [...toolScreen.lines, hitCue.detail] : toolScreen.lines) : [],
-	);
 	const fittedMarks = $derived(
 		Array.from({ length: toolScreen?.setup?.fitted ?? 0 }, (_, index) => index),
 	);
@@ -212,11 +203,6 @@
 		quiet: 'tone-faint',
 		attention: 'tone-attention',
 	};
-
-	function declareTool(equipmentId: number) {
-		toolModel.screen.close();
-		void onDeclareTool(equipmentId);
-	}
 
 	// --- The session's figures ----------------------------------------
 	const lifetime = $derived(status?.lifetime ?? null);
@@ -308,10 +294,7 @@
 		{placeholder}
 		aria-label="Mob"
 		disabled={selectingMob || mobSaving}
-		onfocus={() => {
-			mobModel.hold();
-			onMobFocus();
-		}}
+		onfocus={onMobFocus}
 		onblur={onMobBlur}
 		onkeydown={onMobKeydown}
 	/>
@@ -494,74 +477,16 @@
 			</span>
 			<span class="declared">not {data.harvestGuardrail.observedTool ?? 'no tool'}</span>
 		{:else if toolScreen}
-			<HoverFacet
-				panel={toolModel.screen}
-				label="Tool in hand"
-				panelId="held-tool-panel"
-				toggleTitle="The tool in hand"
-				toggleTestId="held-tool"
-				panelTestId="held-tool-panel"
-				testId="held-tool-facet"
-				class="facet-host"
-			>
-				{#snippet control(toggle)}
-					{@render toggle(screenTool)}
-				{/snippet}
-				{#snippet content()}
-					{@const setup = toolScreen.setup}
-					<span class="panel-head">Tool</span>
-					{#if setup}
-						<p class="panel-value break-words" data-testid="held-tool-name">{setup.name}</p>
-					{/if}
-					{#each toolLines as line (line)}
-						<p class="panel-note" data-testid="held-tool-line">{line}</p>
-					{/each}
-					{#if setup}
-						{#if setup.rows.length > 0}
-							<dl class="setup-rows" data-testid="held-tool-setup">
-								{#each setup.rows as row (row.label)}
-									<dt class="panel-key">{row.label}</dt>
-									<dd class="break-words">{row.value}</dd>
-								{/each}
-							</dl>
-						{/if}
-						<div class="setup-cost" data-testid="held-tool-cost">
-							<p><span class="panel-value">{setup.cost}</span> <span class="panel-key">{setup.per}</span></p>
-							{#if setup.tt}<p class="panel-key">{setup.tt}</p>{/if}
-						</div>
-					{/if}
-					{#if toolScreen.actions.length > 0}
-						<div class="mt-2 flex flex-col gap-1.5">
-							{#each toolScreen.actions as action, index (index)}
-								{#if action.kind === 'declare'}
-									<div class="flex items-center gap-2">
-										<span class="panel-value min-w-0 flex-1 truncate">{action.name}</span>
-										<button
-											type="button"
-											class="facet-chip shrink-0 whitespace-nowrap"
-											disabled={declaringEquipment}
-											aria-label={action.accessibleName}
-											title="Take this as the tool in hand until the screen shows what is held"
-											onclick={() => declareTool(action.equipmentId)}
-										>
-											{action.label}
-										</button>
-									</div>
-								{:else}
-									<button
-										type="button"
-										class="facet-chip self-start whitespace-nowrap"
-										disabled={declaringEquipment}
-										onclick={(event) => void (onChooseTool ?? onEquipmentTrigger)(event.currentTarget)}
-									>
-										{action.label}
-									</button>
-								{/if}
-							{/each}
-						</div>
-					{/if}
-				{/snippet}
-			</HoverFacet>
+			<span class="facet-host" data-testid="held-tool-facet">
+				<SubWindowToggle
+					open={openPanel === 'heldTool'}
+					title="The tool in hand: its set-up and what a use costs"
+					testId="held-tool"
+					onToggle={(anchor) => onPanelTrigger('heldTool', anchor)}
+				>
+					{@render screenTool()}
+				</SubWindowToggle>
+			</span>
 			{#if screenCue}
 				{@render toolCue(screenCue.text, screenCue.tone, screenCue.detail, screenCue.testId)}
 			{/if}
@@ -588,7 +513,11 @@
 			{/if}
 		{/if}
 		{#if unreadLine}
-			<ScreenUnreadNote line={unreadLine} panel={toolModel.unread} />
+			<ScreenUnreadNote
+				line={unreadLine}
+				open={openPanel === 'screenUnread'}
+				onToggle={(anchor) => onPanelTrigger('screenUnread', anchor)}
+			/>
 		{/if}
 		<!-- Armour cost: recorded when repairing or scanning, so it needs no
 			 running session. Quiet until reached for. -->
@@ -645,53 +574,17 @@
 	</div>
 	<div class="cell mob-row" data-testid="mob-facet">
 		{#if mobModel.steered}
-			<HoverFacet
-				panel={mobModel}
-				label="Mob"
-				panelLabel="Where the mob comes from"
-				panelId="mob-source-panel"
-				toggleTitle="Where the mob comes from"
-				toggleTestId="mob-shown"
-				toggleData={{ standing: shown.kind }}
-				panelTestId="mob-source-panel"
-				class="facet-host"
-			>
-				{#snippet control(toggle)}
-					{@render toggle(mobName)}
-				{/snippet}
-				{#snippet content()}
-					<span class="panel-head">Mob</span>
-					{#each mobLines as line (line.kind)}
-						<div class="mob-line" data-testid="mob-line" data-kind={line.kind}>
-							<div class="flex items-baseline justify-between gap-3">
-								<span class="panel-key">{line.label}</span>
-								{#if line.kind === 'backstop' && line.creature}
-									<button type="button" class="panel-link" disabled={mobSaving} onclick={() => void mobModel.clearTyped()}>
-										Clear
-									</button>
-								{/if}
-							</div>
-							<div class="panel-value {line.creature ? '' : 'tone-faint'}">{line.creature?.name ?? NO_DATA}</div>
-							{#if line.note}<p class="panel-note">{line.note}</p>{/if}
-						</div>
-					{/each}
-					<div class="mob-line">
-						{#if inputAvailable}{@render typedInput('Type a mob...', false)}{/if}
-						{#if mobModel.draft}
-							{@const picked = mobModel.draft}
-							<div class="mt-2 flex items-center gap-2" data-testid="mob-draft">
-								<span class="panel-value min-w-0 flex-1 truncate">{picked.display}</span>
-								<button type="button" class="facet-chip whitespace-nowrap" disabled={mobSaving} onclick={() => void mobModel.pinDraft()}>Pin</button>
-								{#if !mobView?.pin}
-									<button type="button" class="facet-chip whitespace-nowrap" disabled={mobSaving} onclick={() => void mobModel.backstopDraft()}>
-										Use as backstop
-									</button>
-								{/if}
-							</div>
-						{/if}
-					</div>
-				{/snippet}
-			</HoverFacet>
+			<span class="facet-host">
+				<SubWindowToggle
+					open={openPanel === 'mobSource'}
+					title="Where the mob comes from"
+					testId="mob-shown"
+					data={{ standing: shown.kind }}
+					onToggle={(anchor) => onPanelTrigger('mobSource', anchor)}
+				>
+					{@render mobName()}
+				</SubWindowToggle>
+			</span>
 		{:else if inputAvailable && mobModel.inputShown}
 			{@render typedInput('Type a mob...', true)}
 		{:else}
@@ -1011,15 +904,15 @@
 		flex: none;
 	}
 
-	/* The shared expanding shell, hosted on a name line: the toggle's own
-	   padding is taken back so the name keeps the content edge. */
+	/* A name line that opens a sub-window: the toggle's own padding is
+	   taken back so the name keeps the content edge. */
 	.cell :global(.facet-host) {
 		display: flex;
 		align-items: center;
 		min-width: 0;
 		margin-left: -4px;
 	}
-	.cell :global(.facet-host .facet-toggle) {
+	.cell :global(.facet-host .sub-toggle) {
 		font-size: inherit;
 		font-weight: inherit;
 		min-width: 0;
@@ -1274,32 +1167,6 @@
 		font-weight: 500;
 	}
 
-	/* ---- the expanded panels ---- */
-	.panel-head {
-		display: block;
-		margin-bottom: 6px;
-		font-size: 11px;
-		font-weight: 500;
-		color: var(--sky);
-	}
-	.panel-key {
-		font-size: 11px;
-		font-weight: 400;
-		color: var(--t3);
-	}
-	.panel-value {
-		font-size: 13px;
-		font-weight: 500;
-		color: var(--t1);
-		white-space: normal;
-	}
-	.panel-note {
-		font-size: 11px;
-		font-weight: 400;
-		line-height: 1.4;
-		color: var(--t3);
-		white-space: normal;
-	}
 	.panel-link {
 		padding: 0;
 		border: none;
@@ -1311,25 +1178,5 @@
 	}
 	.panel-link:hover:not(:disabled) {
 		color: var(--t1);
-	}
-	.mob-line + .mob-line {
-		margin-top: 8px;
-	}
-	.setup-rows {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		gap: 4px 12px;
-		margin-top: 8px;
-		font-size: 11.5px;
-		font-weight: 400;
-		line-height: 1.4;
-		color: var(--t2);
-		white-space: normal;
-	}
-	.setup-cost {
-		margin-top: 8px;
-		padding-top: 8px;
-		border-top: 1px solid var(--hair);
-		font-variant-numeric: tabular-nums;
 	}
 </style>

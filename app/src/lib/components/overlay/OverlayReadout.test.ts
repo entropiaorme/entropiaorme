@@ -733,43 +733,24 @@ describe('the tool in hand read off the screen', () => {
 		expect(screen.queryByTestId('activity-feedback')).toBeNull();
 	});
 
-	it('declares an entry the player picks where the screen cannot say', async () => {
-		const onDeclareTool = vi.fn();
-		render(OverlayReadout, {
-			props: {
-				data: liveData({
-					...fallback,
-					toolSource: source({
-						kind: 'uncertain',
-						why: { kind: 'disabled', entries: [{ id: 7, name: 'Rifle', label: 'Rifle' }] },
-					}),
-				}),
-				onDeclareTool,
-			},
-		});
-		await fireEvent.click(screen.getByTestId('held-tool'));
-		expect(screen.getByText('Rifle is turned off in your equipment.')).toBeTruthy();
-		await fireEvent.click(screen.getByRole('button', { name: 'Use Rifle' }));
-		expect(onDeclareTool).toHaveBeenCalledWith(7);
-	});
-
-	it('opens the picker from "Choose a tool" through its own action', async () => {
-		const onChooseTool = vi.fn();
-		const onEquipmentTrigger = vi.fn();
-		render(OverlayReadout, {
-			props: {
-				data: liveData({
-					...fallback,
-					toolSource: source({ kind: 'uncertain', why: { kind: 'unreadable' } }),
-				}),
-				onChooseTool,
-				onEquipmentTrigger,
-			},
-		});
-		await fireEvent.click(screen.getByTestId('held-tool'));
-		await fireEvent.click(screen.getByRole('button', { name: 'Choose a tool' }));
-		expect(onChooseTool).toHaveBeenCalledTimes(1);
-		expect(onEquipmentTrigger).not.toHaveBeenCalled();
+	it('opens the tool in full in a sub-window hung from its line, and says when it is open', async () => {
+		const onPanelTrigger = vi.fn();
+		const props = {
+			data: liveData({
+				...fallback,
+				toolSource: source({ kind: 'uncertain', why: { kind: 'unreadable' } }),
+			}),
+			onPanelTrigger,
+		};
+		const view = render(OverlayReadout, { props });
+		const toggle = screen.getByTestId('held-tool');
+		expect(toggle.getAttribute('aria-expanded')).toBe('false');
+		// Nothing of the panel is drawn in the readout itself.
+		expect(screen.queryByRole('button', { name: 'Choose a tool' })).toBeNull();
+		await fireEvent.click(toggle);
+		expect(onPanelTrigger).toHaveBeenCalledWith('heldTool', toggle);
+		await view.rerender({ ...props, openPanel: 'heldTool' });
+		expect(screen.getByTestId('held-tool').getAttribute('aria-expanded')).toBe('true');
 	});
 
 	it('does not offer the picker while the screen shows what is held', () => {
@@ -780,6 +761,7 @@ describe('the tool in hand read off the screen', () => {
 	});
 
 	it('keeps the hotbar display and all its cues while the screen is not being read, with one marker', async () => {
+		const onPanelTrigger = vi.fn();
 		render(OverlayReadout, {
 			props: {
 				data: liveData({
@@ -789,6 +771,7 @@ describe('the tool in hand read off the screen', () => {
 						{ readingScreen: false, notReading: 'notStarted' },
 					),
 				}),
+				onPanelTrigger,
 			},
 		});
 		expect(screen.getByText('Sollomate Opalo')).toBeTruthy();
@@ -797,12 +780,13 @@ describe('the tool in hand read off the screen', () => {
 		);
 		expect(screen.queryByTestId('held-tool-facet')).toBeNull();
 		expect(screen.getByTestId('screen-unread-marker').textContent?.trim()).toBe('Screen not read');
-		await fireEvent.click(screen.getByTestId('screen-unread'));
-		expect(
-			screen.getByText(
-				'Screen capture is not running: turn the setting off and on to start it. Hotbar keys are in use.',
-			),
-		).toBeTruthy();
+		// The marker says why on hover, and in a sub-window on a click.
+		const marker = screen.getByTestId('screen-unread');
+		expect(marker.getAttribute('title')).toBe(
+			'Screen capture is not running: turn the setting off and on to start it. Hotbar keys are in use.',
+		);
+		await fireEvent.click(marker);
+		expect(onPanelTrigger).toHaveBeenCalledWith('screenUnread', marker);
 		// Reading the held tool is not in development: the note carries no mark.
 		expect(screen.queryByTestId('in-development-mark')).toBeNull();
 	});
@@ -883,7 +867,10 @@ describe('the mob while the screen is read', () => {
 	const old = { name: 'Atrox Old', species: 'Atrox', maturity: 'Old' };
 	const young = { name: 'Atrox Young', species: 'Atrox', maturity: 'Young' };
 
-	function mount(source: NonNullable<TrackingLive['mobSource']>) {
+	function mount(
+		source: NonNullable<TrackingLive['mobSource']>,
+		props: Record<string, unknown> = {},
+	) {
 		const deps = {
 			view: () => source,
 			pin: vi.fn(async () => ({})),
@@ -894,7 +881,7 @@ describe('the mob while the screen is read', () => {
 		};
 		const mobSource = createMobSourceModel(deps);
 		render(OverlayReadout, {
-			props: { data: liveData({ status: 'active', mobSource: source }), mobSource },
+			props: { data: liveData({ status: 'active', mobSource: source }), mobSource, ...props },
 		});
 		return deps;
 	}
@@ -928,13 +915,18 @@ describe('the mob while the screen is read', () => {
 		expect(deps.unpin).toHaveBeenCalledTimes(1);
 	});
 
-	it('says where the mob comes from when expanded, with the backstop to set', async () => {
-		mount({ readingScreen: true, pin: null, typed: young, reading: old, continuity: null });
+	it('opens where the mob comes from in a sub-window hung from its line', async () => {
+		const onPanelTrigger = vi.fn();
+		mount(
+			{ readingScreen: true, pin: null, typed: young, reading: old, continuity: null },
+			{ onPanelTrigger },
+		);
+		const toggle = screen.getByTestId('mob-shown');
+		await fireEvent.click(toggle);
+		expect(onPanelTrigger).toHaveBeenCalledWith('mobSource', toggle);
+		// The readout draws none of it, and no field to type in while steered.
 		expect(screen.queryByText('Your backstop')).toBeNull();
-		await fireEvent.click(screen.getByTestId('mob-shown'));
-		expect(screen.getByText('Reading now')).toBeTruthy();
-		expect(screen.getByText('Your backstop')).toBeTruthy();
-		expect(screen.getByPlaceholderText('Type a mob...')).toBeTruthy();
+		expect(screen.queryByPlaceholderText('Type a mob...')).toBeNull();
 	});
 });
 

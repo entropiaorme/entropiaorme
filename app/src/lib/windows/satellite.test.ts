@@ -325,13 +325,20 @@ describe('show', () => {
 
 		// A self-revealing satellite (it measures, positions, and shows itself
 		// from the payload) gets the state and nothing else: no host-side
-		// reveal, no host-side focus.
+		// reveal, no host-side focus. Whether it may take the keyboard is
+		// settled first, since the satellite reveals itself.
 		await satellite.show(state, undefined, { reveal: false, focus: true });
 
 		expect(existing.emit).toHaveBeenCalledWith(options.showEvent, state);
 		expect(existing.show).not.toHaveBeenCalled();
 		expect(existing.setFocus).not.toHaveBeenCalled();
-		expect(existing.setFocusable).not.toHaveBeenCalled();
+		expect(existing.setFocusable).toHaveBeenCalledWith(true);
+		expect(existing.setFocusable.mock.invocationCallOrder[0]).toBeLessThan(
+			existing.emit.mock.invocationCallOrder[0],
+		);
+
+		await satellite.show(state, undefined, { reveal: false });
+		expect(existing.setFocusable).toHaveBeenLastCalledWith(false);
 	});
 });
 

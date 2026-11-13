@@ -33,44 +33,38 @@
 	import { createMobSourceModel } from '$lib/features/tracking/mobSourceModel.svelte';
 	import { createMobEntry } from '$lib/features/tracking/mobEntry.svelte';
 	import { createOverlayNotices } from '$lib/features/tracking/overlayNotices.svelte';
-	import { createOverlayArmourCostModel } from '$lib/features/protection/overlayArmourCostModel.svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { PhysicalPosition } from '@tauri-apps/api/dpi';
 	import { listen } from '@tauri-apps/api/event';
-	import { anchorBelow } from '$lib/windows/anchor';
-	import { createSatelliteWindow } from '$lib/windows/satellite';
+	import {
+		ARMOUR_COST_SUB_WINDOW as ARMOUR_COST,
+		createOverlaySubWindows
+	} from '$lib/windows/overlaySubWindows.svelte';
 	import { createWindowSizeSync } from '$lib/windows/windowSize';
 	import {
-		OVERLAY_MENU_CLOSED_EVENT,
-		OVERLAY_MENU_HIDE_EVENT,
-		OVERLAY_MENU_INTERACT_EVENT,
-		OVERLAY_MENU_READY_EVENT,
 		OVERLAY_MENU_SELECT_EVENT,
-		OVERLAY_MENU_SHOW_EVENT,
-		OVERLAY_MENU_WINDOW_LABEL,
-		OVERLAY_MENU_MIN_WIDTH,
 		buildActivitiesMenuState,
 		buildConsumablesMenuState,
+		buildHeldToolState,
+		buildMobSourceState,
 		buildQuestHandInMenuState,
 		buildDefinitionMenuState,
-		computeMenuHeight,
-		menuRowCount,
+		type OverlayArmourCostState,
 		type OverlayMenuKind,
 		type OverlayMenuSelection,
-		type OverlayMenuState
+		type OverlayMenuState,
+		type ReadoutPanel
 	} from '$lib/windows/overlayMenu';
-	import {
-		OVERLAY_ARMOUR_COST_CLOSED_EVENT,
-		OVERLAY_ARMOUR_COST_HIDE_EVENT,
-		OVERLAY_ARMOUR_COST_READY_EVENT,
-		OVERLAY_ARMOUR_COST_SHOW_EVENT,
-		OVERLAY_ARMOUR_COST_WINDOW_LABEL
-	} from '$lib/windows/overlayArmourCost';
 	import OverlayReadout from '$lib/components/overlay/OverlayReadout.svelte';
 	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
-	import { toolInHand } from '$lib/features/tracking/heldTool';
-	import { createHeldToolModel } from '$lib/features/tracking/heldToolModel.svelte';
+	import {
+		cueCopy,
+		heldToolDisplay,
+		screenNotReadLine,
+		toolInHand
+	} from '$lib/features/tracking/heldTool';
+	import { isSteered } from '$lib/features/tracking/mobSource';
 	import { doseState } from '$lib/features/consumables/doses';
 	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
 	import { attachLifetimeLootValuation } from '$lib/features/dashboard/lifetimeLootValuation.svelte';
@@ -87,10 +81,8 @@
 	// Emitted by the shell (toggle_overlay) when this hidden window is shown, so
 	// the overlay can re-read config/runtime fields no tracking frame announces.
 	const OVERLAY_SHOWN_EVENT = 'overlay-shown';
-	const OVERLAY_MENU_VERTICAL_GAP = 6;
 
 	let overlayRoot: HTMLDivElement | null = $state(null);
-	let overlayMenuKind = $state<OverlayMenuKind | null>(null);
 	let decidingWeapon = $state(false);
 	let data = $state<TrackingLive>({ status: 'idle' });
 	let status = $state<TrackingStatus | null>(null);
@@ -109,36 +101,22 @@
 
 
 
-	// The two satellite popovers this window drives. The failure messages keep
-	// the overlay's established wording (they render in the strip).
-	const menuWindow = createSatelliteWindow({
-		label: OVERLAY_MENU_WINDOW_LABEL,
-		url: '/overlay-menu',
-		width: OVERLAY_MENU_MIN_WIDTH,
-		height: 44,
-		readyEvent: OVERLAY_MENU_READY_EVENT,
-		showEvent: OVERLAY_MENU_SHOW_EVENT,
-		hideEvent: OVERLAY_MENU_HIDE_EVENT,
-		messages: {
-			creationTimeout: 'Popup window creation timed out',
-			creationFailed: 'Unknown Tauri popup creation error',
-			readyTimeout: 'Popup route did not become ready'
-		}
+	// The overlay's sub-windows: every menu and panel it opens beside
+	// itself, all opened, placed and closed by the one host (the rules are
+	// in `lib/windows/subWindow.ts`).
+	const subWindows = createOverlaySubWindows({
+		onError: (id, error) => {
+			console.error(`Overlay ${id} popup failed`, error);
+			notices.push(describeOverlayMenuError(error));
+		},
+		// The typed mob's suggestions follow its field: anything that happens
+		// in them, or to them, settles the field's own pending close.
+		onClosed: (id) => id === 'mob' && mobEntry.clearCloseTimer(),
+		onInteract: (id) => id === 'mob' && mobEntry.clearCloseTimer()
 	});
-	const armourCostWindow = createSatelliteWindow({
-		label: OVERLAY_ARMOUR_COST_WINDOW_LABEL,
-		url: '/overlay-armour-cost',
-		width: 320,
-		height: 64,
-		readyEvent: OVERLAY_ARMOUR_COST_READY_EVENT,
-		showEvent: OVERLAY_ARMOUR_COST_SHOW_EVENT,
-		hideEvent: OVERLAY_ARMOUR_COST_HIDE_EVENT,
-		messages: {
-			creationTimeout: 'Armour cost popup creation timed out',
-			creationFailed: 'Unknown Tauri popup creation error',
-			readyTimeout: 'Armour cost popup did not become ready'
-		}
-	});
+	$effect(() => subWindows.connect());
+	/** What the menu window shows, if anything. */
+	const overlayMenuKind = $derived(subWindows.shownIn('menu') as OverlayMenuKind | 'screenUnread' | null);
 
 	// The consolidated snapshot, event-driven with coalesced re-reads (see the
 	// factory). Each webview is its own JS context, so the overlay keeps its
@@ -184,10 +162,6 @@
 		clearTyped: releaseMob,
 		refresh: () => snapshot.hydrate()
 	});
-	$effect(() => () => mobSource.destroy());
-	// The tool in hand's panels, closed with the mob's when the overlay hides.
-	const heldTool = createHeldToolModel({ source: () => data.toolSource });
-	$effect(() => () => heldTool.destroy());
 	// Its typed entry: the catalogue typeahead and the suggestion menu.
 	const mobEntry = createMobEntry({
 		source: mobSource,
@@ -195,9 +169,9 @@
 		search: getManualMobSuggestions,
 		menu: {
 			show: (anchor, state) => showOverlayMenu('mob', anchor, state),
-			hide: hideOverlayMenu,
-			isOpen: () => overlayMenuKind === 'mob',
-			isFocused: () => menuWindow.isFocused()
+			hide: () => subWindows.close('mob'),
+			isOpen: () => subWindows.isOpen('mob'),
+			isFocused: subWindows.menuFocused
 		}
 	});
 
@@ -217,12 +191,8 @@
 	async function handleDrag(e: MouseEvent) {
 		const target = e.target as HTMLElement;
 		if (target.closest('button, [role="button"], input, select, textarea')) return;
-		if (overlayMenuKind) {
-			await hideOverlayMenu();
-		}
-		if (armourCost.open) {
-			await armourCost.hide();
-		}
+		// A sub-window hangs from where the overlay is: none follows a drag.
+		await subWindows.closeAll();
 		await getCurrentWindow().startDragging();
 	}
 
@@ -234,78 +204,61 @@
 		return 'Popup window failed to open';
 	}
 
-	function reportOverlayMenuOpenError(kind: OverlayMenuKind, error: unknown) {
-		console.error(`Overlay ${kind} popup failed`, error);
-		notices.push(describeOverlayMenuError(error));
-	}
-
-	// Keep this window's OS footprint exactly the strip and its notices; each
-	// sync re-anchors the armour-cost popup, which hangs off a strip button.
+	// Keep this window's OS footprint exactly the readout and its notices;
+	// each sync lets the open sub-windows follow their controls.
 	const windowSizeSync = createWindowSizeSync(() => overlayRoot, {
-		afterSync: () => armourCost.scheduleAnchorSync()
+		afterSync: () => void subWindows.reanchor()
 	});
 
 
+	/** Show a menu or panel in the menu window. The typed mob's suggestions
+	 * follow its field and take no keyboard; a quest hand-in stays while
+	 * the player goes to hand the quest in. */
 	async function showOverlayMenu(
 		kind: OverlayMenuKind,
 		anchor: HTMLElement,
 		state: OverlayMenuState,
 		options: { focusPopup?: boolean } = {}
 	) {
-		try {
-			// Resolve the window (creating it on first use) while the anchor
-			// maths runs; the show below re-adopts the settled window.
-			const [, anchorPosition] = await Promise.all([
-				menuWindow.ensure(),
-				anchorBelow(anchor, OVERLAY_MENU_VERTICAL_GAP)
-			]);
-			const height = computeMenuHeight(menuRowCount(state));
-
-			await menuWindow.show(
-				state,
-				{ x: anchorPosition.x, y: anchorPosition.y, width: state.width, height },
-				{ focus: options.focusPopup }
-			);
-			overlayMenuKind = kind;
-		} catch (error) {
-			overlayMenuKind = null;
-			reportOverlayMenuOpenError(kind, error);
-		}
+		await subWindows.open({
+			slot: 'menu',
+			id: kind,
+			anchor,
+			state,
+			focus: options.focusPopup === true,
+			attached: kind === 'mob',
+			stays: kind === 'questHandIn'
+		});
 	}
 
-	async function hideOverlayMenu() {
-		if (overlayMenuKind === 'mob') mobEntry.clearCloseTimer();
-		overlayMenuKind = null;
-		await menuWindow.hide();
+	/** A menu's control was clicked: close it when it is open, else open
+	 * it with what `build` reads for it. */
+	function toggleOverlayMenu(
+		kind: OverlayMenuKind,
+		anchor: HTMLElement,
+		build: () => OverlayMenuState | null | Promise<OverlayMenuState | null>
+	) {
+		return subWindows.toggleWith({ slot: 'menu', id: kind, anchor, focus: true }, build);
 	}
 
 
-	/** Open the session picker off its chip: fetch the authored
-	 * definitions fresh (the dashboard authors them; the overlay must
-	 * never present a stale catalogue) and present them with the
-	 * current selection marked. */
-	async function openDefinitionMenu(anchor: HTMLButtonElement) {
-		let definitions;
-		try {
-			definitions = await getSessionDefinitions();
-		} catch (error) {
-			notices.push(describeOverlayMenuError(error));
-			return;
-		}
-		const state = buildDefinitionMenuState(
-			anchor.getBoundingClientRect().width,
-			definitions,
-			data.sessionDefinitionId ?? null
-		);
-		await showOverlayMenu('definition', anchor, state, { focusPopup: true });
-	}
-
-	async function toggleDefinitionMenu(anchor: HTMLButtonElement) {
-		if (overlayMenuKind === 'definition') {
-			await hideOverlayMenu();
-			return;
-		}
-		await openDefinitionMenu(anchor);
+	/** The session picker off its title: the authored definitions, fetched
+	 * fresh (the dashboard authors them; the overlay must never present a
+	 * stale catalogue), with the current selection marked. */
+	function toggleDefinitionMenu(anchor: HTMLButtonElement) {
+		return toggleOverlayMenu('definition', anchor, async () => {
+			try {
+				const definitions = await getSessionDefinitions();
+				return buildDefinitionMenuState(
+					anchor.getBoundingClientRect().width,
+					definitions,
+					data.sessionDefinitionId ?? null
+				);
+			} catch (error) {
+				notices.push(describeOverlayMenuError(error));
+				return null;
+			}
+		});
 	}
 
 	// The Activities control's anchor, kept so an action can re-present
@@ -329,10 +282,16 @@
 	}
 
 	async function toggleActivitiesMenu(anchor: HTMLElement) {
-		if (overlayMenuKind === 'activities' || overlayMenuKind === 'questHandIn') {
-			await hideOverlayMenu();
+		// A hand-in is the activities control's too: its click closes either.
+		if (subWindows.isOpen('questHandIn')) {
+			await subWindows.close('questHandIn');
 			return;
 		}
+		if (subWindows.isOpen('activities')) {
+			await subWindows.close('activities');
+			return;
+		}
+		if (subWindows.reclicked('activities')) return;
 		await openActivitiesMenu(anchor);
 	}
 
@@ -357,16 +316,14 @@
 		}
 	});
 
-	async function toggleDosesMenu(anchor: HTMLElement) {
-		if (overlayMenuKind === 'consumables') {
-			await hideOverlayMenu();
-			return;
-		}
-		const running = doses.rows.flatMap((dose) =>
-			doseState(dose, doses.now) === 'running' && dose.equipmentId !== null ? [dose.equipmentId] : []
-		);
-		const width = anchor.getBoundingClientRect().width;
-		await showOverlayMenu('consumables', anchor, buildConsumablesMenuState(width, doses.options, running), { focusPopup: true });
+	function toggleDosesMenu(anchor: HTMLElement) {
+		return toggleOverlayMenu('consumables', anchor, () => {
+			const running = doses.rows.flatMap((dose) =>
+				doseState(dose, doses.now) === 'running' && dose.equipmentId !== null ? [dose.equipmentId] : []
+			);
+			const width = anchor.getBoundingClientRect().width;
+			return buildConsumablesMenuState(width, doses.options, running);
+		});
 	}
 
 	// The equipment picker: declare what is in hand without a hotbar press.
@@ -375,25 +332,57 @@
 		onError: (message) => notices.push(message)
 	});
 
-	async function toggleEquipmentMenu(anchor: HTMLElement) {
-		if (overlayMenuKind === 'equipment') {
-			await hideOverlayMenu();
-			return;
-		}
-		try {
-			const width = anchor.getBoundingClientRect().width;
-			const inHand = toolInHand(data.toolSource, data.currentTool);
-			const state = await equipment.menuState(width, inHand, status?.healing?.toolName ?? null);
-			await showOverlayMenu('equipment', anchor, state, { focusPopup: true });
-		} catch (error) {
-			notices.push(describeOverlayMenuError(error));
-		}
+	function toggleEquipmentMenu(anchor: HTMLElement) {
+		return toggleOverlayMenu('equipment', anchor, async () => {
+			try {
+				const width = anchor.getBoundingClientRect().width;
+				const inHand = toolInHand(data.toolSource, data.currentTool);
+				return await equipment.menuState(width, inHand, status?.healing?.toolName ?? null);
+			} catch (error) {
+				notices.push(describeOverlayMenuError(error));
+				return null;
+			}
+		});
 	}
 
-	/** "Choose a tool": open the picker, never closing one already open. */
-	async function openEquipmentMenu(anchor: HTMLElement) {
-		if (overlayMenuKind !== 'equipment') await toggleEquipmentMenu(anchor);
+	// The readout's lines that say more in a sub-window: where the mob
+	// comes from, the tool in hand in full, and why the screen is not read.
+	// Each is built from the snapshot, and kept up to date while it is open.
+	const inputAvailable = $derived(data.status === 'active' || data.status === 'idle');
+	const toolDisplay = $derived(heldToolDisplay(data.toolSource));
+	const unreadLine = $derived(screenNotReadLine(data.toolSource));
+	const panelStates = $derived<Record<ReadoutPanel, OverlayMenuState | null>>({
+		mobSource: isSteered(data.mobSource)
+			? buildMobSourceState(data.mobSource, inputAvailable, mobSource.busy !== null)
+			: null,
+		heldTool: toolDisplay
+			? buildHeldToolState(
+					toolDisplay,
+					data.weaponHitCue
+						? cueCopy(data.toolSource?.readingScreen === true).hit(data.weaponHitCue)
+						: null,
+					equipment.declaring
+				)
+			: null,
+		screenUnread: unreadLine ? { kind: 'note', heading: 'Tool', text: unreadLine } : null
+	});
+	// The control each panel hangs from, for what one panel opens in turn.
+	const panelAnchors: Partial<Record<ReadoutPanel, HTMLElement>> = {};
+
+	function togglePanel(panel: ReadoutPanel, anchor: HTMLElement) {
+		panelAnchors[panel] = anchor;
+		return subWindows.toggleWith({ slot: 'menu', id: panel, anchor, focus: true }, () => panelStates[panel]);
 	}
+
+	// An open panel follows the snapshot, and closes when its line no longer
+	// has anything to say (the session ended, the source moved).
+	$effect(() => {
+		for (const panel of ['mobSource', 'heldTool', 'screenUnread'] as const) {
+			const state = panelStates[panel];
+			if (!subWindows.isOpen(panel)) continue;
+			untrack(() => void (state ? subWindows.update(panel, state) : subWindows.close(panel)));
+		}
+	});
 
 	async function openQuestHandIn(key: string) {
 		const anchor = activitiesAnchor;
@@ -411,16 +400,21 @@
 	 * anchor. */
 	async function handleActivityAction(action: () => Promise<unknown>) {
 		await action();
-		if (overlayMenuKind === 'activities' && activitiesAnchor?.isConnected) {
+		if (subWindows.isOpen('activities') && activitiesAnchor?.isConnected) {
 			await openActivitiesMenu(activitiesAnchor);
 		}
 	}
 
-	const armourCost = createOverlayArmourCostModel({
-		window: armourCostWindow,
-		anchorGap: OVERLAY_MENU_VERTICAL_GAP,
-		repairOcrEnabled: () => data.repairOcrEnabled === true
-	});
+	/** The armour recording: it stays while the player goes to the game to
+	 * repair or to place items in a terminal, centred under its control. */
+	function toggleArmourCost(event: MouseEvent) {
+		const anchor = event.currentTarget as HTMLElement | null;
+		if (!anchor) return;
+		return subWindows.toggleWith(
+			{ slot: 'armour', id: ARMOUR_COST, anchor, stays: true, align: 'centre' },
+			(): OverlayArmourCostState => ({ repairOcrEnabled: data.repairOcrEnabled === true })
+		);
+	}
 
 	/** The player's call on a standing weapon mismatch. A stale control (the
 	 * cue already resolved by a press) changes nothing; either way the
@@ -492,18 +486,13 @@
 				windowSizeSync.schedule();
 			} else {
 				// A hand-in waits on the user going to the game to hand
-				// the quest in, so it outlives the strip going away.
-				if (overlayMenuKind !== 'questHandIn') {
-					void hideOverlayMenu();
-				}
-				mobSource.close();
-				heldTool.close();
-				void armourCost.hide();
+				// the quest in, so it outlives the overlay going away.
+				void subWindows.closeAll((id) => id === 'questHandIn');
 			}
 		};
 		const handleFocus = () => {
 			windowSizeSync.schedule();
-			armourCost.scheduleAnchorSync();
+			void subWindows.reanchor();
 		};
 
 		document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -588,15 +577,12 @@
 	$effect(() => {
 		let disposed = false;
 		let unlistenSelect: (() => void) | undefined;
-		let unlistenClosed: (() => void) | undefined;
-		let unlistenInteract: (() => void) | undefined;
 
 		void (async () => {
 			unlistenSelect = await listen<OverlayMenuSelection>(OVERLAY_MENU_SELECT_EVENT, async (event) => {
 				if (disposed) return;
 
 				if (event.payload.kind === 'definition') {
-					overlayMenuKind = null;
 					// Tapping another row switches; tapping the selected one just
 					// closes. A session always runs under one, so there is no
 					// clear here any more than there is on the chip.
@@ -607,14 +593,34 @@
 				}
 
 				if (event.payload.kind === 'consumables') {
-					overlayMenuKind = null;
 					await doses.start(event.payload.equipmentId, event.payload.untimed);
 					return;
 				}
 
 				if (event.payload.kind === 'equipment') {
-					overlayMenuKind = null;
 					await equipment.declare(event.payload.equipmentId);
+					return;
+				}
+
+				if (event.payload.kind === 'mobSource') {
+					const picked = event.payload;
+					if (picked.action === 'clearBackstop') await mobSource.clearTyped();
+					else if (picked.action === 'pin') {
+						await mobSource.pinTyped(picked.species, picked.maturity);
+					} else await mobSource.backstop(picked.species, picked.maturity);
+					return;
+				}
+
+				if (event.payload.kind === 'heldTool') {
+					if (event.payload.action === 'declare') {
+						await equipment.declare(event.payload.equipmentId);
+						return;
+					}
+					// "Choose a tool": the picker opens where the panel hung.
+					const anchor = panelAnchors.heldTool;
+					if (anchor?.isConnected && !subWindows.isOpen('equipment')) {
+						await toggleEquipmentMenu(anchor);
+					}
 					return;
 				}
 
@@ -639,12 +645,10 @@
 				}
 
 				if (event.payload.kind === 'questHandIn') {
-					overlayMenuKind = null;
 					await activities.refresh();
 					return;
 				}
 
-				overlayMenuKind = null;
 				await mobEntry.select({
 					display: event.payload.maturity
 						? `${event.payload.species} ${event.payload.maturity}`.trim()
@@ -654,44 +658,13 @@
 				});
 			});
 
-			unlistenClosed = await listen(OVERLAY_MENU_CLOSED_EVENT, async () => {
-				if (disposed) return;
-				overlayMenuKind = null;
-				mobEntry.clearCloseTimer();
-			});
-
-			unlistenInteract = await listen(OVERLAY_MENU_INTERACT_EVENT, async () => {
-				if (disposed) return;
-				if (overlayMenuKind === 'mob') mobEntry.clearCloseTimer();
-			});
 		})();
 
 		return () => {
 			disposed = true;
 			unlistenSelect?.();
-			unlistenClosed?.();
-			unlistenInteract?.();
 		};
 	});
-
-	$effect(() => {
-		let disposed = false;
-		let unlistenClosed: (() => void) | undefined;
-
-		void (async () => {
-			unlistenClosed = await listen(OVERLAY_ARMOUR_COST_CLOSED_EVENT, () => {
-				if (disposed) return;
-				armourCost.noteClosed();
-			});
-		})();
-
-		return () => {
-			disposed = true;
-			unlistenClosed?.();
-		};
-	});
-
-
 
 	// Map the one consolidated snapshot onto the overlay's two render bindings:
 	// `data` (TrackingLive, the strip) and `status` (TrackingStatus, the stat
@@ -753,7 +726,6 @@
 	// The feature models' failure channels: each new message is a notice.
 	notices.follow(() => facets.facetError);
 	notices.follow(() => activities.error);
-	notices.follow(() => armourCost.error);
 	notices.follow(() => mobSource.error);
 	$effect(() => () => notices.destroy());
 
@@ -791,7 +763,7 @@
 		selectingMob={mobEntry.selecting}
 		{mobSource}
 		{decidingWeapon}
-		armourCostOpen={armourCost.open}
+		armourCostOpen={subWindows.isOpen(ARMOUR_COST)}
 		definitionMenuOpen={overlayMenuKind === 'definition'}
 		savingDefinition={facets.savingDefinition}
 		definitionEditable={facets.definitionEditable}
@@ -808,16 +780,19 @@
 		onDefinitionTrigger={toggleDefinitionMenu}
 		onActivitiesTrigger={toggleActivitiesMenu}
 		onWeaponDecision={handleWeaponDecision}
-		onArmourCostToggle={armourCost.toggle}
+		onArmourCostToggle={toggleArmourCost}
 		{doses}
 		dosesMenuOpen={overlayMenuKind === 'consumables'}
 		onDosesTrigger={toggleDosesMenu}
 		equipmentMenuOpen={overlayMenuKind === 'equipment'}
 		declaringEquipment={equipment.declaring}
 		onEquipmentTrigger={toggleEquipmentMenu}
-		onDeclareTool={equipment.declare}
-		onChooseTool={openEquipmentMenu}
-		{heldTool}
+		openPanel={overlayMenuKind === 'mobSource' ||
+		overlayMenuKind === 'heldTool' ||
+		overlayMenuKind === 'screenUnread'
+			? overlayMenuKind
+			: null}
+		onPanelTrigger={togglePanel}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>

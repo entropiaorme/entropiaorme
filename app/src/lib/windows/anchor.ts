@@ -10,7 +10,8 @@
  * window's scale factor bridges the two.
  */
 
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { currentMonitor, getCurrentWindow } from '@tauri-apps/api/window';
+import type { ScreenRect, SubWindowAnchor } from './subWindow';
 import { OVERLAY_SURFACE_ATTRIBUTE } from './windowSize';
 
 /**
@@ -73,6 +74,52 @@ export async function anchorCentreBelow(
 		centerX: windowLogicalX + rect.left + rect.width / 2,
 		top: windowLogicalY + dropEdge(anchor, rect) + verticalGap,
 	};
+}
+
+/**
+ * Where a sub-window hangs from `anchor`, in logical screen pixels: the
+ * control's horizontal extent, and the lower and upper edges of the drawn
+ * surface that holds it (a sub-window opens clear of that surface, below or
+ * above), or the control's own edges when it sits in no marked surface.
+ */
+export async function anchorForSubWindow(anchor: HTMLElement): Promise<SubWindowAnchor> {
+	const currentWindow = getCurrentWindow();
+	const [windowPosition, scaleFactor] = await Promise.all([
+		currentWindow.outerPosition(),
+		currentWindow.scaleFactor(),
+	]);
+	const rect = anchor.getBoundingClientRect();
+	const surface = anchor
+		.closest<HTMLElement>(`[${OVERLAY_SURFACE_ATTRIBUTE}]`)
+		?.getBoundingClientRect();
+	const originX = windowPosition.x / scaleFactor;
+	const originY = windowPosition.y / scaleFactor;
+	return {
+		left: originX + rect.left,
+		right: originX + rect.right,
+		below: originY + (surface ? Math.max(rect.bottom, surface.bottom) : rect.bottom),
+		above: originY + (surface ? Math.min(rect.top, surface.top) : rect.top),
+	};
+}
+
+/**
+ * The screen the current window is on, in logical pixels; `null` when the
+ * platform will not say (a sub-window then hangs below, unclamped).
+ */
+export async function currentScreenBounds(): Promise<ScreenRect | null> {
+	try {
+		const monitor = await currentMonitor();
+		if (!monitor) return null;
+		const scale = monitor.scaleFactor || 1;
+		return {
+			x: monitor.position.x / scale,
+			y: monitor.position.y / scale,
+			width: monitor.size.width / scale,
+			height: monitor.size.height / scale,
+		};
+	} catch {
+		return null;
+	}
 }
 
 export interface AnchorTracker {

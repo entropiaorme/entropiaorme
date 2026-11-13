@@ -497,7 +497,8 @@ fn uncertainty(why: Why, rows: &[LibraryRow]) -> ToolUncertainty {
 #[cfg(test)]
 mod tests {
     use eo_services::game_ui::tool_names::BundledTool;
-    use eo_services::tracker::{ManualDeclaration, SeenTool, Unseen};
+    use eo_services::ped::Ped;
+    use eo_services::tracker::{Enhancers, ManualDeclaration, SeenTool, Unseen};
 
     use super::*;
 
@@ -891,5 +892,200 @@ mod tests {
                 ["notReading"],
             "notStarted"
         );
+    }
+
+    /// A set-up as the tracker gives it: an amplifier and an implant, one
+    /// of two enhancers left, at a marked-up price.
+    fn amped() -> HandSetup {
+        HandSetup {
+            kind: HotbarItemKind::Weapon,
+            parts: Some(vec![
+                SetupPart {
+                    role: SetupRole::Amplifier,
+                    name: "A101".into(),
+                },
+                SetupPart {
+                    role: SetupRole::Implant,
+                    name: "NeoPsion".into(),
+                },
+            ]),
+            enhancers: Some(Enhancers {
+                active: 1,
+                fitted: 2,
+            }),
+            cost_per_use: Ped(0.128),
+            tt_per_use: Some(Ped(0.036)),
+        }
+    }
+
+    fn amped_view() -> ToolSetupView {
+        ToolSetupView {
+            per: ToolUse::Shot,
+            parts: Some(vec![
+                ToolPart {
+                    role: ToolPartRole::Amplifier,
+                    name: "A101".into(),
+                },
+                ToolPart {
+                    role: ToolPartRole::Implant,
+                    name: "NeoPsion".into(),
+                },
+            ])
+            .into(),
+            enhancers: Some(ToolEnhancers {
+                active: 1,
+                fitted: 2,
+            })
+            .into(),
+            cost_per_use_ped: 0.128,
+            tt_per_use_ped: Some(0.036).into(),
+        }
+    }
+
+    fn with_setup(hand: HandView, setup: HandSetup) -> HandView {
+        HandView {
+            setup: Some(setup),
+            ..hand
+        }
+    }
+
+    #[test]
+    fn a_set_up_crosses_with_its_parts_enhancers_and_prices_named_for_its_use() {
+        assert_eq!(ToolSetupView::of(amped()), amped_view());
+        let heal = ToolSetupView::of(HandSetup {
+            kind: HotbarItemKind::Healing,
+            parts: None,
+            enhancers: None,
+            cost_per_use: Ped(0.03),
+            tt_per_use: None,
+        });
+        assert_eq!(heal.per, ToolUse::Heal);
+        assert_eq!(heal.parts.0, None);
+        assert_eq!(heal.enhancers.0, None);
+        assert_eq!(heal.tt_per_use_ped.0, None);
+        let swing = ToolSetupView::of(HandSetup {
+            kind: HotbarItemKind::Harvesting,
+            ..amped()
+        });
+        assert_eq!(swing.per, ToolUse::Swing);
+        assert_eq!(
+            serde_json::to_value(amped_view()).unwrap(),
+            serde_json::json!({
+                "per": "shot",
+                "parts": [
+                    {"role": "amplifier", "name": "A101"},
+                    {"role": "implant", "name": "NeoPsion"},
+                ],
+                "enhancers": {"active": 1, "fitted": 2},
+                "costPerUsePed": 0.128,
+                "ttPerUsePed": 0.036,
+            })
+        );
+    }
+
+    #[test]
+    fn the_tool_held_carries_the_set_up_of_the_hand_that_is_it() {
+        let holding = display(
+            seen(ToolSeen::Holding(HeldTool::Library { id: 4 })),
+            Some(with_setup(library(4, "Rifle"), amped())),
+        );
+        assert_eq!(
+            held(holding),
+            ToolHeld::Tool {
+                name: "Rifle".into(),
+                provisional: false,
+                setup: Some(amped_view()).into(),
+            }
+        );
+        // A hand that is another entry says nothing of this one.
+        let other = display(
+            seen(ToolSeen::Holding(HeldTool::Library { id: 4 })),
+            Some(with_setup(library(1, "Pistol"), amped())),
+        );
+        assert_eq!(
+            held(other),
+            ToolHeld::Tool {
+                name: "Rifle".into(),
+                provisional: false,
+                setup: None.into(),
+            }
+        );
+        let rusty = |hand: HandView| {
+            held(display(
+                seen(ToolSeen::Holding(HeldTool::Bundled {
+                    endpoint: "weapons".into(),
+                    item_id: "7".into(),
+                    name: "Rusty Rifle".into(),
+                })),
+                Some(hand),
+            ))
+        };
+        assert!(matches!(
+            rusty(with_setup(bundled("Rusty Rifle"), amped())),
+            ToolHeld::Tool {
+                setup: Nullable(Some(_)),
+                provisional: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            rusty(with_setup(bundled("Other Rifle"), amped())),
+            ToolHeld::Tool {
+                setup: Nullable(None),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_covered_bar_and_a_standing_declaration_carry_the_set_up_too() {
+        let covered = ToolDisplay {
+            source: ToolSource::Screen(ScreenTool {
+                last: Some(SeenTool {
+                    seen: ToolSeen::NotVisible,
+                    at_ms: 2_000,
+                }),
+                unseen: Some(Unseen { since_ms: 2_000 }),
+                manual: None,
+            }),
+            hand: None,
+            unseen_hand: Some(with_setup(library(4, "Rifle"), amped())),
+        };
+        assert_eq!(
+            held(covered),
+            ToolHeld::NotVisible {
+                last: Some("Rifle".to_string()).into(),
+                provisional: false,
+                setup: Some(amped_view()).into(),
+            }
+        );
+        let chosen = |hand: HandView| {
+            held(display(
+                ToolSource::Screen(ScreenTool {
+                    last: None,
+                    unseen: None,
+                    manual: Some(ManualDeclaration {
+                        equipment_id: 1,
+                        name: "Pistol".into(),
+                        at_ms: 2_500,
+                    }),
+                }),
+                Some(hand),
+            ))
+        };
+        assert!(matches!(
+            chosen(with_setup(library(1, "Pistol"), amped())),
+            ToolHeld::Tool {
+                setup: Nullable(Some(_)),
+                ..
+            }
+        ));
+        assert!(matches!(
+            chosen(with_setup(library(2, "Pistol"), amped())),
+            ToolHeld::Tool {
+                setup: Nullable(None),
+                ..
+            }
+        ));
     }
 }

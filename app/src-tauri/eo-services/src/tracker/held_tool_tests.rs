@@ -13,8 +13,8 @@ use super::{
     TrackerCommandError, TrackingConfig,
 };
 use crate::bus_events::{
-    BusEvent, CombatPayload, HotbarIntentPayload, HotbarItemKind, IntentSource, LootGroupPayload,
-    LootTag,
+    BusEvent, CombatPayload, EnhancerBreakPayload, EnhancerBreakTag, HotbarIntentPayload,
+    HotbarItemKind, IntentSource, LootGroupPayload, LootTag,
 };
 use crate::clock::Clock;
 use crate::consumables::ConsumableProfile;
@@ -2645,4 +2645,202 @@ fn placing_a_long_pinned_stretch_again_takes_steps_in_proportion() {
         taken <= 24 * SHOTS,
         "{taken} steps placing {SHOTS} shots again"
     );
+}
+
+// The set-up of the tool in hand, as the overlay shows it.
+
+/// The cannon fitted with an amplifier, two damage enhancers, and its
+/// weapon at 150% markup.
+fn amped_cannon() -> CarriedWeaponProfile {
+    let mut profile = carried(2, "Cannon", 40.0, 0.2);
+    profile.props.insert(
+        "amp_entity".into(),
+        serde_json::json!({"name": "A101", "economy": {"decay": 0.1, "ammo_burn": 0}}),
+    );
+    profile
+        .props
+        .insert("damage_enhancers".into(), serde_json::json!(2));
+    profile
+        .props
+        .insert("weapon_markup".into(), serde_json::json!(150));
+    profile
+}
+
+/// The amped cannon's price and TT per shot (PED) with `enhancers` fitted.
+fn amped_cannon_price(enhancers: i64) -> (f64, f64) {
+    let priced = crate::cost_engine::cost_per_shot_from_props(
+        &serde_json::Value::Object(amped_cannon().props),
+        Some(enhancers),
+    );
+    (
+        priced["totalCostPerUse"].as_f64().unwrap() / 100.0,
+        crate::tool_setup::tt_per_shot_pec(&priced) / 100.0,
+    )
+}
+
+impl Hunt {
+    fn hand(&self) -> Option<super::HandView> {
+        self.rig
+            .probe(&self.tracker, |actor| actor.tool_display().hand)
+    }
+
+    fn setup(&self) -> super::HandSetup {
+        self.hand()
+            .and_then(|hand| hand.setup)
+            .expect("the hand has a set-up")
+    }
+
+    /// The per-shot price the session booked the shots of `name` at.
+    fn booked_price(&self, name: &str) -> f64 {
+        let name = name.to_string();
+        self.rig.probe(&self.tracker, move |actor| {
+            actor
+                .session
+                .active()
+                .unwrap()
+                .accumulator
+                .tool_stats
+                .iter()
+                .find(|(_, stats)| stats.tool_name == name)
+                .map(|(_, stats)| stats.cost_per_shot.value())
+                .expect("shots were booked")
+        })
+    }
+}
+
+#[test]
+fn a_weapon_in_hand_shows_its_parts_enhancers_and_the_price_its_shots_are_booked_at() {
+    let hunt = hunt_over(
+        true,
+        false,
+        vec![carried(1, "Pistol", 10.0, 0.05), amped_cannon()],
+    );
+    hunt.start();
+    hunt.see(holding(2), 0.0);
+    let (price, tt) = amped_cannon_price(2);
+    let setup = hunt.setup();
+    assert_eq!(setup.kind, HotbarItemKind::Weapon);
+    assert_eq!(
+        setup.parts,
+        Some(vec![crate::tool_setup::SetupPart {
+            role: crate::tool_setup::SetupRole::Amplifier,
+            name: "A101".into()
+        }])
+    );
+    assert_eq!(
+        setup.enhancers,
+        Some(super::Enhancers {
+            active: 2,
+            fitted: 2
+        })
+    );
+    assert!((setup.cost_per_use.value() - price).abs() < 1e-12);
+    assert!((setup.tt_per_use.unwrap().value() - tt).abs() < 1e-12);
+    assert!(price > tt, "the markup moves the price");
+
+    hunt.shot(30.0);
+    assert!(
+        (hunt.booked_price("Cannon") - setup.cost_per_use.value()).abs() < 1e-12,
+        "what is shown is what a shot is booked at"
+    );
+
+    // One enhancer wears out: the price shown follows.
+    hunt.rig
+        .bus
+        .publish(&BusEvent::EnhancerBreak(EnhancerBreakPayload {
+            kind: EnhancerBreakTag,
+            timestamp: "2026-01-01T00:00:01".into(),
+            enhancer_name: "Damage Enhancer 1".into(),
+            item_name: "Cannon".into(),
+            remaining: 1,
+            shrapnel_ped: 0.0,
+        }));
+    let worn = hunt.setup();
+    assert_eq!(
+        worn.enhancers,
+        Some(super::Enhancers {
+            active: 1,
+            fitted: 2
+        })
+    );
+    assert!((worn.cost_per_use.value() - amped_cannon_price(1).0).abs() < 1e-12);
+    assert!(worn.cost_per_use.value() < setup.cost_per_use.value());
+}
+
+#[test]
+fn a_weapon_set_up_without_enhancers_or_parts_shows_none() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    let setup = hunt.setup();
+    assert_eq!(setup.parts, Some(Vec::new()));
+    assert_eq!(setup.enhancers, None);
+    assert!((setup.cost_per_use.value() - pistol()).abs() < 1e-12);
+    assert_eq!(hunt.hand().unwrap().library_id, Some(1));
+}
+
+#[test]
+fn a_healer_or_finder_in_hand_shows_the_price_it_was_declared_at() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(4), 0.0);
+    let healer = hunt.setup();
+    assert_eq!(healer.kind, HotbarItemKind::Healing);
+    assert_eq!(healer.parts, Some(Vec::new()), "resolved with its parts");
+    assert_eq!(healer.enhancers, None);
+    assert!((healer.cost_per_use.value() - 0.03).abs() < 1e-12);
+    assert_eq!(healer.tt_per_use, None);
+
+    hunt.advance(1.0);
+    hunt.see(holding(6), 0.0);
+    let finder = hunt.setup();
+    assert_eq!(finder.kind, HotbarItemKind::Harvesting);
+    assert!((finder.cost_per_use.value() - 0.02).abs() < 1e-12);
+}
+
+#[test]
+fn a_tool_known_only_from_the_game_data_shows_bare_at_the_price_it_is_booked_at() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(rusty_seen(), 0.0);
+    let hand = hunt.hand().unwrap();
+    assert_eq!(hand.library_id, None);
+    let setup = hand.setup.unwrap();
+    assert_eq!(setup.parts, Some(Vec::new()));
+    assert_eq!(setup.enhancers, None);
+    assert!((setup.cost_per_use.value() - rusty()).abs() < 1e-12);
+    hunt.shot(150.0);
+    assert!((hunt.booked_price("Rusty Rifle") - rusty()).abs() < 1e-12);
+}
+
+#[test]
+fn a_covered_bar_keeps_the_set_up_of_the_tool_in_hand_when_it_went() {
+    let hunt = hunt_over(
+        true,
+        false,
+        vec![carried(1, "Pistol", 10.0, 0.05), amped_cannon()],
+    );
+    hunt.start();
+    hunt.see(holding(2), 0.0);
+    hunt.advance(1.0);
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    let unseen = hunt
+        .rig
+        .probe(&hunt.tracker, |actor| actor.tool_display().unseen_hand)
+        .and_then(|hand| hand.setup)
+        .expect("the tool in hand when the bar went");
+    assert_eq!(unseen.parts.map(|parts| parts.len()), Some(1));
+    assert!((unseen.cost_per_use.value() - amped_cannon_price(2).0).abs() < 1e-12);
+}
+
+#[test]
+fn a_declaration_from_an_intent_alone_does_not_claim_to_know_the_parts() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(ToolSeen::Uncertain(Why::Unreadable), 0.0);
+    hunt.intent(IntentSource::Overlay, "FAP", HotbarItemKind::Healing);
+    let setup = hunt.setup();
+    assert_eq!(setup.kind, HotbarItemKind::Healing);
+    assert_eq!(setup.parts, None);
+    assert!((setup.cost_per_use.value() - 0.03).abs() < 1e-12);
 }

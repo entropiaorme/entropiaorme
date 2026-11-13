@@ -927,5 +927,15 @@
     },
     "max_candidates": 5,
     "twin_visible": 28
+  },
+  "tool_watch": {
+    "look_ms": 250,
+    "hint_gap_ms": 100,
+    "hint_window_ms": 600,
+    "reread_ms": 2000,
+    "search_ms": 2000,
+    "settle_ms": 500,
+    "capture_slack_ms": 300,
+    "margin": 64
   }
 }

@@ -211,6 +211,18 @@ pub struct ToolBar {
     pub view: View,
 }
 
+impl ToolBar {
+    /// Where the health bar and the tool bar stand together, in the frame's
+    /// coordinates: the tool bar's panel and the health bar's place at its
+    /// scale's pitch to the left, whether or not the health bar shows
+    /// there. What a watcher captures to look at the bar again. `None` for
+    /// a bar of a scale the profile does not list.
+    pub fn pair(&self, profile: &UiProfile) -> Option<Rect> {
+        let pitch = profile.tool_bar.scales.get(self.scale)?.pitch;
+        Some(union(self.panel.offset(-pitch, 0), self.panel))
+    }
+}
+
 /// What the tool bar shows, decided from its geometry and its pixels
 /// before anything is recognised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1090,6 +1102,23 @@ mod tests {
             let elsewhere = Rect::new(tool.x1 + 10, 0, tool.x1 + 20, 10);
             assert_eq!(find_tool_bar_in(&s.image, elsewhere, &profile), None);
         }
+    }
+
+    #[test]
+    fn the_pair_is_where_both_panels_stand() {
+        let profile = bundled_profile();
+        let mut s = scene(1400, 800, 3);
+        let (health, tool) = s.draw(&ToolBarDrawing::named((120, 500), NAME));
+        let bar = find_tool_bar(&s.image, &profile).expect("the bar is found");
+        assert_eq!(
+            bar.pair(&profile),
+            Some(Rect::new(health.x0, health.y0, tool.x1, tool.y1))
+        );
+        // Whatever is seen of it, the pair is placed from the panel.
+        let covered = placed(tool, View::Covered);
+        assert_eq!(covered.pair(&profile), bar.pair(&profile));
+        let unlisted = ToolBar { scale: 7, ..bar };
+        assert_eq!(unlisted.pair(&profile), None);
     }
 
     #[test]

@@ -21,10 +21,54 @@ use super::window::ChromeProfile;
 /// The profile format this build reads.
 pub const PROFILE_FORMAT: u32 = 1;
 
-/// The shortest interval the creature watcher may look at the screen at,
-/// whatever a profile says: a floor on what the watcher may cost the
-/// machine the game is running on, not a measurement of the client.
+/// The shortest interval between the looks a watcher of the game window
+/// takes on its own cadence, whatever a profile says: a floor on what a
+/// watcher may cost the machine the game is running on, not a measurement
+/// of the client. A hint may bring one look forward, no sooner than
+/// [`MIN_HINT_GAP_MS`] after the look before.
 pub const MIN_PULSE_MS: i64 = 250; // not layout: a floor on the profile's cadence
+
+/// The soonest a hint may have the held-tool watcher look again after its
+/// last look began, whatever a profile says: a key held down repeats many
+/// times a second, far faster than the bar is worth reading, and each
+/// hinted look may read the name.
+pub const MIN_HINT_GAP_MS: i64 = 100; // not layout: a floor on the profile's hint cadence
+
+/// How the held-tool watcher looks at the bar, as the profile describes
+/// it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolWatchProfile {
+    /// How often the bar is looked at while a session is watched; held to
+    /// [`MIN_PULSE_MS`] at the least.
+    pub look_ms: i64,
+    /// The soonest a hint has the bar looked at again after a look began;
+    /// held to [`MIN_HINT_GAP_MS`] at the least.
+    pub hint_gap_ms: i64,
+    /// After a hint the name is read at every look for this long: a look
+    /// just after a key press is usually taken before the client has drawn
+    /// the new tool's name.
+    pub hint_window_ms: i64,
+    /// The name is read again at least this often while its lettering looks
+    /// unchanged: the comparison of the lettering cannot see every change
+    /// of one character, so this bounds how long such a change can go
+    /// unread.
+    pub reread_ms: i64,
+    /// The whole window is searched for the bar no more often than this
+    /// while the bar's place is not known.
+    pub search_ms: i64,
+    /// A change to an uncertain or unseen bar is told only once it has
+    /// held this long, so one unclear frame does not blank the tool.
+    pub settle_ms: i64,
+    /// A capture taking longer than this is too late to stand for the
+    /// moment it was stamped with, and is not used.
+    pub capture_slack_ms: i64,
+    /// Pixels captured round the health bar and the tool bar once the bar
+    /// is found: room for the bar to be found again where it stands, and
+    /// for a window over it to be told as one, which needs more of the
+    /// window in view than the bar's own height (`chrome.min_window`).
+    pub margin: i32,
+}
 
 /// One client interface, described as data.
 #[derive(Debug, Clone, Deserialize)]
@@ -60,6 +104,8 @@ pub struct UiProfile {
     /// How strictly a name read off the tool bar must match a known
     /// tool.
     pub tool_names: ToolNameProfile,
+    /// How the held-tool watcher looks at the bar.
+    pub tool_watch: ToolWatchProfile,
 }
 
 /// Why a profile could not be used.
@@ -206,6 +252,23 @@ impl UiProfile {
         claims_apart(&profile.tool_bar.scales, "tool_bar.scales", |s| s.width)
             .map_err(ProfileError::Inconsistent)?;
         profile.mob_history.pulse_ms = profile.mob_history.pulse_ms.max(MIN_PULSE_MS);
+        profile.tool_watch.look_ms = profile.tool_watch.look_ms.max(MIN_PULSE_MS);
+        profile.tool_watch.hint_gap_ms = profile.tool_watch.hint_gap_ms.max(MIN_HINT_GAP_MS);
+        let watch = &profile.tool_watch;
+        for (name, value) in [
+            ("hint_window_ms", watch.hint_window_ms),
+            ("reread_ms", watch.reread_ms),
+            ("search_ms", watch.search_ms),
+            ("settle_ms", watch.settle_ms),
+            ("capture_slack_ms", watch.capture_slack_ms),
+            ("margin", i64::from(watch.margin)),
+        ] {
+            if value <= 0 {
+                return Err(ProfileError::Inconsistent(format!(
+                    "tool_watch.{name} is {value}; it must be above zero"
+                )));
+            }
+        }
         Ok(profile)
     }
 
@@ -368,6 +431,71 @@ mod tests {
             assert_ne!(quick, text);
             assert_eq!(
                 UiProfile::from_json(&quick).unwrap().mob_history.pulse_ms,
+                kept
+            );
+        }
+    }
+
+    #[test]
+    fn the_held_tool_watchers_hint_gap_is_held_to_its_floor() {
+        let text = bundled_text();
+        assert_eq!(
+            UiProfile::from_json(&text).unwrap().tool_watch.hint_gap_ms,
+            100
+        );
+        for (written, kept) in [(0, MIN_HINT_GAP_MS), (-1, MIN_HINT_GAP_MS), (180, 180)] {
+            let quick = text.replace(
+                "\"hint_gap_ms\": 100",
+                &format!("\"hint_gap_ms\": {written}"),
+            );
+            assert_ne!(quick, text);
+            assert_eq!(
+                UiProfile::from_json(&quick).unwrap().tool_watch.hint_gap_ms,
+                kept
+            );
+        }
+    }
+
+    #[test]
+    fn a_held_tool_watcher_interval_or_margin_not_above_zero_is_refused() {
+        let bundled: serde_json::Value = serde_json::from_str(&bundled_text()).unwrap();
+        for field in [
+            "hint_window_ms",
+            "reread_ms",
+            "search_ms",
+            "settle_ms",
+            "capture_slack_ms",
+            "margin",
+        ] {
+            for value in [0, -1] {
+                let mut bad = bundled.clone();
+                *bad.pointer_mut(&format!("/tool_watch/{field}")).unwrap() = value.into();
+                assert!(
+                    matches!(
+                        UiProfile::from_json(&bad.to_string()),
+                        Err(ProfileError::Inconsistent(why)) if why.contains(field)
+                    ),
+                    "{field} = {value}"
+                );
+            }
+            let mut good = bundled.clone();
+            *good.pointer_mut(&format!("/tool_watch/{field}")).unwrap() = 1.into();
+            assert!(
+                UiProfile::from_json(&good.to_string()).is_ok(),
+                "{field} = 1"
+            );
+        }
+    }
+
+    #[test]
+    fn the_held_tool_watcher_cadence_is_held_to_its_floor() {
+        let text = bundled_text();
+        assert_eq!(UiProfile::from_json(&text).unwrap().tool_watch.look_ms, 250);
+        for (written, kept) in [(10, MIN_PULSE_MS), (-5, MIN_PULSE_MS), (400, 400)] {
+            let quick = text.replace("\"look_ms\": 250", &format!("\"look_ms\": {written}"));
+            assert_ne!(quick, text);
+            assert_eq!(
+                UiProfile::from_json(&quick).unwrap().tool_watch.look_ms,
                 kept
             );
         }

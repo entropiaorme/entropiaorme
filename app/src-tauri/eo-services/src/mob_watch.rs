@@ -38,14 +38,15 @@
 //! The setting is also checked where the capture happens, before every
 //! look, and a watch whose looks can no longer be delivered (the tracker is
 //! gone) ends.
+//!
+//! How the looks are run (the worker and its life, the cadence, focus,
+//! consent and the lock no two captures are taken beside) is the shared
+//! [`crate::screen_watch`]; this module is what one look does.
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 
 use crate::clock::Clock;
-use crate::eu_window::GameFocus;
 use crate::game_ui::geometry::BgrImage;
 use crate::game_ui::mob_history::{MobHistory, Sighting};
 use crate::game_ui::mob_names::MobCatalogue;
@@ -53,12 +54,11 @@ use crate::game_ui::plates::{find_locked_plate, read_found_plate, PlateScratch};
 use crate::game_ui::profile::UiProfile;
 use crate::game_ui::seams::{FrameArea, FrameReader, FrameUnavailable, GameWindowFrame};
 use crate::hotbar_listener::GameFocusProbe;
-use crate::time::clock_epoch_ms;
+use crate::screen_watch::{
+    Eyes, LateBound, Look, Reader, ScreenWatch, Seams, Sink, SwapCell, Watcher,
+};
 
-/// How long shutting down waits for the worker to finish its look: a look
-/// can be held inside a capture by the desktop's consent prompt, and app
-/// exit does not wait on the player for that.
-const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
+pub use crate::screen_watch::{CaptureStatus, CaptureStatusProbe, Probe, PulseWait, WatchEnded};
 
 /// One look at the game window, for the session it was taken for: when the
 /// window was captured (epoch milliseconds on the injected clock), and the
@@ -73,77 +73,13 @@ pub struct MobPulse {
 
 /// Where the watcher hands each look: whether it was delivered. A look
 /// that could not be (the tracker is gone) ends the watch.
-pub type PulseSink = Arc<dyn Fn(MobPulse) -> bool + Send + Sync>;
-
-/// Told, with the session it watched for, when a watch ends by itself
-/// (capture refused or stopped, detection found off where the capture
-/// happens, a look failing, its looks no longer deliverable), so whoever
-/// started it knows the screen is no longer read. A watch stopped by its
-/// owner tells nothing.
-pub type WatchEnded = Arc<dyn Fn(&str) + Send + Sync>;
-
-/// A yes-or-no seam the composition root wires in: whether capture is
-/// running, start it (the player's gesture), or whether detection is on.
-pub type Probe = Arc<dyn Fn() -> bool + Send + Sync>;
-
-/// Whether the watcher can capture when a session wants it, in the
-/// player's terms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CaptureStatus {
-    /// Capture is running, or nothing has to be started on this desktop,
-    /// or the player's turning detection on will start it at the next look.
-    Ready,
-    /// Capture needs starting and is not running: turning detection off and
-    /// on starts it.
-    NotRunning,
-    /// The desktop refused capture, or it failed or was stopped while
-    /// watching: turning detection off and on asks again.
-    Refused,
-    /// Detection cannot run here: the recogniser or the interface profile
-    /// did not load.
-    Unavailable,
-}
-
-/// How the settings ask the watcher's [`CaptureStatus`].
-pub type CaptureStatusProbe = Arc<dyn Fn() -> CaptureStatus + Send + Sync>;
-
-/// How the watcher waits for its next look: until the injected clock's
-/// monotonic reading reaches the first argument, or until the receiver
-/// says to stop (its sender dropped). Answers whether to go on. Left
-/// unset, the watcher waits on the clock in real time; a test drives the
-/// clock itself.
-pub type PulseWait = Arc<dyn Fn(f64, &mpsc::Receiver<()>) -> bool + Send + Sync>;
+pub type PulseSink = Sink<MobPulse>;
 
 /// The creatures a name read off a plate is matched against: the bundled
 /// list and the names the player has confirmed. Shared by the watcher,
 /// which matches with it, and the review, which rebuilds it when the
 /// player confirms a name.
-pub struct CatalogueCell(RwLock<Arc<MobCatalogue>>);
-
-impl CatalogueCell {
-    pub fn new(catalogue: MobCatalogue) -> Self {
-        Self(RwLock::new(Arc::new(catalogue)))
-    }
-
-    /// The catalogue as it stands.
-    pub fn current(&self) -> Arc<MobCatalogue> {
-        self.0
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    /// Put a rebuilt catalogue in place: the next look matches with it.
-    pub fn replace(&self, catalogue: MobCatalogue) {
-        *self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalogue);
-    }
-}
-
-impl Default for CatalogueCell {
-    fn default() -> Self {
-        Self::new(MobCatalogue::default())
-    }
-}
+pub type CatalogueCell = SwapCell<MobCatalogue>;
 
 /// The tracker's handle on creature detection.
 pub trait MobDetector: Send + Sync {
@@ -191,47 +127,38 @@ impl MobDetector for NoDetector {
 /// A detector bound after the tracker is built: the watcher reads with
 /// the recogniser, which is loaded later in composition than the tracker
 /// starts. Until it is bound, detection does not run.
-#[derive(Default)]
-pub struct DetectorSlot(OnceLock<Arc<dyn MobDetector>>);
-
-impl DetectorSlot {
-    /// Bind the detector; a second call is ignored.
-    pub fn bind(&self, detector: Arc<dyn MobDetector>) {
-        let _ = self.0.set(detector);
-    }
-}
+pub type DetectorSlot = LateBound<dyn MobDetector>;
 
 impl MobDetector for DetectorSlot {
     fn new_history(&self) -> Option<MobHistory> {
-        self.0.get()?.new_history()
+        self.bound()?.new_history()
     }
 
     fn start(&self, session_id: &str, sink: PulseSink, ended: WatchEnded) {
-        if let Some(detector) = self.0.get() {
+        if let Some(detector) = self.bound() {
             detector.start(session_id, sink, ended);
         }
     }
 
     fn stop(&self) {
-        if let Some(detector) = self.0.get() {
+        if let Some(detector) = self.bound() {
             detector.stop();
         }
     }
 
     fn watches(&self, session_id: &str) -> bool {
-        self.0
-            .get()
+        self.bound()
             .is_some_and(|detector| detector.watches(session_id))
     }
 
     fn permit_capture(&self) {
-        if let Some(detector) = self.0.get() {
+        if let Some(detector) = self.bound() {
             detector.permit_capture();
         }
     }
 
     fn shutdown(&self) {
-        if let Some(detector) = self.0.get() {
+        if let Some(detector) = self.bound() {
             detector.shutdown();
         }
     }
@@ -277,400 +204,62 @@ impl Default for MobWatchProviders {
     }
 }
 
-/// The running watch.
-struct Watching {
-    watch: u64,
-    session_id: String,
-    /// Told if the watch ends by itself.
-    ended: Option<WatchEnded>,
-    /// Held only to be dropped: leaving this state disconnects the
-    /// worker's receiver, which wakes it from its wait to stop.
-    _stop: mpsc::Sender<()>,
+/// What the creature watcher does at each look: capture the game window,
+/// find the locked plate, read it and match its name.
+pub struct PlateLook {
+    profile: Option<Arc<UiProfile>>,
+    read_text: Option<FrameReader>,
+    catalogue: Arc<CatalogueCell>,
 }
 
-struct State {
-    watching: Option<Watching>,
-    /// The last watch's number; each start takes the next.
-    last_watch: u64,
-    /// The desktop refused a capture, or capture stopped while watching:
-    /// nothing is captured again until the player turns detection back on.
-    capture_refused: bool,
-    /// The player turned detection on: the next look may start capture.
-    may_start: bool,
+/// What the creature watcher keeps from one look to the next.
+pub struct PlateMemory {
+    scratch: PlateScratch,
+    /// A capture taking longer than this, in seconds, is too late to stand
+    /// for the moment it was stamped with: a gap, not an observation.
+    slack: f64,
 }
 
-/// Counts the live workers, so shutting down can wait for them.
-#[derive(Default)]
-struct Workers {
-    live: Mutex<usize>,
-    done: Condvar,
-}
-
-/// One live worker; dropping it, however the worker ends, counts it out.
-struct WorkerToken {
-    service: Arc<MobWatch>,
-}
-
-impl Drop for WorkerToken {
-    fn drop(&mut self) {
-        let workers = &self.service.workers;
-        let mut live = workers.live.lock().unwrap_or_else(PoisonError::into_inner);
-        *live = live.saturating_sub(1);
-        workers.done.notify_all();
-    }
-}
-
-/// What a worker reads with, taken once when its watch starts.
-struct Reader {
-    profile: Arc<UiProfile>,
-    read_text: FrameReader,
-}
-
-/// What one look came to.
-enum Look {
-    /// The window was captured: the plate locked then, if any.
-    Seen {
-        at_ms: i64,
-        sighting: Option<Sighting>,
-    },
-    /// Nothing was captured (the game was in the background, or its
-    /// window could not be had): the screen was not watched.
-    Missed,
-    /// Capture was refused, or is no longer running.
-    Refused,
-    /// Detection was turned off.
-    Disabled,
-}
-
-pub struct MobWatch {
-    providers: MobWatchProviders,
-    clock: Arc<dyn Clock>,
-    state: Mutex<State>,
-    /// Held across each look, so a worker whose watch was just replaced
-    /// never captures beside its successor.
-    looking: Mutex<()>,
-    workers: Workers,
-}
-
-impl MobWatch {
-    pub fn new(providers: MobWatchProviders, clock: Arc<dyn Clock>) -> Arc<Self> {
-        Arc::new(Self {
-            providers,
-            clock,
-            state: Mutex::new(State {
-                watching: None,
-                last_watch: 0,
-                capture_refused: false,
-                may_start: false,
-            }),
-            looking: Mutex::new(()),
-            workers: Workers::default(),
-        })
-    }
-
-    fn lock_state(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
+impl Watcher for PlateLook {
+    type Pulse = MobPulse;
+    type Memory = PlateMemory;
+    const THREAD: &'static str = "mob-watch";
+    const WHAT: &'static str = "the creature watcher";
 
     fn reader(&self) -> Option<Reader> {
         Some(Reader {
-            profile: self.providers.profile.clone()?,
-            read_text: self.providers.read_text.clone()?,
+            profile: self.profile.clone()?,
+            read_text: self.read_text.clone()?,
         })
     }
 
-    /// The session being watched, if any.
-    pub fn watching(&self) -> Option<String> {
-        self.lock_state()
-            .watching
-            .as_ref()
-            .map(|w| w.session_id.clone())
+    fn interval(reader: &Reader) -> f64 {
+        reader.profile.mob_history.pulse_ms.max(1) as f64 / 1000.0
     }
 
-    /// Whether a session starting now could be watched, in the player's
-    /// terms.
-    pub fn capture_status(&self) -> CaptureStatus {
-        if self.reader().is_none() {
-            return CaptureStatus::Unavailable;
-        }
-        let state = self.lock_state();
-        if state.capture_refused {
-            CaptureStatus::Refused
-        } else if state.may_start || (self.providers.capture_running)() {
-            CaptureStatus::Ready
-        } else {
-            CaptureStatus::NotRunning
+    fn memory(reader: &Reader) -> PlateMemory {
+        PlateMemory {
+            scratch: PlateScratch::default(),
+            slack: reader.profile.mob_history.capture_slack_ms as f64 / 1000.0,
         }
     }
 
-    /// Start watching for `session_id`. A watch for the same session is
-    /// left running; one for another session is replaced. Nothing starts
-    /// without the profile and the recogniser, after capture was refused,
-    /// or while capture is not running and the player has not just turned
-    /// detection on.
-    pub fn start(self: &Arc<Self>, session_id: &str, sink: PulseSink) {
-        self.begin(session_id, sink, None);
-    }
-
-    /// Start watching as [`MobWatch::start`] does, telling `ended` if the
-    /// watch ends by itself.
-    pub fn start_reporting_end(
-        self: &Arc<Self>,
-        session_id: &str,
-        sink: PulseSink,
-        ended: WatchEnded,
-    ) {
-        self.begin(session_id, sink, Some(ended));
-    }
-
-    fn begin(self: &Arc<Self>, session_id: &str, sink: PulseSink, ended: Option<WatchEnded>) {
-        let Some(reader) = self.reader() else {
-            return;
-        };
-        let mut state = self.lock_state();
-        if state.capture_refused || !(state.may_start || (self.providers.capture_running)()) {
-            return;
-        }
-        if state
-            .watching
-            .as_ref()
-            .is_some_and(|w| w.session_id == session_id)
-        {
-            return;
-        }
-        // Replacing the running watch drops its sender: that worker
-        // wakes and ends.
-        state.watching = None;
-        let watch = state.last_watch + 1;
-        let (stop, stopped) = mpsc::channel();
-        *self
-            .workers
-            .live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) += 1;
-        let token = WorkerToken {
-            service: self.clone(),
-        };
-        let worker = self.clone();
-        let session = session_id.to_string();
-        let spawned = std::thread::Builder::new()
-            .name("mob-watch".into())
-            .spawn(move || worker.watch(watch, &session, &reader, &sink, &stopped, token));
-        // A worker that did not start dropped its token with the closure,
-        // counting itself out; nothing is watched.
-        if spawned.is_err() {
-            tracing::warn!(target: "eo::mob_watch", "the creature watcher could not start");
-            return;
-        }
-        state.last_watch = watch;
-        state.watching = Some(Watching {
-            watch,
-            session_id: session_id.to_string(),
-            ended,
-            _stop: stop,
-        });
-    }
-
-    /// Stop watching. Returns at once: the worker ends within its look.
-    pub fn stop(&self) {
-        self.lock_state().watching = None;
-    }
-
-    /// The player turned detection on: the next look may start capture,
-    /// asking the desktop's consent once, even where it was refused before.
-    pub fn permit_capture(&self) {
-        let mut state = self.lock_state();
-        state.capture_refused = false;
-        state.may_start = true;
-    }
-
-    /// Whether this look may start capture: the player turned detection on
-    /// and no look has asked since. Taken once.
-    fn take_start(&self) -> bool {
-        std::mem::take(&mut self.lock_state().may_start)
-    }
-
-    /// Stop watching and wait, for a short while, for the worker to finish
-    /// its look: at app exit, where nothing may go on capturing behind the
-    /// closing app. A worker still out after the wait is left to end with
-    /// the process.
-    pub fn shutdown(&self) {
-        self.stop();
-        if !self.wait_for_workers(SHUTDOWN_WAIT) {
-            tracing::warn!(
-                target: "eo::mob_watch",
-                "the creature watcher was still capturing at exit; not waiting for it"
-            );
-        }
-    }
-
-    /// Wait until no worker is running; answers whether that happened
-    /// within `timeout`.
-    pub fn wait_for_workers(&self, timeout: Duration) -> bool {
-        let live = self
-            .workers
-            .live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let (live, _) = self
-            .workers
-            .done
-            .wait_timeout_while(live, timeout, |live| *live > 0)
-            .unwrap_or_else(PoisonError::into_inner);
-        *live == 0
-    }
-
-    fn is_watching(&self, watch: u64) -> bool {
-        self.lock_state()
-            .watching
-            .as_ref()
-            .is_some_and(|w| w.watch == watch)
-    }
-
-    /// End `watch` because the desktop refused a capture, if it is still
-    /// the one running.
-    fn refused(&self, watch: u64) {
-        let ended = {
-            let mut state = self.lock_state();
-            state.capture_refused = true;
-            Self::take_ended(&mut state, watch)
-        };
-        Self::tell_ended(ended);
-    }
-
-    /// End `watch` because a look failed, if it is still the one running.
-    fn failed(&self, watch: u64) {
-        let ended = Self::take_ended(&mut self.lock_state(), watch);
-        Self::tell_ended(ended);
-    }
-
-    /// Clear `watch` if it is still the one running, with whom to tell.
-    fn take_ended(state: &mut State, watch: u64) -> Option<(WatchEnded, String)> {
-        if state.watching.as_ref().is_none_or(|w| w.watch != watch) {
-            return None;
-        }
-        let ended = state.watching.take()?;
-        ended.ended.map(|tell| (tell, ended.session_id))
-    }
-
-    /// Tell, outside the state's lock, that a watch ended by itself.
-    fn tell_ended(ended: Option<(WatchEnded, String)>) {
-        if let Some((tell, session_id)) = ended {
-            tell(&session_id);
-        }
-    }
-
-    fn wait(&self, due: f64, stopped: &mpsc::Receiver<()>) -> bool {
-        match &self.providers.wait {
-            Some(wait) => wait(due, stopped),
-            None => wait_on_clock(self.clock.as_ref(), due, stopped),
-        }
-    }
-
-    /// The worker: wait for the next look, look, hand the look on, until
-    /// the watch is no longer the running one.
-    fn watch(
-        &self,
-        watch: u64,
-        session_id: &str,
-        reader: &Reader,
-        sink: &PulseSink,
-        stopped: &mpsc::Receiver<()>,
-        _token: WorkerToken,
-    ) {
-        let interval = reader.profile.mob_history.pulse_ms.max(1) as f64 / 1000.0;
-        // A capture taking longer than this is too late to stand for the
-        // moment it was stamped with: a gap, not an observation.
-        let slack = reader.profile.mob_history.capture_slack_ms as f64 / 1000.0;
-        let mut scratch = PlateScratch::default();
-        // The first look is taken at once.
-        let mut due = self.clock.monotonic();
-        loop {
-            if !self.wait(due, stopped) {
-                return;
-            }
-            let look = {
-                let _looking = self.looking.lock().unwrap_or_else(PoisonError::into_inner);
-                // Checked again after waiting for another worker's look.
-                if !self.is_watching(watch) {
-                    return;
-                }
-                if !(self.providers.enabled)() {
-                    self.failed(watch);
-                    return;
-                }
-                if self.take_start() && !(self.providers.start_capture)() {
-                    self.refused(watch);
-                    return;
-                }
-                catch_unwind(AssertUnwindSafe(|| self.look(reader, slack, &mut scratch)))
-            };
-            match look {
-                Ok(Look::Seen { at_ms, sighting }) => {
-                    // A look finishing after its watch ended is dropped.
-                    if !self.is_watching(watch) {
-                        return;
-                    }
-                    let delivered = sink(MobPulse {
-                        session_id: session_id.to_string(),
-                        at_ms,
-                        sighting,
-                    });
-                    if !delivered {
-                        self.failed(watch);
-                        return;
-                    }
-                }
-                Ok(Look::Missed) => {}
-                Ok(Look::Disabled) => {
-                    self.failed(watch);
-                    return;
-                }
-                Ok(Look::Refused) => {
-                    self.refused(watch);
-                    return;
-                }
-                Err(_) => {
-                    tracing::error!(
-                        target: "eo::mob_watch",
-                        "reading the locked plate failed; the creature watcher stops"
-                    );
-                    self.failed(watch);
-                    return;
-                }
-            }
-            due = next_due(due, interval, self.clock.monotonic());
-        }
-    }
-
-    /// One look: capture the game window, find the locked plate, read it
-    /// and match its name.
-    fn look(&self, reader: &Reader, slack: f64, scratch: &mut PlateScratch) -> Look {
-        if !(self.providers.enabled)() {
-            return Look::Disabled;
-        }
-        if self
-            .providers
-            .focus
-            .as_ref()
-            .is_some_and(|focus| !GameFocus::game_in_view(focus()))
-        {
-            return Look::Missed;
-        }
+    fn look(&self, reader: &Reader, memory: &mut PlateMemory, eyes: &Eyes) -> Look<MobPulse> {
+        let clock = eyes.clock();
         let metrics = eo_wire::metrics::metrics();
-        // Stamped as the capture starts: the profile allows for how far the
-        // capture lags this moment.
-        let at_ms = clock_epoch_ms(self.clock.as_ref());
-        let began = self.clock.monotonic();
-        let started = Instant::now();
-        let frame = (self.providers.frame)(FrameArea::Whole);
-        let image = match frame {
+        // Stamped as the capture starts, once the capture lock is held: the
+        // profile allows for how far the capture lags this moment.
+        let Some(capture) = eyes.capture(FrameArea::Whole) else {
+            return Look::Quiet;
+        };
+        let at_ms = capture.at_ms;
+        let image = match capture.frame {
             Ok(frame) => {
                 // Only a capture that found the window is a measure of what
                 // capturing costs.
-                metrics.record_plate_capture(started.elapsed());
-                if self.clock.monotonic() - began > slack {
-                    return Look::Missed;
+                metrics.record_plate_capture(capture.took);
+                if clock.monotonic() - capture.began > memory.slack {
+                    return Look::Quiet;
                 }
                 frame.image
             }
@@ -679,17 +268,19 @@ impl MobWatch {
                 FrameUnavailable::WindowNotFound
                 | FrameUnavailable::OutsideCapturableArea
                 | FrameUnavailable::CaptureFailed,
-            ) => return Look::Missed,
+            ) => return Look::Quiet,
         };
         let profile = reader.profile.as_ref();
         let started = Instant::now();
-        let locked = find_locked_plate(&image, profile, scratch);
+        let locked = find_locked_plate(&image, profile, &mut memory.scratch);
         metrics.record_plate_search(started.elapsed());
+        let pulse = |sighting| MobPulse {
+            session_id: eyes.session_id().to_string(),
+            at_ms,
+            sighting,
+        };
         let Some(locked) = locked else {
-            return Look::Seen {
-                at_ms,
-                sighting: None,
-            };
+            return Look::Tell(pulse(None));
         };
         let started = Instant::now();
         // A crop the recogniser fails on reads as nothing, which no
@@ -697,21 +288,40 @@ impl MobWatch {
         let read_text = &reader.read_text;
         let recogniser =
             |crop: &BgrImage| Some(read_text(crop).unwrap_or_else(|| (String::new(), 0.0)));
-        let sighting = read_found_plate(&image, &locked, profile, &recogniser).map(|read| {
-            Sighting::of(
-                &read,
-                &self.providers.catalogue.current(),
-                &profile.mob_names,
-            )
-        });
+        let sighting = read_found_plate(&image, &locked, profile, &recogniser)
+            .map(|read| Sighting::of(&read, &self.catalogue.current(), &profile.mob_names));
         metrics.record_plate_read(started.elapsed());
-        Look::Seen { at_ms, sighting }
+        Look::Tell(pulse(sighting))
+    }
+}
+
+/// The creature watcher.
+pub type MobWatch = ScreenWatch<PlateLook>;
+
+impl ScreenWatch<PlateLook> {
+    pub fn new(providers: MobWatchProviders, clock: Arc<dyn Clock>) -> Arc<Self> {
+        ScreenWatch::from_parts(
+            PlateLook {
+                profile: providers.profile,
+                read_text: providers.read_text,
+                catalogue: providers.catalogue,
+            },
+            Seams {
+                frame: providers.frame,
+                capture_running: providers.capture_running,
+                start_capture: providers.start_capture,
+                enabled: providers.enabled,
+                focus: providers.focus,
+                wait: providers.wait,
+            },
+            clock,
+        )
     }
 }
 
 impl MobDetector for Arc<MobWatch> {
     fn new_history(&self) -> Option<MobHistory> {
-        let reader = self.reader()?;
+        let reader = self.watcher().reader()?;
         Some(MobHistory::new(
             reader.profile.mob_history.clone(),
             reader.profile.mob_names.clone(),
@@ -736,34 +346,6 @@ impl MobDetector for Arc<MobWatch> {
 
     fn shutdown(&self) {
         MobWatch::shutdown(self);
-    }
-}
-
-/// When the look after one due at `due` is due, `interval` apart, now that
-/// the clock reads `now`: the next on the cadence that is still to come.
-/// Looks that came due while the last one ran are dropped, never taken
-/// late one after another.
-pub(crate) fn next_due(due: f64, interval: f64, now: f64) -> f64 {
-    let next = due + interval;
-    if next > now {
-        return next;
-    }
-    let missed = ((now - next) / interval).floor() + 1.0;
-    next + missed * interval
-}
-
-/// Wait in real time until `clock`'s monotonic reading reaches `due`, or
-/// until told to stop.
-fn wait_on_clock(clock: &dyn Clock, due: f64, stopped: &mpsc::Receiver<()>) -> bool {
-    loop {
-        let left = due - clock.monotonic();
-        if left <= 0.0 {
-            return matches!(stopped.try_recv(), Err(TryRecvError::Empty));
-        }
-        match stopped.recv_timeout(Duration::from_secs_f64(left)) {
-            Err(RecvTimeoutError::Timeout) => {}
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => return false,
-        }
     }
 }
 

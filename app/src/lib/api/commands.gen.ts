@@ -2351,6 +2351,10 @@ export interface MetricsSnapshot {
 	plate_capture_latency: HistogramSnapshot;
 	plate_search_latency: HistogramSnapshot;
 	plate_read_latency: HistogramSnapshot;
+	/** The held-tool watcher's cost per look: capturing the bar's area (or the whole window while the bar is looked for), finding the bar and comparing its lettering, and reading and matching the name. */
+	tool_capture_latency: HistogramSnapshot;
+	tool_search_latency: HistogramSnapshot;
+	tool_read_latency: HistogramSnapshot;
 	rss_bytes: number;
 	handle_count: number;
 }

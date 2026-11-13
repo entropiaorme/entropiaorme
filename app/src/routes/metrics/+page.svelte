@@ -149,6 +149,9 @@
 			{@render histogramCard('Creature watcher: capture', snapshot.plate_capture_latency)}
 			{@render histogramCard('Creature watcher: plate search', snapshot.plate_search_latency)}
 			{@render histogramCard('Creature watcher: plate reading', snapshot.plate_read_latency)}
+			{@render histogramCard('Held-tool watcher: capture', snapshot.tool_capture_latency)}
+			{@render histogramCard('Held-tool watcher: bar search', snapshot.tool_search_latency)}
+			{@render histogramCard('Held-tool watcher: name reading', snapshot.tool_read_latency)}
 		</section>
 	{:else}
 		<p class="text-sm text-slate-400">Loading…</p>

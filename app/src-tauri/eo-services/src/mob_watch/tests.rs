@@ -1,10 +1,16 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, TryRecvError};
+use std::sync::Mutex;
+use std::time::Duration;
 
 use super::*;
 use crate::clock::MockClock;
+use crate::eu_window::GameFocus;
 use crate::game_ui::mob_names::{CatalogueMob, Resolved, Spelling};
 use crate::game_ui::seams::GameFrame;
 use crate::game_ui::test_support::{blank, bundled_profile, PlateDrawing, RadarScene};
+use crate::screen_watch::next_due;
+use crate::time::clock_epoch_ms;
 
 /// The watcher over stand-in seams: a frame seam counting its captures
 /// and running `on_capture` first (a slow capture advances the clock), a

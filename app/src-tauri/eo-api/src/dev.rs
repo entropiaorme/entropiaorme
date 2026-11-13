@@ -72,6 +72,12 @@ pub struct MetricsSnapshot {
     pub plate_capture_latency: HistogramSnapshot,
     pub plate_search_latency: HistogramSnapshot,
     pub plate_read_latency: HistogramSnapshot,
+    /// The held-tool watcher's cost per look: capturing the bar's area (or
+    /// the whole window while the bar is looked for), finding the bar and
+    /// comparing its lettering, and reading and matching the name.
+    pub tool_capture_latency: HistogramSnapshot,
+    pub tool_search_latency: HistogramSnapshot,
+    pub tool_read_latency: HistogramSnapshot,
     pub rss_bytes: u64,
     pub handle_count: u64,
 }

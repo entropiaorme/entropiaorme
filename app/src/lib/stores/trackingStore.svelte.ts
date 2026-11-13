@@ -12,13 +12,9 @@
 
 import { getTrackingSnapshot, type TrackingSnapshot } from '$lib/api';
 import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
+import { TRACKING_TOPIC } from '$lib/realtime/trackingTopic';
 
-/**
- * The Tauri-bus topic the shell's event bridge emits each backend tracking
- * frame on: the colon form of the `tracking.session.updated` wire topic (Tauri
- * event names forbid dots). See `spawn_domain_event_bridge` in the shell.
- */
-export const TRACKING_TOPIC = 'tracking:session:updated';
+export { TRACKING_TOPIC };
 
 /** The consolidated readout; `current` is `null` before the first hydration. */
 export const trackingSnapshot = createSnapshotStore<TrackingSnapshot>(

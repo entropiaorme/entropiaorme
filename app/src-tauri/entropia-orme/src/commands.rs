@@ -73,6 +73,9 @@ use eo_api::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, 
 use eo_api::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use eo_api::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
+use eo_api::tool_sighting::{
+    DismissedToolName, ToolSightingAction, ToolSightingReview, ToolSightingSettleResult,
+};
 use eo_api::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
     ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
@@ -141,6 +144,21 @@ pub async fn equipment_set_enabled(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn equipment_delete(app: tauri::AppHandle, item_id: i64) -> Result<(), ApiError> {
     facade(&app)?.equipment_delete(item_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn equipment_dismissed_tools(
+    app: tauri::AppHandle,
+) -> Result<Vec<DismissedToolName>, ApiError> {
+    facade(&app)?.equipment_dismissed_tools().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn equipment_track_again(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<DismissedToolName>, ApiError> {
+    facade(&app)?.equipment_track_again(name).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1485,6 +1503,37 @@ pub async fn tracking_mob_detection_settle(
 ) -> Result<MobDetectionSettleResult, ApiError> {
     facade(&app)?
         .tracking_mob_detection_settle(session_id, group, target)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_tool_sightings(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<ToolSightingReview, ApiError> {
+    facade(&app)?.tracking_tool_sightings(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_tool_sighting_settle(
+    app: tauri::AppHandle,
+    session_id: String,
+    sighting_id: String,
+    action: ToolSightingAction,
+) -> Result<ToolSightingSettleResult, ApiError> {
+    facade(&app)?
+        .tracking_tool_sighting_settle(session_id, sighting_id, action)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_tool_sighting_undo(
+    app: tauri::AppHandle,
+    session_id: String,
+    sighting_id: String,
+) -> Result<ToolSightingSettleResult, ApiError> {
+    facade(&app)?
+        .tracking_tool_sighting_undo(session_id, sighting_id)
         .await
 }
 

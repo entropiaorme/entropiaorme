@@ -137,6 +137,16 @@ export const getMobDetections = commands.trackingMobDetections;
 /** Settle every kill of one group: name the creature, or put back the
  * declared mob each kill had. Answers with the refreshed review. */
 export const settleMobDetection = commands.trackingMobDetectionSettle;
+/** What the screen read as the tool in hand during a session that is not
+ * in the library: tools of the game's data held without an entry, and
+ * names that matched no tool. The ones still to be settled come first. */
+export const getToolSightings = commands.trackingToolSightings;
+/** Settle one sighting: add the tool to the library, dismiss the name as
+ * not a tracked tool, or leave it. Answers with the refreshed review, or a
+ * typed refusal that changed nothing. */
+export const settleToolSighting = commands.trackingToolSightingSettle;
+/** Undo a sighting's settlement, so it is asked about again. */
+export const undoToolSighting = commands.trackingToolSightingUndo;
 /** Set the session facets (full-state apply: null clears a facet). The
  * name is fixed while a session runs (the backend answers 409 on an
  * attempted change): it is a stamp of the definition's name, so a

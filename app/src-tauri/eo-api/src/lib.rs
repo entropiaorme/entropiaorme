@@ -69,6 +69,7 @@ pub mod scan;
 pub mod session_definitions;
 pub mod settings;
 pub mod skilling;
+pub mod tool_sighting;
 pub mod tracking;
 pub mod weapons;
 
@@ -158,6 +159,9 @@ pub struct Api {
     /// The review of which creatures a session's kills were detected as,
     /// over the catalogue the creature watcher matches names with.
     mob_review: eo_services::mob_review::MobReviewService,
+    /// The review of what the screen read as the tool in hand that is not
+    /// in the library, over the shared database and injected clock.
+    tool_review: eo_services::tool_review::ToolReviewService,
     /// Whether creature detection can capture the game window, for the
     /// settings; `None` without a watcher (detection then cannot run).
     mob_capture: Option<eo_services::mob_watch::CaptureStatusProbe>,
@@ -261,6 +265,8 @@ impl Api {
         );
         let weapon_review = WeaponReviewService::new(db.clone(), clock.clone())
             .with_pricing(weapon_pricing.clone());
+        let tool_review =
+            eo_services::tool_review::ToolReviewService::new(db.clone(), clock.clone());
         let session_definitions = eo_services::session_definitions::SessionDefinitionService::new(
             db.clone(),
             clock.clone(),
@@ -310,6 +316,7 @@ impl Api {
             healing_review,
             weapon_review,
             mob_review,
+            tool_review,
             mob_capture: None,
             tool_names: None,
             tool_catalogues: None,

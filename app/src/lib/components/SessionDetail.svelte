@@ -30,8 +30,11 @@
 	import { createHealingReviewModel } from '$lib/features/healing/healingReviewModel.svelte';
 	import MobDetections from '$lib/features/tracking/MobDetections.svelte';
 	import { createMobDetectionModel } from '$lib/features/tracking/mobDetectionModel.svelte';
+	import ToolSightings from '$lib/features/tracking/ToolSightings.svelte';
+	import { createToolSightingModel } from '$lib/features/tracking/toolSightingModel.svelte';
 	import { describeCertainty } from '$lib/features/tracking/mobDetection';
 	import { inDevelopment } from '$lib/inDevelopment';
+	import { TRACKING_TOPIC } from '$lib/realtime/trackingTopic';
 	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
 	import { describeUnpriced, hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
 	import { createWeaponReviewModel } from '$lib/features/weapons/weaponReviewModel.svelte';
@@ -92,9 +95,17 @@
 		sessionId: () => detail.sessionId,
 		onSettled: () => refetchSessionDetail(),
 	});
+	// What the screen read as the tool in hand that is not in the library:
+	// settling one moves no cost, so the session's figures stay as they are.
+	// A running session's are read again as the tracker moves on, so its
+	// last shots and the offer to add appear once it ends.
+	const toolSightings = createToolSightingModel({ sessionId: () => detail.sessionId });
 	$effect(() => {
 		void detail.sessionId;
-		if (inDevelopment.visible) void mobDetections.refresh();
+		if (inDevelopment.visible) {
+			void mobDetections.refresh();
+			void toolSightings.refresh();
+		}
 	});
 
 	// A recording or undo from the overlay moves this session's armour cost,
@@ -127,6 +138,12 @@
 			[HEALING_TOPIC, () => reread(() => void healingReview.refresh())],
 			[WEAPONS_TOPIC, () => reread(() => void weaponReview.refresh())],
 			[CONSUMABLES_TOPIC, () => reread(() => void sessionDoses.refresh())],
+			[
+				TRACKING_TOPIC,
+				() => {
+					if (inDevelopment.visible) void toolSightings.followRunning();
+				},
+			],
 		];
 		for (const [topic, handler] of subscriptions) {
 			void listen(topic, handler).then((unlisten) => {
@@ -492,6 +509,7 @@
 
 	{#if inDevelopment.visible}
 		<MobDetections model={mobDetections} />
+		<ToolSightings model={toolSightings} />
 	{/if}
 
 	<!-- 1b2. Harvesting strip (shown only when the session harvested) -->

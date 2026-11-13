@@ -448,6 +448,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "healing intent screen",
         sql: include_str!("../../migrations/0082_healing_intent_screen.sql"),
     },
+    Migration {
+        version: 83,
+        description: "tool sighting entry created",
+        sql: include_str!("../../migrations/0083_tool_sighting_entry_created.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -538,6 +543,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "6545E8EE456350B342B77A03532267BB0604FBCF934ACE8A56D924E4CA8C7C7F8BABB5C55D768B21B91B427116A8BAB1",
     "99EC7258E17AB5E1D67033BCF86345280355575B168DEBA9CB9678D3FC3DF4FBEE8B3D3AF35984470EAB58D344A8EB66",
     "1D1E642AF6D220266FE2DE6A462A4417B66D2667D3115FB9B5A6EAEC9465A3A84902D4B84A58F76ADCFC4EDE2BDEB371",
+    "B35280BC61A020150DEDE28A53D5D05DA3FAEE077F1E04A499B8B8E41C5A2EE9EB7E4D77349F0821C02B2734957D89E7",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -2549,5 +2555,97 @@ mod tests {
                 .is_err(),
             "the vocabulary stays closed"
         );
+    }
+
+    /// Whether an addition created its entry joins additively: a
+    /// version-82 database keeps every sighting as it was, each reading as
+    /// having created nothing, and the flag can be set only on a sighting
+    /// settled as added, to nothing but 0 or 1.
+    #[test]
+    fn tool_sighting_entry_created_upgrade_keeps_every_sighting_and_stays_closed() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..82] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO equipment_library (id, name, item_type, catalog_id, \
+                  properties_json) VALUES (1, 'Sollomate Opalo', 'weapon', '42', '{}'); \
+                 INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+                  first_seen, last_seen, shots, cost_per_shot, settled_kind, settled_at, \
+                  equipment_id) VALUES ('b1', 's', 'bundled', 'weapons', '42', \
+                  'Sollomate Opalo', 5, 9, 12, 0.05, 'added', 20, 1); \
+                 INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+                  first_seen, last_seen) VALUES ('u1', 's', 'unknown', 'teleport chip', \
+                  'Teleport Chip', 6, 6);",
+            )
+            .expect("v82 rows");
+        let rows = |connection: &Connection| -> Vec<String> {
+            connection
+                .prepare(
+                    "SELECT id || '|' || kind || '|' || COALESCE(item_name, text_read) || '|' || \
+                     COALESCE(shots, '') || '|' || COALESCE(settled_kind, '') || '|' || \
+                     COALESCE(equipment_id, '') FROM tool_sightings ORDER BY id",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap()
+        };
+        let before = rows(&connection);
+
+        let migration = &MIGRATIONS[82];
+        assert_eq!(migration.version, 83);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        assert_eq!(rows(&connection), before, "every sighting as it was");
+        let created = |id: &str| -> i64 {
+            connection
+                .query_row(
+                    "SELECT entry_created FROM tool_sightings WHERE id = ?",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!((created("b1"), created("u1")), (0, 0));
+
+        connection
+            .execute(
+                "UPDATE tool_sightings SET entry_created = 1 WHERE id = 'b1'",
+                [],
+            )
+            .expect("an addition may have created its entry");
+        assert_eq!(created("b1"), 1);
+        for refused in [
+            // Only an addition creates an entry.
+            "UPDATE tool_sightings SET entry_created = 1 WHERE id = 'u1'",
+            // Nothing but 0 or 1.
+            "UPDATE tool_sightings SET entry_created = 2 WHERE id = 'b1'",
+            "UPDATE tool_sightings SET entry_created = NULL WHERE id = 'b1'",
+            // An addition undone keeps no flag.
+            "UPDATE tool_sightings SET settled_kind = NULL, settled_at = NULL, \
+              equipment_id = NULL WHERE id = 'b1'",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+        // The entry deleted keeps the settlement and the flag.
+        connection
+            .execute(
+                "UPDATE tool_sightings SET equipment_id = NULL WHERE id = 'b1'",
+                [],
+            )
+            .expect("an entry deleted from the library");
+        assert_eq!(created("b1"), 1);
     }
 }

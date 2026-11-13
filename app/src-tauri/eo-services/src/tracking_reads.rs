@@ -1828,6 +1828,9 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 "DELETE FROM tool_sightings WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;
+            // A name set aside only by this session's sightings is set
+            // aside by nothing now: it is released.
+            crate::tool_review::release_unclaimed_names(&tx)?;
             tx.execute(
                 "DELETE FROM tracking_sessions WHERE id = ?",
                 rusqlite::params![sid],

@@ -6,6 +6,7 @@
 	import CompareTab from '$lib/features/equipment/compare/CompareTab.svelte';
 	import EquipmentFormModal from '$lib/features/equipment/EquipmentFormModal.svelte';
 	import EquipmentListView from '$lib/features/equipment/EquipmentListView.svelte';
+	import NotTracked from '$lib/features/equipment/NotTracked.svelte';
 	import HotbarPresetSwitcher from '$lib/features/equipment/HotbarPresetSwitcher.svelte';
 	import { createLibraryModel } from '$lib/features/equipment/libraryModel.svelte';
 	import ProtectionTab from '$lib/features/protection/ProtectionTab.svelte';
@@ -132,6 +133,7 @@
 		<ProtectionTab model={protection} />
 	{:else}
 		<EquipmentListView {model} />
+		<NotTracked readingOn={model.toolReading} />
 	{/if}
 </div>
 

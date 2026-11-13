@@ -666,6 +666,38 @@ fn default_markup() -> i64 {
     100
 }
 
+impl EquipmentRequest {
+    /// The request the add path takes for a catalogue pick of `kind` with
+    /// nothing else chosen: no attachments, implant or enhancers, every
+    /// markup at its default, a healer's healing as its catalogue gives it.
+    pub(crate) fn bare(kind: EquipmentKind, catalog_id: &str) -> Self {
+        Self {
+            kind,
+            catalog_id: Some(catalog_id.to_string()),
+            name: None,
+            amp_catalog_id: None,
+            scope_catalog_id: None,
+            absorber_catalog_id: None,
+            weapon_markup: default_markup(),
+            amp_markup: default_markup(),
+            scope_markup: default_markup(),
+            absorber_markup: default_markup(),
+            damage_enhancers: 0,
+            implant_catalog_id: None,
+            implant_markup: default_markup(),
+            healing_mode: HealingMode::default(),
+            heal_min: None,
+            heal_max: None,
+            effect_duration_seconds: None,
+            tick_min: None,
+            tick_max: None,
+            tick_seconds: None,
+            weapon_effect: None,
+            dose: None,
+        }
+    }
+}
+
 /// Python `str.strip()`: `char::is_whitespace` plus the four
 /// information-separator controls (FS/GS/RS/US) Python's `isspace`
 /// includes and Rust's does not.
@@ -1267,10 +1299,10 @@ fn equipment_expected_returns(
 }
 
 /// The stored props built for an add/update request.
-struct BuiltProps {
-    name: String,
+pub(crate) struct BuiltProps {
+    pub(crate) name: String,
     stored_catalog_id: Option<String>,
-    props: Value,
+    pub(crate) props: Value,
 }
 
 impl Api {
@@ -1420,7 +1452,7 @@ impl Api {
     /// matched against are rebuilt while the reading is on, so the
     /// watcher's next look matches with the library as it now stands.
     /// Called once the write has succeeded, whatever follows it.
-    async fn equipment_changed(&self) {
+    pub(crate) async fn equipment_changed(&self) {
         if let Some(catalogues) = &self.tool_catalogues {
             catalogues.changed().await;
         }
@@ -1487,7 +1519,7 @@ impl Api {
     /// Build the stored props for an add/update request, reproducing
     /// the route-order validation (missing catalogue id refusals,
     /// catalogue misses, the consumable identity rule).
-    fn build_props(&self, req: &EquipmentRequest) -> Result<BuiltProps, ApiError> {
+    pub(crate) fn build_props(&self, req: &EquipmentRequest) -> Result<BuiltProps, ApiError> {
         match req.kind {
             EquipmentKind::Weapon => {
                 let catalog_id = req
@@ -1506,7 +1538,7 @@ impl Api {
                 let scope_e =
                     optional("weapon_vision_attachments", req.scope_catalog_id.as_deref())?;
                 let absorber_e = optional("absorbers", req.absorber_catalog_id.as_deref())?;
-                let name = weapon_e["name"].as_str().unwrap_or_default().to_string();
+                let name = eo_services::bundled_tools::entity_name(&weapon_e).unwrap_or_default();
                 let mut props = Map::new();
                 props.insert("weapon_entity".into(), weapon_e);
                 props.insert("weapon_catalog_id".into(), json!(catalog_id));
@@ -1556,7 +1588,7 @@ impl Api {
                     .filter(|id| !id.is_empty())
                     .ok_or_else(|| ApiError::bad_request("catalog_id required for healing"))?;
                 let tool_e = self.fetch_entity("medical_tools", catalog_id)?;
-                let name = tool_e["name"].as_str().unwrap_or_default().to_string();
+                let name = eo_services::bundled_tools::entity_name(&tool_e).unwrap_or_default();
                 let direct_min = req
                     .heal_min
                     .or_else(|| tool_e.get("min_heal").and_then(Value::as_f64));
@@ -1614,7 +1646,7 @@ impl Api {
                     .filter(|id| !id.is_empty())
                     .ok_or_else(|| ApiError::bad_request("catalog_id required for tool"))?;
                 let tool_e = self.fetch_entity("harvesting_tools", catalog_id)?;
-                let name = tool_e["name"].as_str().unwrap_or_default().to_string();
+                let name = eo_services::bundled_tools::entity_name(&tool_e).unwrap_or_default();
                 let mut props = Map::new();
                 props.insert("tool_entity".into(), tool_e);
                 props.insert("tool_catalog_id".into(), json!(catalog_id));

@@ -106,6 +106,31 @@ describe('tracking wrappers dispatch typed commands', () => {
 				target: { kind: 'declared' },
 			},
 		],
+		['getDismissedTools', () => api.getDismissedTools(), 'equipment_dismissed_tools', {}],
+		[
+			'trackToolAgain',
+			() => api.trackToolAgain('Teleport Chip'),
+			'equipment_track_again',
+			{ name: 'Teleport Chip' },
+		],
+		[
+			'getToolSightings',
+			() => api.getToolSightings('s1'),
+			'tracking_tool_sightings',
+			{ session_id: 's1' },
+		],
+		[
+			'settleToolSighting',
+			() => api.settleToolSighting('s1', 't1', 'dismiss'),
+			'tracking_tool_sighting_settle',
+			{ session_id: 's1', sighting_id: 't1', action: 'dismiss' },
+		],
+		[
+			'undoToolSighting',
+			() => api.undoToolSighting('s1', 't1'),
+			'tracking_tool_sighting_undo',
+			{ session_id: 's1', sighting_id: 't1' },
+		],
 		['releaseMob', () => api.releaseMob(), 'tracking_release_mob', {}],
 		[
 			'setSessionConfig',

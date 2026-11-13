@@ -75,6 +75,9 @@ use crate::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, S
 use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
+use crate::tool_sighting::{
+    DismissedToolName, ToolSightingAction, ToolSightingReview, ToolSightingSettleResult,
+};
 use crate::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
     ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
@@ -162,6 +165,19 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(i64)),
             }],
             returns: None,
+        },
+        CommandSpec {
+            name: "equipment_dismissed_tools",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<DismissedToolName>))),
+        },
+        CommandSpec {
+            name: "equipment_track_again",
+            args: vec![ArgSpec {
+                name: "name",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<DismissedToolName>))),
         },
         CommandSpec {
             name: "equipment_detail",
@@ -1673,6 +1689,46 @@ pub fn manifest() -> Vec<CommandSpec> {
                 },
             ],
             returns: Some(schema(schema_for!(MobDetectionSettleResult))),
+        },
+        CommandSpec {
+            name: "tracking_tool_sightings",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ToolSightingReview))),
+        },
+        CommandSpec {
+            name: "tracking_tool_sighting_settle",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "sighting_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "action",
+                    schema: schema(schema_for!(ToolSightingAction)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ToolSightingSettleResult))),
+        },
+        CommandSpec {
+            name: "tracking_tool_sighting_undo",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "sighting_id",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ToolSightingSettleResult))),
         },
         CommandSpec {
             name: "tracking_loot_item_activate",

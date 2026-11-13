@@ -234,6 +234,42 @@ pub fn latest_skill_levels(
     mapped.collect()
 }
 
+/// Insert an equipment-library row, returning its generated id: the one
+/// insert every new library entry goes through, on its own or inside a
+/// caller's transaction.
+pub(crate) fn insert_equipment_row(
+    conn: &rusqlite::Connection,
+    name: &str,
+    item_type: &str,
+    catalog_id: Option<&str>,
+    properties_json: &str,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) \
+         VALUES (?, ?, ?, ?)",
+        rusqlite::params![name, item_type, catalog_id, properties_json],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Delete an equipment-library row inside the caller's transaction
+/// (nothing over a missing row). A sighting of a tool read off the screen
+/// that became this entry keeps its settlement but no longer points at it.
+pub(crate) fn delete_equipment_row(
+    tx: &rusqlite::Transaction<'_>,
+    item_id: i64,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE tool_sightings SET equipment_id = NULL WHERE equipment_id = ?",
+        rusqlite::params![item_id],
+    )?;
+    tx.execute(
+        "DELETE FROM equipment_library WHERE id = ?",
+        rusqlite::params![item_id],
+    )?;
+    Ok(())
+}
+
 impl Db {
     /// Run a read closure on the synchronous core: whichever reader
     /// thread is free runs it to completion on its own connection,
@@ -587,12 +623,13 @@ impl Db {
         properties_json: String,
     ) -> Result<i64, DbError> {
         self.with_writer(move |conn| {
-            conn.execute(
-                "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) \
-                 VALUES (?, ?, ?, ?)",
-                rusqlite::params![name, item_type, catalog_id, properties_json],
-            )?;
-            Ok(conn.last_insert_rowid())
+            Ok(insert_equipment_row(
+                conn,
+                &name,
+                &item_type,
+                catalog_id.as_deref(),
+                &properties_json,
+            )?)
         })
         .await
     }
@@ -722,14 +759,7 @@ impl Db {
     pub async fn delete_equipment(&self, item_id: i64) -> Result<(), DbError> {
         self.with_writer(move |conn| {
             let tx = conn.transaction()?;
-            tx.execute(
-                "UPDATE tool_sightings SET equipment_id = NULL WHERE equipment_id = ?",
-                rusqlite::params![item_id],
-            )?;
-            tx.execute(
-                "DELETE FROM equipment_library WHERE id = ?",
-                rusqlite::params![item_id],
-            )?;
+            delete_equipment_row(&tx, item_id)?;
             tx.commit()?;
             Ok(())
         })

@@ -1881,6 +1881,7 @@ impl Api {
             .await
             .map_err(edit_error("tracking session delete"))?;
         self.healing_review.announce_changed();
+        self.equipment_changed().await;
         Ok(())
     }
 

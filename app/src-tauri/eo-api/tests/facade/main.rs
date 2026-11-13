@@ -29,6 +29,7 @@ mod session_definitions_facade;
 mod session_exclusion_facade;
 mod settings_facade;
 mod skilling_routes_facade;
+mod tool_sighting_facade;
 mod tracking_facade;
 
 /// The facade tests stay one binary: a family added as its own file directly

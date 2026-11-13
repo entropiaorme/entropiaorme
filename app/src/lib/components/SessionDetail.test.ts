@@ -31,6 +31,11 @@ vi.mock('$lib/api', () => ({
 	restoreSessionMob: vi.fn(),
 	getMobDetections: vi.fn(async () => ({ sessionId: 's1', ended: true, groups: [] })),
 	settleMobDetection: vi.fn(),
+	getToolSightings: vi.fn(async () => ({ sessionId: 's1', ended: true, sightings: [] })),
+	settleToolSighting: vi.fn(),
+	undoToolSighting: vi.fn(),
+	setLibraryEnabled: vi.fn(),
+	getTrackingSnapshot: vi.fn(),
 }));
 
 // The protection bridge: capture the listener so a test can fire a write.

@@ -1018,6 +1018,15 @@ export interface DetectedCreature {
 }
 
 /**
+ * A name set aside as not a tracked tool.
+ */
+export interface DismissedToolName {
+	name: string;
+	/** When it was set aside (epoch seconds). */
+	dismissedAt: number;
+}
+
+/**
  * The buyout as read: switched off, or a price.
  */
 export type DraftBuyout = {
@@ -3917,6 +3926,11 @@ export interface ShrapnelConversionInput {
 }
 
 /**
+ * What kind of tool a tool of the game's data is.
+ */
+export type SightedToolKind = 'weapon' | 'healing' | 'harvesting';
+
+/**
  * One per-skill gain (attributes excluded).
  */
 export interface SkillGain {
@@ -4407,6 +4421,11 @@ export interface ToolEntry {
 }
 
 /**
+ * Why the entry an addition created stays with the addition undone.
+ */
+export type ToolEntryKeptBecause = 'changed' | 'notInGameData' | 'otherSighting' | 'inSession' | 'referenced' | 'inSettings';
+
+/**
  * What the screen shows is in hand.
  */
 export type ToolHeld = {
@@ -4434,6 +4453,140 @@ export type ToolHeld = {
  * the screen is turned on.
  */
 export type ToolScreenUnread = 'stopped' | 'notStarted';
+
+/**
+ * What the screen read.
+ */
+export type ToolSighted = {
+		name: string;
+		tool: SightedToolKind;
+		shots: number | null;
+		kind: 'bundled';
+	} | {
+		text: string;
+		kind: 'unknown';
+	};
+
+/**
+ * One thing read off the screen that is not a library entry.
+ */
+export interface ToolSighting {
+	id: string;
+	sighted: ToolSighted;
+	/** When it was first and last seen in hand (epoch seconds). */
+	firstSeen: number;
+	lastSeen: number;
+	/** Null while it is still to be settled. */
+	settled: ToolSightingSettled | null;
+}
+
+/**
+ * What to settle a sighting as.
+ */
+export type ToolSightingAction = 'add' | 'dismiss' | 'leave';
+
+/**
+ * What a settlement, or its undoing, did.
+ */
+export type ToolSightingChange = {
+		created: boolean;
+		uses: ToolUsesCosting;
+		entry: ToolSightingEntry;
+		kind: 'added';
+	} | {
+		kind: 'dismissed';
+	} | {
+		kind: 'left';
+	} | {
+		was: ToolSightingSettledKind;
+		entry: ToolSightingEntryOnUndo;
+		kind: 'reopened';
+	};
+
+/**
+ * The library entry a tool was added as.
+ */
+export interface ToolSightingEntry {
+	id: string;
+	/** The entry as the player tells it from others of its name. */
+	label: string;
+	/** The entry is on. One linked to may be off, and then the reader cannot take the tool as in hand until it is turned on. */
+	enabled: boolean;
+}
+
+/**
+ * What undoing an addition did with the entry it created.
+ */
+export type ToolSightingEntryOnUndo = {
+		kind: 'none';
+	} | {
+		kind: 'removed';
+	} | {
+		because: ToolEntryKeptBecause;
+		kind: 'kept';
+	};
+
+/**
+ * Why a settlement or its undoing was refused. Nothing changed.
+ */
+export type ToolSightingRefusal = {
+		kind: 'notFound';
+	} | {
+		kind: 'otherSession';
+	} | {
+		settled: ToolSightingSettledKind;
+		kind: 'alreadySettled';
+	} | {
+		kind: 'notSettled';
+	} | {
+		kind: 'sessionRunning';
+	} | {
+		kind: 'notATool';
+	} | {
+		kind: 'notInGameData';
+	} | {
+		kind: 'needsSetUp';
+	};
+
+/**
+ * A session's sightings: the ones still to be settled first, tools of
+ * the game's data before names read.
+ */
+export interface ToolSightingReview {
+	sessionId: string;
+	/** The session has ended, so its tools can be added. */
+	ended: boolean;
+	sightings: ToolSighting[];
+}
+
+/**
+ * What settling a sighting, or undoing its settlement, came to.
+ */
+export type ToolSightingSettleResult = {
+		change: ToolSightingChange;
+		review: ToolSightingReview;
+		kind: 'settled';
+	} | {
+		reason: ToolSightingRefusal;
+		kind: 'refused';
+	};
+
+/**
+ * How a sighting was settled.
+ */
+export type ToolSightingSettled = {
+		created: boolean;
+		kind: 'added';
+	} | {
+		kind: 'dismissed';
+	} | {
+		kind: 'left';
+	};
+
+/**
+ * A settlement, by what it was alone.
+ */
+export type ToolSightingSettledKind = 'added' | 'dismissed' | 'left';
 
 /**
  * Where the tool in hand comes from, as the overlay shows it. While the
@@ -4481,6 +4634,11 @@ export type ToolUncertainty = {
 	} | {
 		kind: 'unreadable';
 	};
+
+/**
+ * How an added tool's uses this session are costed.
+ */
+export type ToolUsesCosting = 'withoutAttachments' | 'asBooked' | 'notCosted';
 
 /**
  * One row of the session list.
@@ -5030,6 +5188,14 @@ export async function equipmentSetEnabled(itemId: number, enabled: boolean): Pro
 
 export async function equipmentDelete(itemId: number): Promise<void> {
 	return invokeCommand('equipment_delete', { item_id: itemId });
+}
+
+export async function equipmentDismissedTools(): Promise<DismissedToolName[]> {
+	return invokeCommand('equipment_dismissed_tools', {});
+}
+
+export async function equipmentTrackAgain(name: string): Promise<DismissedToolName[]> {
+	return invokeCommand('equipment_track_again', { name });
 }
 
 export async function equipmentDetail(itemId: number): Promise<EquipmentDetail> {
@@ -5790,6 +5956,32 @@ export async function trackingMobDetectionSettle(sessionId: string, group: MobDe
 		kind: 'didYouMean';
 	}> {
 	return invokeCommand('tracking_mob_detection_settle', { session_id: sessionId, group, target });
+}
+
+export async function trackingToolSightings(sessionId: string): Promise<ToolSightingReview> {
+	return invokeCommand('tracking_tool_sightings', { session_id: sessionId });
+}
+
+export async function trackingToolSightingSettle(sessionId: string, sightingId: string, action: 'add' | 'dismiss' | 'leave'): Promise<{
+		change: ToolSightingChange;
+		review: ToolSightingReview;
+		kind: 'settled';
+	} | {
+		reason: ToolSightingRefusal;
+		kind: 'refused';
+	}> {
+	return invokeCommand('tracking_tool_sighting_settle', { session_id: sessionId, sighting_id: sightingId, action });
+}
+
+export async function trackingToolSightingUndo(sessionId: string, sightingId: string): Promise<{
+		change: ToolSightingChange;
+		review: ToolSightingReview;
+		kind: 'settled';
+	} | {
+		reason: ToolSightingRefusal;
+		kind: 'refused';
+	}> {
+	return invokeCommand('tracking_tool_sighting_undo', { session_id: sessionId, sighting_id: sightingId });
 }
 
 export async function trackingLootItemActivate(sessionId: string, itemName: string): Promise<LootItemEditResult> {

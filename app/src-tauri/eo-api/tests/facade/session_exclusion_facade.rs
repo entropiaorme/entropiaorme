@@ -821,9 +821,13 @@ const OTHER_COMMANDS: &[&str] = &[
     "tracking_session_exclusion",
     "tracking_session_delete",
     // Which creatures a session's kills were: a record of the kills, not a
-    // statistic.
+    // statistic. Likewise what the screen read as the tool in hand that is
+    // not in the library, and how each was settled.
     "tracking_mob_detections",
     "tracking_mob_detection_settle",
+    "tracking_tool_sightings",
+    "tracking_tool_sighting_settle",
+    "tracking_tool_sighting_undo",
     "tracking_mob_pin",
     "tracking_mob_unpin",
     "session_definitions_list",
@@ -971,6 +975,8 @@ const OTHER_COMMANDS: &[&str] = &[
     "equipment_update",
     "equipment_set_enabled",
     "equipment_delete",
+    "equipment_dismissed_tools",
+    "equipment_track_again",
     "equipment_detail",
     "loadout_compare",
     "settings_get",

@@ -56,6 +56,11 @@ export async function updateLibrary(id: string, req: commands.EquipmentRequest) 
 	return commands.equipmentUpdate(Number(id), req);
 }
 
+/** The names the player set aside as not a tool they track, oldest first. */
+export const getDismissedTools = commands.equipmentDismissedTools;
+/** Bring a name set aside back, so the held-tool reader matches it again;
+ * answers the names still set aside. */
+export const trackToolAgain = commands.equipmentTrackAgain;
 /** Turn a library entry on or off; answers the entry as it now stands. */
 export async function setLibraryEnabled(id: string, enabled: boolean) {
 	return commands.equipmentSetEnabled(Number(id), enabled);

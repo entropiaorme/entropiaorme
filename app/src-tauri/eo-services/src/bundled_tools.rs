@@ -63,6 +63,18 @@ pub fn bare_props(endpoint: &str, item_id: &str, entity: &Value) -> Option<Value
     Some(Value::Object(props))
 }
 
+/// A catalogue entity's name as a library entry and a tool read off the
+/// screen both carry it: trimmed, None when blank. The one place either
+/// takes a name from the game's data.
+pub fn entity_name(entity: &Value) -> Option<String> {
+    entity
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
 /// `entity` of `endpoint`, priced bare under `reload_speed_percent`; None
 /// for a collection holding no held tool or an entity without a name.
 pub fn bare_tool(
@@ -72,12 +84,7 @@ pub fn bare_tool(
     game_data: Option<&GameDataStore>,
     reload_speed_percent: f64,
 ) -> Option<BundledTool> {
-    let name = entity
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())?
-        .to_string();
+    let name = entity_name(entity)?;
     let kind = kind_of(endpoint)?;
     let props = bare_props(endpoint, item_id, entity)?;
     match kind {

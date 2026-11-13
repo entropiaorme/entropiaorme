@@ -7,8 +7,9 @@
 	// quiet line with nothing asking to be done; the same settlement is a
 	// click away. Shown for an ended session only (the model gives no groups
 	// otherwise).
-	import { Button, Divider, ErrorNotice, Input } from '$lib/components';
-	import { InDevelopmentMark } from '$lib/inDevelopment';
+	import { Button, Input } from '$lib/components';
+	import { inDevelopmentSurface } from '$lib/inDevelopment';
+	import SessionReviewBlock from './SessionReviewBlock.svelte';
 	import {
 		continuityLine,
 		describeGrade,
@@ -63,71 +64,65 @@
 {/snippet}
 
 {#if model.groups.length > 0}
-	<Divider />
-	<section aria-labelledby="mob-detections-heading" data-testid="mob-detections">
-		<div class="mb-3 flex flex-wrap items-baseline gap-2">
-			<h3 id="mob-detections-heading" class="eyebrow">Detected creatures</h3>
-			<InDevelopmentMark id="creature-detection" align="left" />
-		</div>
-
-		<ErrorNotice message={model.error} onDismiss={model.dismissError} class="mb-3" />
-		{#if model.notice}
-			<p class="mb-3 text-xs text-text-secondary" role="status">{model.notice}</p>
-		{/if}
-
-		<div class="divide-y divide-border/40">
-			{#each model.groups as group (groupKey(group.group))}
-				{@const grade = group.group.grade}
-				{@const acting = model.busy === groupKey(group.group)}
-				{@const offered = model.offerFor(group)}
-				{@const key = groupKey(group.group)}
-				{#if isContinuity(grade)}
-					<div class="py-2 text-sm" data-testid="mob-detection" data-grade={grade}>
-						<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-							<span class="text-text-secondary">{group.group.creature.name}</span>
-							<span class="text-xs text-text-tertiary"
-								>{continuityLine(
-									group.killCount,
-									group.group.creature.name,
-									group.currentName,
-								)}</span
-							>
-							<button
-								type="button"
-								class="ml-auto text-xs text-text-tertiary hover:text-text"
-								aria-expanded={correcting[key] === true}
-								onclick={() => (correcting = { ...correcting, [key]: !correcting[key] })}
-							>
-								Correct
-							</button>
-						</div>
-						{#if correcting[key]}
-							<p class="mt-1 text-xs text-text-tertiary">
-								Kills nothing on screen named took the creature the kills before them were.
-								After a change of creature whose name was not read, the first few can be the
-								one before.
-							</p>
-							{@render settle(group, acting, offered)}
-						{/if}
+	<SessionReviewBlock
+		id="mob-detections"
+		heading="Detected creatures"
+		mark={inDevelopmentSurface('creature-detection').id}
+		error={model.error}
+		onDismissError={model.dismissError}
+		notice={model.notice}
+	>
+		{#each model.groups as group (groupKey(group.group))}
+			{@const grade = group.group.grade}
+			{@const acting = model.busy === groupKey(group.group)}
+			{@const offered = model.offerFor(group)}
+			{@const key = groupKey(group.group)}
+			{#if isContinuity(grade)}
+				<div class="py-2 text-sm" data-testid="mob-detection" data-grade={grade}>
+					<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+						<span class="text-text-secondary">{group.group.creature.name}</span>
+						<span class="text-xs text-text-tertiary"
+							>{continuityLine(
+								group.killCount,
+								group.group.creature.name,
+								group.currentName,
+							)}</span
+						>
+						<button
+							type="button"
+							class="ml-auto text-xs text-text-tertiary hover:text-text"
+							aria-expanded={correcting[key] === true}
+							onclick={() => (correcting = { ...correcting, [key]: !correcting[key] })}
+						>
+							Correct
+						</button>
 					</div>
-				{:else}
-					<div class="py-3 text-sm" data-testid="mob-detection" data-grade={grade}>
-						<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-							<span class="text-text">{group.group.creature.name}</span>
-							<span class="text-xs text-text-tertiary">{describeGrade(grade)}</span>
-							<span class="ml-auto text-xs tabular-nums text-text-tertiary">{killCount(group.killCount)}</span>
-						</div>
+					{#if correcting[key]}
 						<p class="mt-1 text-xs text-text-tertiary">
-							{#if group.exampleText === null}
-								Pinned from what the screen read{#if group.currentName}; recorded as {group.currentName}{/if}.
-							{:else}
-								Read as “{group.exampleText}”{#if group.currentName}; recorded as {group.currentName}{/if}{#if isSuggestion(grade) && !group.reviewed}, your declared mob{/if}.
-							{/if}
+							Kills nothing on screen named took the creature the kills before them were.
+							After a change of creature whose name was not read, the first few can be the
+							one before.
 						</p>
 						{@render settle(group, acting, offered)}
+					{/if}
+				</div>
+			{:else}
+				<div class="py-3 text-sm" data-testid="mob-detection" data-grade={grade}>
+					<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+						<span class="text-text">{group.group.creature.name}</span>
+						<span class="text-xs text-text-tertiary">{describeGrade(grade)}</span>
+						<span class="ml-auto text-xs tabular-nums text-text-tertiary">{killCount(group.killCount)}</span>
 					</div>
-				{/if}
-			{/each}
-		</div>
-	</section>
+					<p class="mt-1 text-xs text-text-tertiary">
+						{#if group.exampleText === null}
+							Pinned from what the screen read{#if group.currentName}; recorded as {group.currentName}{/if}.
+						{:else}
+							Read as “{group.exampleText}”{#if group.currentName}; recorded as {group.currentName}{/if}{#if isSuggestion(grade) && !group.reviewed}, your declared mob{/if}.
+						{/if}
+					</p>
+					{@render settle(group, acting, offered)}
+				</div>
+			{/if}
+		{/each}
+	</SessionReviewBlock>
 {/if}

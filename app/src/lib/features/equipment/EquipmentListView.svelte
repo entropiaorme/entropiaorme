@@ -8,7 +8,6 @@
 	import WeaponRow from './WeaponRow.svelte';
 	import EntrySwitch from './EntrySwitch.svelte';
 	import LookalikeNote from './LookalikeNote.svelte';
-	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import { type LookalikeNote as LookalikeNoteText, lookalikeNotes } from './toolReading';
 
 	let { model }: { model: LibraryModel } = $props();
@@ -30,13 +29,6 @@
 	<span class="text-text-tertiary" aria-hidden="true">
 		<IconWeapons />
 	</span>
-	{#if model.toolReading}
-		<!-- The switches and look-alike flags below serve reading the held
-			 tool off the screen. -->
-		<span class="ml-auto" data-testid="tool-reading-mark">
-			<InDevelopmentMark id="held-tool-reading" />
-		</span>
-	{/if}
 </div>
 
 {#if model.loading}

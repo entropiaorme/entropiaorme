@@ -10,7 +10,7 @@
 		readingOn,
 		model = createNotTrackedModel(),
 	}: {
-		/** The held tool is read off the screen (and in-development surfaces show). */
+		/** The held tool is read off the screen. */
 		readingOn: boolean;
 		model?: NotTrackedModel;
 	} = $props();

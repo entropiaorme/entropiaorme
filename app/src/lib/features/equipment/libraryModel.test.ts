@@ -26,6 +26,18 @@ import * as api from '$lib/api';
 
 const mocked = vi.mocked(api);
 
+// The in-development channel, switchable per test: a published build hides
+// surfaces still in development.
+const channel = vi.hoisted(() => ({ visible: true }));
+vi.mock('$lib/inDevelopment/channel', () => ({
+	isInDevelopmentVisible: (stable: boolean) => !stable,
+	inDevelopment: {
+		get visible() {
+			return channel.visible;
+		},
+	},
+}));
+
 function summary(overrides: Partial<Equipment> = {}): Equipment {
 	return {
 		id: '1',
@@ -891,6 +903,16 @@ describe('switching entries on and off while the tool in hand is read off the sc
 		expect(model.toolReading).toBe(true);
 		expect(model.indistinguishable).toEqual([['1', '2']]);
 		expect(model.lookalikeLabels['1']).toBe('Jester D-1 + A101');
+	});
+
+	it('follows the setting alone, in a build that hides surfaces in development too', async () => {
+		channel.visible = false;
+		try {
+			const model = await loaded([summary({ id: '1' })]);
+			expect(model.toolReading).toBe(true);
+		} finally {
+			channel.visible = true;
+		}
 	});
 
 	it('is off as the settings stand by default', async () => {

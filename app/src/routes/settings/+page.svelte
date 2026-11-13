@@ -17,7 +17,11 @@
 	import { externalLinks } from '$lib/utils/openExternal';
 	import { inDevelopment } from '$lib/inDevelopment';
 	import ScreenReadingSetting from '$lib/features/settings/ScreenReadingSetting.svelte';
-	import { SCREEN_READINGS, type ScreenReading } from '$lib/features/settings/screenReadingSetting';
+	import {
+		CREATURE_DETECTION,
+		HELD_TOOL_READING,
+		type ScreenReading,
+	} from '$lib/features/settings/screenReadingSetting';
 
 	let settings = $state<AppSettings | null>(null);
 	let loading = $state(true);
@@ -169,11 +173,11 @@
 
 	async function handleScreenReading(reading: ScreenReading, checked: boolean) {
 		if (!settings) return;
-		savingField = reading.mark;
+		savingField = reading.key;
 		capabilityError = null;
 		try {
 			settings = await updateSettings(reading.patch(checked));
-			flashSaved(reading.mark);
+			flashSaved(reading.key);
 		} catch (e) {
 			capabilityError = e instanceof Error ? e.message : reading.failure;
 		} finally {
@@ -220,6 +224,16 @@
 	}
 
 </script>
+
+{#snippet screenReading(reading: ScreenReading, current: AppSettings)}
+	<ScreenReadingSetting
+		{reading}
+		{...reading.state(current)}
+		disabled={savingField !== null}
+		saved={savedIndicator === reading.key}
+		onchange={(checked) => handleScreenReading(reading, checked)}
+	/>
+{/snippet}
 
 {#if loading}
 	<div class="px-6 pb-6 text-sm text-text-tertiary">Loading settings…</div>
@@ -325,6 +339,11 @@
 
 			<Divider />
 
+			<!-- Reading the held tool: takes over the hotbar keys' part above -->
+			{@render screenReading(HELD_TOOL_READING, settings)}
+
+			<Divider />
+
 			<!-- Keyless tracking: this machine cannot read keys -->
 			<div class="py-5 flex items-start justify-between gap-6">
 				<div>
@@ -376,16 +395,8 @@
 			<Divider />
 
 			{#if inDevelopment.visible}
-				{#each SCREEN_READINGS as reading (reading.mark)}
-					<ScreenReadingSetting
-						{reading}
-						{...reading.state(settings)}
-						disabled={savingField !== null}
-						saved={savedIndicator === reading.mark}
-						onchange={(checked) => handleScreenReading(reading, checked)}
-					/>
-					<Divider />
-				{/each}
+				{@render screenReading(CREATURE_DETECTION, settings)}
+				<Divider />
 			{/if}
 
 			<!-- Loot filter -->

@@ -138,11 +138,12 @@ describe('expanding it', () => {
 		expect(screen.getByRole('button', { name: 'Choose a tool' })).toBeTruthy();
 	});
 
-	it('carries the shared in-development mark inside the panel', async () => {
+	it('carries no in-development mark inside the panel: reading the held tool is not in development', async () => {
 		mount(display({ kind: 'nothing' }));
 		await fireEvent.click(screen.getByTestId('held-tool'));
 		const panel = screen.getByTestId('held-tool-panel');
-		expect(panel.querySelector('[data-testid="in-development-mark"]')).not.toBeNull();
+		expect(panel.querySelector('[data-testid="in-development-mark"]')).toBeNull();
+		expect(screen.queryByText('In development')).toBeNull();
 	});
 
 	it('is keyboard-operable: the toggle is a button, and Escape closes it', async () => {

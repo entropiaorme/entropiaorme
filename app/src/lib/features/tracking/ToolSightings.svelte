@@ -8,7 +8,6 @@
 	// being costed. A settled one collapses to one quiet line with its undo.
 	// Not shown when there is nothing.
 	import { Button } from '$lib/components';
-	import { inDevelopmentSurface } from '$lib/inDevelopment';
 	import SessionReviewBlock from './SessionReviewBlock.svelte';
 	import { canAdd, describeSettled, describeSighted, sightingName } from './toolSighting';
 	import type { ToolSightingModel } from './toolSightingModel.svelte';
@@ -23,7 +22,6 @@
 	<SessionReviewBlock
 		id="tool-sightings"
 		heading="Detected tools"
-		mark={inDevelopmentSurface('held-tool-reading').id}
 		error={model.error}
 		onDismissError={model.dismissError}
 		notice={model.notice}

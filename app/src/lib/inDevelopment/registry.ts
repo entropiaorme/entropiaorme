@@ -34,12 +34,6 @@ export const IN_DEVELOPMENT_SURFACES: readonly InDevelopmentSurface[] = [
 			'Reads the name over the creature you are locked on to and records which creature each kill was. Tried so far only on simulated ordinary hunts, where it named about three kills in four (one in two hundred wrongly) and kept your declared mob for the rest. Off until you turn it on.',
 		graduates: 'Detection has been checked against live hunts.',
 	},
-	{
-		id: 'held-tool-reading',
-		summary:
-			"Reads the tool in hand off the game's own bar and costs each shot from that tool's library entry, leaving the hotbar keys to start consumables. Tried so far only on recorded screens, not yet in a live hunt. Off until you turn it on.",
-		graduates: 'Reading the held tool has been walked in live hunts.',
-	},
 ] as const;
 
 /** The registered surface for `id`. Throws on an unregistered id, matching

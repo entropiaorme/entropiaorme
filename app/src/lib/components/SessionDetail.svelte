@@ -102,10 +102,8 @@
 	const toolSightings = createToolSightingModel({ sessionId: () => detail.sessionId });
 	$effect(() => {
 		void detail.sessionId;
-		if (inDevelopment.visible) {
-			void mobDetections.refresh();
-			void toolSightings.refresh();
-		}
+		if (inDevelopment.visible) void mobDetections.refresh();
+		void toolSightings.refresh();
 	});
 
 	// A recording or undo from the overlay moves this session's armour cost,
@@ -138,12 +136,7 @@
 			[HEALING_TOPIC, () => reread(() => void healingReview.refresh())],
 			[WEAPONS_TOPIC, () => reread(() => void weaponReview.refresh())],
 			[CONSUMABLES_TOPIC, () => reread(() => void sessionDoses.refresh())],
-			[
-				TRACKING_TOPIC,
-				() => {
-					if (inDevelopment.visible) void toolSightings.followRunning();
-				},
-			],
+			[TRACKING_TOPIC, () => void toolSightings.followRunning()],
 		];
 		for (const [topic, handler] of subscriptions) {
 			void listen(topic, handler).then((unlisten) => {
@@ -509,8 +502,8 @@
 
 	{#if inDevelopment.visible}
 		<MobDetections model={mobDetections} />
-		<ToolSightings model={toolSightings} />
 	{/if}
+	<ToolSightings model={toolSightings} />
 
 	<!-- 1b2. Harvesting strip (shown only when the session harvested) -->
 	{#if detail.harvest && detail.harvest.swings > 0}

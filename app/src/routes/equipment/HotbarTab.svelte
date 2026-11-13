@@ -2,7 +2,6 @@
 	import type { Equipment } from '$lib/types';
 	import type { Hotbar, HotbarPreset } from '$lib/types/settings';
 	import { Divider, Select } from '$lib/components';
-	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import { NO_DATA } from '$lib/utils/format';
 	import CarriedWeapons from '$lib/features/equipment/CarriedWeapons.svelte';
 	import DamageRanges from '$lib/features/equipment/DamageRanges.svelte';
@@ -95,12 +94,9 @@
 
 <div class="space-y-4">
 	{#if toolReading}
-		<div class="flex items-center gap-2 max-w-2xl">
-			<p class="text-xs text-text-tertiary" data-testid="hotbar-listener-state">
-				{hotbarReadingNote({ keyless, hotbarHooksEnabled })}
-			</p>
-			<InDevelopmentMark id="held-tool-reading" align="left" />
-		</div>
+		<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
+			{hotbarReadingNote({ keyless, hotbarHooksEnabled })}
+		</p>
 	{:else}
 		<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
 			{#if keyless}

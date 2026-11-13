@@ -5,7 +5,6 @@
 	// the marker says why, in the shared expanding shell.
 	import HoverFacet from '$lib/components/overlay/HoverFacet.svelte';
 	import type { HoverPanel } from '$lib/components/overlay/hoverPanel.svelte';
-	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import { SCREEN_NOT_READ_MARKER } from './heldTool';
 
 	let { line, panel }: { line: string; panel: HoverPanel } = $props();
@@ -36,8 +35,5 @@
 	{#snippet content()}
 		<span class="facet-label mb-2 block">Tool</span>
 		<p class="text-[11px] leading-snug text-white/70" data-testid="screen-unread-line">{line}</p>
-		<div class="mt-2">
-			<InDevelopmentMark id="held-tool-reading" inSurface />
-		</div>
 	{/snippet}
 </HoverFacet>

@@ -51,6 +51,8 @@ describe('the detected creatures section', () => {
 		const shown = group();
 		const m = model([shown]);
 		render(MobDetections, { props: { model: m } });
+		// Creature detection is still in development: its heading carries the mark.
+		expect(screen.getByText('In development')).toBeTruthy();
 		expect(screen.getByText('Gloomrat')).toBeTruthy();
 		expect(screen.getByText('Not in the creature list')).toBeTruthy();
 		expect(screen.getByText('2 kills')).toBeTruthy();

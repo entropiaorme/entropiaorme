@@ -247,7 +247,7 @@ pub struct AppSettings {
     pub mob_detection_capture: ScreenCapture,
     /// Whether the tool in hand is read off the game's own bar while a
     /// session runs, instead of from the hotbar keys (the player's choice;
-    /// off until they make one, and never in a published build).
+    /// off until they make one).
     pub tool_reading_enabled: bool,
     /// Whether reading the held tool can capture the game window when a
     /// session wants it.

@@ -6,7 +6,6 @@
 	// shows what is held, or the equipment picker.
 	import HoverFacet from '$lib/components/overlay/HoverFacet.svelte';
 	import type { HoverPanel } from '$lib/components/overlay/hoverPanel.svelte';
-	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import type { HeldToolDisplay, HeldToolFeedback, HeldToolTone } from './heldTool';
 
 	const noop = () => {};
@@ -124,8 +123,5 @@
 				{/each}
 			</div>
 		{/if}
-		<div class="mt-2">
-			<InDevelopmentMark id="held-tool-reading" inSurface />
-		</div>
 	{/snippet}
 </HoverFacet>

@@ -857,6 +857,8 @@ describe('the tool in hand read off the screen', () => {
 				'Screen capture is not running: turn the setting off and on to start it. Hotbar keys are in use.',
 			),
 		).toBeTruthy();
+		// Reading the held tool is not in development: the note carries no mark.
+		expect(screen.queryByTestId('in-development-mark')).toBeNull();
 	});
 
 	it('keeps the healer display while the screen is not being read', () => {

@@ -75,6 +75,8 @@ describe('the hotbar tab', () => {
 		expect(screen.getByTestId('hotbar-listener-state').textContent?.trim()).toBe(
 			'The held tool is read from the screen. Hotbar keys only start consumables and count heals.',
 		);
+		// Reading the held tool is not in development: the note is unmarked.
+		expect(screen.queryByText('In development')).toBeNull();
 		const empty = slotOptions(3);
 		expect(empty).toContain('Vita');
 		expect(empty).not.toContain('Pistol');

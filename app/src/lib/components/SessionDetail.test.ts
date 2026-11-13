@@ -1,10 +1,23 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as api from '$lib/api';
 import type { SessionDetail as SessionDetailType } from '$lib/types/tracking';
 import SessionDetail from './SessionDetail.svelte';
+
+// The in-development channel, switchable per test: a published build hides
+// surfaces still in development.
+const channel = vi.hoisted(() => ({ visible: true }));
+vi.mock('$lib/inDevelopment/channel', () => ({
+	isInDevelopmentVisible: (stable: boolean) => !stable,
+	inDevelopment: {
+		get visible() {
+			return channel.visible;
+		},
+	},
+}));
 
 vi.mock('$lib/api', () => ({
 	ApiError: class ApiError extends Error {},
@@ -38,11 +51,14 @@ vi.mock('$lib/api', () => ({
 	getTrackingSnapshot: vi.fn(),
 }));
 
-// The protection bridge: capture the listener so a test can fire a write.
+// The protection and tracking bridges: capture the listeners so a test can
+// fire a write or the tracker moving on.
 const protectionListeners: Array<() => void> = [];
+const trackingListeners: Array<() => void> = [];
 vi.mock('@tauri-apps/api/event', () => ({
 	listen: vi.fn(async (topic: string, handler: () => void) => {
 		if (topic === 'protection:updated') protectionListeners.push(handler);
+		if (topic === 'tracking:session:updated') trackingListeners.push(handler);
 		return () => {};
 	}),
 }));
@@ -83,6 +99,8 @@ function detail(overrides: Partial<SessionDetailType> = {}): SessionDetailType {
 beforeEach(() => {
 	vi.clearAllMocks();
 	protectionListeners.length = 0;
+	trackingListeners.length = 0;
+	channel.visible = true;
 });
 
 // The name is a stamp of the session definition's name, not a label of
@@ -167,5 +185,47 @@ describe('the armour standing', () => {
 		render(SessionDetail, { props: { detail: recorded } });
 		expect(await screen.findByText('1.50')).toBeTruthy();
 		expect(screen.queryByText('not recorded yet')).toBeNull();
+	});
+});
+
+describe('the after-session reviews in a build that hides surfaces in development', () => {
+	const sighting = {
+		id: 't1',
+		sighted: { kind: 'bundled', name: 'Sollomate Opalo', tool: 'weapon', shots: 212 },
+		firstSeen: 1000,
+		lastSeen: 2000,
+		settled: null,
+	} as const;
+
+	it('still shows the detected tools, and follows a running session', async () => {
+		channel.visible = false;
+		const read = vi.mocked(api.getToolSightings);
+		read.mockImplementation(async () => ({ sessionId: 's1', ended: false, sightings: [sighting] }));
+		try {
+			render(SessionDetail, { props: { detail: detail() } });
+			expect(await screen.findByText('Sollomate Opalo')).toBeTruthy();
+			expect(screen.getByText('Detected tools')).toBeTruthy();
+			expect(screen.queryByText('In development')).toBeNull();
+			const before = read.mock.calls.length;
+
+			await waitFor(() => expect(trackingListeners.length).toBeGreaterThan(0));
+			for (const handler of trackingListeners) handler();
+			await waitFor(() => expect(read.mock.calls.length).toBeGreaterThan(before));
+		} finally {
+			read.mockImplementation(async () => ({ sessionId: 's1', ended: true, sightings: [] }));
+		}
+	});
+
+	it('keeps creature detection hidden', async () => {
+		channel.visible = false;
+		render(SessionDetail, { props: { detail: detail() } });
+		await waitFor(() => expect(api.getToolSightings).toHaveBeenCalled());
+		expect(api.getMobDetections).not.toHaveBeenCalled();
+	});
+
+	it('reads creature detection where surfaces in development show', async () => {
+		render(SessionDetail, { props: { detail: detail() } });
+		await waitFor(() => expect(api.getMobDetections).toHaveBeenCalled());
+		expect(api.getToolSightings).toHaveBeenCalled();
 	});
 });

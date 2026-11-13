@@ -29,7 +29,6 @@ import {
 	doseRequest,
 	previewDose,
 } from '$lib/features/consumables/doseForm';
-import { inDevelopment } from '$lib/inDevelopment';
 import type { Equipment, EquipmentDetail, HealingMode, HealingTool } from '$lib/types';
 import type {
 	AppSettings,
@@ -80,10 +79,7 @@ export function createLibraryModel() {
 	let carriedWeaponIds = $state<number[]>([]);
 	// The tool in hand is read off the game screen: holdable entries are
 	// switched on and off, and the hotbar keys start consumables only.
-	let toolReadingSetting = $state(false);
-	// The library's part in reading the held tool is a surface in
-	// development: shown where such surfaces are, and only with the setting on.
-	const toolReading = $derived(toolReadingSetting && inDevelopment.visible);
+	let toolReading = $state(false);
 	// The groups of entries the held-tool bar cannot tell apart, by id.
 	let indistinguishable = $state<string[][]>([]);
 	// How the player tells apart the members of those groups, by id.
@@ -272,7 +268,7 @@ export function createLibraryModel() {
 			splitByKind(library);
 			applyHotbar(settings);
 			hotbarHooksEnabled = settings.hotbarHooksEnabled;
-			toolReadingSetting = settings.toolReadingEnabled;
+			toolReading = settings.toolReadingEnabled;
 			keyless = settings.keyboard.keyless;
 			carriedWeaponIds = [...settings.carriedWeaponIds];
 			harvestGuardrail = settings.harvestGuardrail;

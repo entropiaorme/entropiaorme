@@ -1,8 +1,9 @@
 <script lang="ts">
 	// A setting that reads the game screen while a session runs (creature
 	// detection, reading the held tool): its toggle, its line of copy, and a
-	// note when, turned on, capture cannot run. Rendered inside a block gated
-	// on the in-development channel.
+	// note when, turned on, capture cannot run. A setting still in
+	// development carries its mark, and its owner renders it only inside a
+	// block gated on the in-development channel.
 	import type { ScreenCapture } from '$lib/api';
 	import { Toggle } from '$lib/components';
 	import { InDevelopmentMark } from '$lib/inDevelopment';
@@ -31,7 +32,9 @@
 	<div>
 		<p class="flex items-center gap-2 text-sm text-text">
 			{reading.title}
-			<InDevelopmentMark id={reading.mark} align="left" />
+			{#if reading.mark}
+				<InDevelopmentMark id={reading.mark} align="left" />
+			{/if}
 		</p>
 		<p class="text-xs text-text-tertiary mt-0.5">{reading.description}</p>
 		{#if note}

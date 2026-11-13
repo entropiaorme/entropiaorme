@@ -70,7 +70,6 @@ describe('the equipment list', () => {
 		const { container } = render(EquipmentListView, { props: { model: model(false) } });
 		expect(screen.queryAllByRole('switch')).toHaveLength(0);
 		expect(screen.queryByTestId('lookalike-note')).toBeNull();
-		expect(screen.queryByTestId('tool-reading-mark')).toBeNull();
 		// The markup the list drew before reading the held tool existed.
 		await expect(shownMarkup(container.innerHTML)).toMatchFileSnapshot(
 			'./__fixtures__/EquipmentListView.off.html',
@@ -80,7 +79,8 @@ describe('the equipment list', () => {
 	it('switches healing and harvesting entries, mutes one that is off, and flags look-alikes', async () => {
 		const reading = model(true);
 		render(EquipmentListView, { props: { model: reading } });
-		expect(screen.getByTestId('tool-reading-mark')).toBeTruthy();
+		// Reading the held tool is not in development: the list is unmarked.
+		expect(screen.queryByText('In development')).toBeNull();
 		const fap = screen.getByRole('switch', { name: 'FAP in use' });
 		expect(fap.getAttribute('aria-checked')).toBe('false');
 		expect(screen.getByText('FAP').className).toContain('text-text-tertiary');

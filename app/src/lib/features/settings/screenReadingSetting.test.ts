@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { IN_DEVELOPMENT_SURFACES } from '$lib/inDevelopment';
 import type { AppSettings } from '$lib/types';
-import { captureNote, SCREEN_READINGS } from './screenReadingSetting';
+import {
+	CREATURE_DETECTION,
+	captureNote,
+	HELD_TOOL_READING,
+	SCREEN_READINGS,
+} from './screenReadingSetting';
 
 describe('the screen-reading capture note', () => {
 	it('says nothing while capture can run, and one plain line when it cannot', () => {
@@ -24,13 +29,22 @@ describe('the screen-reading settings', () => {
 
 	const [creatures, heldTool] = SCREEN_READINGS;
 
-	it('marks each control as its own registered in-development surface', () => {
+	it('describes both settings, each under its own key', () => {
+		expect(SCREEN_READINGS).toEqual([CREATURE_DETECTION, HELD_TOOL_READING]);
+		expect(creatures).toBe(CREATURE_DETECTION);
+		expect(heldTool).toBe(HELD_TOOL_READING);
+		expect(new Set(SCREEN_READINGS.map((reading) => reading.key)).size).toBe(2);
+	});
+
+	it('marks creature detection as its registered in-development surface', () => {
 		const registered = IN_DEVELOPMENT_SURFACES.map((surface) => surface.id);
-		expect(SCREEN_READINGS.map((reading) => reading.mark)).toEqual([
-			'creature-detection',
-			'held-tool-reading',
-		]);
-		for (const reading of SCREEN_READINGS) expect(registered).toContain(reading.mark);
+		expect(creatures.mark).toBe('creature-detection');
+		expect(registered).toContain(creatures.mark);
+	});
+
+	it('leaves reading the held tool unmarked: it is not in development', () => {
+		expect(heldTool.mark).toBeUndefined();
+		expect(IN_DEVELOPMENT_SURFACES.map((surface) => surface.id)).not.toContain('held-tool-reading');
 	});
 
 	it('reads each setting from its own fields', () => {
@@ -42,6 +56,15 @@ describe('the screen-reading settings', () => {
 		expect(creatures.patch(true)).toEqual({ mob_detection_enabled: true });
 		expect(heldTool.patch(true)).toEqual({ tool_reading_enabled: true });
 		expect(heldTool.patch(false)).toEqual({ tool_reading_enabled: false });
+	});
+
+	it("names creature detection in the player's terms, as it always has", () => {
+		expect(creatures.title).toBe('Detect the creature I am fighting');
+		expect(creatures.description).toBe(
+			'While you hunt with the game in front, reads the name over the creature you are locked on to about once a second and records which creature each kill was. A kill it cannot tell takes the creature you have been hunting, else the mob you typed; pin a creature on the overlay to stop reading.',
+		);
+		expect(creatures.failure).toBe('Failed to update creature detection');
+		expect(creatures.patch(false)).toEqual({ mob_detection_enabled: false });
 	});
 
 	it("names the held-tool reading in the player's terms", () => {

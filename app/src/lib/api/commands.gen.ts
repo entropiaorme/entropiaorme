@@ -276,7 +276,7 @@ export interface AppSettings {
 	mobDetectionEnabled: boolean;
 	/** Whether detection can capture the game window when a session wants it: what the settings say beside the toggle when it cannot. */
 	mobDetectionCapture: ScreenCapture;
-	/** Whether the tool in hand is read off the game's own bar while a session runs, instead of from the hotbar keys (the player's choice; off until they make one, and never in a published build). */
+	/** Whether the tool in hand is read off the game's own bar while a session runs, instead of from the hotbar keys (the player's choice; off until they make one). */
 	toolReadingEnabled: boolean;
 	/** Whether reading the held tool can capture the game window when a session wants it. */
 	toolReadingCapture: ScreenCapture;

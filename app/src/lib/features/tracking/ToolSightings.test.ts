@@ -62,6 +62,8 @@ describe('the detected tools section', () => {
 		const m = model([shown]);
 		render(ToolSightings, { props: { model: m } });
 		expect(screen.getByText('Detected tools')).toBeTruthy();
+		// Reading the held tool is not in development: the heading is unmarked.
+		expect(screen.queryByText('In development')).toBeNull();
 		expect(screen.getByText('Sollomate Opalo')).toBeTruthy();
 		expect(screen.getByText('Held for 212 shots, costed without attachments')).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: 'Add to equipment' }));

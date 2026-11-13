@@ -251,6 +251,55 @@ impl HotbarListener {
         Ok(item)
     }
 
+    /// Resolve an equipment item as a declaration of it would, without
+    /// declaring it: a running session is needed, as for a declaration.
+    /// Resolves synchronously (a database read), so call it off the async
+    /// runtime.
+    pub fn resolve(&self, equipment_id: i64) -> Result<ResolvedHotbarItem, DeclareError> {
+        self.gate
+            .active_session_id
+            .lock()
+            .expect("active session")
+            .clone()
+            .filter(|_| self.gate.session_active.load(Ordering::SeqCst))
+            .ok_or(DeclareError::NoSession)?;
+        let resolver = self
+            .item_resolver
+            .lock()
+            .expect("item resolver")
+            .clone()
+            .ok_or(DeclareError::UnknownItem)?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resolver(equipment_id)))
+            .unwrap_or(None)
+            .ok_or(DeclareError::UnknownItem)
+    }
+
+    /// Declare an item already resolved (see [`Self::resolve`]) as in hand,
+    /// as its press would: published for the running session.
+    pub fn declare_resolved(
+        &self,
+        item: &ResolvedHotbarItem,
+        occurred_at: f64,
+    ) -> Result<(), DeclareError> {
+        let session_id = self
+            .gate
+            .active_session_id
+            .lock()
+            .expect("active session")
+            .clone()
+            .filter(|_| self.gate.session_active.load(Ordering::SeqCst))
+            .ok_or(DeclareError::NoSession)?;
+        publish_intent(
+            &self.bus,
+            session_id,
+            String::new(),
+            crate::bus_events::IntentSource::Overlay,
+            occurred_at,
+            item,
+        );
+        Ok(())
+    }
+
     /// Apply the hotbar capability toggle; the source still only runs
     /// while a tracking session is active.
     pub fn set_hotbar_hooks_enabled(&self, enabled: bool) {

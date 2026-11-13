@@ -366,6 +366,8 @@ pub struct ProducerState {
     // starts and stops it with its sessions, and the exit path waits for
     // its look in progress.
     mob_detection: Arc<DetectorSlot>,
+    /// Where a held-tool watcher would be bound; nothing binds it yet.
+    tool_detection: Arc<eo_services::tool_watch::ToolDetectorSlot>,
 }
 
 impl ProducerState {
@@ -387,6 +389,7 @@ impl ProducerState {
         // for a look still in progress, so nothing captures behind the
         // closing app.
         self.mob_detection.shutdown();
+        eo_services::tool_watch::ToolDetector::shutdown(self.tool_detection.as_ref());
         self.watcher.stop();
     }
 
@@ -1407,6 +1410,7 @@ fn compose_producers(
     // the creature watcher stamps its looks on, so the two compare.
     watcher.set_arrival_clock(clock.clone());
     let mob_detection = Arc::new(DetectorSlot::default());
+    let tool_detection = Arc::new(eo_services::tool_watch::ToolDetectorSlot::default());
 
     let skill_tracker = SkillTracker::new(&bus, db.clone(), clock.clone(), chatlog_clock.clone());
 
@@ -1437,7 +1441,7 @@ fn compose_producers(
         Some(build_hotbar_resolver(data_dir, items.clone())),
         game_focus,
     );
-    hotbar.set_item_resolver(items);
+    hotbar.set_item_resolver(items.clone());
     // Apply the stored toggle; the source still only attaches while a session
     // is active (the listener reconciles on the session bus events).
     hotbar.set_hotbar_hooks_enabled(config.hotbar_keys_observed(machine_id.as_deref()));
@@ -1455,6 +1459,21 @@ fn compose_producers(
             chatlog_clock,
             Providers {
                 detector: mob_detection.clone(),
+                tool_detector: tool_detection.clone(),
+                // A library entry read off the screen resolves as a press
+                // or a declaration of it does; a tool the library does not
+                // hold prices bare from the game data.
+                items: Some(items.clone()),
+                bundled_tools: game_data.clone().map(|data| {
+                    let reader = config_reader.clone();
+                    let doses = doses.clone();
+                    eo_services::bundled_tools::resolver(
+                        data,
+                        Arc::new(move || {
+                            doses.reload_speed_percent(&reader.current().passive_effect_sources)
+                        }),
+                    )
+                }),
                 ..build_providers(
                     db,
                     config_reader,
@@ -1560,6 +1579,7 @@ fn compose_producers(
         machine_id,
         quests,
         mob_detection,
+        tool_detection,
     })
 }
 
@@ -1857,6 +1877,27 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
             .collect()
     }
 
+    fn enabled_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        // Every weapon entry the player has on, in the library's order, each
+        // prepared as the carried weapons' props are.
+        let db = self.db.clone();
+        let rows = block_on_pool(&self.runtime, async move {
+            db.equipment_library_rows().await.ok()
+        })
+        .unwrap_or_default();
+        rows.into_iter()
+            .filter(|(_, _, item_type, _, enabled)| *enabled && item_type == "weapon")
+            .filter_map(|(id, name, _, properties_json, _)| {
+                let props = serde_json::from_str::<Value>(&properties_json).ok()?;
+                let props = self.current_weapon_props(&props);
+                Some(CarriedWeaponProfile {
+                    weapon: CarriedWeapon::from_props(id, name, &props),
+                    props: props.as_object().cloned().unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
     fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
         // Resolve the configured intent per board-output class off the live
         // config and the equipment library. A class whose id is unset,
@@ -1988,6 +2029,12 @@ impl TrackingConfig for LiveTrackingConfig {
     fn mob_detection_enabled(&self) -> bool {
         self.reader.current().mob_detection_on()
     }
+
+    /// Not offered yet: no setting turns it on, and no held-tool watcher is
+    /// bound to the tracker's slot.
+    fn tool_reading_enabled(&self) -> bool {
+        false
+    }
 }
 
 /// Wire the hunt-tracker seams to their live sources: the equipment
@@ -2015,6 +2062,10 @@ fn build_providers(
         doses,
         // Bound by `compose_producers`, which owns the detector slot.
         detector: Arc::new(eo_services::mob_watch::NoDetector),
+        // Bound by `compose_producers`, which owns the held-tool slot.
+        tool_detector: Arc::new(eo_services::tool_watch::NoToolDetector),
+        items: None,
+        bundled_tools: None,
     }
 }
 

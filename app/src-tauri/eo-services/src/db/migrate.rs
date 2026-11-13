@@ -438,6 +438,16 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "equipment enabled",
         sql: include_str!("../../migrations/0080_equipment_enabled.sql"),
     },
+    Migration {
+        version: 81,
+        description: "tool sightings",
+        sql: include_str!("../../migrations/0081_tool_sightings.sql"),
+    },
+    Migration {
+        version: 82,
+        description: "healing intent screen",
+        sql: include_str!("../../migrations/0082_healing_intent_screen.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -526,6 +536,8 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "05FCA82F42CE9F5D4BA4BDECCC5268FEA846E3CBD03CC72EA6356A36270177F6911C0A489ECFC31F6A0AD3082DCCBA34",
     "838DB4BF28D0A5845768FFC692148AF27430C7AA8B947FB04DD85CFB2FAE851EB8B81AC1CBEAAA89BEEAA6F9AC32F1E1",
     "6545E8EE456350B342B77A03532267BB0604FBCF934ACE8A56D924E4CA8C7C7F8BABB5C55D768B21B91B427116A8BAB1",
+    "99EC7258E17AB5E1D67033BCF86345280355575B168DEBA9CB9678D3FC3DF4FBEE8B3D3AF35984470EAB58D344A8EB66",
+    "1D1E642AF6D220266FE2DE6A462A4417B66D2667D3115FB9B5A6EAEC9465A3A84902D4B84A58F76ADCFC4EDE2BDEB371",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -2197,5 +2209,237 @@ mod tests {
             );
         }
         assert_eq!(enabled(&connection, 1), 1);
+    }
+
+    /// The sightings of tools read off the screen join additively: a
+    /// version-80 database keeps its sessions and library as they were,
+    /// gains two empty tables, and each holds only whole rows: a bundled
+    /// tool by its collection, id and name, a name read by its key and
+    /// text, once per session each, a settlement whole or absent, and
+    /// dismissed names unique without regard to case.
+    #[test]
+    fn tool_sightings_upgrade_adds_empty_tables_that_hold_only_whole_rows() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..80] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO equipment_library (id, name, item_type, catalog_id, \
+                  properties_json, created_at, updated_at) VALUES \
+                 (1, 'Opalo', 'weapon', 'w1', '{}', 10, 11);",
+            )
+            .expect("v80 rows");
+
+        run(&mut connection).expect("v81 upgrade");
+
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count(&connection, "tool_sightings"), 0);
+        assert_eq!(count(&connection, "dismissed_tool_names"), 0);
+        assert_eq!(count(&connection, "tracking_sessions"), 1);
+        assert_eq!(count(&connection, "equipment_library"), 1);
+
+        for kept in [
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+              first_seen, last_seen) VALUES ('b1', 's', 'bundled', 'weapons', '42', \
+              'Sollomate Opalo', 5, 9)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('u1', 's', 'unknown', 'teleport chip', \
+              'Teleport  Chip', 6, 6)",
+            "UPDATE tool_sightings SET shots = 12, cost_per_shot = 0.05 WHERE id = 'b1'",
+            "UPDATE tool_sightings SET settled_kind = 'added', settled_at = 20, \
+              equipment_id = 1 WHERE id = 'b1'",
+            "UPDATE tool_sightings SET settled_kind = 'dismissed', settled_at = 21 \
+              WHERE id = 'u1'",
+            "INSERT INTO dismissed_tool_names (name, dismissed_at) VALUES ('Teleport Chip', 21)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // A kind outside the two.
+            "INSERT INTO tool_sightings (id, session_id, kind, first_seen, last_seen) \
+              VALUES ('x', 's', 'library', 1, 1)",
+            // A bundled tool without its id, or carrying text.
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_name, \
+              first_seen, last_seen) VALUES ('x', 's', 'bundled', 'weapons', 'A', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+              text_key, text_read, first_seen, last_seen) VALUES ('x', 's', 'bundled', \
+              'weapons', '7', 'A', 'a', 'A', 1, 1)",
+            // A name read without its text, with a blank key, or with shots.
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, first_seen, \
+              last_seen) VALUES ('x', 's', 'unknown', 'a', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('x', 's', 'unknown', ' ', ' ', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen, shots) VALUES ('x', 's', 'unknown', 'b', 'B', 1, 1, 3)",
+            // Seen last before first.
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('x', 's', 'unknown', 'c', 'C', 5, 4)",
+            // The same thing twice in one session.
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+              first_seen, last_seen) VALUES ('x', 's', 'bundled', 'weapons', '42', 'B', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('x', 's', 'unknown', 'teleport chip', 'T', 1, 1)",
+            // A settlement without its time, of another kind, or an entry
+            // for anything but an addition.
+            "UPDATE tool_sightings SET settled_at = NULL WHERE id = 'b1'",
+            "UPDATE tool_sightings SET settled_kind = 'kept' WHERE id = 'b1'",
+            "UPDATE tool_sightings SET equipment_id = 1 WHERE id = 'u1'",
+            // A negative count.
+            "UPDATE tool_sightings SET shots = -1 WHERE id = 'b1'",
+            // A dismissed name twice, told apart only by case, or blank.
+            "INSERT INTO dismissed_tool_names (name, dismissed_at) VALUES ('teleport chip', 22)",
+            "INSERT INTO dismissed_tool_names (name, dismissed_at) VALUES (' ', 22)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    /// A heal paid on the screen's word joins the closed vocabulary by a
+    /// rebuild that keeps every row with every column in its place, every
+    /// index, and every reference other tables make to the table.
+    #[test]
+    fn healing_intent_screen_upgrade_keeps_every_row_column_and_index() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..81] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        let shape = |connection: &Connection| -> (Vec<String>, Vec<String>, Vec<String>) {
+            let columns = connection
+                .prepare("SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk FROM pragma_table_info('healing_activations')")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            let indexes = connection
+                .prepare(
+                    "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master \
+                     WHERE tbl_name = 'healing_activations' AND type IN ('index', 'trigger') \
+                     ORDER BY name",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            let referencing = connection
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' \
+                     AND name <> 'healing_activations' AND sql LIKE '%healing_activations(id)%' \
+                     ORDER BY name",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            (columns, indexes, referencing)
+        };
+        let row_sql = "SELECT id, session_id, equipment_id, tool_name, intent_at, observed_at, \
+                       chat_timestamp, context_id, cost_ped, profile_json, provenance, \
+                       superseded_at, confirming_output_id, correction_id, \
+                       reload_speed_percent, intent_source FROM healing_activations ORDER BY id";
+        let rows = |connection: &Connection| -> Vec<String> {
+            connection
+                .prepare(row_sql)
+                .unwrap()
+                .query_map([], |row| {
+                    let mut cells = Vec::new();
+                    for index in 0..16 {
+                        let value: rusqlite::types::Value = row.get(index)?;
+                        cells.push(format!("{value:?}"));
+                    }
+                    Ok(cells.join("|"))
+                })
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap()
+        };
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at) VALUES ('s', 1); \
+                 INSERT INTO healing_activations (id, session_id, equipment_id, tool_name, \
+                  intent_at, observed_at, chat_timestamp, context_id, cost_ped, profile_json, \
+                  provenance, superseded_at, confirming_output_id, correction_id, \
+                  reload_speed_percent, intent_source) VALUES \
+                 ('a', 's', 4, 'Vivo T1', 10.5, 11.25, '2026-01-01 00:00:11', 3, 0.0125, \
+                  '{\"mode\":\"direct\"}', 'direct', NULL, 'o1', NULL, 12.5, 'key'), \
+                 ('b', 's', NULL, 'Vivo T1', 20, 21, '2026-01-01 00:00:21', NULL, 0, '{}', \
+                  'retrospective', 30, NULL, 'c1', NULL, 'inferred'), \
+                 ('c', 's', 5, 'Chip', 40, 41, '2026-01-01 00:00:41', 2, 0.5, '{}', \
+                  'health_capped', NULL, NULL, NULL, 0, NULL);",
+            )
+            .expect("v81 rows");
+        let before = (shape(&connection), rows(&connection));
+
+        let migration = &MIGRATIONS[81];
+        assert_eq!(migration.version, 82);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        assert_eq!((shape(&connection), rows(&connection)), before);
+        assert_eq!(before.0 .1.len(), 4, "the autoindex and the three indexes");
+        assert_eq!(
+            before.0 .2,
+            [
+                "healing_corrections",
+                "healing_effect_windows",
+                "healing_outputs"
+            ]
+        );
+        connection
+            .execute(
+                "INSERT INTO healing_activations (id, session_id, tool_name, intent_at, \
+                  observed_at, chat_timestamp, cost_ped, profile_json, provenance, intent_source) \
+                 VALUES ('d', 's', 'Vivo T1', 50, 51, 't', 0.01, '{}', 'direct', 'screen')",
+                [],
+            )
+            .expect("the screen's word is allowed");
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO healing_activations (id, session_id, tool_name, intent_at, \
+                      observed_at, chat_timestamp, cost_ped, profile_json, provenance, \
+                      intent_source) VALUES ('e', 's', 'Vivo T1', 50, 51, 't', 0.01, '{}', \
+                      'direct', 'hotbar')",
+                    [],
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
     }
 }

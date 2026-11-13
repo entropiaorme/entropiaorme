@@ -1,6 +1,7 @@
 {
   "codex_claims": [],
   "codex_progress": [],
+  "dismissed_tool_names": [],
   "harvest_events": [],
   "harvest_loot_items": [],
   "healing_activations": [],
@@ -64,6 +65,7 @@
   "session_quest_analytics_links": [],
   "session_quest_completions": [],
   "skill_calibrations": [],
+  "tool_sightings": [],
   "tracking_sessions": [
     {
       "dangling_cost": 0.0,

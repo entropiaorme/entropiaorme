@@ -79,6 +79,13 @@ pub trait EquipmentLibrary: Send + Sync {
     /// and every weapon carried without a hotkey, each once.
     fn carried_weapons(&self) -> Vec<CarriedWeaponProfile>;
 
+    /// Every weapon of the library the player has on, each once: the
+    /// weapons attribution chooses among while the tool in hand is read
+    /// off the screen, which can show any of them in hand.
+    fn enabled_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        Vec::new()
+    }
+
     /// Resolve the harvest guardrail's intended tools, when the
     /// guardrail is enabled and at least one board class names a tool the
     /// library knows.
@@ -142,7 +149,42 @@ pub trait TrackingConfig: Send + Sync {
     fn mob_detection_enabled(&self) -> bool {
         false
     }
+
+    /// Whether the tool in hand is read off the game screen while a session
+    /// runs, in place of the hotbar's weapon and tool keys.
+    fn tool_reading_enabled(&self) -> bool {
+        false
+    }
 }
+
+/// A held tool the equipment library does not hold, known only from the
+/// game's data and built from its bundled entry alone: no amplifier, no
+/// attachments, markup as an entry added to the library starts with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundledTool {
+    pub name: String,
+    pub kind: crate::bus_events::HotbarItemKind,
+    /// The bare cost of one use, in PED.
+    pub cost_per_use_ped: f64,
+    /// A weapon's band and the props that price it; None for any other
+    /// kind.
+    pub weapon: Option<BundledWeapon>,
+}
+
+/// A weapon known only from the game's data: the band its shots are tested
+/// against and the bare props that price them. It has no library entry, so
+/// it is never one of the carried weapons.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundledWeapon {
+    pub band: Option<super::attribution::DamageBand>,
+    pub props: Map<String, Value>,
+}
+
+/// Resolve a tool of the bundled game data, by its collection and its id
+/// there, to its bare profile; None when the data holds no such tool or
+/// its collection holds no held tool. May read the game data; called off
+/// the tracker's task.
+pub type BundledToolResolver = Arc<dyn Fn(&str, &str) -> Option<BundledTool> + Send + Sync>;
 
 /// The tracker's wired dependencies. Defaults are the inert fallbacks
 /// the original shipped (no equipment, mob mode, manual entry on).
@@ -160,6 +202,18 @@ pub struct Providers {
     /// the history a session keeps of it. Inert where nothing looks at a
     /// screen.
     pub detector: Arc<dyn crate::mob_watch::MobDetector>,
+    /// The held-tool watcher that reads the tool in hand off the screen.
+    /// Inert where nothing looks at a screen.
+    pub tool_detector: Arc<dyn crate::tool_watch::ToolDetector>,
+    /// An equipment-library entry to its current snapshot, as a hotbar
+    /// press or an overlay declaration resolves it: how a library entry
+    /// read off the screen is resolved. None resolves nothing. It may read
+    /// the database synchronously, so it is called off the tracker's task.
+    pub items: Option<crate::hotbar_listener::ItemResolver>,
+    /// A tool of the bundled game data to its bare profile, for a tool read
+    /// off the screen that the library does not hold. None resolves
+    /// nothing.
+    pub bundled_tools: Option<BundledToolResolver>,
 }
 
 impl Default for Providers {
@@ -170,6 +224,9 @@ impl Default for Providers {
             player_name: String::new(),
             doses: DoseBoard::new(Arc::new(RealClock::new())),
             detector: Arc::new(crate::mob_watch::NoDetector),
+            tool_detector: Arc::new(crate::tool_watch::NoToolDetector),
+            items: None,
+            bundled_tools: None,
         }
     }
 }

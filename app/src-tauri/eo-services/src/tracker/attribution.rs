@@ -453,6 +453,78 @@ pub(super) struct AttributionRuntime {
     /// The declared weapon's latest hits, oldest first, each with the
     /// margin it landed in. Cleared with the regime.
     recent_hits: VecDeque<Option<HitMargin>>,
+    /// A tool known only from the game's data, tested beside the carried
+    /// weapons while it is held and for the switch tail after.
+    provisional: Option<ProvisionalBand>,
+    /// The shots kept past the regime floor, while something may still
+    /// move them (see [`ShotRetention`]); None keeps none.
+    retention: Option<ShotRetention>,
+}
+
+/// A held tool the equipment library does not hold, known only from the
+/// game's data: its name and band, apart from the carried weapons, since
+/// no library entry stands behind it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ProvisionalBand {
+    pub(super) name: String,
+    pub(super) band: Option<DamageBand>,
+    /// When it stops being tested, once it is no longer held: the end of
+    /// the switch tail. None while it is held.
+    pub(super) until: Option<f64>,
+}
+
+/// Where and how a shot was recorded, beyond what the regime log keeps:
+/// what a stored row written for it later needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ShotContext {
+    pub(super) context_id: Option<i64>,
+    pub(super) reload_speed_percent: f64,
+}
+
+/// One shot kept by the retention, with where it was recorded.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct RetainedShot {
+    pub(super) record: ShotRecord,
+    pub(super) context: ShotContext,
+    /// What the shot added to the unpriced shots' bound while it is
+    /// unpriced; None while it is priced.
+    pub(super) charge: Option<UnpricedCharge>,
+}
+
+/// What one unpriced shot adds to the session's disclosure of unpriced
+/// cost: the dearest carried weapon that could explain it, or a count of
+/// shots no weapon explains.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) enum UnpricedCharge {
+    Bound(crate::ped::Ped),
+    NoFit,
+}
+
+/// The shots something read after them may still move: every shot of the
+/// last `window` seconds, and every shot since `pinned` while it is set.
+/// The regime log forgets what no decision can reach; a change read off
+/// the screen can reach further, since it can arrive after shots it
+/// predates, and a tool unseen for a while is settled only when the
+/// screen shows it again.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(super) struct ShotRetention {
+    window: f64,
+    pinned: Option<f64>,
+    /// Every shot observed at or after this moment is kept: when the
+    /// retention began, raised as older shots are let go.
+    floor: f64,
+    shots: Vec<RetainedShot>,
+}
+
+impl ShotRetention {
+    fn prune(&mut self, latest: f64) {
+        let mut floor = latest - self.window;
+        if let Some(pinned) = self.pinned {
+            floor = floor.min(pinned);
+        }
+        self.shots.retain(|shot| shot.record.observed_at >= floor);
+        self.floor = self.floor.max(floor);
+    }
 }
 
 impl AttributionRuntime {
@@ -529,6 +601,7 @@ impl AttributionRuntime {
         &self.log
     }
 
+    #[cfg(test)]
     pub(super) fn record_mut(&mut self, seq: u64) -> Option<&mut ShotRecord> {
         self.log.iter_mut().find(|record| record.seq == seq)
     }
@@ -584,11 +657,241 @@ impl AttributionRuntime {
         self.floor();
     }
 
+    /// Nothing is in hand from `at` (a tool read off the screen was put
+    /// away, or the screen cannot say which is held): a new regime with no
+    /// weapon declared, whose shots are classified as with none ever
+    /// declared, save that the weapon declared until now may still land a
+    /// shot for a moment.
+    pub(super) fn undeclare(&mut self, at: f64) {
+        if let Some(previous) = self.declared.take() {
+            self.previous = Some((previous, at));
+        }
+        self.recording = None;
+        self.floor();
+    }
+
+    /// Forget the weapon whose shots may still be landing: it was not
+    /// seen in hand before the change, so no later shot is its by timing.
+    pub(super) fn forget_previous(&mut self) {
+        self.previous = None;
+    }
+
+    /// Test a tool known only from the game's data beside the carried
+    /// weapons, for as long as it is held.
+    pub(super) fn carry_provisional(&mut self, name: &str, band: Option<DamageBand>) {
+        self.provisional = Some(ProvisionalBand {
+            name: name.to_string(),
+            band,
+            until: None,
+        });
+    }
+
+    /// The provisional tool is no longer held from `at`: it is tested for
+    /// the switch tail after, then not at all.
+    pub(super) fn release_provisional(&mut self, at: f64) {
+        if let Some(provisional) = self.provisional.as_mut() {
+            if provisional.until.is_none() {
+                provisional.until = Some(at + SWITCH_TAIL_SECONDS);
+            }
+        }
+    }
+
+    /// Forget the provisional tool once its tail has passed at `now`.
+    pub(super) fn expire_provisional(&mut self, now: f64) {
+        if self
+            .provisional
+            .as_ref()
+            .and_then(|provisional| provisional.until)
+            .is_some_and(|until| now > until)
+        {
+            self.provisional = None;
+        }
+    }
+
+    pub(super) fn provisional_band(&self) -> Option<&ProvisionalBand> {
+        self.provisional.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(super) fn provisional(&self) -> Option<&ProvisionalBand> {
+        self.provisional.as_ref()
+    }
+
+    /// Keep every shot of the last `window` seconds past the regime floor
+    /// (see [`ShotRetention`]), until [`Self::stop_retaining`].
+    pub(super) fn retain_shots(&mut self, window: f64, now: f64) {
+        let retention = self.retention.get_or_insert_with(|| ShotRetention {
+            floor: now,
+            ..ShotRetention::default()
+        });
+        retention.window = window;
+    }
+
+    /// The moment from which every shot is retained; None while none are.
+    pub(super) fn retention_floor(&self) -> Option<f64> {
+        self.retention.as_ref().map(|retention| retention.floor)
+    }
+
+    /// Take the retained shots observed at or after `from` out of the
+    /// retention, oldest first, to be placed again.
+    pub(super) fn take_retained_since(&mut self, from: f64) -> Vec<RetainedShot> {
+        let Some(retention) = self.retention.as_mut() else {
+            return Vec::new();
+        };
+        let (taken, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut retention.shots)
+            .into_iter()
+            .partition(|shot| shot.record.observed_at >= from);
+        retention.shots = kept;
+        taken
+    }
+
+    /// Put a shot back in the retention as it was, in its place by time.
+    pub(super) fn restore_retained(&mut self, shot: RetainedShot) {
+        if let Some(retention) = self.retention.as_mut() {
+            let index = retention
+                .shots
+                .iter()
+                .position(|kept| {
+                    (kept.record.observed_at, kept.record.seq)
+                        > (shot.record.observed_at, shot.record.seq)
+                })
+                .unwrap_or(retention.shots.len());
+            retention.shots.insert(index, shot);
+        }
+    }
+
+    pub(super) fn stop_retaining(&mut self) {
+        self.retention = None;
+    }
+
+    /// Keep every shot since `since` as well, however old, while set; None
+    /// lets them go once they leave the window.
+    pub(super) fn pin_retention(&mut self, since: Option<f64>, now: f64) {
+        if let Some(retention) = self.retention.as_mut() {
+            retention.pinned = since;
+            retention.prune(now);
+        }
+    }
+
+    /// The retained shots observed at or after `from`, oldest first.
+    pub(super) fn retained_since(&self, from: f64) -> Vec<RetainedShot> {
+        self.retention
+            .as_ref()
+            .map(|retention| {
+                retention
+                    .shots
+                    .iter()
+                    .filter(|shot| shot.record.observed_at >= from)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Remember a shot of the current regime (see [`Self::remember`]), and
+    /// keep it with where it was recorded while shots are retained.
+    pub(super) fn remember_shot(
+        &mut self,
+        record: ShotRecord,
+        context: ShotContext,
+        charge: Option<UnpricedCharge>,
+    ) {
+        if let Some(retention) = self.retention.as_mut() {
+            let latest = record.observed_at;
+            retention.shots.push(RetainedShot {
+                record: record.clone(),
+                context,
+                charge,
+            });
+            retention.prune(latest);
+        }
+        self.remember(record);
+    }
+
+    /// What a retained shot now adds to the unpriced shots' bound.
+    pub(super) fn set_charge(&mut self, seq: u64, charge: Option<UnpricedCharge>) {
+        if let Some(retention) = self.retention.as_mut() {
+            for shot in &mut retention.shots {
+                if shot.record.seq == seq {
+                    shot.charge = charge;
+                }
+            }
+        }
+    }
+
+    /// Whether an open effect window could tick an observation at `at`.
+    pub(super) fn ticks_at(&self, observation: Observation, at: f64) -> bool {
+        match observation {
+            Observation::Hit { amount, critical } => !self.ticking(at, amount, critical).is_empty(),
+            Observation::Countered => false,
+        }
+    }
+
+    /// Take one shot's tally back out: it is about to be placed again.
+    pub(super) fn untally(&mut self, attribution: &Attribution) {
+        Self::tally(&mut self.counts, attribution, -1);
+    }
+
+    /// A shot moved to another weapon (or to none): how it is attributed,
+    /// where it is booked, at what, and its stored row, in the regime log
+    /// and the retention alike.
+    pub(super) fn rebook(
+        &mut self,
+        seq: u64,
+        attribution: Option<&Attribution>,
+        booked: Option<String>,
+        cost: crate::ped::Ped,
+        evidence_id: Option<String>,
+    ) {
+        let retained = self
+            .retention
+            .as_mut()
+            .into_iter()
+            .flat_map(|retention| retention.shots.iter_mut().map(|shot| &mut shot.record));
+        for record in self.log.iter_mut().chain(retained) {
+            if record.seq != seq {
+                continue;
+            }
+            if let Some(attribution) = attribution {
+                record.attribution = attribution.clone();
+            }
+            record.booked = booked.clone();
+            record.cost = cost;
+            if evidence_id.is_some() {
+                record.evidence_id = evidence_id.clone();
+            }
+        }
+    }
+
+    /// Move one shot's tally from how it was attributed to how it is now.
+    pub(super) fn recount(&mut self, from: &Attribution, to: &Attribution) {
+        Self::tally(&mut self.counts, from, -1);
+        Self::tally(&mut self.counts, to, 1);
+    }
+
+    fn tally(counts: &mut AttributionCounts, attribution: &Attribution, step: i64) {
+        match attribution {
+            Attribution::Agrees { reason, .. } if reason.margin().is_some() => {
+                counts.in_margin += step
+            }
+            Attribution::Agrees { .. } => counts.agreed += step,
+            Attribution::Evidence { .. } => counts.evidenced += step,
+            Attribution::Unresolved => counts.unresolved += step,
+            Attribution::EffectTick { .. } => counts.effect_ticks += step,
+        }
+    }
+
     fn band_of(&self, tool: &str) -> Option<DamageBand> {
         self.carried
             .iter()
             .find(|weapon| weapon.name == tool)
             .and_then(|weapon| weapon.band)
+            .or_else(|| {
+                self.provisional
+                    .as_ref()
+                    .filter(|provisional| provisional.name == tool)
+                    .and_then(|provisional| provisional.band)
+            })
     }
 
     fn fitting(&self, amount: f64, critical: bool) -> Vec<String> {
@@ -597,6 +900,44 @@ impl AttributionRuntime {
             .filter(|weapon| weapon.band.is_some_and(|band| band.fits(amount, critical)))
             .map(|weapon| weapon.name.clone())
             .collect()
+    }
+
+    /// The carried weapons whose band fits a hit at `at`, and the
+    /// provisional tool's while it is still tested then.
+    fn fitting_at(&self, at: f64, amount: f64, critical: bool) -> Vec<String> {
+        let mut fits = self.fitting(amount, critical);
+        if let Some(provisional) = &self.provisional {
+            let tested = provisional.until.is_none_or(|until| at <= until);
+            if tested
+                && provisional
+                    .band
+                    .is_some_and(|band| band.fits(amount, critical))
+                && !fits.contains(&provisional.name)
+            {
+                fits.push(provisional.name.clone());
+            }
+        }
+        fits
+    }
+
+    /// The weapon declared before the latest change, when a hit at `at`
+    /// lands inside the switch tail and its band fits: a shot it fired
+    /// before the change, still arriving.
+    fn in_flight(&self, at: f64, amount: f64, critical: bool) -> Option<String> {
+        self.in_flight_since(at, amount, critical)
+            .map(|(previous, _)| previous)
+    }
+
+    /// [`Self::in_flight`], with when the change was.
+    fn in_flight_since(&self, at: f64, amount: f64, critical: bool) -> Option<(String, f64)> {
+        self.previous.as_ref().and_then(|(previous, switched_at)| {
+            let in_tail = at >= switched_at - 0.05 && at - switched_at <= SWITCH_TAIL_SECONDS;
+            (in_tail
+                && self
+                    .band_of(previous)
+                    .is_some_and(|band| band.fits(amount, critical)))
+            .then(|| (previous.clone(), *switched_at))
+        })
     }
 
     /// The open windows whose tick band holds the hit.
@@ -681,10 +1022,10 @@ impl AttributionRuntime {
             Observation::Hit { amount, critical } => (amount, critical),
             Observation::Countered => return self.classify_countered(),
         };
-        let fits = self.fitting(amount, critical);
+        let fits = self.fitting_at(at, amount, critical);
         let ticking = self.ticking(at, amount, critical);
         let Some(declared) = self.declared.clone() else {
-            return self.classify_undeclared(amount, at, fits, &ticking);
+            return self.classify_undeclared(amount, critical, at, fits, &ticking);
         };
 
         // A declared weapon with no band cannot be contradicted, so it
@@ -715,14 +1056,7 @@ impl AttributionRuntime {
         }
         let band = declared_band.expect("a bandless declared weapon fits every hit");
 
-        let in_flight = self.previous.as_ref().and_then(|(previous, switched_at)| {
-            let in_tail = at >= switched_at - 0.05 && at - switched_at <= SWITCH_TAIL_SECONDS;
-            (in_tail
-                && self
-                    .band_of(previous)
-                    .is_some_and(|band| band.fits(amount, critical)))
-            .then(|| previous.clone())
-        });
+        let in_flight = self.in_flight(at, amount, critical);
         if !ticking.is_empty() {
             return match &in_flight {
                 Some(previous) if !Self::all_owned_by(&ticking, previous) => {
@@ -814,10 +1148,43 @@ impl AttributionRuntime {
     fn classify_undeclared(
         &self,
         amount: f64,
+        critical: bool,
         at: f64,
         fits: Vec<String>,
         ticking: &[&OffensiveEffectWindow],
     ) -> Resolved {
+        // The weapon declared until nothing was (a tool read off the screen
+        // put away) may still be landing a shot, and competes with an effect
+        // it does not own. With nothing in hand there is no declaration for
+        // the tail to stand beside, so it takes a shot only when that
+        // weapon alone explains it, or when the shot was seen before the
+        // tool was put away (one already in flight).
+        let landing = self
+            .in_flight_since(at, amount, critical)
+            .filter(|(previous, switched_at)| {
+                at < *switched_at || fits.as_slice() == std::slice::from_ref(previous)
+            })
+            .map(|(previous, _)| previous);
+        if let Some(previous) = landing {
+            if !ticking.is_empty() && !Self::all_owned_by(ticking, &previous) {
+                return Self::concurrent(
+                    ticking,
+                    fits,
+                    &format!("{previous}'s shot still landing"),
+                );
+            }
+            if ticking.is_empty() {
+                return Resolved {
+                    attribution: Attribution::Agrees {
+                        tool: previous,
+                        reason: AgreeReason::InFlight,
+                    },
+                    reason: String::new(),
+                    fits,
+                    windows: Vec::new(),
+                };
+            }
+        }
         if !ticking.is_empty() {
             let owners: BTreeSet<&str> =
                 ticking.iter().map(|window| window.tool.as_str()).collect();
@@ -1005,7 +1372,12 @@ impl AttributionRuntime {
 
     /// Every pending shot settled into this kill.
     pub(super) fn settle_kill(&mut self, kill_id: &str) {
-        for record in &mut self.log {
+        let retained = self
+            .retention
+            .as_mut()
+            .into_iter()
+            .flat_map(|retention| retention.shots.iter_mut().map(|shot| &mut shot.record));
+        for record in self.log.iter_mut().chain(retained) {
             if record.location == ShotLocation::Pending {
                 record.location = ShotLocation::Kill(kill_id.to_string());
             }
@@ -2486,6 +2858,241 @@ mod tests {
                     }
                     _ => {}
                 }
+            }
+        }
+    }
+
+    /// Nothing in hand: a new regime with no weapon declared. Each case is
+    /// (the hit, seconds after the tool was put away, how it resolves).
+    #[test]
+    fn with_nothing_in_hand_shots_resolve_as_with_none_declared() {
+        let cases: &[(f64, f64, Attribution)] = &[
+            // The pistol alone fits, inside the tail: still landing.
+            (7.0, 0.5, agrees("Pistol", AgreeReason::InFlight)),
+            // Past the tail, the damage evidence names the one fit.
+            (7.0, 2.0, evidence("Pistol")),
+            // The pistol and the rifle both fit: past the tail, unresolved.
+            (9.0, 2.0, Attribution::Unresolved),
+            // Inside the tail, but the rifle fits too: with nothing in hand
+            // the tail does not choose between them.
+            (9.0, 1.0, Attribution::Unresolved),
+            // Seen before the tool was put away, it is still landing.
+            (9.0, -0.02, agrees("Pistol", AgreeReason::InFlight)),
+            // The cannon alone, inside the tail: evidence, not the pistol.
+            (30.0, 0.5, evidence("Cannon")),
+            // No weapon fits: unresolved, never the tool put away.
+            (3.0, 0.5, Attribution::Unresolved),
+        ];
+        for (amount, after, expected) in cases {
+            let mut runtime = runtime();
+            runtime.declare("Pistol", 0.0);
+            runtime.undeclare(10.0);
+            assert_eq!(runtime.declared(), None);
+            assert_eq!(
+                runtime.classify(hit(*amount), 10.0 + after).attribution,
+                *expected,
+                "{amount} at {after}s"
+            );
+        }
+    }
+
+    #[test]
+    fn putting_the_tool_away_starts_a_regime_no_evidence_reaches_past() {
+        let mut runtime = runtime();
+        runtime.declare("Pistol", 0.0);
+        observe(&mut runtime, hit(30.0), 1.0);
+        assert!(runtime.mismatch().is_some());
+        runtime.undeclare(2.0);
+        assert!(runtime.mismatch().is_none());
+        assert!(runtime.log().is_empty());
+        assert_eq!(runtime.hit_cue(), None);
+        // Put away again with nothing in hand: the tail stays the first's.
+        runtime.undeclare(5.0);
+        assert_eq!(
+            runtime.classify(hit(7.0), 2.5).attribution,
+            agrees("Pistol", AgreeReason::InFlight)
+        );
+        runtime.forget_previous();
+        assert_eq!(
+            runtime.classify(hit(7.0), 2.5).attribution,
+            evidence("Pistol")
+        );
+    }
+
+    #[test]
+    fn a_tool_known_only_from_the_game_data_is_tested_while_held_and_for_its_tail() {
+        let mut runtime = runtime();
+        runtime.carry_provisional(
+            "Rusty",
+            Some(DamageBand {
+                min: 100.0,
+                max: 200.0,
+            }),
+        );
+        runtime.declare("Rusty", 0.0);
+        assert_eq!(
+            runtime.classify(hit(150.0), 1.0).attribution,
+            agrees("Rusty", AgreeReason::Fits)
+        );
+        assert!(runtime
+            .carried()
+            .iter()
+            .all(|weapon| weapon.name != "Rusty"));
+        runtime.declare("Cannon", 5.0);
+        runtime.release_provisional(5.0);
+        // Inside the tail it still lands; its fit counts beside the others'.
+        assert_eq!(
+            runtime.classify(hit(150.0), 5.5).attribution,
+            agrees("Rusty", AgreeReason::InFlight)
+        );
+        runtime.expire_provisional(5.5);
+        assert!(runtime.provisional().is_some());
+        runtime.expire_provisional(7.0);
+        assert!(runtime.provisional().is_none());
+        assert_eq!(
+            runtime.classify(hit(150.0), 7.0).attribution,
+            Attribution::Unresolved
+        );
+    }
+
+    #[test]
+    fn retained_shots_outlive_the_regime_floor_and_follow_kills_and_moves() {
+        let context = ShotContext {
+            context_id: Some(4),
+            reload_speed_percent: 0.0,
+        };
+        let mut runtime = runtime();
+        runtime.retain_shots(5.0, 0.0);
+        assert_eq!(runtime.retention_floor(), Some(0.0));
+        runtime.declare("Pistol", 0.0);
+        for at in [1.0, 2.0, 3.0] {
+            let resolved = runtime.classify(hit(7.0), at);
+            let seq = runtime.apply(&resolved, at);
+            runtime.remember_shot(
+                ShotRecord {
+                    seq,
+                    observed_at: at,
+                    observation: hit(7.0),
+                    attribution: resolved.attribution.clone(),
+                    fits: resolved.fits.clone(),
+                    windows: Vec::new(),
+                    location: ShotLocation::Pending,
+                    evidence_id: None,
+                    booked: Some("Pistol".into()),
+                    cost: Ped(0.1),
+                    opened_window: None,
+                },
+                context,
+                None,
+            );
+        }
+        // Proof of the pistol forgets the older shots in the log, and a new
+        // regime forgets them all; the retention keeps them.
+        runtime.declare("Cannon", 4.0);
+        assert!(runtime.log().is_empty());
+        assert_eq!(runtime.retained_since(0.0).len(), 3);
+        assert_eq!(runtime.retained_since(2.0).len(), 2);
+        runtime.settle_kill("k1");
+        runtime.rebook(
+            1,
+            Some(&Attribution::Unresolved),
+            None,
+            Ped::ZERO,
+            Some("row".into()),
+        );
+        let kept = runtime.retained_since(0.0);
+        assert!(kept
+            .iter()
+            .all(|shot| shot.record.location == ShotLocation::Kill("k1".into())));
+        assert_eq!(kept[1].record.booked, None);
+        assert_eq!(kept[1].record.evidence_id.as_deref(), Some("row"));
+        assert_eq!(kept[1].record.attribution, Attribution::Unresolved);
+        assert_eq!(kept[1].context, context);
+        // Taken out to be placed again, and put back in its place by time.
+        let taken = runtime.take_retained_since(2.0);
+        assert_eq!(taken.len(), 2);
+        assert_eq!(runtime.retained_since(0.0).len(), 1);
+        for shot in taken.into_iter().rev() {
+            runtime.restore_retained(shot);
+        }
+        let order: Vec<u64> = runtime
+            .retained_since(0.0)
+            .iter()
+            .map(|shot| shot.record.seq)
+            .collect();
+        assert_eq!(order, [0, 1, 2]);
+        runtime.set_charge(2, Some(UnpricedCharge::NoFit));
+        assert_eq!(
+            runtime.retained_since(3.0)[0].charge,
+            Some(UnpricedCharge::NoFit)
+        );
+        // Pinned, an old shot stays past the window; unpinned, it goes.
+        runtime.pin_retention(Some(1.0), 20.0);
+        assert_eq!(runtime.retained_since(0.0).len(), 3);
+        runtime.pin_retention(None, 20.0);
+        assert!(runtime.retained_since(0.0).is_empty());
+        assert_eq!(
+            runtime.retention_floor(),
+            Some(15.0),
+            "nothing older is kept now"
+        );
+        runtime.stop_retaining();
+        assert!(runtime.retained_since(0.0).is_empty());
+    }
+
+    #[test]
+    fn recounting_moves_one_tally_to_another() {
+        let mut runtime = runtime();
+        runtime.declare("Pistol", 0.0);
+        observe(&mut runtime, hit(7.0), 1.0);
+        observe(&mut runtime, hit(4.0), 1.5);
+        runtime.recount(
+            &agrees("Pistol", AgreeReason::Fits),
+            &Attribution::Unresolved,
+        );
+        runtime.recount(
+            &agrees("Pistol", AgreeReason::BelowBand),
+            &evidence("Rifle"),
+        );
+        let counts = runtime.counts();
+        assert_eq!(
+            (
+                counts.agreed,
+                counts.in_margin,
+                counts.unresolved,
+                counts.evidenced
+            ),
+            (0, 0, 1, 1)
+        );
+    }
+
+    mod nothing_in_hand_properties {
+        use super::*;
+        use proptest::prelude::*;
+
+        proptest! {
+            /// With nothing in hand past the tail, a hit is priced only when
+            /// exactly one carried weapon explains it, and never to a tool
+            /// by being the last in hand.
+            #[test]
+            fn past_the_tail_only_a_lone_fit_is_priced(
+                amount in 0.0f64..130.0,
+                critical in any::<bool>(),
+                after in 1.3f64..60.0,
+            ) {
+                let mut runtime = runtime();
+                runtime.declare("Rifle", 0.0);
+                runtime.undeclare(10.0);
+                let resolved = runtime.classify(Observation::Hit { amount, critical }, 10.0 + after);
+                match resolved.attribution.priced_tool() {
+                    Some(tool) => prop_assert_eq!(resolved.fits.clone(), vec![tool.to_string()]),
+                    None => prop_assert!(resolved.fits.len() != 1),
+                }
+                let in_flight = matches!(
+                    resolved.attribution,
+                    Attribution::Agrees { reason: AgreeReason::InFlight, .. }
+                );
+                prop_assert!(!in_flight);
             }
         }
     }

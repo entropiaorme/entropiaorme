@@ -227,15 +227,17 @@ pub enum HotbarItemKind {
     Harvesting,
 }
 
-/// Where an equipment intent came from: a hotbar key press, or the player
+/// Where an equipment intent came from: a hotbar key press, the player
 /// declaring the item in the overlay (the path a machine that cannot read
-/// keys relies on). Both declare the item in hand the same way.
+/// keys relies on), or the tool in hand read off the game screen. Each
+/// declares the item in hand the same way.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IntentSource {
     #[default]
     Key,
     Overlay,
+    Screen,
 }
 
 impl IntentSource {
@@ -249,6 +251,7 @@ impl IntentSource {
         match self {
             IntentSource::Key => "key",
             IntentSource::Overlay => "overlay",
+            IntentSource::Screen => "screen",
         }
     }
 }

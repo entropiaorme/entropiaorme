@@ -233,6 +233,22 @@ pub const CATALOGUE: &[TableSpec] = &[
                 FROM weapon_effect_windows",
         order_by: &["started_at", "rowid"],
     },
+    // Tools read off the screen as the tool in hand that the library does
+    // not hold, and names the player dismissed. Appended last so no earlier
+    // table's symbol assignment moves.
+    TableSpec {
+        name: "tool_sightings",
+        query: "SELECT id, session_id, kind, endpoint, item_id, item_name, text_key, text_read, \
+                first_seen, last_seen, shots, cost_per_shot, settled_kind, settled_at, \
+                equipment_id \
+                FROM tool_sightings",
+        order_by: &["first_seen", "rowid"],
+    },
+    TableSpec {
+        name: "dismissed_tool_names",
+        query: "SELECT name, dismissed_at FROM dismissed_tool_names",
+        order_by: &["name"],
+    },
 ];
 
 /// Normalise the pre-fetched catalogue rows, returning the snapshot value.

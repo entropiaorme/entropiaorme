@@ -1497,22 +1497,37 @@ impl Api {
 
     /// Declare an equipment-library item as in hand, as its hotbar press
     /// would: the overlay's equipment picker. A keyless machine relies on it;
-    /// with keys it corrects the hand without a press.
+    /// with keys it corrects the hand without a press. While the tool in
+    /// hand is read off the screen, the tracker decides: a tool is taken
+    /// where the screen cannot say and refused where it shows the tool in
+    /// hand. A consumable, used and never held, is never refused.
     pub async fn tracking_declare_equipment(
         &self,
         equipment_id: i64,
     ) -> Result<DeclaredEquipment, ApiError> {
         use eo_services::hotbar_listener::DeclareError;
+        use eo_services::tracker::ToolDeclared;
+        let declare_error = |error: DeclareError| match error {
+            DeclareError::NoSession => ApiError::conflict(error.to_string()),
+            DeclareError::UnknownItem => ApiError::not_found(error.to_string()),
+        };
         let hotbar = self.hotbar.clone();
         let occurred_at =
             eo_services::time::instant_to_epoch(eo_services::time::resolve_local(self.clock.now()));
-        let item = tokio::task::spawn_blocking(move || hotbar.declare(equipment_id, occurred_at))
+        let item = tokio::task::spawn_blocking(move || hotbar.resolve(equipment_id))
             .await
             .map_err(ApiError::internal("equipment declaration"))?
-            .map_err(|error| match error {
-                DeclareError::NoSession => ApiError::conflict(error.to_string()),
-                DeclareError::UnknownItem => ApiError::not_found(error.to_string()),
-            })?;
+            .map_err(declare_error)?;
+        let declared = self
+            .tracker
+            .declare_tool(item.clone(), occurred_at)
+            .await
+            .map_err(tracker_conflict)?;
+        if declared == ToolDeclared::KeysAreSource {
+            self.hotbar
+                .declare_resolved(&item, occurred_at)
+                .map_err(declare_error)?;
+        }
         Ok(DeclaredEquipment {
             name: item.name,
             kind: item.kind.into(),

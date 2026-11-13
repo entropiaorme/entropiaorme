@@ -22,9 +22,11 @@ use crate::tracking_models::{Kill, ToolStats};
 
 use super::actor::TrackerActor;
 use super::attribution::{
-    Attribution, AttributionKind, AttributionRuntime, Observation, Reprice, Resolved, ShotLocation,
+    Attribution, AttributionKind, AttributionRuntime, Observation, Reprice, Resolved, ShotContext,
+    ShotLocation, ShotRecord, UnpricedCharge,
 };
 use super::combat::UNPRICED_TOOL;
+use super::providers::Providers;
 use super::session::ActiveSession;
 use super::time::{instant_to_epoch, resolve_local};
 
@@ -268,7 +270,7 @@ pub(super) fn write_kill_phases(conn: &rusqlite::Connection, kill: &Kill) -> Res
 /// Take one shot out of the phase it was booked under. A phase left with
 /// nothing in it disappears. False when no phase holds the shot (memory no
 /// longer matches the record; the move is then skipped).
-fn unbook(
+pub(super) fn unbook(
     tool_stats: &mut Vec<(String, ToolStats)>,
     booked: Option<&str>,
     cost: Ped,
@@ -297,8 +299,8 @@ fn unbook(
     true
 }
 
-/// Everything a decision may change, restored if its write fails.
-struct Backup {
+/// Everything a move of shots may change, restored if its write fails.
+pub(super) struct Backup {
     attribution: AttributionRuntime,
     tool_stats: Vec<(String, ToolStats)>,
     evidence: Vec<ShotEvidence>,
@@ -306,9 +308,326 @@ struct Backup {
     active_key: Option<String>,
     observed_name: Option<String>,
     held_item: Option<(String, crate::bus_events::HotbarItemKind)>,
+    unpriced_cost_bound: Ped,
+    unpriced_no_fit: i64,
+}
+
+impl Backup {
+    pub(super) fn of(
+        active: &ActiveSession,
+        held_item: &Option<(String, crate::bus_events::HotbarItemKind)>,
+    ) -> Self {
+        Self {
+            attribution: active.weapons.attribution.clone(),
+            tool_stats: active.accumulator.tool_stats.clone(),
+            evidence: active.accumulator.evidence.clone(),
+            kills: Vec::new(),
+            active_key: active.weapons.active_key.clone(),
+            observed_name: active.weapons.observed_name.clone(),
+            held_item: held_item.clone(),
+            unpriced_cost_bound: active.unpriced_cost_bound,
+            unpriced_no_fit: active.unpriced_no_fit,
+        }
+    }
+
+    /// The kills the move changed, as they stand now.
+    pub(super) fn saved_kills_now(&self, active: &ActiveSession) -> Vec<Kill> {
+        self.kills
+            .iter()
+            .map(|(index, _)| active.session.kills[*index].clone())
+            .collect()
+    }
+
+    /// Save a kill as it stood before the move first changes it.
+    pub(super) fn save_kill(&mut self, index: usize, kill: &Kill) {
+        if !self.kills.iter().any(|(saved, _)| *saved == index) {
+            self.kills.push((index, kill.clone()));
+        }
+    }
+
+    /// Put memory back as it stood before the move.
+    pub(super) fn restore(
+        self,
+        active: &mut ActiveSession,
+        held_item: &mut Option<(String, crate::bus_events::HotbarItemKind)>,
+    ) {
+        active.weapons.attribution = self.attribution;
+        active.accumulator.tool_stats = self.tool_stats;
+        active.accumulator.evidence = self.evidence;
+        for (index, kill) in self.kills {
+            active.session.kills[index] = kill;
+        }
+        active.weapons.active_key = self.active_key;
+        active.weapons.observed_name = self.observed_name;
+        active.unpriced_cost_bound = self.unpriced_cost_bound;
+        active.unpriced_no_fit = self.unpriced_no_fit;
+        active.dirty = true;
+        *held_item = self.held_item;
+    }
+}
+
+/// One logged shot to move: to another weapon, or to none, where it is
+/// left unpriced.
+pub(super) struct ShotMove {
+    pub(super) seq: u64,
+    /// The weapon it moves to; None leaves it unpriced.
+    pub(super) to_tool: Option<String>,
+    /// How the shot is attributed after the move, when the move itself
+    /// decides it; None when the attribution runtime already did (a
+    /// decision on a mismatch).
+    pub(super) attribution: Option<Attribution>,
+    /// The record as it stood before the move: where its cost sits, and at
+    /// what.
+    pub(super) record: ShotRecord,
+    /// Where it was recorded, for a shot left unpriced that kept no stored
+    /// row: its row is written now.
+    pub(super) context: Option<ShotContext>,
+    /// Why a row first written for it says it is unpriced.
+    pub(super) reason: &'static str,
+    /// What the shot adds to the unpriced shots' bound before the move,
+    /// for a shot the retention keeps; None for a priced shot, and for a
+    /// decision's moves.
+    pub(super) charge: Option<UnpricedCharge>,
+}
+
+impl From<&Reprice> for ShotMove {
+    fn from(reprice: &Reprice) -> Self {
+        Self {
+            seq: reprice.seq,
+            to_tool: Some(reprice.to_tool.clone()),
+            attribution: None,
+            record: reprice.record.clone(),
+            context: None,
+            reason: "",
+            charge: None,
+        }
+    }
+}
+
+/// A stored row a move changes: the weapon it is priced to now (none:
+/// unpriced) and at what.
+pub(super) struct RowUpdate {
+    id: String,
+    tool: Option<String>,
+    cost: Ped,
+}
+
+/// What a move of shots changed in the database's terms: the kills it
+/// repriced, the rows it changed, and the rows it first wrote into kills
+/// already settled.
+#[derive(Default)]
+pub(super) struct Moved {
+    pub(super) cost_delta: Ped,
+    pub(super) repriced: i64,
+    pub(super) kills: Vec<Kill>,
+    row_updates: Vec<RowUpdate>,
+    /// Rows first written into kills already settled, with the kill.
+    pub(super) row_inserts: Vec<(ShotEvidence, String)>,
+    /// Stored rows of settled shots that are gone: a shot placed again
+    /// keeps a row only if its new attribution does.
+    pub(super) row_deletes: Vec<String>,
 }
 
 impl TrackerActor {
+    /// Move logged shots between weapons in memory, against `backup`: each
+    /// leaves the phase it was booked under (in the accumulator, or in the
+    /// kill it settled into) for the phase of the weapon it moves to, at
+    /// that weapon's current price, or for the unpriced phase at none; the
+    /// kill's cost follows, and so does its stored row. A shot left
+    /// unpriced that kept no row gains one, as an unpriced shot always
+    /// has. `review_id` names the decision the moved rows record, when a
+    /// decision made the move.
+    pub(super) fn move_shots(
+        providers: &Providers,
+        active: &mut ActiveSession,
+        moves: &[ShotMove],
+        review_id: Option<&str>,
+        backup: &mut Backup,
+    ) -> Moved {
+        let mut moved = Moved::default();
+        for shot in moves {
+            let record = &shot.record;
+            let (to_cost, to_evidence) = match &shot.to_tool {
+                Some(to_tool) => (
+                    Self::current_cost_for_tool(providers, &mut active.weapons, to_tool, Ped::ZERO),
+                    Self::expected_evidence_for_tool(
+                        providers,
+                        &mut active.weapons,
+                        to_tool,
+                        active.hunting_looters,
+                    ),
+                ),
+                None => (Ped::ZERO, None),
+            };
+            let amount = AttributionRuntime::amount_of(record);
+            let critical = matches!(record.observation, Observation::Hit { critical: true, .. });
+            let tool_stats = match &record.location {
+                ShotLocation::Pending => &mut active.accumulator.tool_stats,
+                ShotLocation::Kill(kill_id) => {
+                    let Some(index) = active
+                        .session
+                        .kills
+                        .iter()
+                        .rposition(|kill| &kill.id == kill_id)
+                    else {
+                        continue;
+                    };
+                    if !backup.kills.iter().any(|(saved, _)| *saved == index) {
+                        backup
+                            .kills
+                            .push((index, active.session.kills[index].clone()));
+                    }
+                    &mut active.session.kills[index].tool_stats
+                }
+            };
+            if !unbook(
+                tool_stats,
+                record.booked.as_deref(),
+                record.cost,
+                amount,
+                critical,
+            ) {
+                tracing::warn!(
+                    target: "eo::tracker",
+                    seq = shot.seq,
+                    "a repriced shot was not found in its phase; left as recorded",
+                );
+                continue;
+            }
+            let phase = shot.to_tool.as_deref().unwrap_or(UNPRICED_TOOL);
+            let stats = Self::tool_stats_for_phase(tool_stats, phase, to_cost, to_evidence);
+            stats.shots_fired += 1;
+            if amount > 0.0 {
+                stats.damage_dealt += amount;
+            }
+            if critical {
+                stats.critical_hits += 1;
+            }
+            if let ShotLocation::Kill(kill_id) = &record.location {
+                if let Some(kill) = active
+                    .session
+                    .kills
+                    .iter_mut()
+                    .rev()
+                    .find(|kill| &kill.id == kill_id)
+                {
+                    kill.cost_ped += to_cost - record.cost;
+                }
+            }
+            moved.cost_delta += to_cost - record.cost;
+            moved.repriced += 1;
+            let mut written = None;
+            match &record.evidence_id {
+                Some(evidence_id) => match active
+                    .accumulator
+                    .evidence
+                    .iter_mut()
+                    .find(|row| &row.id == evidence_id)
+                {
+                    Some(row) => {
+                        row.tool_name = shot.to_tool.clone();
+                        row.cost_per_shot = to_cost;
+                        if shot.to_tool.is_none() {
+                            row.kind = AttributionKind::Unresolved;
+                        }
+                        if let Some(review_id) = review_id {
+                            row.review_id = Some(review_id.to_string());
+                        }
+                    }
+                    None => moved.row_updates.push(RowUpdate {
+                        id: evidence_id.clone(),
+                        tool: shot.to_tool.clone(),
+                        cost: to_cost,
+                    }),
+                },
+                None if shot.to_tool.is_none() => {
+                    let row = Self::unpriced_row(active, shot);
+                    written = Some(row.id.clone());
+                    match &record.location {
+                        ShotLocation::Pending => active.accumulator.evidence.push(row),
+                        ShotLocation::Kill(kill_id) => {
+                            moved.row_inserts.push((row, kill_id.clone()));
+                        }
+                    }
+                }
+                None => {}
+            }
+            if shot.to_tool.is_none() {
+                let charge =
+                    Self::note_unpriced(providers, active, record.observation, &record.fits);
+                active
+                    .weapons
+                    .attribution
+                    .set_charge(shot.seq, Some(charge));
+            } else if let (Some(_), Some(charge)) = (&shot.attribution, shot.charge) {
+                // A shot leaving unpriced takes back what it added.
+                Self::unnote_unpriced(active, charge);
+                active.weapons.attribution.set_charge(shot.seq, None);
+            }
+            if let Some(attribution) = &shot.attribution {
+                active
+                    .weapons
+                    .attribution
+                    .recount(&record.attribution, attribution);
+            }
+            active.weapons.attribution.rebook(
+                shot.seq,
+                shot.attribution.as_ref(),
+                shot.to_tool.clone(),
+                to_cost,
+                written,
+            );
+        }
+        moved.kills = backup
+            .kills
+            .iter()
+            .map(|(index, _)| active.session.kills[*index].clone())
+            .collect();
+        moved
+    }
+
+    /// The stored row of a shot left unpriced by a move that kept none.
+    fn unpriced_row(active: &ActiveSession, shot: &ShotMove) -> ShotEvidence {
+        let record = &shot.record;
+        let (amount, critical) = match record.observation {
+            Observation::Hit { amount, critical } => (Some(amount), critical),
+            Observation::Countered => (None, false),
+        };
+        let context = shot.context.unwrap_or(ShotContext {
+            context_id: active.intervals.context_id(),
+            reload_speed_percent: active.reload_speed_percent,
+        });
+        let candidates = active
+            .weapons
+            .attribution
+            .carried()
+            .iter()
+            .map(|weapon| Candidate {
+                equipment_id: weapon.equipment_id,
+                name: weapon.name.clone(),
+                fits: amount.is_some() && record.fits.contains(&weapon.name),
+            })
+            .collect();
+        ShotEvidence {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id: active.session.id.clone(),
+            context_id: context.context_id,
+            observed_at: record.observed_at,
+            amount,
+            critical,
+            kind: AttributionKind::Unresolved,
+            hotbar_tool: record.booked.clone(),
+            tool_name: None,
+            cost_per_shot: Ped::ZERO,
+            candidates,
+            reason: shot.reason.to_string(),
+            effect_window_id: None,
+            effect_candidates: Vec::new(),
+            review_id: None,
+            reload_speed_percent: context.reload_speed_percent,
+        }
+    }
+
     /// Decide a standing weapon mismatch. False when none stands (a stale
     /// control): nothing changes.
     pub(super) async fn decide_weapon_mismatch(
@@ -327,15 +646,7 @@ impl TrackerActor {
             let Some(active) = session.active_mut() else {
                 return Err(WeaponDecisionError::NoActiveSession);
             };
-            let mut backup = Backup {
-                attribution: active.weapons.attribution.clone(),
-                tool_stats: active.accumulator.tool_stats.clone(),
-                evidence: active.accumulator.evidence.clone(),
-                kills: Vec::new(),
-                active_key: active.weapons.active_key.clone(),
-                observed_name: active.weapons.observed_name.clone(),
-                held_item: held_item.clone(),
-            };
+            let mut backup = Backup::of(active, held_item);
             let decided = match decision {
                 MismatchDecision::Confirm => active.weapons.attribution.confirm(now),
                 MismatchDecision::Keep => active.weapons.attribution.keep(),
@@ -344,100 +655,8 @@ impl TrackerActor {
                 return Ok(false);
             };
 
-            let mut cost_delta = Ped::ZERO;
-            let mut repriced = 0i64;
-            let mut row_updates: Vec<(String, String, Ped)> = Vec::new();
-            for Reprice {
-                seq,
-                to_tool,
-                record,
-            } in &decided.moves
-            {
-                let to_cost =
-                    Self::current_cost_for_tool(providers, &mut active.weapons, to_tool, Ped::ZERO);
-                let to_evidence = Self::expected_evidence_for_tool(
-                    providers,
-                    &mut active.weapons,
-                    to_tool,
-                    active.hunting_looters,
-                );
-                let amount = AttributionRuntime::amount_of(record);
-                let critical =
-                    matches!(record.observation, Observation::Hit { critical: true, .. });
-                let tool_stats = match &record.location {
-                    ShotLocation::Pending => &mut active.accumulator.tool_stats,
-                    ShotLocation::Kill(kill_id) => {
-                        let Some(index) = active
-                            .session
-                            .kills
-                            .iter()
-                            .rposition(|kill| &kill.id == kill_id)
-                        else {
-                            continue;
-                        };
-                        if !backup.kills.iter().any(|(saved, _)| *saved == index) {
-                            backup
-                                .kills
-                                .push((index, active.session.kills[index].clone()));
-                        }
-                        &mut active.session.kills[index].tool_stats
-                    }
-                };
-                if !unbook(
-                    tool_stats,
-                    record.booked.as_deref(),
-                    record.cost,
-                    amount,
-                    critical,
-                ) {
-                    tracing::warn!(
-                        target: "eo::tracker",
-                        seq,
-                        "a repriced shot was not found in its phase; left as recorded",
-                    );
-                    continue;
-                }
-                let stats = Self::tool_stats_for_phase(tool_stats, to_tool, to_cost, to_evidence);
-                stats.shots_fired += 1;
-                if amount > 0.0 {
-                    stats.damage_dealt += amount;
-                }
-                if critical {
-                    stats.critical_hits += 1;
-                }
-                if let ShotLocation::Kill(kill_id) = &record.location {
-                    if let Some(kill) = active
-                        .session
-                        .kills
-                        .iter_mut()
-                        .rev()
-                        .find(|kill| &kill.id == kill_id)
-                    {
-                        kill.cost_ped += to_cost - record.cost;
-                    }
-                }
-                cost_delta += to_cost - record.cost;
-                repriced += 1;
-                if let Some(evidence_id) = &record.evidence_id {
-                    match active
-                        .accumulator
-                        .evidence
-                        .iter_mut()
-                        .find(|row| &row.id == evidence_id)
-                    {
-                        Some(row) => {
-                            row.tool_name = Some(to_tool.clone());
-                            row.cost_per_shot = to_cost;
-                            row.review_id = Some(review_id.clone());
-                        }
-                        None => row_updates.push((evidence_id.clone(), to_tool.clone(), to_cost)),
-                    }
-                }
-                if let Some(logged) = active.weapons.attribution.record_mut(*seq) {
-                    logged.booked = Some(to_tool.clone());
-                    logged.cost = to_cost;
-                }
-            }
+            let moves: Vec<ShotMove> = decided.moves.iter().map(ShotMove::from).collect();
+            let moved = Self::move_shots(providers, active, &moves, Some(&review_id), &mut backup);
 
             // The weapon in hand after the decision is the declared one:
             // enhancer breaks apply to it, and the overlay shows it.
@@ -449,11 +668,6 @@ impl TrackerActor {
             }
             active.dirty = true;
 
-            let kills: Vec<Kill> = backup
-                .kills
-                .iter()
-                .map(|(index, _)| active.session.kills[*index].clone())
-                .collect();
             let write = DecisionWrite {
                 review_id,
                 session_id: active.session.id.clone(),
@@ -463,10 +677,7 @@ impl TrackerActor {
                 evidence: decided.mismatch.evidence,
                 since: decided.mismatch.since,
                 decided_at: now,
-                repriced,
-                cost_delta,
-                kills,
-                row_updates,
+                moved,
             };
             (backup, write)
         };
@@ -489,20 +700,11 @@ impl TrackerActor {
                         write.evidence,
                         write.since,
                         write.decided_at,
-                        write.repriced,
-                        write.cost_delta.value(),
+                        write.moved.repriced,
+                        write.moved.cost_delta.value(),
                     ],
                 )?;
-                for kill in &write.kills {
-                    write_kill_phases(&tx, kill)?;
-                }
-                for (id, tool, cost) in &write.row_updates {
-                    tx.execute(
-                        "UPDATE weapon_shot_evidence \
-                         SET tool_name = ?1, cost_per_shot = ?2, review_id = ?3 WHERE id = ?4",
-                        rusqlite::params![tool, cost.value(), write.review_id, id],
-                    )?;
-                }
+                write_moved(&tx, &write.moved, Some(&write.review_id))?;
                 for window in &write.withdrawn {
                     tx.execute(
                         "UPDATE weapon_effect_windows \
@@ -517,18 +719,12 @@ impl TrackerActor {
 
         if let Err(error) = stored {
             tracing::error!(target: "eo::tracker", %error, "weapon mismatch decision write failed");
-            if let Some(active) = self.session.active_mut() {
-                active.weapons.attribution = backup.attribution;
-                active.accumulator.tool_stats = backup.tool_stats;
-                active.accumulator.evidence = backup.evidence;
-                for (index, kill) in backup.kills {
-                    active.session.kills[index] = kill;
-                }
-                active.weapons.active_key = backup.active_key;
-                active.weapons.observed_name = backup.observed_name;
-                active.dirty = true;
+            let Self {
+                session, held_item, ..
+            } = &mut *self;
+            if let Some(active) = session.active_mut() {
+                backup.restore(active, held_item);
             }
-            self.held_item = backup.held_item;
             return Err(WeaponDecisionError::NotSaved);
         }
 
@@ -542,6 +738,55 @@ impl TrackerActor {
     }
 }
 
+/// Write what a move of shots changed: the repriced kills' phases and
+/// costs, the changed rows, and the rows first written into settled
+/// kills. A decision's rows name its review.
+pub(super) fn write_moved(
+    conn: &rusqlite::Connection,
+    moved: &Moved,
+    review_id: Option<&str>,
+) -> Result<(), DbError> {
+    for kill in &moved.kills {
+        write_kill_phases(conn, kill)?;
+    }
+    for update in &moved.row_updates {
+        match (&update.tool, review_id) {
+            (Some(tool), Some(review_id)) => {
+                conn.execute(
+                    "UPDATE weapon_shot_evidence \
+                     SET tool_name = ?1, cost_per_shot = ?2, review_id = ?3 WHERE id = ?4",
+                    rusqlite::params![tool, update.cost.value(), review_id, update.id],
+                )?;
+            }
+            (Some(tool), None) => {
+                conn.execute(
+                    "UPDATE weapon_shot_evidence \
+                     SET tool_name = ?1, cost_per_shot = ?2 WHERE id = ?3",
+                    rusqlite::params![tool, update.cost.value(), update.id],
+                )?;
+            }
+            (None, _) => {
+                conn.execute(
+                    "UPDATE weapon_shot_evidence \
+                     SET tool_name = NULL, cost_per_shot = 0, attribution = 'unresolved' \
+                     WHERE id = ?1",
+                    rusqlite::params![update.id],
+                )?;
+            }
+        }
+    }
+    for id in &moved.row_deletes {
+        conn.execute(
+            "DELETE FROM weapon_shot_evidence WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+    }
+    for (row, kill_id) in &moved.row_inserts {
+        row.insert(conn, Some(kill_id))?;
+    }
+    Ok(())
+}
+
 /// A decision's database write, detached from the actor's state.
 struct DecisionWrite {
     review_id: String,
@@ -553,10 +798,7 @@ struct DecisionWrite {
     evidence: String,
     since: f64,
     decided_at: f64,
-    repriced: i64,
-    cost_delta: Ped,
-    kills: Vec<Kill>,
-    row_updates: Vec<(String, String, Ped)>,
+    moved: Moved,
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ pub mod analytics;
 pub mod attack_rate;
 pub mod auction_fee;
 pub mod auction_fee_research;
+pub mod bundled_tools;
 pub mod bus_events;
 pub mod character_calc;
 pub mod chatlog_parser;

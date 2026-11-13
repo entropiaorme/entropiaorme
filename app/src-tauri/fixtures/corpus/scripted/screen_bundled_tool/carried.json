@@ -1,0 +1,5 @@
+[
+  {"equipment_id": 1, "name": "Pistol", "damage": 10.0, "decay": 5.0},
+  {"equipment_id": 2, "name": "Cannon", "damage": 40.0, "decay": 20.0},
+  {"equipment_id": 3, "name": "Rifle", "damage": 16.0, "decay": 10.0}
+]

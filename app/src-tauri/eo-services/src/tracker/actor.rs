@@ -130,6 +130,20 @@ pub(super) enum TrackerMsg {
     /// The creature watcher's watch for this session ended by itself: no
     /// reply, as for a look.
     WatchEnded(String),
+    /// One change the held-tool watcher saw: no reply, since its thread
+    /// never waits on the tracker (see `held_tool`).
+    /// Each carries the watch it came from.
+    ToolPulse(crate::tool_watch::ToolPulse, u64),
+    /// The held-tool watcher's watch for this session ended by itself.
+    ToolWatchEnded(String, u64),
+    /// Where the tool in hand comes from, and what the screen showed of it.
+    ToolSource(oneshot::Sender<super::held_tool::ToolSource>),
+    /// A tool the player declared by hand, resolved as a press resolves it.
+    DeclareTool {
+        item: crate::hotbar_listener::ResolvedHotbarItem,
+        occurred_at: f64,
+        reply: oneshot::Sender<Result<super::held_tool::ToolDeclared, TrackerCommandError>>,
+    },
     /// Test-only structural inspection: run a closure against the
     /// actor's owned state (the typestate replaced the lockable state
     /// tests used to peek at).
@@ -195,6 +209,11 @@ pub(super) struct TrackerActor {
     /// The detection setting as last applied: turning it on lets the
     /// watcher ask for a capture the desktop refused before.
     pub(super) detection_setting: bool,
+    /// The held-tool reading setting as last applied, likewise.
+    pub(super) tool_reading_setting: bool,
+    /// Counts the held-tool watches started: a message of an earlier one
+    /// is dropped.
+    pub(super) tool_watch_generation: u64,
 }
 
 impl TrackerActor {
@@ -231,8 +250,11 @@ impl TrackerActor {
             subscriptions: Vec::new(),
             status,
             detection_setting: false,
+            tool_reading_setting: false,
+            tool_watch_generation: 0,
         };
         actor.detection_setting = actor.providers.config.mob_detection_enabled();
+        actor.tool_reading_setting = actor.providers.config.tool_reading_enabled();
         actor.refresh_loot_filter();
 
         let recovered = actor.recover_orphaned_sessions().await;
@@ -276,6 +298,7 @@ impl TrackerActor {
             TrackerMsg::ReloadConfig(reply) => {
                 self.reload_config();
                 self.sync_detection().await;
+                self.sync_tool_reading().await;
                 let _ = reply.send(());
             }
             TrackerMsg::DecideWeaponMismatch(decision, reply) => {
@@ -337,6 +360,22 @@ impl TrackerActor {
             TrackerMsg::DoseWake => {}
             TrackerMsg::MobPulse(pulse) => self.on_mob_pulse(pulse).await,
             TrackerMsg::WatchEnded(session_id) => self.on_watch_ended(&session_id).await,
+            TrackerMsg::ToolPulse(pulse, generation) => {
+                self.on_tool_pulse(pulse, generation).await;
+            }
+            TrackerMsg::ToolWatchEnded(session_id, generation) => {
+                self.on_tool_watch_ended(&session_id, generation).await;
+            }
+            TrackerMsg::ToolSource(reply) => {
+                let _ = reply.send(self.tool_source());
+            }
+            TrackerMsg::DeclareTool {
+                item,
+                occurred_at,
+                reply,
+            } => {
+                let _ = reply.send(self.declare_by_hand(item, occurred_at).await);
+            }
             #[cfg(test)]
             TrackerMsg::Inspect(probe) => probe(self),
         }
@@ -352,7 +391,7 @@ impl TrackerActor {
             BusEvent::ActiveToolChanged(_) => self.on_tool_changed(event),
             BusEvent::ActiveHealToolChanged(_) => self.on_heal_tool_changed(event),
             BusEvent::ActiveHarvestToolChanged(_) => self.on_harvest_tool_changed(event),
-            BusEvent::HotbarIntent(_) => self.on_hotbar_intent(event).await,
+            BusEvent::HotbarIntent(_) => self.on_intent(event).await,
             BusEvent::HarvestFail(_) => self.on_harvest_fail(event).await,
             BusEvent::Global(_) => self.on_global(event).await,
             BusEvent::EnhancerBreak(_) => self.on_enhancer_break(event),

@@ -1,0 +1,31 @@
+name: screen_covered_long
+flavour: scripted
+description: >
+  The pistol is seen in hand, then a window covers the bar for thirty
+  seconds, a shot each second, a kill settling midway. The bar comes back
+  showing the cannon: every one of those shots is left unpriced, however
+  long before the bar came back it was fired, in the settled kill and
+  after it.
+surfaces:
+  - tracking-held-tool-screen
+  - tracking-kill-creation
+events: 33
+expected_kills: 2
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Hand-authored. carried.json names the three library weapons (pistol
+  5-10, cannon 20-40, rifle 8-16 regular bands); screen.json turns the
+  reading of the tool in hand on and names the bundled tools the library
+  does not hold; steps.jsonl interleaves the chat log's tick groups with
+  the changes read off the screen, hotbar presses and clock steps.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus
+# replay test). The start instant is chosen away from the scenario's chat-log
+# instants so a plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

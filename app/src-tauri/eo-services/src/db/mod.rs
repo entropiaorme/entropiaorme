@@ -716,13 +716,21 @@ impl Db {
         .await
     }
 
-    /// Delete a stored equipment row (idempotent over a missing row).
+    /// Delete a stored equipment row (idempotent over a missing row). A
+    /// sighting of a tool read off the screen that became this entry keeps
+    /// its settlement but no longer points at it.
     pub async fn delete_equipment(&self, item_id: i64) -> Result<(), DbError> {
         self.with_writer(move |conn| {
-            conn.execute(
+            let tx = conn.transaction()?;
+            tx.execute(
+                "UPDATE tool_sightings SET equipment_id = NULL WHERE equipment_id = ?",
+                rusqlite::params![item_id],
+            )?;
+            tx.execute(
                 "DELETE FROM equipment_library WHERE id = ?",
                 rusqlite::params![item_id],
             )?;
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -1125,6 +1133,51 @@ fn snapshot_rows_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deleting an equipment entry leaves a sighting that became it
+    /// settled as added, but pointing at nothing.
+    #[tokio::test]
+    async fn deleting_an_entry_unlinks_the_sighting_that_became_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_db(dir.path()).await;
+        db.insert_equipment_for_tests(7, "Rusty Rifle", "weapon", "{}")
+            .await
+            .unwrap();
+        db.insert_equipment_for_tests(8, "Opalo", "weapon", "{}")
+            .await
+            .unwrap();
+        db.with_writer(|conn| {
+            conn.execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0);
+                 INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name,
+                     first_seen, last_seen, settled_kind, settled_at, equipment_id)
+                 VALUES ('a', 's', 'bundled', 'weapons', '9', 'Rusty Rifle', 1, 2, 'added', 3, 7),
+                        ('b', 's', 'bundled', 'weapons', '10', 'Opalo', 1, 2, 'added', 3, 8);",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        db.delete_equipment(7).await.unwrap();
+        let rows: Vec<(String, Option<String>, Option<i64>)> = db
+            .with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, settled_kind, equipment_id FROM tool_sightings ORDER BY id",
+                )?;
+                let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("a".into(), Some("added".into()), None),
+                ("b".into(), Some("added".into()), Some(8)),
+            ]
+        );
+        assert_eq!(db.equipment_row(7).await.unwrap(), None);
+    }
 
     async fn fresh_db(dir: &std::path::Path) -> Db {
         Db::open(&dir.join("entropia_orme.db")).await.unwrap()
@@ -1877,10 +1930,11 @@ mod tests {
         // + the listing field sources' table
         // + kill mob detection's 2 tables and session index
         // + kill mob routes' carried table and session index
+        // + tool sightings' 2 tables and 2 indexes
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 242);
+        assert_eq!(master.len(), 246);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

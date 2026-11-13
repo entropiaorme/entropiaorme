@@ -11,7 +11,9 @@ use crate::tracking_models::ToolStats;
 use crate::weapon_review::UNDECLARED_WARNING_SHOTS;
 
 use super::actor::TrackerActor;
-use super::attribution::{Attribution, Observation, ShotLocation, ShotRecord};
+use super::attribution::{
+    Attribution, Observation, ShotContext, ShotLocation, ShotRecord, UnpricedCharge,
+};
 use super::providers::Providers;
 use super::session::ActiveSession;
 use super::time::{instant_to_epoch, resolve_local};
@@ -106,14 +108,16 @@ impl TrackerActor {
         observation: Observation,
         observed_at: f64,
     ) -> Option<EffectActivation> {
+        // A tool known only from the game's data is tested only while held
+        // and for the switch tail after.
+        active.weapons.expire_provisional(observed_at);
         let resolved = active
             .weapons
             .attribution
             .classify(observation, observed_at);
         let seq = active.weapons.attribution.apply(&resolved, observed_at);
-        if matches!(resolved.attribution, Attribution::Unresolved) {
-            Self::note_unpriced(providers, active, observation, &resolved.fits);
-        }
+        let charge = matches!(resolved.attribution, Attribution::Unresolved)
+            .then(|| Self::note_unpriced(providers, active, observation, &resolved.fits));
         let (amount, critical) = match observation {
             Observation::Hit { amount, critical } => (amount, critical),
             Observation::Countered => (0.0, false),
@@ -165,34 +169,43 @@ impl TrackerActor {
                 .attribution
                 .open_effect_window(activation.window.clone());
         }
-        active.weapons.attribution.remember(ShotRecord {
-            seq,
-            observed_at,
-            observation,
-            attribution: resolved.attribution,
-            fits: resolved.fits,
-            windows: resolved.windows,
-            location: ShotLocation::Pending,
-            evidence_id,
-            booked: tool,
-            cost,
-            opened_window: activation
-                .as_ref()
-                .map(|activation| activation.window.id.clone()),
-        });
+        let context = ShotContext {
+            context_id: active.intervals.context_id(),
+            reload_speed_percent: active.reload_speed_percent,
+        };
+        active.weapons.attribution.remember_shot(
+            ShotRecord {
+                seq,
+                observed_at,
+                observation,
+                attribution: resolved.attribution,
+                fits: resolved.fits,
+                windows: resolved.windows,
+                location: ShotLocation::Pending,
+                evidence_id,
+                booked: tool,
+                cost,
+                opened_window: activation
+                    .as_ref()
+                    .map(|activation| activation.window.id.clone()),
+            },
+            context,
+            charge,
+        );
         activation
     }
 
     /// Account for an unpriced shot: bound what it could have cost at the
     /// dearest carried weapon that fitted it or holds it in its margin (a
     /// countered shot has neither), and once enough land with no weapon
-    /// declared, warn that the session is running undeclared.
-    fn note_unpriced(
+    /// declared, warn that the session is running undeclared. Answers what
+    /// it added to the bound.
+    pub(super) fn note_unpriced(
         providers: &Providers,
         active: &mut ActiveSession,
         observation: Observation,
         fits: &[String],
-    ) {
+    ) -> UnpricedCharge {
         let explaining: Vec<String> = match observation {
             Observation::Hit { amount, critical } => {
                 let mut names = fits.to_vec();
@@ -205,12 +218,21 @@ impl TrackerActor {
             .iter()
             .filter_map(|name| active.weapons.bound_price(name))
             .max_by(|a, b| a.value().total_cmp(&b.value()));
-        match dearest {
-            Some(price) => active.unpriced_cost_bound += price,
-            None => active.unpriced_no_fit += 1,
-        }
-        if active.weapons.attribution.declared().is_some() {
-            return;
+        let charge = match dearest {
+            Some(price) => {
+                active.unpriced_cost_bound += price;
+                UnpricedCharge::Bound(price)
+            }
+            None => {
+                active.unpriced_no_fit += 1;
+                UnpricedCharge::NoFit
+            }
+        };
+        // Reading the tool off the screen, no weapon declared is a state
+        // the screen states (nothing held, or uncertain), not a missing
+        // press.
+        if active.weapons.attribution.declared().is_some() || active.held_tool.is_some() {
+            return charge;
         }
         active.undeclared_unpriced += 1;
         if active.undeclared_unpriced >= UNDECLARED_WARNING_SHOTS
@@ -226,6 +248,18 @@ impl TrackerActor {
                 "No weapon declared: {UNDECLARED_WARNING_SHOTS} shots are unpriced so far. {fix}"
             ));
         }
+        charge
+    }
+
+    /// Take back what an unpriced shot added to the bound: it is priced
+    /// now, or about to be placed again.
+    pub(super) fn unnote_unpriced(active: &mut ActiveSession, charge: UnpricedCharge) {
+        match charge {
+            UnpricedCharge::Bound(price) => {
+                active.unpriced_cost_bound = active.unpriced_cost_bound - price
+            }
+            UnpricedCharge::NoFit => active.unpriced_no_fit -= 1,
+        }
     }
 
     /// Count one shot into the accumulator's phase for its weapon, and
@@ -239,19 +273,35 @@ impl TrackerActor {
         amount: f64,
         critical: bool,
     ) -> Ped {
+        Self::book_into(
+            providers,
+            &mut active.weapons,
+            active.hunting_looters,
+            &mut active.accumulator.tool_stats,
+            tool,
+            amount,
+            critical,
+        )
+    }
+
+    /// [`Self::book_shot`] into the phases given: the accumulator's, or a
+    /// settled kill's for a shot placed again.
+    pub(super) fn book_into(
+        providers: &Providers,
+        weapons: &mut super::weapons::WeaponRuntime,
+        looters: crate::expected_hunting::HuntingLooterLevels,
+        tool_stats: &mut Vec<(String, ToolStats)>,
+        tool: Option<&str>,
+        amount: f64,
+        critical: bool,
+    ) -> Ped {
         let (cost, expected_economics) = match tool {
             Some(tool) => (
-                Self::current_cost_for_tool(providers, &mut active.weapons, tool, Ped::ZERO),
-                Self::expected_evidence_for_tool(
-                    providers,
-                    &mut active.weapons,
-                    tool,
-                    active.hunting_looters,
-                ),
+                Self::current_cost_for_tool(providers, weapons, tool, Ped::ZERO),
+                Self::expected_evidence_for_tool(providers, weapons, tool, looters),
             ),
             None => (Ped::ZERO, None),
         };
-        let tool_stats = &mut active.accumulator.tool_stats;
         let stats: &mut ToolStats = match tool {
             Some(tool) if cost.is_positive() => {
                 Self::tool_stats_for_phase(tool_stats, tool, cost, expected_economics)

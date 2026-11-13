@@ -15,7 +15,7 @@ use crate::ped::Ped;
 
 use super::actor::TrackerActor;
 use super::attribution::AttributionRuntime;
-use super::providers::{CarriedWeaponProfile, Providers};
+use super::providers::{BundledWeapon, CarriedWeaponProfile, Providers};
 
 /// The session-scoped weapon runtime: which weapons are carried and which
 /// one each shot is attributed to, the enhancer stacks, and the memoised
@@ -41,6 +41,9 @@ pub(super) struct WeaponRuntime {
     pub(super) static_cost_cache: BTreeMap<String, Ped>,
     /// Memoised carried-weapon prices for bounding unpriced shots.
     bound_price_cache: BTreeMap<String, Option<Ped>>,
+    /// The props of a held tool known only from the game's data, priced
+    /// by name as a carried weapon is, kept across carried-set reloads.
+    provisional: Option<(String, Arc<Value>)>,
 }
 
 impl WeaponRuntime {
@@ -67,6 +70,50 @@ impl WeaponRuntime {
             weapons.push(profile.weapon);
         }
         self.attribution.set_carried(weapons);
+        self.restore_provisional();
+    }
+
+    /// Hold a tool the library does not hold, known only from the game's
+    /// data, at its bare profile: its shots price from these props, and
+    /// its band is tested beside the carried weapons' while it is held.
+    pub(super) fn carry_provisional(&mut self, name: &str, weapon: BundledWeapon) {
+        let name = name.to_string();
+        self.attribution.carry_provisional(&name, weapon.band);
+        self.carried_profiles.remove(&name);
+        self.profile_cache.remove(&name);
+        self.static_cost_cache.remove(&name);
+        self.bound_price_cache.remove(&name);
+        self.provisional = Some((name, Arc::new(Value::Object(weapon.props))));
+        self.restore_provisional();
+    }
+
+    /// The provisional tool's props, priced by its name.
+    fn restore_provisional(&mut self) {
+        if let Some((name, props)) = &self.provisional {
+            self.carried_profiles
+                .entry(name.clone())
+                .or_insert_with(|| props.clone());
+        }
+    }
+
+    /// Forget the provisional tool once its tail has passed at `now`: its
+    /// band is no longer tested and its props no longer price anything.
+    pub(super) fn expire_provisional(&mut self, now: f64) {
+        self.attribution.expire_provisional(now);
+        if self.attribution.provisional_band().is_none() {
+            if let Some((name, _)) = self.provisional.take() {
+                self.carried_profiles.remove(&name);
+                self.profile_cache.remove(&name);
+                self.static_cost_cache.remove(&name);
+                self.bound_price_cache.remove(&name);
+            }
+        }
+    }
+
+    /// The provisional tool held now, if one is.
+    #[cfg(test)]
+    pub(super) fn provisional_name(&self) -> Option<&str> {
+        self.provisional.as_ref().map(|(name, _)| name.as_str())
     }
 }
 
@@ -94,6 +141,7 @@ impl WeaponRuntime {
             weapons.push(profile.weapon);
         }
         self.attribution.set_carried(weapons);
+        self.restore_provisional();
         self.profile_cache.clear();
         self.static_cost_cache.clear();
         self.bound_price_cache.clear();
@@ -209,6 +257,17 @@ impl WeaponRuntime {
 }
 
 impl TrackerActor {
+    /// The weapons attribution chooses among: while the tool in hand is
+    /// read off the screen, every weapon of the library the player has on;
+    /// otherwise those bound to the hotbar and carried without a hotkey.
+    pub(super) fn carried_set(providers: &Providers) -> Vec<CarriedWeaponProfile> {
+        if providers.config.tool_reading_enabled() {
+            providers.equipment.enabled_weapons()
+        } else {
+            providers.equipment.carried_weapons()
+        }
+    }
+
     /// Resolve a tool name to its canonical profile: the carried weapons
     /// first, then the memoised equipment-library lookup.
     fn match_weapon_profile(

@@ -235,12 +235,14 @@ impl TrackerActor {
         }
         active.reload_speed_percent = speed;
         let equipment = providers.equipment.clone();
-        active.weapons.reprice(equipment.carried_weapons(), |name| {
-            equipment
-                .weapon_profile(name)
-                .filter(|profile| !profile.is_empty())
-                .map(|profile| std::sync::Arc::new(serde_json::Value::Object(profile)))
-        });
+        active
+            .weapons
+            .reprice(Self::carried_set(providers), |name| {
+                equipment
+                    .weapon_profile(name)
+                    .filter(|profile| !profile.is_empty())
+                    .map(|profile| std::sync::Arc::new(serde_json::Value::Object(profile)))
+            });
         if let Some(intent) = active.healing.intent.as_mut() {
             intent.apply_reload_speed(speed);
         }

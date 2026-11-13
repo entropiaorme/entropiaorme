@@ -159,6 +159,12 @@ pub(super) struct ActiveSession {
     /// Whether the screen was read when the readouts were last told: a
     /// change is told once, however it came about.
     pub(super) reading_told: bool,
+    /// The tool in hand as read off the screen, while the screen is the
+    /// source of it for this session.
+    pub(super) held_tool: Option<super::held_tool::SessionHeldTool>,
+    /// When the screen stopped being read by itself this session (epoch
+    /// milliseconds): the keys are the source since.
+    pub(super) screen_stopped: Option<i64>,
 }
 
 impl ActiveSession {
@@ -196,6 +202,8 @@ impl ActiveSession {
             },
             detection: None,
             reading_told: false,
+            held_tool: None,
+            screen_stopped: None,
         }
     }
 
@@ -820,9 +828,7 @@ impl TrackerActor {
         let Some(active) = session.active_mut() else {
             return;
         };
-        active
-            .weapons
-            .load_carried(providers.equipment.carried_weapons());
+        active.weapons.load_carried(Self::carried_set(providers));
 
         // Sync the typed creature with the live config (the declare and
         // release commands write the config first, so this also covers
@@ -897,7 +903,7 @@ impl TrackerActor {
             },
         };
         let session_id = uuid::Uuid::new_v4().to_string();
-        let carried = self.providers.equipment.carried_weapons();
+        let carried = Self::carried_set(&self.providers);
         self.harvest_guardrail = self.providers.equipment.resolve_harvest_guardrail();
 
         self.refresh_loot_filter();
@@ -957,10 +963,16 @@ impl TrackerActor {
         // session-scoped field starts at its documented initial
         // state by construction.
         let keyless = facets.input_mode == InputMode::Keyless;
+        // Reading the tool off the screen, the first look declares it: the
+        // tool held before the start is not carried in, nor is the healer
+        // declared before it.
+        let reads_tool = self.session_reads_tool();
         let mut active = ActiveSession::new(session.clone(), facets);
         if keyless {
             active.healing.keyless = true;
-            active.healing.declared_healer = self.declared_healer.clone();
+            if !reads_tool {
+                active.healing.declared_healer = self.declared_healer.clone();
+            }
         }
         active.hunting_looters = self.providers.equipment.hunting_looter_levels();
         active.weapons.load_carried(carried);
@@ -973,6 +985,9 @@ impl TrackerActor {
         // it from the start, as its press would have, so a hit several
         // carried bands explain prices to it rather than to nothing, and
         // damage that contradicts it raises the weapon cue.
+        if reads_tool {
+            self.held_item = None;
+        }
         if let Some((weapon, HotbarItemKind::Weapon)) = &self.held_item {
             active.weapons.attribution.declare(weapon, start_ts);
             Self::current_cost_for_tool(&self.providers, &mut active.weapons, weapon, Ped::ZERO);
@@ -996,6 +1011,7 @@ impl TrackerActor {
         self.subscribe_handlers();
         self.publish_status();
         self.start_detection();
+        self.start_tool_reading().await;
         // The session's start tells the readouts; this only notes it.
         self.reading_changed();
 
@@ -1053,8 +1069,13 @@ impl TrackerActor {
         // below sums the session's kills; the watcher itself stops only once
         // the stop has committed, so a stop that fails leaves the session
         // fully live, still watching.
+        // A tool still unseen is settled in memory first, so the sums below
+        // see it; its write goes in the stop's transaction, and a stop that
+        // fails puts it back.
+        let mut settlement = None;
         if self.session.active().is_some() {
             self.answer_waiting_kills().await;
+            settlement = self.prepare_stop_settlement().await;
         }
         let (
             session,
@@ -1117,9 +1138,20 @@ impl TrackerActor {
         let end_epoch = instant_to_epoch(end_time);
         let heal_value = heal_cost.value();
         let dangling_value = dangling_cost.value();
-        self.db
+        let (settled, restore) = match settlement {
+            Some(settlement) => (
+                Some(settlement.moved),
+                Some((settlement.backup, settlement.hold)),
+            ),
+            None => (None, None),
+        };
+        let stopped = self
+            .db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
+                if let Some(moved) = &settled {
+                    super::weapon_evidence::write_moved(&tx, moved, None)?;
+                }
                 // Both facets re-land from memory at stop, so a contained
                 // failure of a mid-session write cannot strand the summary
                 // on a stale row.
@@ -1153,9 +1185,16 @@ impl TrackerActor {
                 tx.commit()?;
                 Ok(())
             })
-            .await?;
+            .await;
+        if let Err(error) = stopped {
+            if let Some((backup, hold)) = restore {
+                self.restore_stop_settlement(backup, hold);
+            }
+            return Err(error);
+        }
         self.unsubscribe_handlers();
         self.drop_detection();
+        self.drop_tool_reading();
 
         // Session end is a quiescent boundary: checkpoint and truncate the WAL
         // so its growth over a tracked session is bounded. Best-effort: the

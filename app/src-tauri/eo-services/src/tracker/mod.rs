@@ -37,6 +37,9 @@ mod harvest;
 mod healing;
 #[cfg(test)]
 mod healing_tests;
+mod held_tool;
+#[cfg(test)]
+mod held_tool_tests;
 mod intervals;
 mod loot;
 mod mob;
@@ -61,6 +64,7 @@ pub(crate) use cycled::read_session_armour;
 #[cfg(test)]
 pub(crate) use detection::{write_detection, KillDetection, KillReading, StampedMob};
 pub use doses::{DoseError, DoseStart};
+pub use held_tool::{ManualDeclaration, ScreenTool, SeenTool, ToolDeclared, ToolSource, Unseen};
 pub use intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec, OpenInterval,
 };
@@ -69,8 +73,9 @@ pub use mob::{
     PinnedBy,
 };
 pub use providers::{
-    CarriedWeaponProfile, DefaultTrackingConfig, EquipmentLibrary, EquipmentProfile, GuardrailTool,
-    HarvestGuardrailTools, InertEquipment, Providers, TrackingConfig, TreeSize,
+    BundledTool, BundledToolResolver, BundledWeapon, CarriedWeaponProfile, DefaultTrackingConfig,
+    EquipmentLibrary, EquipmentProfile, GuardrailTool, HarvestGuardrailTools, InertEquipment,
+    Providers, TrackingConfig, TreeSize,
 };
 pub use weapon_evidence::{MismatchDecision, WeaponDecisionError};
 
@@ -128,6 +133,10 @@ pub enum TrackerCommandError {
     /// pin it.
     #[error("The creature being read has changed; pin it again")]
     ReadingChanged,
+    /// A tool was declared by hand while the screen shows which tool is
+    /// in hand: the screen's reading stands.
+    #[error("The screen shows the tool in hand")]
+    ScreenShowsTool,
 }
 
 /// The session typestate: everything session-scoped lives inside the
@@ -224,6 +233,14 @@ impl HuntTracker {
             .send(build(reply_tx))
             .expect("tracker actor alive");
         reply_rx.await.expect("tracker actor replies")
+    }
+
+    /// One message call that answers None, rather than failing, when the
+    /// actor is gone.
+    async fn try_call<R>(&self, build: impl FnOnce(oneshot::Sender<R>) -> TrackerMsg) -> Option<R> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.sender.send(build(reply_tx)).ok()?;
+        reply_rx.await.ok()
     }
 
     pub fn is_tracking(&self) -> bool {
@@ -405,6 +422,31 @@ impl HuntTracker {
             reply,
         })
         .await
+    }
+
+    /// Where the tool in hand comes from now, and, while it is the screen,
+    /// what the screen has shown of it.
+    pub async fn tool_source(&self) -> ToolSource {
+        self.call(TrackerMsg::ToolSource).await
+    }
+
+    /// A tool the player declared by hand (the overlay's equipment picker),
+    /// resolved as a press resolves it: taken here while the tool in hand
+    /// is read off the screen and the screen cannot say, refused while it
+    /// shows the tool; otherwise the declaration goes the way a press does
+    /// (see [`ToolDeclared`]). A tracker that is gone has no session.
+    pub async fn declare_tool(
+        &self,
+        item: crate::hotbar_listener::ResolvedHotbarItem,
+        occurred_at: f64,
+    ) -> Result<ToolDeclared, TrackerCommandError> {
+        self.try_call(|reply| TrackerMsg::DeclareTool {
+            item,
+            occurred_at,
+            reply,
+        })
+        .await
+        .unwrap_or(Err(TrackerCommandError::NoActiveSession))
     }
 
     /// Run the dose expiry sweep now (what the wake-up at an expiry does).

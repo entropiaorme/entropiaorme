@@ -383,6 +383,7 @@ impl TrackerActor {
         let source = Some(match payload.source {
             IntentSource::Key => format!("hotbar:{}", payload.slot),
             IntentSource::Overlay => "overlay".to_string(),
+            IntentSource::Screen => "screen".to_string(),
         });
         if let (HotbarItemKind::Healing, Some(profile)) =
             (payload.item_kind, payload.healing_profile.clone())
@@ -1004,7 +1005,7 @@ fn intent_from_payload(payload: &HotbarIntentPayload, profile: HealingProfile) -
     }
 }
 
-fn close_healing_intent(runtime: &mut HealingRuntime, occurred_at: f64) {
+pub(super) fn close_healing_intent(runtime: &mut HealingRuntime, occurred_at: f64) {
     if let Some(mut intent) = runtime.intent.take() {
         intent.closed_at = Some(occurred_at);
         runtime.recent_intent = Some(intent);

@@ -1823,6 +1823,11 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 rusqlite::params![sid],
             )?;
             crate::consumables::detach_session(&tx, &sid)?;
+            // Tools read off the screen during the session describe it alone.
+            tx.execute(
+                "DELETE FROM tool_sightings WHERE session_id = ?",
+                rusqlite::params![sid],
+            )?;
             tx.execute(
                 "DELETE FROM tracking_sessions WHERE id = ?",
                 rusqlite::params![sid],
@@ -3499,7 +3504,10 @@ mod tests {
                  INSERT INTO healing_corrections (
                     id, session_id, kind, activation_id, output_id, cost_delta_ped,
                     corrected_at, undone_at
-                 ) VALUES ('hc1', 's1', 'not_paid_use', 'ha1', 'ho1', -0.01, 1100, 1200);",
+                 ) VALUES ('hc1', 's1', 'not_paid_use', 'ha1', 'ho1', -0.01, 1100, 1200);
+                 INSERT INTO tool_sightings (
+                    id, session_id, kind, endpoint, item_id, item_name, first_seen, last_seen
+                 ) VALUES ('ts1', 's1', 'bundled', 'weapons', '7', 'Rusty Rifle', 1000, 1010);",
             )?;
             seed_session(conn, "active", 1000.0, None, true, "mob", 0.0, 0.0, 0.0)?;
             Ok(())
@@ -3545,6 +3553,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(healing_count, 0);
+        let sightings = db
+            .with_reader(|conn| {
+                Ok::<i64, DbError>(conn.query_row(
+                    "SELECT COUNT(*) FROM tool_sightings WHERE session_id = 's1'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(sightings, 0, "the session's sightings leave with it");
     }
 
     // ── Producer helpers ────────────────────────────────────────────

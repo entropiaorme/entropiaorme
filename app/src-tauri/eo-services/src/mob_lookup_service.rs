@@ -16,8 +16,8 @@ impl<'a> MobLookupService<'a> {
     }
 
     /// Every mob the catalogue names, as `{display, species, maturity}`
-    /// rows (`display` is `{maturity} {species}`, or the bare species when
-    /// it has no maturities), deduplicated by (species, maturity) and
+    /// rows (`display` is the mob as the game prints it, `{species}
+    /// {maturity}`, or the bare species when it has no maturities), deduplicated by (species, maturity) and
     /// sorted by display. The declared-mob picker searches this list with
     /// the frontend's shared search.
     pub fn mob_names(&self) -> Vec<Value> {
@@ -57,11 +57,7 @@ impl<'a> MobLookupService<'a> {
                     .unwrap_or("")
                     .trim()
                     .to_string();
-                let display = if maturity.is_empty() {
-                    species.clone()
-                } else {
-                    format!("{maturity} {species}")
-                };
+                let display = crate::mob_display::printed(&species, &maturity);
                 if seen.insert((species.clone(), maturity.clone())) {
                     results.push(row(&display, &species, &maturity));
                 }
@@ -185,23 +181,23 @@ mod tests {
             .iter()
             .map(|row| row["display"].as_str().unwrap())
             .collect();
-        // The duplicate Young Atrox entry collapses; the unnamed species
+        // The duplicate Atrox Young entry collapses; the unnamed species
         // is skipped; a maturity-less species is its bare name; the
         // species falls back to the top-level name.
         assert_eq!(
             displays,
             [
+                "Atrox Old",
+                "Atrox Young",
                 "Daikiba",
-                "Old Atrox",
-                "Young Atrox",
-                "Young Kold",
-                "Young Snablesnot Female"
+                "Kold Young",
+                "Snablesnot Female Young"
             ]
         );
-        let young_atrox = &rows[2];
+        let young_atrox = &rows[1];
         assert_eq!(young_atrox["species"], "Atrox");
         assert_eq!(young_atrox["maturity"], "Young");
-        assert_eq!(rows[0]["maturity"], "");
+        assert_eq!(rows[2]["maturity"], "");
     }
 
     #[test]

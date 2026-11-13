@@ -377,6 +377,29 @@ impl MobCatalogue {
         catalogue
     }
 
+    /// Whether `resolved` names a creature graded by number at a number the
+    /// list does not give it: read off the plate alone, so a single reading
+    /// of it may be another number misread.
+    pub fn infers_number(&self, resolved: &Resolved) -> bool {
+        match resolved {
+            Resolved::Known {
+                name,
+                maturity: Some(maturity),
+                ..
+            } => !self
+                .mobs
+                .iter()
+                .any(|mob| mob.name == *name && mob.maturity.as_deref() == Some(maturity)),
+            _ => false,
+        }
+    }
+
+    /// The name `name` prints on a plate: without the bracketed part the
+    /// list adds to tell creatures of one name apart.
+    pub fn printed_name(name: &str) -> &str {
+        without_qualifier(name).unwrap_or(name)
+    }
+
     /// Keep `kept`, whose maturity is `number`, as a creature graded by
     /// number: with a creature of the same name, only the way it prints its
     /// number; near another's name without being it, not at all.

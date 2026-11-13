@@ -3,12 +3,16 @@ use crate::clock::MockClock;
 use crate::game_ui::test_support::bundled_profile;
 use crate::tracker::{write_detection, KillDetection, KillReading, StampedMob};
 
+mod mobs;
+
 struct Rig {
     _dir: tempfile::TempDir,
     runtime: tokio::runtime::Runtime,
     db: Db,
     review: MobReviewService,
     catalogue: Arc<CatalogueCell>,
+    /// What is shown for each mob, as the tracker would hold it.
+    labels: Arc<MobDisplayNames>,
 }
 
 const MOBS: &str = r#"[
@@ -37,19 +41,22 @@ fn rig() -> Rig {
             .block_on(build_catalogue(&db, &store, &names))
             .unwrap(),
     ));
+    let labels = Arc::new(MobDisplayNames::default());
     let review = MobReviewService::new(
         db.clone(),
         Arc::new(MockClock::new(None, 0.0)),
         catalogue.clone(),
         Some(store),
         Some(names),
-    );
+    )
+    .with_labels(labels.clone());
     Rig {
         _dir: dir,
         runtime,
         db,
         review,
         catalogue,
+        labels,
     }
 }
 
@@ -73,7 +80,7 @@ fn detected(name: &str, species: &str, maturity: &str) -> StampedMob {
 
 fn declared() -> StampedMob {
     stamped(
-        "Young Atrox",
+        "Atrox Young",
         "Atrox",
         "Young",
         Some(MobStampSource::Declared),
@@ -254,7 +261,7 @@ fn hunt(rig: &Rig) {
         "k3",
         (
             MobDetectionGrade::Named,
-            detected("Old Atrox", "Atrox", "Old"),
+            detected("Atrox Old", "Atrox", "Old"),
             None,
             "Atrox Old",
         ),
@@ -265,7 +272,7 @@ fn hunt(rig: &Rig) {
         "k4",
         (
             MobDetectionGrade::LatestRead,
-            detected("Mature Daikiba", "Daikiba", "Mature"),
+            detected("Daikiba Mature", "Daikiba", "Mature"),
             None,
             "Daikiba Mature",
         ),
@@ -295,7 +302,7 @@ fn the_review_groups_by_creature_and_grade_the_least_certain_first() {
         [
             (
                 MobDetectionGrade::LatestRead,
-                "Mature Daikiba",
+                "Daikiba Mature",
                 1,
                 "Daikiba Mature",
                 Some("Unknown")
@@ -309,10 +316,10 @@ fn the_review_groups_by_creature_and_grade_the_least_certain_first() {
             ),
             (
                 MobDetectionGrade::Named,
-                "Old Atrox",
+                "Atrox Old",
                 1,
                 "Atrox Old",
-                Some("Old Atrox")
+                Some("Atrox Old")
             ),
         ],
         "a suggestion keeps the kill's own stamp; a stamped group shows what it stamped"
@@ -397,12 +404,12 @@ fn a_listed_creature_misspelt_is_that_creature_never_a_new_name() {
     assert_eq!(
         settled,
         Settled::Listed(DetectedCreature {
-            name: "Young Atrox".into(),
+            name: "Atrox Young".into(),
             species: "Atrox".into(),
             maturity: "Young".into(),
         })
     );
-    assert_eq!(rig.stamp("k2").0, "Young Atrox");
+    assert_eq!(rig.stamp("k2").0, "Atrox Young");
     assert!(rig.confirmed().is_empty(), "nothing kept as a new name");
 
     // A species alone is that species at no maturity.
@@ -434,7 +441,7 @@ fn a_suggestion_is_confirmed_once_for_all_its_kills_and_any_group_can_go_back_to
     assert_eq!(
         rig.stamp("k4"),
         (
-            "Mature Daikiba".into(),
+            "Daikiba Mature".into(),
             "Daikiba".into(),
             "Mature".into(),
             some("declared"),
@@ -458,7 +465,7 @@ fn a_suggestion_is_confirmed_once_for_all_its_kills_and_any_group_can_go_back_to
     assert_eq!(
         rig.stamp("k3"),
         (
-            "Young Atrox".into(),
+            "Atrox Young".into(),
             "Atrox".into(),
             "Young".into(),
             some("declared"),
@@ -499,7 +506,7 @@ fn refusals_change_nothing() {
         "k9",
         (
             MobDetectionGrade::Named,
-            detected("Old Atrox", "Atrox", "Old"),
+            detected("Atrox Old", "Atrox", "Old"),
             None,
             "Atrox Old",
         ),
@@ -560,7 +567,7 @@ fn a_loose_match_is_offered_back_and_a_near_miss_of_a_kept_name_is_that_name() {
     assert_eq!(
         offered,
         SettleOutcome::DidYouMean(DetectedCreature {
-            name: "Young Atrox".into(),
+            name: "Atrox Young".into(),
             species: "Atrox".into(),
             maturity: "Young".into(),
         })
@@ -715,8 +722,8 @@ fn a_settlement_is_kept_with_its_answer_and_repairs_the_session_figures() {
         (
             "named".to_string(),
             "listed".to_string(),
-            "Mature Daikiba".to_string(),
-            "Young Atrox".to_string()
+            "Daikiba Mature".to_string(),
+            "Atrox Young".to_string()
         ),
         "what detection said, what it was settled as, and the declaration"
     );
@@ -897,7 +904,7 @@ fn hunt_with_continuity(rig: &Rig) {
             kill,
             (
                 MobDetectionGrade::Continuity,
-                detected("Old Atrox", "Atrox", "Old"),
+                detected("Atrox Old", "Atrox", "Old"),
                 None,
                 "",
             ),
@@ -918,7 +925,7 @@ fn hunt_with_continuity(rig: &Rig) {
     rig.execute(
         "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
          mob_stamp_source, mob_route, timestamp, cost_ped, loot_total_ped) \
-         VALUES ('k8', 's1', 'Mature Daikiba', 'Daikiba', 'Mature', 'declared', \
+         VALUES ('k8', 's1', 'Daikiba Mature', 'Daikiba', 'Mature', 'declared', \
                  'pinned_read', 1600.0, 0.5, 0.4)",
     );
 }
@@ -954,7 +961,7 @@ fn continuity_kills_are_listed_last_without_a_reading_and_pinned_kills_not_at_al
         [
             (
                 MobDetectionGrade::LatestRead,
-                "Mature Daikiba",
+                "Daikiba Mature",
                 1,
                 Some("Daikiba Mature"),
                 Some("Unknown")
@@ -968,10 +975,10 @@ fn continuity_kills_are_listed_last_without_a_reading_and_pinned_kills_not_at_al
             ),
             (
                 MobDetectionGrade::Named,
-                "Old Atrox",
+                "Atrox Old",
                 1,
                 Some("Atrox Old"),
-                Some("Old Atrox")
+                Some("Atrox Old")
             ),
             // The creature being hunted, after every grade the screen
             // gave: no text was read for these kills.
@@ -984,10 +991,10 @@ fn continuity_kills_are_listed_last_without_a_reading_and_pinned_kills_not_at_al
             ),
             (
                 MobDetectionGrade::Continuity,
-                "Old Atrox",
+                "Atrox Old",
                 2,
                 None,
-                Some("Old Atrox")
+                Some("Atrox Old")
             ),
         ]
     );
@@ -1003,7 +1010,7 @@ fn continuity_kills_are_listed_last_without_a_reading_and_pinned_kills_not_at_al
     assert_eq!(
         rig.stamp("k5"),
         (
-            "Old Atrox".into(),
+            "Atrox Old".into(),
             "Atrox".into(),
             "Old".into(),
             some("detected"),
@@ -1031,7 +1038,7 @@ fn a_continuity_group_settles_in_one_action_like_any_other() {
     let group = DetectionGroupRef {
         grade: MobDetectionGrade::Continuity,
         creature: DetectedCreature {
-            name: "Old Atrox".into(),
+            name: "Atrox Old".into(),
             species: "Atrox".into(),
             maturity: "Old".into(),
         },
@@ -1046,7 +1053,7 @@ fn a_continuity_group_settles_in_one_action_like_any_other() {
         assert_eq!(
             rig.stamp(kill),
             (
-                "Young Atrox".into(),
+                "Atrox Young".into(),
                 "Atrox".into(),
                 "Young".into(),
                 some("declared"),
@@ -1109,7 +1116,7 @@ fn a_continuity_group_settles_in_one_action_like_any_other() {
     );
     assert_eq!(rig.stamp("k7").0, "Unknown");
     // The pinned kill was never touched.
-    assert_eq!(rig.stamp("k8").0, "Mature Daikiba");
+    assert_eq!(rig.stamp("k8").0, "Daikiba Mature");
 }
 
 #[test]
@@ -1156,14 +1163,14 @@ fn an_unlisted_creature_carried_on_reads_as_unlisted_and_merges_with_its_detecti
     let rig = rig();
     hunt_with_continuity(&rig);
     // Gloomrat: two provisional detections and one continuity kill, all
-    // unconfirmed, are one row; the Old Atrox continuity kills are as
+    // unconfirmed, are one row; the Atrox Old continuity kills are as
     // recorded, with the named one.
     assert_eq!(
         breakdown(&rig),
         [
+            ("Atrox Old".to_string(), 3, "recorded".to_string()),
+            ("Daikiba Mature".to_string(), 1, "recorded".to_string()),
             ("Gloomrat".to_string(), 3, "unlisted".to_string()),
-            ("Mature Daikiba".to_string(), 1, "recorded".to_string()),
-            ("Old Atrox".to_string(), 3, "recorded".to_string()),
             ("Unknown".to_string(), 1, "recorded".to_string()),
         ]
     );
@@ -1248,8 +1255,8 @@ fn a_pinned_unlisted_creature_is_listed_to_confirm_and_a_pinned_listed_one_is_no
     assert!(breakdown(&rig).contains(&("Shadowmaw".to_string(), 1, "recorded".to_string())));
     // Put back instead: the stamp it would have had without the pin.
     rig.settle("s1", &group, ReviewTarget::Declared).unwrap();
-    assert_eq!(rig.stamp("k9").0, "Young Atrox");
-    assert_eq!(rig.stamp("k8").0, "Mature Daikiba");
+    assert_eq!(rig.stamp("k9").0, "Atrox Young");
+    assert_eq!(rig.stamp("k8").0, "Daikiba Mature");
 }
 
 #[test]
@@ -1269,7 +1276,7 @@ fn settling_kills_carried_on_repairs_the_session_figures_and_respects_sold_loot(
             "SELECT dominant_mob FROM session_summaries WHERE session_id = 's1'"
         ),
         some("Gloomrat"),
-        "three Old Atrox, two of them carried on, beside three Gloomrat"
+        "three Atrox Old, two of them carried on, beside three Gloomrat"
     );
     rig.execute(
         "INSERT INTO daily_rollup_meta (id, rolled_through) VALUES (1, '2100-01-01');
@@ -1278,7 +1285,7 @@ fn settling_kills_carried_on_repairs_the_session_figures_and_respects_sold_loot(
     let group = DetectionGroupRef {
         grade: MobDetectionGrade::Continuity,
         creature: DetectedCreature {
-            name: "Old Atrox".into(),
+            name: "Atrox Old".into(),
             species: "Atrox".into(),
             maturity: "Old".into(),
         },

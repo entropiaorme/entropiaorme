@@ -1,91 +1,29 @@
 //! Creature detection across the boundary: the running session's mob
 //! source as the overlay shows and steers it (the creature pinned, read,
 //! carried on from the latest kills, or typed as a backstop; pin and
-//! release), and the review after a session: every creature and suggestion
-//! the screen gave the session's kills, grouped by creature and grade, and
-//! the one action that settles a group (name the creature, or put back the
-//! stamp each kill was recorded with).
+//! release), and the review after a session: a line for each mob the screen
+//! gave the session's kills and one for the kills it could not name, and
+//! the one action that settles a line (name the mob, or put back the stamp
+//! each kill was recorded with); and the labels the player gives mobs.
 //!
-//! The grade and the pin's kind stay closed vocabularies across the
-//! boundary, and a group is named back by the same typed reference the
-//! review lists it under. The review service owns every check and repair;
+//! The pin's kind stays a closed vocabulary across the boundary, and a
+//! line is named back by the same typed reference the review lists it
+//! under. The review service owns every check and repair;
 //! this facade maps its outcomes and answers a settlement with the
 //! refreshed review.
 
 use eo_services::mob_review::{
-    AddedBy, DetectedCreature as ServiceCreature, DetectionGroup, DetectionGroupRef, EntryCheck,
-    KeptEntry, MobReviewError, ReviewTarget, SettleOutcome, Settled,
+    AddedBy, DetectedCreature as ServiceCreature, EntryCheck, KeptEntry, KeptLabel, MobReviewError,
+    ReviewTarget, ReviewedMob as ServiceReviewedMob, ReviewedRef, SettleOutcome, Settled,
 };
 use eo_services::tracker::{
-    DeclaredMob, MobDetectionGrade as ServiceGrade, MobSourceView as ServiceSourceView,
-    PinnedBy as ServicePinnedBy,
+    DeclaredMob, MobSourceView as ServiceSourceView, PinnedBy as ServicePinnedBy,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::tracking::tracker_conflict;
 use crate::{Api, ApiError, Nullable};
-
-/// How detection named a creature. The upper four are the screen's own
-/// evidence and stamped the kills; the latest-read two are suggestions the
-/// kills did not take; the continuity two are the creature being hunted,
-/// given where the screen could not settle the kills, and stamped them; the
-/// pinned one is an unlisted creature the player pinned from a reading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MobDetectionGrade {
-    /// A listed creature, read whole and repeatedly in its own fight.
-    Named,
-    /// A listed creature the screen leaned to without proving it.
-    Guess,
-    /// A creature on no list, by the spelling read most often.
-    Provisional,
-    /// A creature on no list, leaned to but not proved.
-    ProvisionalGuess,
-    /// The listed creature read last before the kill: a suggestion only.
-    LatestRead,
-    /// The unlisted creature read last before the kill: a suggestion only.
-    ProvisionalLatestRead,
-    /// The listed creature the latest kills were.
-    Continuity,
-    /// The unlisted creature the latest kills were.
-    ProvisionalContinuity,
-    /// An unlisted creature the player pinned from what the screen read:
-    /// its spelling still to be confirmed.
-    ProvisionalPinned,
-}
-
-impl From<ServiceGrade> for MobDetectionGrade {
-    fn from(grade: ServiceGrade) -> Self {
-        match grade {
-            ServiceGrade::Named => Self::Named,
-            ServiceGrade::Guess => Self::Guess,
-            ServiceGrade::Provisional => Self::Provisional,
-            ServiceGrade::ProvisionalGuess => Self::ProvisionalGuess,
-            ServiceGrade::LatestRead => Self::LatestRead,
-            ServiceGrade::ProvisionalLatestRead => Self::ProvisionalLatestRead,
-            ServiceGrade::Continuity => Self::Continuity,
-            ServiceGrade::ProvisionalContinuity => Self::ProvisionalContinuity,
-            ServiceGrade::ProvisionalPinned => Self::ProvisionalPinned,
-        }
-    }
-}
-
-impl From<MobDetectionGrade> for ServiceGrade {
-    fn from(grade: MobDetectionGrade) -> Self {
-        match grade {
-            MobDetectionGrade::Named => Self::Named,
-            MobDetectionGrade::Guess => Self::Guess,
-            MobDetectionGrade::Provisional => Self::Provisional,
-            MobDetectionGrade::ProvisionalGuess => Self::ProvisionalGuess,
-            MobDetectionGrade::LatestRead => Self::LatestRead,
-            MobDetectionGrade::ProvisionalLatestRead => Self::ProvisionalLatestRead,
-            MobDetectionGrade::Continuity => Self::Continuity,
-            MobDetectionGrade::ProvisionalContinuity => Self::ProvisionalContinuity,
-            MobDetectionGrade::ProvisionalPinned => Self::ProvisionalPinned,
-        }
-    }
-}
 
 /// A creature as a kill's stamp carries it: its display name, species and
 /// maturity (both empty for a creature on no list).
@@ -117,42 +55,87 @@ impl From<DetectedCreature> for ServiceCreature {
     }
 }
 
-/// Which group of a session's detections: the creature, at one grade,
-/// with the session's own key for a creature on no list (two such
-/// creatures can share a spelling, read at different levels).
+/// Which line of a session's review: a mob detection named, as its kills
+/// were recorded (its name and maturity; with the session's own key for a
+/// mob on no list, since two such mobs can share a spelling), or the kills
+/// the screen could not name.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MobDetectionGroupRef {
-    pub grade: MobDetectionGrade,
-    pub creature: DetectedCreature,
-    pub provisional_key: Nullable<String>,
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MobReviewRef {
+    #[serde(rename_all = "camelCase")]
+    Mob {
+        species: String,
+        maturity: String,
+        provisional_key: Nullable<String>,
+    },
+    Unnamed,
 }
 
-/// One group of the session's detections.
+impl From<ReviewedRef> for MobReviewRef {
+    fn from(mob: ReviewedRef) -> Self {
+        match mob {
+            ReviewedRef::Mob {
+                species,
+                maturity,
+                provisional_key,
+            } => Self::Mob {
+                species,
+                maturity,
+                provisional_key: provisional_key.into(),
+            },
+            ReviewedRef::Unnamed => Self::Unnamed,
+        }
+    }
+}
+
+impl From<MobReviewRef> for ReviewedRef {
+    fn from(mob: MobReviewRef) -> Self {
+        match mob {
+            MobReviewRef::Mob {
+                species,
+                maturity,
+                provisional_key,
+            } => Self::Mob {
+                species,
+                maturity,
+                provisional_key: provisional_key.0,
+            },
+            MobReviewRef::Unnamed => Self::Unnamed,
+        }
+    }
+}
+
+/// One line of the session's review: a mob and every kill given it, or the
+/// kills the screen could not name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct MobDetectionGroup {
-    pub group: MobDetectionGroupRef,
+pub struct ReviewedMob {
+    pub mob: MobReviewRef,
+    /// The mob as shown; null for the kills the screen could not name.
+    pub name: Nullable<String>,
     pub kill_count: i64,
-    /// The text read off the plate most often for the group's kills; null
-    /// for the creature being hunted or a pin, which no reading of these
-    /// kills gave.
+    /// How many of the kills the screen was less than sure of.
+    pub unsure_count: i64,
+    /// The text read off the plate most often for the mob's kills, when
+    /// any was read.
     pub example_text: Nullable<String>,
-    /// What the group's kills are recorded as now, when they agree.
+    /// What the kills are recorded as now, when they agree.
     pub current_name: Nullable<String>,
-    /// The player has settled the group.
+    /// The mob is on no list: its spelling is the screen's, to be confirmed.
+    pub unlisted: bool,
+    /// The player has settled the line.
     pub reviewed: bool,
 }
 
-/// Every creature and suggestion detection gave an ended session's kills,
-/// the least certain first.
+/// An ended session's kills by the mob detection gave them: the lines that
+/// ask for the player first, the kills the screen could not name last.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MobDetectionReview {
     pub session_id: String,
-    /// The session has ended, so its detections can be settled.
+    /// The session has ended, so its kills can be settled.
     pub ended: bool,
-    pub groups: Vec<MobDetectionGroup>,
+    pub mobs: Vec<ReviewedMob>,
 }
 
 /// What to settle a group as.
@@ -205,57 +188,51 @@ fn review_error(error: MobReviewError) -> ApiError {
     }
 }
 
-fn group_view(group: DetectionGroup) -> MobDetectionGroup {
-    MobDetectionGroup {
-        group: MobDetectionGroupRef {
-            grade: group.group.grade.into(),
-            creature: group.group.creature.into(),
-            provisional_key: group.group.provisional_key.into(),
-        },
-        kill_count: group.kill_count,
-        example_text: group.example_text.into(),
-        current_name: group.current_name.into(),
-        reviewed: group.reviewed,
+fn mob_view(mob: ServiceReviewedMob) -> ReviewedMob {
+    ReviewedMob {
+        mob: mob.mob.into(),
+        name: mob.name.into(),
+        kill_count: mob.kill_count,
+        unsure_count: mob.unsure_count,
+        example_text: mob.example_text.into(),
+        current_name: mob.current_name.into(),
+        unlisted: mob.unlisted,
+        reviewed: mob.reviewed,
     }
 }
 
 impl Api {
-    /// The creatures and suggestions detection gave a session's kills.
+    /// A session's kills by the mob detection gave them.
     pub async fn tracking_mob_detections(
         &self,
         session_id: String,
     ) -> Result<MobDetectionReview, ApiError> {
         let review = self
             .mob_review
-            .detections(&session_id)
+            .mobs(&session_id)
             .await
             .map_err(review_error)?;
         Ok(MobDetectionReview {
             session_id,
             ended: review.ended,
-            groups: review.groups.into_iter().map(group_view).collect(),
+            mobs: review.mobs.into_iter().map(mob_view).collect(),
         })
     }
 
-    /// Settle every kill of one group of an ended session's detections.
+    /// Settle every kill of one line of an ended session's review.
     pub async fn tracking_mob_detection_settle(
         &self,
         session_id: String,
-        group: MobDetectionGroupRef,
+        mob: MobReviewRef,
         target: MobDetectionTarget,
     ) -> Result<MobDetectionSettleResult, ApiError> {
-        let group = DetectionGroupRef {
-            grade: group.grade.into(),
-            creature: group.creature.into(),
-            provisional_key: group.provisional_key.0,
-        };
         let target = match target {
             MobDetectionTarget::Creature { name } => ReviewTarget::Creature(name),
             MobDetectionTarget::Declared => ReviewTarget::Declared,
         };
         let outcome = self
             .mob_review
-            .settle(&session_id, group, target)
+            .settle_mob(&session_id, mob.into(), target)
             .await
             .map_err(review_error)?;
         let settled = match outcome {
@@ -282,6 +259,72 @@ impl Api {
             settled,
             review: self.tracking_mob_detections(session_id).await?,
         })
+    }
+}
+
+/// A label a mob is shown by.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MobLabel {
+    /// The mob as its kills are recorded.
+    pub species: String,
+    pub maturity: String,
+    /// The mob as the game prints it, without any label.
+    pub printed: String,
+    pub label: String,
+    /// The player chose it; otherwise it is how the mob's plate was read
+    /// to print it.
+    pub by_player: bool,
+}
+
+impl From<KeptLabel> for MobLabel {
+    fn from(label: KeptLabel) -> Self {
+        Self {
+            species: label.species,
+            maturity: label.maturity,
+            printed: label.printed,
+            label: label.label,
+            by_player: label.by_player,
+        }
+    }
+}
+
+impl Api {
+    /// Every label a mob is shown by.
+    pub async fn mob_labels(&self) -> Result<Vec<MobLabel>, ApiError> {
+        let labels = self.mob_review.labels().await.map_err(review_error)?;
+        Ok(labels.into_iter().map(Into::into).collect())
+    }
+
+    /// Show `mob` (typed as the game prints it, or as it is labelled now)
+    /// as `label`, from now on and everywhere it is recorded; the labels as
+    /// they now stand. Which mob it is does not change.
+    pub async fn mob_label_set(
+        &self,
+        mob: String,
+        label: String,
+    ) -> Result<Vec<MobLabel>, ApiError> {
+        let labels = self
+            .mob_review
+            .set_label(&mob, &label)
+            .await
+            .map_err(review_error)?;
+        Ok(labels.into_iter().map(Into::into).collect())
+    }
+
+    /// Show the mob as the game prints it again; the labels as they now
+    /// stand.
+    pub async fn mob_label_clear(
+        &self,
+        species: String,
+        maturity: String,
+    ) -> Result<Vec<MobLabel>, ApiError> {
+        let labels = self
+            .mob_review
+            .clear_label(&species, &maturity)
+            .await
+            .map_err(review_error)?;
+        Ok(labels.into_iter().map(Into::into).collect())
     }
 }
 

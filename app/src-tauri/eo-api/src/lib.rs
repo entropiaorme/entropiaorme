@@ -262,7 +262,8 @@ impl Api {
             Arc::new(eo_services::mob_watch::CatalogueCell::default()),
             Some(game_data.clone()),
             None,
-        );
+        )
+        .with_labels(tracker.mob_names());
         let weapon_review = WeaponReviewService::new(db.clone(), clock.clone())
             .with_pricing(weapon_pricing.clone());
         let tool_review =
@@ -350,7 +351,8 @@ impl Api {
             catalogue,
             Some(self.game_data.clone()),
             names,
-        );
+        )
+        .with_labels(self.tracker.mob_names());
         self
     }
 

@@ -186,6 +186,7 @@ pub struct HuntTracker {
     sender: mpsc::UnboundedSender<TrackerMsg>,
     status: watch::Receiver<TrackerStatus>,
     doses: crate::consumables::DoseBoard,
+    mob_names: Arc<crate::mob_display::MobDisplayNames>,
 }
 
 impl HuntTracker {
@@ -205,6 +206,13 @@ impl HuntTracker {
             .trim_matches(python_whitespace)
             .to_string();
         let doses = providers.doses.clone();
+        // The labels the player chose and the printings read so far: held
+        // for naming kills as they are recorded.
+        let mob_names = providers.mob_names.clone();
+        mob_names.replace(
+            db.with_reader(|conn| crate::mob_display::labels(conn))
+                .await?,
+        );
         let (sender, inbox) = mpsc::unbounded_channel();
         let (status_tx, status_rx) = watch::channel(TrackerStatus::default());
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -225,6 +233,7 @@ impl HuntTracker {
             sender,
             status: status_rx,
             doses,
+            mob_names,
         }))
     }
 
@@ -255,6 +264,12 @@ impl HuntTracker {
     /// reader of the reload speed in effect outside the tracker reads.
     pub fn dose_board(&self) -> crate::consumables::DoseBoard {
         self.doses.clone()
+    }
+
+    /// What is shown for each mob, as the tracker names kills: whoever
+    /// changes a mob's label replaces what it holds.
+    pub fn mob_names(&self) -> Arc<crate::mob_display::MobDisplayNames> {
+        self.mob_names.clone()
     }
 
     /// Start a new tracking session; any prior session stops first.

@@ -1,16 +1,16 @@
 //! Behavioural pins for creature detection over the typed facade: the
 //! setting that turns it on and off (and, off, never starts the watcher),
-//! the after-session review that lists every detected creature and
-//! suggestion and settles a group in one action, and the creature list the
-//! player keeps beside the bundled one.
+//! the after-session review that lists each mob the kills were given and
+//! settles a line in one action, the labels mobs are shown by, and the
+//! creature list the player keeps beside the bundled one.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use eo_api::mob_detection::{
-    CreatureEntryCheck, CreatureEntrySource, DetectedCreature, MobDetectionGrade,
-    MobDetectionGroupRef, MobDetectionSettleResult, MobDetectionSettled, MobDetectionTarget,
-    MobPin, MobPinTarget, MobPinnedBy, MobSourceView,
+    CreatureEntryCheck, CreatureEntrySource, DetectedCreature, MobDetectionSettleResult,
+    MobDetectionSettled, MobDetectionTarget, MobPin, MobPinTarget, MobPinnedBy, MobReviewRef,
+    MobSourceView,
 };
 use eo_api::settings::SettingsPatch;
 use eo_api::{Api, ApiError};
@@ -227,22 +227,22 @@ async fn seed(db: &Db, active: bool) {
                  mob_species, mob_maturity, provisional_key, read_text, read_at, \
                  declared_name, declared_species, declared_maturity, declared_source) \
                  VALUES (?, 's1', 'provisional', 'Gloomrat', 'Gloomrat', '', 'GLOOMRAT L4 #0', ?, \
-                 1499.0, 'Young Atrox', 'Atrox', 'Young', 'declared')",
+                 1499.0, 'Atrox Young', 'Atrox', 'Young', 'declared')",
                 rusqlite::params![kill, read],
             )?;
         }
         tx.execute(
             "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
              mob_stamp_source, timestamp) \
-             VALUES ('k3', 's1', 'Young Atrox', 'Atrox', 'Young', 'declared', 1600.0)",
+             VALUES ('k3', 's1', 'Atrox Young', 'Atrox', 'Young', 'declared', 1600.0)",
             [],
         )?;
         tx.execute(
             "INSERT INTO kill_mob_detections (kill_id, session_id, grade, mob_name, \
              mob_species, mob_maturity, read_text, read_at, declared_name, \
              declared_species, declared_maturity, declared_source) \
-             VALUES ('k3', 's1', 'latest_read', 'Old Atrox', 'Atrox', 'Old', 'Atrox Old', \
-             1599.0, 'Young Atrox', 'Atrox', 'Young', 'declared')",
+             VALUES ('k3', 's1', 'latest_read', 'Atrox Old', 'Atrox', 'Old', 'Atrox Old', \
+             1599.0, 'Atrox Young', 'Atrox', 'Young', 'declared')",
             [],
         )?;
         tx.commit()?;
@@ -266,23 +266,35 @@ async fn stamp(db: &Db, kill: &'static str) -> (String, String, Option<String>, 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_review_lists_every_detection_and_settles_a_group_in_one_action() {
+async fn the_review_lists_each_mob_and_settles_a_line_in_one_action() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db, _) = detection_api(dir.path(), Arc::default()).await;
     seed(&db, false).await;
 
     let review = api.tracking_mob_detections("s1".into()).await.unwrap();
     let wire = serde_json::to_value(&review).unwrap();
-    assert_eq!(wire["groups"][0]["group"]["grade"], "latest_read");
-    assert_eq!(wire["groups"][0]["currentName"], "Young Atrox");
-    assert_eq!(wire["groups"][1]["group"]["grade"], "provisional");
+    // The mob on no list asks first; the suggestion its kill did not take
+    // is a line of the mob suggested, less than sure.
     assert_eq!(
-        wire["groups"][1]["group"]["provisionalKey"],
-        "GLOOMRAT L4 #0"
+        wire["mobs"][0]["mob"],
+        serde_json::json!({
+            "kind": "mob",
+            "species": "Gloomrat",
+            "maturity": "",
+            "provisionalKey": "GLOOMRAT L4 #0",
+        })
     );
-    assert_eq!(wire["groups"][1]["killCount"], 2);
-    let provisional = review.groups[1].group.clone();
-    let suggestion = review.groups[0].group.clone();
+    assert_eq!(wire["mobs"][0]["name"], "Gloomrat");
+    assert_eq!(wire["mobs"][0]["killCount"], 2);
+    assert_eq!(wire["mobs"][0]["unsureCount"], 0);
+    assert_eq!(wire["mobs"][0]["unlisted"], true);
+    assert_eq!(wire["mobs"][1]["name"], "Atrox Old");
+    assert_eq!(wire["mobs"][1]["currentName"], "Atrox Young");
+    assert_eq!(wire["mobs"][1]["unsureCount"], 1);
+    assert_eq!(wire["mobs"][1]["unlisted"], false);
+    assert_eq!(wire["mobs"].as_array().map(Vec::len), Some(2));
+    let provisional = review.mobs[0].mob.clone();
+    let suggestion = review.mobs[1].mob.clone();
 
     // A new name for both kills at once, kept from now on.
     let settled = api
@@ -312,7 +324,10 @@ async fn the_review_lists_every_detection_and_settles_a_group_in_one_action() {
             }
         }
     );
-    assert!(after.groups[1].reviewed);
+    assert!(after
+        .mobs
+        .iter()
+        .any(|m| m.mob == provisional && m.reviewed));
     for kill in ["k1", "k2"] {
         assert_eq!(
             stamp(&db, kill).await,
@@ -331,7 +346,7 @@ async fn the_review_lists_every_detection_and_settles_a_group_in_one_action() {
             "s1".into(),
             suggestion.clone(),
             MobDetectionTarget::Creature {
-                name: "Old Atrox".into(),
+                name: "Atrox Old".into(),
             },
         )
         .await
@@ -343,7 +358,7 @@ async fn the_review_lists_every_detection_and_settles_a_group_in_one_action() {
             ..
         }
     ));
-    assert_eq!(stamp(&db, "k3").await.0, "Old Atrox");
+    assert_eq!(stamp(&db, "k3").await.0, "Atrox Old");
 
     // And back to the declaration.
     api.tracking_mob_detection_settle("s1".into(), suggestion, MobDetectionTarget::Declared)
@@ -352,14 +367,15 @@ async fn the_review_lists_every_detection_and_settles_a_group_in_one_action() {
     assert_eq!(
         stamp(&db, "k3").await,
         (
-            "Young Atrox".into(),
+            "Atrox Young".into(),
             "Atrox".into(),
             Some("declared".into()),
             None
         )
     );
 
-    // Refusals: a name that is not one, a group the session has not.
+    // Refusals: a name that is not one, a mob the session has not, and
+    // kills not named where every kill was given a mob.
     let refused = api
         .tracking_mob_detection_settle(
             "s1".into(),
@@ -371,17 +387,22 @@ async fn the_review_lists_every_detection_and_settles_a_group_in_one_action() {
         matches!(refused, Err(ApiError::BadRequest { .. })),
         "{refused:?}"
     );
-    let unknown = MobDetectionGroupRef {
-        grade: MobDetectionGrade::Named,
-        ..provisional
-    };
-    let refused = api
-        .tracking_mob_detection_settle("s1".into(), unknown, MobDetectionTarget::Declared)
-        .await;
-    assert!(
-        matches!(refused, Err(ApiError::NotFound { .. })),
-        "{refused:?}"
-    );
+    for unknown in [
+        MobReviewRef::Mob {
+            species: "Daikiba".into(),
+            maturity: "Mature".into(),
+            provisional_key: None.into(),
+        },
+        MobReviewRef::Unnamed,
+    ] {
+        let refused = api
+            .tracking_mob_detection_settle("s1".into(), unknown, MobDetectionTarget::Declared)
+            .await;
+        assert!(
+            matches!(refused, Err(ApiError::NotFound { .. })),
+            "{refused:?}"
+        );
+    }
     assert!(matches!(
         api.tracking_mob_detections("nope".into()).await,
         Err(ApiError::NotFound { .. })
@@ -393,12 +414,8 @@ async fn a_name_only_loosely_like_a_listed_creature_is_offered_back() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db, _) = detection_api(dir.path(), Arc::default()).await;
     seed(&db, false).await;
-    let group = api
-        .tracking_mob_detections("s1".into())
-        .await
-        .unwrap()
-        .groups[1]
-        .group
+    let group = api.tracking_mob_detections("s1".into()).await.unwrap().mobs[0]
+        .mob
         .clone();
     let offered = api
         .tracking_mob_detection_settle(
@@ -414,7 +431,7 @@ async fn a_name_only_loosely_like_a_listed_creature_is_offered_back() {
         serde_json::to_value(&offered).unwrap(),
         serde_json::json!({
             "kind": "didYouMean",
-            "creature": {"name": "Young Atrox", "species": "Atrox", "maturity": "Young"}
+            "creature": {"name": "Atrox Young", "species": "Atrox", "maturity": "Young"}
         })
     );
     assert_eq!(stamp(&db, "k1").await.3.as_deref(), Some("provisional"));
@@ -425,12 +442,8 @@ async fn a_running_session_is_not_reviewed() {
     let dir = tempfile::tempdir().unwrap();
     let (api, db, _) = detection_api(dir.path(), Arc::default()).await;
     seed(&db, true).await;
-    let group = api
-        .tracking_mob_detections("s1".into())
-        .await
-        .unwrap()
-        .groups[1]
-        .group
+    let group = api.tracking_mob_detections("s1".into()).await.unwrap().mobs[0]
+        .mob
         .clone();
     let refused = api
         .tracking_mob_detection_settle("s1".into(), group, MobDetectionTarget::Declared)
@@ -470,7 +483,7 @@ async fn a_creature_is_pinned_by_typing_and_released_through_the_facade() {
     assert_eq!(idle.pin.0, None);
     assert_eq!(
         idle.typed.0.map(|creature| creature.name).as_deref(),
-        Some("Young Atrox")
+        Some("Atrox Young")
     );
     assert!(matches!(
         api.tracking_mob_pin(typed("Atrox", Some("Old"))).await,
@@ -499,7 +512,7 @@ async fn a_creature_is_pinned_by_typing_and_released_through_the_facade() {
     assert!(matches!(
         api.tracking_mob_pin(MobPinTarget::Shown {
             creature: DetectedCreature {
-                name: "Old Atrox".into(),
+                name: "Atrox Old".into(),
                 species: "Atrox".into(),
                 maturity: "Old".into(),
             },
@@ -516,7 +529,7 @@ async fn a_creature_is_pinned_by_typing_and_released_through_the_facade() {
         pinned,
         MobPin {
             creature: DetectedCreature {
-                name: "Old Atrox".into(),
+                name: "Atrox Old".into(),
                 species: "Atrox".into(),
                 maturity: "Old".into(),
             },
@@ -570,7 +583,7 @@ async fn the_creature_list_checks_keeps_edits_and_removes_a_creature_typed_as_it
         } => {
             assert_eq!(name, "Atrox");
             assert_eq!(maturity.0.as_deref(), Some("Old"));
-            assert_eq!(recorded_as.name, "Old Atrox");
+            assert_eq!(recorded_as.name, "Atrox Old");
         }
         other => panic!("{other:?}"),
     }
@@ -611,4 +624,58 @@ async fn the_creature_list_checks_keeps_edits_and_removes_a_creature_typed_as_it
         .is_empty());
     let again = api.creature_entry_remove("Gloomrat Bruiser".into()).await;
     assert!(matches!(again, Err(ApiError::NotFound { .. })), "{again:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_label_changes_what_a_mob_is_shown_as_and_the_tracker_names_by_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db, tracker) = detection_api(dir.path(), Arc::default()).await;
+    seed(&db, false).await;
+    assert!(api.mob_labels().await.unwrap().is_empty());
+
+    // The declared mob of the seeded kill, labelled: the kill reads so, the
+    // mob it is unchanged.
+    let labels = api
+        .mob_label_set("Atrox Young".into(), "Trox Pup".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&labels).unwrap(),
+        serde_json::json!([{
+            "species": "Atrox",
+            "maturity": "Young",
+            "printed": "Atrox Young",
+            "label": "Trox Pup",
+            "byPlayer": true,
+        }])
+    );
+    let recorded = stamp(&db, "k3").await;
+    assert_eq!(
+        (recorded.0.as_str(), recorded.1.as_str()),
+        ("Trox Pup", "Atrox")
+    );
+    // The tracker names kills by it from now on.
+    assert_eq!(
+        tracker.mob_names().chosen("Atrox", "Young").as_deref(),
+        Some("Trox Pup")
+    );
+
+    // Refusals change nothing: a mob the app does not know, an empty label.
+    for (mob, label) in [("Gloomrat Bruiser", "Bruiser"), ("Atrox Young", "  ")] {
+        let refused = api.mob_label_set(mob.into(), label.into()).await;
+        assert!(
+            matches!(refused, Err(ApiError::BadRequest { .. })),
+            "{refused:?}"
+        );
+    }
+    assert_eq!(api.mob_labels().await.unwrap().len(), 1);
+
+    // Removed, the mob is shown as the game prints it again.
+    let labels = api
+        .mob_label_clear("Atrox".into(), "Young".into())
+        .await
+        .unwrap();
+    assert!(labels.is_empty());
+    assert_eq!(stamp(&db, "k3").await.0, "Atrox Young");
+    assert_eq!(tracker.mob_names().chosen("Atrox", "Young"), None);
 }

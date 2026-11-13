@@ -350,8 +350,9 @@ impl MobSource {
 /// without its species/maturity pair is unrepresentable.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeclaredMob {
-    /// The display name ("<maturity> <species>", or the bare species
-    /// when no maturity is set).
+    /// The display name: the mob as the game prints it ("<species>
+    /// <maturity>", or the bare species when no maturity is set), or the
+    /// label the player gave it (see `mob_display`).
     pub name: String,
     pub species: String,
     pub maturity: String,
@@ -362,13 +363,23 @@ impl DeclaredMob {
     /// the display name the way the session-start and reload paths
     /// always have.
     pub fn from_parts(species: String, maturity: String) -> Self {
-        let name = if maturity.is_empty() {
-            species.clone()
-        } else {
-            format!("{maturity} {species}")
-        };
+        let name = crate::mob_display::printed(&species, &maturity);
         DeclaredMob {
             name,
+            species,
+            maturity,
+        }
+    }
+
+    /// The declaration for a species/maturity pair under the label the
+    /// player gave the mob, when they gave it one.
+    pub fn labelled(
+        species: String,
+        maturity: String,
+        names: &crate::mob_display::MobDisplayNames,
+    ) -> Self {
+        DeclaredMob {
+            name: names.shown(&species, &maturity, None),
             species,
             maturity,
         }
@@ -387,13 +398,22 @@ impl TrackerActor {
         species: &str,
         maturity: &str,
     ) -> Result<(), TrackerCommandError> {
-        let Some(active) = self.session.active_mut() else {
+        if self.session.active().is_none() {
             return Err(TrackerCommandError::NoActiveSession);
-        };
+        }
+        // The name the caller made is the mob as the game prints it; the
+        // player's own label for the mob stands over it.
         let typed = DeclaredMob {
-            name: mob_name.to_string(),
+            name: self
+                .providers
+                .mob_names
+                .chosen(species, maturity)
+                .unwrap_or_else(|| mob_name.to_string()),
             species: species.to_string(),
             maturity: maturity.to_string(),
+        };
+        let Some(active) = self.session.active_mut() else {
+            return Err(TrackerCommandError::NoActiveSession);
         };
         let replaced = active.mob.pin.is_some();
         if replaced {
@@ -459,6 +479,7 @@ impl TrackerActor {
         if self.session.active().is_none() {
             return Err(TrackerCommandError::NoActiveSession);
         }
+        let mob = DeclaredMob::labelled(mob.species, mob.maturity, &self.providers.mob_names);
         self.pin(Pin {
             mob,
             by: PinnedBy::Typed,
@@ -685,6 +706,6 @@ mod tests {
         let bare = DeclaredMob::from_parts("Atrox".into(), String::new());
         assert_eq!(bare.name, "Atrox");
         let mature = DeclaredMob::from_parts("Atrox".into(), "Old".into());
-        assert_eq!(mature.name, "Old Atrox");
+        assert_eq!(mature.name, "Atrox Old");
     }
 }

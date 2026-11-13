@@ -1,18 +1,23 @@
 <script lang="ts">
 	// Equipment's Mobs tab: the mobs kept for the name reader beside the
-	// bundled list. One entry adds or edits a mob, typed as its plate
-	// prints it and checked as it is typed; the list below holds what is kept.
+	// bundled list, and what mobs are shown as. One entry adds or edits a
+	// mob, typed as its plate prints it and checked as it is typed; the list
+	// below holds what is kept. Under it, the labels: a mob shown under
+	// another name than the game's, which stays the same mob.
 	import { onMount } from 'svelte';
 	import { Button, ErrorNotice, Input } from '$lib/components';
 	import {
 		createCreatureEntries,
 		plateText,
 	} from '$lib/features/equipment/creatureEntries.svelte';
+	import { createMobLabels, labelKey } from '$lib/features/equipment/mobLabels.svelte';
 	import type { CreatureEntry } from '$lib/api';
 
 	const model = createCreatureEntries();
+	const labels = createMobLabels();
 	onMount(() => {
 		void model.load();
+		void labels.load();
 		return () => model.destroy();
 	});
 
@@ -143,4 +148,74 @@
 			{/each}
 		</ul>
 	{/if}
+
+	<section class="space-y-4 border-t border-border/40 pt-6" aria-labelledby="mob-labels-heading">
+		<header>
+			<h2 id="mob-labels-heading" class="text-sm font-medium text-text">Shown as</h2>
+			<p class="mt-1 text-sm leading-6 text-text-secondary">
+				A mob is shown as the game prints it. Give one another label here; it stays the
+				same mob, in every session already recorded too.
+			</p>
+		</header>
+
+		<ErrorNotice message={labels.error} onDismiss={() => labels.dismissError()} />
+
+		<form
+			class="flex flex-wrap items-center gap-3"
+			onsubmit={(event) => {
+				event.preventDefault();
+				void labels.save();
+			}}
+		>
+			<Input
+				class="flex-1 min-w-56"
+				placeholder="Mob, as the game shows it"
+				aria-label="Mob to label"
+				bind:value={() => labels.mob, (value) => (labels.mob = String(value ?? ''))}
+			/>
+			<Input
+				class="flex-1 min-w-56"
+				placeholder="Show as"
+				aria-label="Label"
+				maxlength={64}
+				bind:value={() => labels.label, (value) => (labels.label = String(value ?? ''))}
+			/>
+			<Button type="submit" size="sm" disabled={!labels.ready} loading={labels.busy}>
+				Set label
+			</Button>
+		</form>
+
+		{#if labels.labels.length > 0}
+			<ul class="divide-y divide-border/40 border-t border-border/40">
+				{#each labels.labels as held (labelKey(held))}
+					<li class="flex items-center gap-4 py-2.5" data-testid="mob-label">
+						<div class="min-w-0 flex-1">
+							<p class="truncate text-sm text-text">{held.label}</p>
+							<p class="text-xs text-text-tertiary">
+								{held.printed}{#if !held.byPlayer} · as its plate prints it{/if}
+							</p>
+						</div>
+						<Button
+							size="sm"
+							variant="ghost"
+							disabled={labels.busy}
+							aria-label="Change the label of {held.printed}"
+							onclick={() => labels.edit(held)}
+						>
+							Change
+						</Button>
+						<Button
+							size="sm"
+							variant="ghost"
+							disabled={labels.busy}
+							aria-label="Remove the label of {held.printed}"
+							onclick={() => void labels.remove(held)}
+						>
+							Remove label
+						</Button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
 </div>

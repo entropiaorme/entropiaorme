@@ -57,8 +57,8 @@ use crate::market::{
     MarketPastePreview, MarketUnitPriceResult,
 };
 use crate::mob_detection::{
-    CreatureEntry, CreatureEntryCheck, MobDetectionGroupRef, MobDetectionReview,
-    MobDetectionSettleResult, MobDetectionTarget, MobPin, MobPinTarget,
+    CreatureEntry, CreatureEntryCheck, MobDetectionReview, MobDetectionSettleResult,
+    MobDetectionTarget, MobLabel, MobPin, MobPinTarget, MobReviewRef,
 };
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1680,8 +1680,8 @@ pub fn manifest() -> Vec<CommandSpec> {
                     schema: schema(schema_for!(String)),
                 },
                 ArgSpec {
-                    name: "group",
-                    schema: schema(schema_for!(MobDetectionGroupRef)),
+                    name: "mob",
+                    schema: schema(schema_for!(MobReviewRef)),
                 },
                 ArgSpec {
                     name: "target",
@@ -1734,6 +1734,39 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(Vec<CreatureEntry>))),
+        },
+        CommandSpec {
+            name: "mob_labels",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<MobLabel>))),
+        },
+        CommandSpec {
+            name: "mob_label_set",
+            args: vec![
+                ArgSpec {
+                    name: "mob",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "label",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(Vec<MobLabel>))),
+        },
+        CommandSpec {
+            name: "mob_label_clear",
+            args: vec![
+                ArgSpec {
+                    name: "species",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "maturity",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(Vec<MobLabel>))),
         },
         CommandSpec {
             name: "tracking_tool_sightings",

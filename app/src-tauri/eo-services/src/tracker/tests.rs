@@ -3631,7 +3631,7 @@ fn session_facet_and_declared_mob_rules() {
         assert_eq!(active.facets.name.as_deref(), Some("Team Hunt"));
         assert_eq!(active.facets.skill_boost_percent, Some(50));
         // The declared mob is independent of the name: both are in force.
-        assert_eq!(active.stamped_mob_name(), Some("Young Atrox"));
+        assert_eq!(active.stamped_mob_name(), Some("Atrox Young"));
     });
 
     // Both facets persist onto the session row at start.
@@ -3685,7 +3685,7 @@ fn session_facet_and_declared_mob_rules() {
     assert_eq!(
         stamped,
         (
-            "Young Atrox".to_string(),
+            "Atrox Young".to_string(),
             "Atrox".to_string(),
             "Young".to_string(),
             Some("declared".to_string())
@@ -3695,12 +3695,12 @@ fn session_facet_and_declared_mob_rules() {
     // The two live facets move mid-session independently: the mob
     // declaration (kill-grain) and the boost (skill-gain-grain). The
     // name is session-grain and no command moves it, so it stands.
-    rig.wait(facets.set_declared_mob("Old Atrox", "Atrox", "Old"))
+    rig.wait(facets.set_declared_mob("Atrox Old", "Atrox", "Old"))
         .unwrap();
     rig.wait(facets.set_skill_boost(Some(25))).unwrap();
     rig.probe(&facets, |actor| {
         let active = actor.session.active().unwrap();
-        assert_eq!(active.stamped_mob_name(), Some("Old Atrox"));
+        assert_eq!(active.stamped_mob_name(), Some("Atrox Old"));
         assert_eq!(active.facets.skill_boost_percent, Some(25));
         // The name snapshotted at start and no command moves it.
         assert_eq!(active.facets.name.as_deref(), Some("Team Hunt"));
@@ -3716,7 +3716,7 @@ fn session_facet_and_declared_mob_rules() {
     // Releasing clears only the mob; the other facets stand.
     assert_eq!(
         rig.wait(facets.release_declared_mob()).as_deref(),
-        Some("Old Atrox")
+        Some("Atrox Old")
     );
     assert_eq!(rig.wait(facets.release_declared_mob()), None);
     rig.probe(&facets, |actor| {
@@ -3887,7 +3887,7 @@ fn reload_config_transitions_manual_mob_and_heal_state() {
     rig.probe(&tracker, |actor| {
         assert_eq!(
             actor.session.active().unwrap().stamped_mob_name(),
-            Some("Young Atrox")
+            Some("Atrox Young")
         );
     });
 
@@ -4797,7 +4797,7 @@ fn reload_config_resyncs_the_declared_mob_from_the_live_config() {
     rig.wait(tracker.reload_config());
     rig.probe(&tracker, |actor| {
         let active = actor.session.active().unwrap();
-        assert_eq!(active.stamped_mob_name(), Some("Young Atrox"));
+        assert_eq!(active.stamped_mob_name(), Some("Atrox Young"));
         // The name facet is snapshotted at start, so a reload leaves it be.
         assert_eq!(active.facets.name.as_deref(), Some("Team"));
     });
@@ -5029,7 +5029,7 @@ fn reload_clears_the_declaration_once_the_config_drops_it() {
     rig.probe(&tracker, |actor| {
         assert_eq!(
             actor.session.active().unwrap().stamped_mob_name(),
-            Some("Young Atrox")
+            Some("Atrox Young")
         );
     });
 

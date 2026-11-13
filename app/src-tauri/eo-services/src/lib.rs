@@ -50,6 +50,7 @@ pub mod maintenance;
 pub mod map_pins;
 pub mod market_paste;
 pub mod market_service;
+pub mod mob_display;
 pub mod mob_lookup_service;
 pub mod mob_review;
 pub mod mob_watch;

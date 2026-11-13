@@ -43,6 +43,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use crate::game_ui::mob_history::{
     Creature, KillReport, KillStamp, KillTrace, MobHistory, MobIdentity, MobStamp,
 };
+use crate::game_ui::mob_names::MobCatalogue;
+use crate::mob_display::{LabelSource, MobDisplayNames};
 use crate::mob_watch::{MobPulse, PulseSink, WatchEnded};
 use crate::time::clock_epoch_ms;
 
@@ -58,6 +60,8 @@ pub(super) struct SessionDetection {
     reading: Option<(MobIdentity, i64)>,
     /// The creature the latest kills were, as of the latest look.
     continuity: Option<MobIdentity>,
+    /// What to show for each mob.
+    names: std::sync::Arc<MobDisplayNames>,
     /// Makes the next look fail inside the history, to prove a failure
     /// there is contained.
     #[cfg(test)]
@@ -74,9 +78,10 @@ pub(super) struct ScreenView {
 }
 
 impl SessionDetection {
-    pub(super) fn new(history: MobHistory) -> Self {
+    pub(super) fn new(history: MobHistory, names: std::sync::Arc<MobDisplayNames>) -> Self {
         Self {
             history,
+            names,
             pending: Vec::new(),
             reading: None,
             continuity: None,
@@ -90,11 +95,11 @@ impl SessionDetection {
         let reading = self
             .reading
             .as_ref()
-            .map(|(who, _)| stamp_of(who).as_declared());
+            .map(|(who, _)| stamp_of(who, &self.history, &self.names).as_declared());
         let continuity = self
             .continuity
             .as_ref()
-            .map(|who| stamp_of(who).as_declared())
+            .map(|who| stamp_of(who, &self.history, &self.names).as_declared())
             .filter(|continuity| reading.as_ref().is_none_or(|read| read == continuity));
         ScreenView {
             reading,
@@ -118,7 +123,7 @@ impl SessionDetection {
             MobIdentity::Known(_) => None,
             MobIdentity::Unfamiliar { key, .. } => Some(key.clone()),
         };
-        Some((stamp_of(who).as_declared(), key))
+        Some((stamp_of(who, &self.history, &self.names).as_declared(), key))
     }
 
     /// Move the shown creatures on with the look taken at `at_ms`, after
@@ -253,7 +258,14 @@ impl KillDetection {
     /// The answer for `pending`, from the history's stamp. The grade is
     /// the stamp's own, never raised. A continuity stamp's evidence belongs
     /// to an earlier kill, so it is not kept as this kill's reading.
-    fn of(pending: &PendingKill, session_id: &str, stamp: MobStamp) -> Self {
+    fn of(
+        pending: &PendingKill,
+        session_id: &str,
+        stamp: MobStamp,
+        history: &MobHistory,
+        names: &MobDisplayNames,
+    ) -> Self {
+        let listed = |creature: &Creature| listed(creature, history, names);
         let (grade, creature, provisional_key) = match &stamp {
             MobStamp::Named { creature, .. } => (MobDetectionGrade::Named, listed(creature), None),
             MobStamp::Guess { creature, .. } => (MobDetectionGrade::Guess, listed(creature), None),
@@ -304,37 +316,36 @@ impl KillDetection {
 }
 
 /// A creature the history knows, as a kill's stamp carries it.
-fn stamp_of(who: &MobIdentity) -> StampedMob {
+fn stamp_of(who: &MobIdentity, history: &MobHistory, names: &MobDisplayNames) -> StampedMob {
     match who {
-        MobIdentity::Known(creature) => listed(creature),
+        MobIdentity::Known(creature) => listed(creature, history, names),
         MobIdentity::Unfamiliar { spelling, .. } => unlisted(spelling),
     }
 }
 
-/// A known creature as a kill's stamp carries it: the species and
-/// maturity, and the display name the declaration would give them, so a
-/// detected kill groups with a declared kill of the same creature.
-fn listed(creature: &Creature) -> StampedMob {
-    let (species, maturity) = match creature {
-        Creature::Catalogued {
-            name,
-            species,
-            maturity,
-        } => (
-            species.clone().unwrap_or_else(|| name.clone()),
+/// A known creature as a kill's stamp carries it: recorded by the name its
+/// plate prints and its maturity, never by the wider species the bundled
+/// list files it under (several creatures share one, and a kill is one
+/// creature's); shown under the player's label for it, else as the plate
+/// prints it, a number as the plate was read to print it.
+fn listed(creature: &Creature, history: &MobHistory, names: &MobDisplayNames) -> StampedMob {
+    let (name, maturity) = recorded(creature);
+    StampedMob {
+        name: names.shown(&name, &maturity, history.printed_maturity(creature)),
+        species: name,
+        maturity,
+        source: Some(MobStampSource::Detected),
+    }
+}
+
+/// The name and maturity a known creature's kills are recorded under.
+fn recorded(creature: &Creature) -> (String, String) {
+    match creature {
+        Creature::Catalogued { name, maturity, .. } | Creature::Species { name, maturity, .. } => (
+            MobCatalogue::printed_name(name).to_string(),
             maturity.clone().unwrap_or_default(),
         ),
-        Creature::Species {
-            species, maturity, ..
-        } => (species.clone(), maturity.clone().unwrap_or_default()),
         Creature::Confirmed { name } => (name.clone(), String::new()),
-    };
-    let declared = DeclaredMob::from_parts(species, maturity);
-    StampedMob {
-        name: declared.name,
-        species: declared.species,
-        maturity: declared.maturity,
-        source: Some(MobStampSource::Detected),
     }
 }
 
@@ -423,7 +434,10 @@ impl TrackerActor {
         let Some(active) = self.session.active_mut() else {
             return;
         };
-        active.detection = Some(SessionDetection::new(history));
+        active.detection = Some(SessionDetection::new(
+            history,
+            self.providers.mob_names.clone(),
+        ));
         let session_id = active.session.id.clone();
         let sender = self.sender.clone();
         // Delivered while the tracker lives; once it is gone the watch ends.
@@ -520,6 +534,15 @@ impl TrackerActor {
             return;
         }
         let at_ms = pulse.at_ms;
+        let learned = detection.history.take_printed();
+        self.keep_printed(learned).await;
+        let Some(detection) = self
+            .session
+            .active_mut()
+            .and_then(|active| active.detection.as_mut())
+        else {
+            return;
+        };
         let looked = detection.follow(at_ms);
         // Asked as of the look itself, not of when the tracker got to it:
         // looks still queued behind this one may be the ones that watched
@@ -605,7 +628,10 @@ impl TrackerActor {
         };
         let session_id = active.session.id.clone();
         let Some(SessionDetection {
-            history, pending, ..
+            history,
+            pending,
+            names,
+            ..
         }) = active.detection.as_mut()
         else {
             return;
@@ -624,7 +650,7 @@ impl TrackerActor {
                     KillStamp::NotYet => true,
                     KillStamp::Unnamed(_) => false,
                     KillStamp::Stamped(stamp) => {
-                        answers.push(KillDetection::of(kill, &session_id, stamp));
+                        answers.push(KillDetection::of(kill, &session_id, stamp, history, names));
                         false
                     }
                 }
@@ -639,6 +665,54 @@ impl TrackerActor {
         }
         for answer in answers {
             self.apply_detection(answer).await;
+        }
+    }
+
+    /// Keep how plates were just read to print creatures graded by number
+    /// (`04` where the list has `4`): the mob is shown so from now on, and
+    /// everywhere it is already recorded, unless the player chose its label.
+    /// A printing that cannot be saved is let go: the next reading of it is
+    /// kept instead.
+    async fn keep_printed(&mut self, learned: Vec<(Creature, String)>) {
+        for (creature, printed) in learned {
+            let (name, maturity) = recorded(&creature);
+            if printed == maturity || self.providers.mob_names.chosen(&name, &maturity).is_some() {
+                continue;
+            }
+            let label = crate::mob_display::printed(&name, &printed);
+            let now = crate::time::naive_to_epoch(self.clock.now());
+            let (species, of_maturity, text) = (name.clone(), maturity.clone(), label.clone());
+            let result = self
+                .db
+                .with_writer(move |conn| {
+                    let tx = conn.transaction()?;
+                    crate::mob_display::set_label(
+                        &tx,
+                        &species,
+                        &of_maturity,
+                        &text,
+                        LabelSource::Plate,
+                        now,
+                    )?;
+                    let labels = crate::mob_display::labels(&tx)?;
+                    tx.commit()?;
+                    Ok(labels)
+                })
+                .await;
+            match result {
+                Ok(labels) => self.providers.mob_names.replace(labels),
+                Err(error) => {
+                    tracing::warn!(target: "eo::tracker", %error, "a mob's printed name could not be saved");
+                    continue;
+                }
+            }
+            if let Some(active) = self.session.active_mut() {
+                for kill in &mut active.session.kills {
+                    if kill.mob_species == name && kill.mob_maturity == maturity {
+                        kill.mob_name = label.clone();
+                    }
+                }
+            }
         }
     }
 

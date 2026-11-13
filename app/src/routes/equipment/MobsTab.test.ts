@@ -2,13 +2,16 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CreatureEntry, CreatureEntryCheck } from '$lib/api';
+import type { CreatureEntry, CreatureEntryCheck, MobLabel } from '$lib/api';
 
 const api = vi.hoisted(() => ({
 	getCreatureEntries: vi.fn(),
 	checkCreatureEntry: vi.fn(),
 	saveCreatureEntry: vi.fn(),
 	removeCreatureEntry: vi.fn(),
+	getMobLabels: vi.fn(),
+	setMobLabel: vi.fn(),
+	clearMobLabel: vi.fn(),
 }));
 vi.mock('$lib/api', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/api')>()),
@@ -41,8 +44,13 @@ async function type(text: string) {
 	await vi.advanceTimersByTimeAsync(300);
 }
 
-async function mount(entries: CreatureEntry[], check?: CreatureEntryCheck) {
+async function mount(
+	entries: CreatureEntry[],
+	check?: CreatureEntryCheck,
+	labels: MobLabel[] = [],
+) {
 	api.getCreatureEntries.mockResolvedValue(entries);
+	api.getMobLabels.mockResolvedValue(labels);
 	api.checkCreatureEntry.mockResolvedValue(check ?? { kind: 'refused', reason: 'unset' });
 	render(MobsTab);
 	await vi.advanceTimersByTimeAsync(0);
@@ -150,5 +158,76 @@ describe('adding and editing', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(screen.getByRole('button', { name: 'Add' })).toBeTruthy();
 		expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+	});
+});
+
+describe('what mobs are shown as', () => {
+	const printed: MobLabel = {
+		species: 'Survival Zombie Dog',
+		maturity: '4',
+		printed: 'Survival Zombie Dog 4',
+		label: 'Survival Zombie Dog 04',
+		byPlayer: false,
+	};
+	const chosen: MobLabel = {
+		species: 'Atrox',
+		maturity: 'Old',
+		printed: 'Atrox Old',
+		label: 'Old Trox',
+		byPlayer: true,
+	};
+
+	it('lists each label with the mob it stands for, and says which the plate gave', async () => {
+		await mount([], undefined, [printed, chosen]);
+		const rows = screen.getAllByTestId('mob-label');
+		expect(rows).toHaveLength(2);
+		expect(rows[0].textContent).toContain('Survival Zombie Dog 04');
+		expect(rows[0].textContent).toContain('as its plate prints it');
+		expect(rows[1].textContent).toContain('Old Trox');
+		expect(rows[1].textContent).toContain('Atrox Old');
+		expect(rows[1].textContent).not.toContain('as its plate prints it');
+	});
+
+	it('labels a mob typed as the game shows it, once both halves are typed', async () => {
+		await mount([]);
+		const set = screen.getByRole('button', { name: 'Set label' }) as HTMLButtonElement;
+		expect(set.disabled).toBe(true);
+		await fireEvent.input(screen.getByLabelText('Mob to label'), {
+			target: { value: 'Atrox Old' },
+		});
+		expect(set.disabled).toBe(true);
+		await fireEvent.input(screen.getByLabelText('Label'), { target: { value: 'Old Trox' } });
+		expect(set.disabled).toBe(false);
+		api.setMobLabel.mockResolvedValue([chosen]);
+		await fireEvent.click(set);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.setMobLabel).toHaveBeenCalledWith('Atrox Old', 'Old Trox');
+		expect(screen.getByTestId('mob-label').textContent).toContain('Old Trox');
+		expect((screen.getByLabelText('Mob to label') as HTMLInputElement).value).toBe('');
+	});
+
+	it('puts a label back in the entry to change it, and removes one', async () => {
+		await mount([], undefined, [chosen]);
+		await fireEvent.click(screen.getByRole('button', { name: 'Change the label of Atrox Old' }));
+		expect((screen.getByLabelText('Mob to label') as HTMLInputElement).value).toBe('Atrox Old');
+		expect((screen.getByLabelText('Label') as HTMLInputElement).value).toBe('Old Trox');
+		api.clearMobLabel.mockResolvedValue([]);
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove the label of Atrox Old' }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(api.clearMobLabel).toHaveBeenCalledWith('Atrox', 'Old');
+		expect(screen.queryByTestId('mob-label')).toBeNull();
+	});
+
+	it('says why a label was refused and keeps what was typed', async () => {
+		await mount([]);
+		await fireEvent.input(screen.getByLabelText('Mob to label'), {
+			target: { value: 'Gloomrat Bruiser' },
+		});
+		await fireEvent.input(screen.getByLabelText('Label'), { target: { value: 'Bruiser' } });
+		api.setMobLabel.mockRejectedValue(new Error('"Gloomrat Bruiser" is not a mob the app knows'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Set label' }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(screen.getByText(/is not a mob the app knows/)).toBeTruthy();
+		expect((screen.getByLabelText('Label') as HTMLInputElement).value).toBe('Bruiser');
 	});
 });

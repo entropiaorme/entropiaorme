@@ -31,9 +31,11 @@ fn is_missing_table(error: &rusqlite::Error) -> bool {
 // tag-or-mob capture (session name and skill boost carried onto the summary,
 // mob dominance computed over species-bearing kills only, the dominant-tag
 // pair retired to NULL/0); to 5 when protection costs were re-attributed by
-// hit count; to 6 when consumed doses joined cycledPed as their own bucket.
+// hit count; to 6 when consumed doses joined cycledPed as their own bucket;
+// to 7 when a mob's shown name became the game's own (name, then maturity),
+// so the dominant and primary mob names read as the kills now do.
 // A below-version row heals on the next read.
-pub const SUMMARY_VERSION: i64 = 6;
+pub const SUMMARY_VERSION: i64 = 7;
 pub const DOMINANCE_THRESHOLD: f64 = 0.6;
 
 /// What a session's kills add up to: the sums and per-kill extremes a

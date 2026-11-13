@@ -3,7 +3,7 @@
  *
  * The review is read for the session shown and re-read when the session
  * changes; a read that lands after the player moved to another session is
- * dropped. Only an ended session's review is shown. Settling a group answers
+ * dropped. Only an ended session's review is shown. Settling a line answers
  * with the refreshed review, applied here, and tells the owner so the
  * session's own figures re-read; a name typed only loosely like a mob
  * changes nothing and offers that mob, to accept in one action. While
@@ -13,34 +13,34 @@
 import {
 	type DetectedCreature,
 	getMobDetections,
-	type MobDetectionGroup,
 	type MobDetectionTarget,
+	type ReviewedMob,
 	settleMobDetection,
 } from '$lib/api';
 import { describeError } from '$lib/view/errorState';
-import { describeSettled, groupKey } from './mobDetection';
+import { describeSettled, mobKey } from './mobDetection';
 
 export interface MobDetectionOptions {
 	/** The session shown. */
 	sessionId: () => string;
-	/** A group was settled: the session's figures changed. */
+	/** A line was settled: the session's figures changed. */
 	onSettled: () => void | Promise<void>;
 }
 
 export function createMobDetectionModel(options: MobDetectionOptions) {
-	let groups = $state<MobDetectionGroup[]>([]);
+	let mobs = $state<ReviewedMob[]>([]);
 	let loadedFor = $state<string | null>(null);
 	let error = $state<string | null>(null);
 	let notice = $state<string | null>(null);
 	let busy = $state<string | null>(null);
 	let drafts = $state<Record<string, string>>({});
 	let ended = $state(false);
-	/** The mob offered for a group whose typed name read only loosely. */
+	/** The mob offered for a line whose typed name read only loosely. */
 	let offer = $state<{ key: string; creature: DetectedCreature } | null>(null);
 	let generation = 0;
 
-	function draftOf(group: MobDetectionGroup): string {
-		return drafts[groupKey(group.group)] ?? group.group.creature.name;
+	function draftOf(mob: ReviewedMob): string {
+		return drafts[mobKey(mob.mob)] ?? mob.name ?? '';
 	}
 
 	async function refresh() {
@@ -49,7 +49,7 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 		try {
 			const review = await getMobDetections(sessionId);
 			if (run !== generation || options.sessionId() !== sessionId) return;
-			groups = review.groups;
+			mobs = review.mobs;
 			ended = review.ended;
 			loadedFor = sessionId;
 			drafts = {};
@@ -59,23 +59,23 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 		}
 	}
 
-	async function settle(group: MobDetectionGroup, target: MobDetectionTarget) {
+	async function settle(mob: ReviewedMob, target: MobDetectionTarget) {
 		if (busy !== null) return;
 		const sessionId = options.sessionId();
-		const key = groupKey(group.group);
+		const key = mobKey(mob.mob);
 		busy = key;
 		error = null;
 		notice = null;
 		offer = null;
 		try {
-			const result = await settleMobDetection(sessionId, group.group, target);
+			const result = await settleMobDetection(sessionId, mob.mob, target);
 			if (options.sessionId() !== sessionId) return;
 			if (result.kind === 'didYouMean') {
 				offer = { key, creature: result.creature };
 				return;
 			}
 			generation += 1;
-			groups = result.review.groups;
+			mobs = result.review.mobs;
 			ended = result.review.ended;
 			const { [key]: _, ...rest } = drafts;
 			drafts = rest;
@@ -89,19 +89,19 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 	}
 
 	return {
-		/** The groups to show: only an ended session's. */
-		get groups() {
-			return loadedFor === options.sessionId() && ended ? groups : [];
+		/** The lines to show: only an ended session's. */
+		get mobs() {
+			return loadedFor === options.sessionId() && ended ? mobs : [];
 		},
-		/** The mob offered for `group`, when its typed name read loosely. */
-		offerFor(group: MobDetectionGroup): DetectedCreature | null {
-			return offer?.key === groupKey(group.group) ? offer.creature : null;
+		/** The mob offered for `mob`, when its typed name read loosely. */
+		offerFor(mob: ReviewedMob): DetectedCreature | null {
+			return offer?.key === mobKey(mob.mob) ? offer.creature : null;
 		},
-		/** Accept the mob offered for `group`. */
-		acceptOffer(group: MobDetectionGroup) {
-			const offered = offer?.key === groupKey(group.group) ? offer.creature : null;
+		/** Accept the mob offered for `mob`. */
+		acceptOffer(mob: ReviewedMob) {
+			const offered = offer?.key === mobKey(mob.mob) ? offer.creature : null;
 			if (!offered) return Promise.resolve();
-			return settle(group, { kind: 'creature', name: offered.name });
+			return settle(mob, { kind: 'creature', name: offered.name });
 		},
 		get error() {
 			return error;
@@ -113,17 +113,17 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 			return busy;
 		},
 		draft: draftOf,
-		setDraft(group: MobDetectionGroup, value: string) {
-			drafts = { ...drafts, [groupKey(group.group)]: value };
+		setDraft(mob: ReviewedMob, value: string) {
+			drafts = { ...drafts, [mobKey(mob.mob)]: value };
 		},
 		refresh,
-		/** Record every kill of the group as the mob typed for it. */
-		name(group: MobDetectionGroup) {
-			return settle(group, { kind: 'creature', name: draftOf(group) });
+		/** Record every kill of the line as the mob typed for it. */
+		name(mob: ReviewedMob) {
+			return settle(mob, { kind: 'creature', name: draftOf(mob) });
 		},
-		/** Put back the declared mob each of the group's kills had. */
-		restoreDeclared(group: MobDetectionGroup) {
-			return settle(group, { kind: 'declared' });
+		/** Put back the declared mob each of the line's kills had. */
+		restoreDeclared(mob: ReviewedMob) {
+			return settle(mob, { kind: 'declared' });
 		},
 		dismissError() {
 			error = null;

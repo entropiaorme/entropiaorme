@@ -831,6 +831,10 @@ const OTHER_COMMANDS: &[&str] = &[
     "creature_entry_check",
     "creature_entry_save",
     "creature_entry_remove",
+    // What a mob is shown as: a label, not a statistic.
+    "mob_labels",
+    "mob_label_set",
+    "mob_label_clear",
     "tracking_tool_sightings",
     "tracking_tool_sighting_settle",
     "tracking_tool_sighting_undo",

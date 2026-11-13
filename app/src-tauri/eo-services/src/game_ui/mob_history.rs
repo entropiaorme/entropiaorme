@@ -80,7 +80,8 @@ use crate::fuzzy_match::ratio;
 
 use super::field::label_key;
 use super::mob_names::{
-    misread_of, plate_strings, resolve, MobCatalogue, MobNameProfile, Resolved, Spelling,
+    misread_of, numbered_maturity, plate_strings, resolve, MobCatalogue, MobNameProfile, Resolved,
+    Spelling,
 };
 use super::plates::PlateRead;
 
@@ -195,6 +196,9 @@ pub struct Sighting {
     /// The name as the recogniser read it, when it read.
     pub raw_name: Option<String>,
     pub resolved: Resolved,
+    /// The name is a creature graded by number at a number the list does
+    /// not give it (see [`MobCatalogue::infers_number`]).
+    pub inferred_number: bool,
 }
 
 impl Sighting {
@@ -205,9 +209,26 @@ impl Sighting {
             Ok(raw) => resolve(raw, read.level.as_ref().ok().copied(), catalogue, names),
             Err(_) => Resolved::Unclear,
         };
+        Sighting::resolved(
+            read.fill,
+            read.name.as_ref().ok().cloned(),
+            resolved,
+            catalogue,
+        )
+    }
+
+    /// A reading of health `fill` whose name read as `raw_name` and
+    /// resolved against `catalogue` as `resolved`.
+    pub fn resolved(
+        fill: f64,
+        raw_name: Option<String>,
+        resolved: Resolved,
+        catalogue: &MobCatalogue,
+    ) -> Self {
         Sighting {
-            fill: read.fill,
-            raw_name: read.name.as_ref().ok().cloned(),
+            fill,
+            raw_name,
+            inferred_number: catalogue.infers_number(&resolved),
             resolved,
         }
     }
@@ -567,6 +588,15 @@ pub struct MobHistory {
     current_unrecognised: bool,
     /// Why the latest kill answered was answered so.
     trace: Option<KillTrace>,
+    /// Creatures graded by number read at a number the list does not give
+    /// them, with how often each was read this session: one reading of a
+    /// number nobody listed is not yet a creature.
+    inferred: Vec<(Creature, Kept)>,
+    /// How the plate prints the number of each creature graded by number
+    /// read this session (`04` where the list has `4`).
+    printed: Vec<(Creature, String)>,
+    /// The printings noted since the caller last took them.
+    printed_news: Vec<(Creature, String)>,
 }
 
 /// Why creature detection gave a kill the answer it did: a diagnostic
@@ -669,6 +699,9 @@ impl MobHistory {
             current: None,
             current_unrecognised: false,
             trace: None,
+            inferred: Vec::new(),
+            printed: Vec::new(),
+            printed_news: Vec::new(),
         }
     }
 
@@ -748,6 +781,18 @@ impl MobHistory {
             Resolved::Unclear => (None, None, false),
         };
         self.current = vote.clone();
+        let read_as = match (&vote, &loose) {
+            (Some(Vote::Known(creature)), _) | (None, Some(creature)) => Some(creature.clone()),
+            _ => None,
+        };
+        if let Some(creature) = read_as {
+            if sighting.inferred_number {
+                count_kept(&mut self.inferred, creature.clone(), self.profile.spellings);
+            }
+            if matches!(vote, Some(Vote::Known(_))) {
+                self.note_printed(creature, sighting.raw_name.as_deref());
+            }
+        }
         if sighting.raw_name.is_some() {
             let named = match (&vote, &loose) {
                 (Some(v), _) => Some(self.vote_identity(v)),
@@ -1422,6 +1467,72 @@ impl MobHistory {
         self.shown(&identity(basis), basis)
     }
 
+    /// Note how the plate prints `creature`'s number, from `raw` (the name
+    /// as read): the digits it ends in, when they are the creature's number.
+    /// The longest printing read is kept: a reading drops a leading zero
+    /// sooner than it adds one.
+    fn note_printed(&mut self, creature: Creature, raw: Option<&str>) {
+        let (Creature::Catalogued {
+            maturity: Some(maturity),
+            ..
+        }
+        | Creature::Species {
+            maturity: Some(maturity),
+            ..
+        }) = &creature
+        else {
+            return;
+        };
+        let (Some(number), Some(raw)) = (numbered_maturity(maturity, &self.names), raw) else {
+            return;
+        };
+        let text = raw.trim_end_matches(|c: char| !c.is_alphanumeric());
+        let digits: String = {
+            let tail: Vec<char> = text
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            tail.into_iter().rev().collect()
+        };
+        if digits.is_empty()
+            || digits.len() > self.names.number_digits
+            || digits.parse::<u32>().ok() != Some(number.value)
+        {
+            return;
+        }
+        let printed = format!("{}{digits}", number.before);
+        match self.printed.iter_mut().find(|(c, _)| *c == creature) {
+            Some((_, held)) => {
+                if printed.len() <= held.len() {
+                    return;
+                }
+                *held = printed.clone();
+            }
+            None => {
+                if self.printed.len() >= self.profile.spellings.max(1) {
+                    self.printed.remove(0);
+                }
+                self.printed.push((creature.clone(), printed.clone()));
+            }
+        }
+        self.printed_news.push((creature, printed));
+    }
+
+    /// The printings noted since this was last asked, with each creature.
+    pub fn take_printed(&mut self) -> Vec<(Creature, String)> {
+        std::mem::take(&mut self.printed_news)
+    }
+
+    /// `creature`'s maturity as its plate prints it, when it is graded by
+    /// number and was read this session (`04` where the list has `4`).
+    pub fn printed_maturity(&self, creature: &Creature) -> Option<&str> {
+        self.printed
+            .iter()
+            .find(|(c, _)| c == creature)
+            .map(|(_, printed)| printed.as_str())
+    }
+
     /// Whether the latest pulse read a name off the locked plate that named
     /// nothing: a creature locked that the reader cannot name now.
     pub fn current_unrecognised(&self) -> bool {
@@ -1569,12 +1680,28 @@ impl MobHistory {
             .iter()
             .any(|i| !alive(i) && left(*i) && self.fights[*i].last().fill < p.damaged_fill);
         let doubted = alive_rival || left_damaged;
-        let considered: Vec<(usize, Option<MobStamp>)> = gathered
+        let mut considered: Vec<(usize, Option<MobStamp>)> = gathered
             .iter()
             .copied()
             .filter(|i| !alive(i) && !left(*i))
             .map(|i| (i, self.decide(&self.fights[i])))
             .collect();
+        // A plate whose name never read says nothing of which creature it
+        // was. Where every name read round the kill, from the look-back to
+        // the end of the watch past it, is one creature's, such a plate is
+        // not a creature of its own, only a doubt, which keeps the answer to
+        // a guess: the hunt there was of that creature. Where the names
+        // read round the kill are of more than one, it may be any of them,
+        // and stays a creature of its own.
+        let unread = |i: usize| self.fights[i].readings.iter().all(|r| r.raw.is_none());
+        let any_unread = considered.iter().any(|(i, _)| unread(*i));
+        let set_aside = any_unread
+            && considered.iter().any(|(i, _)| !unread(*i))
+            && self.one_creature_read(from, end);
+        if set_aside {
+            considered.retain(|(i, _)| !unread(*i));
+        }
+        let doubted = doubted || set_aside;
         // What each names: its decision, or, undecided, a creature of its
         // own that agrees with none.
         let mut identities: Vec<Identity> = Vec::new();
@@ -1608,6 +1735,33 @@ impl MobHistory {
             }
             _ => self.suggest(&considered, arrived_ms, latest_death, window_end),
         }
+    }
+
+    /// Whether the readings taken from `from` to `to` that name anything,
+    /// strictly or loosely, all name one creature (and at least one does).
+    fn one_creature_read(&self, from: i64, to: i64) -> bool {
+        let mut read: Option<Identity> = None;
+        for reading in self
+            .fights
+            .iter()
+            .flat_map(|fight| fight.readings.iter())
+            .filter(|reading| reading.at_ms >= from && reading.at_ms <= to)
+        {
+            let named = match (&reading.vote, &reading.loose) {
+                (Some(vote), _) => self.vote_identity(vote),
+                (None, Some(creature)) => Identity::Known(creature.clone()),
+                // A name read that names nothing is a creature the reader
+                // cannot vouch for.
+                (None, None) if reading.raw.is_some() => return false,
+                (None, None) => continue,
+            };
+            match &read {
+                Some(held) if *held != named => return false,
+                Some(_) => {}
+                None => read = Some(named),
+            }
+        }
+        read.is_some()
     }
 
     /// Fight `i`'s creature for a kill as `stamp`; as a guess when
@@ -1727,7 +1881,23 @@ impl MobHistory {
     /// spelled it whole, and the fight was read more than once; otherwise
     /// it is a guess, and nothing when its loose readings are needed while a
     /// strict reading of the fight names another creature.
+    ///
+    /// A creature graded by number at a number the list does not give it is
+    /// decided only once that number has been read `provisional_reads` times
+    /// this session: a number read once may be another misread.
     fn decide(&self, fight: &Fight) -> Option<MobStamp> {
+        self.vote_of(fight).filter(|stamp| match identity(stamp) {
+            Identity::Known(creature) => self
+                .inferred
+                .iter()
+                .find(|(c, _)| *c == creature)
+                .is_none_or(|(_, kept)| kept.read() >= self.profile.provisional_reads),
+            _ => true,
+        })
+    }
+
+    /// The vote [`MobHistory::decide`] takes.
+    fn vote_of(&self, fight: &Fight) -> Option<MobStamp> {
         let p = &self.profile;
         let ballots = self.ballots(fight);
         let total = ballots.len();
@@ -2197,11 +2367,12 @@ mod tests {
 
     /// A reading of `text` at `level`, resolved against `catalogue`.
     fn seen(catalogue: &MobCatalogue, text: &str, level: Option<u32>, fill: f64) -> Sighting {
-        Sighting {
+        Sighting::resolved(
             fill,
-            raw_name: Some(text.to_string()),
-            resolved: resolve(text, level, catalogue, &bundled_profile().mob_names),
-        }
+            Some(text.to_string()),
+            resolve(text, level, catalogue, &bundled_profile().mob_names),
+            catalogue,
+        )
     }
 
     /// Feed `sightings` one a second from `start_ms`; the last's time.
@@ -2869,31 +3040,77 @@ mod tests {
     }
 
     #[test]
-    fn a_fight_whose_name_never_reads_is_a_creature_of_its_own() {
-        // Mature read 5 s to 8 s down to 0.3; the player switches to a
-        // creature whose name never reads, read at 9 s (full) and 10 s
-        // (0.7), which dies at 10.4 s: logged 10 s, arrived 10.5 s.
+    fn a_plate_whose_name_never_reads_is_only_a_doubt_in_a_hunt_of_one_creature() {
+        // Mature read 5 s to 8 s down to 0.3; the next plate locked never
+        // reads its name, read at 9 s (full) and 10 s (0.7), and dies at
+        // 10.4 s: logged 10 s, arrived 10.5 s. Every name read round the
+        // kill is Mature's, so the unread plate is not a creature of its
+        // own: the kill is Mature's, as a guess and never more.
         let c = catalogue(Vec::new());
-        let mut h = history();
-        feed(
-            &mut h,
-            5000,
-            (0..4)
-                .map(|k| seen(&c, "Combibo Mature", Some(4), 0.9 - k as f64 * 0.2))
-                .collect(),
-        );
         let unread = |fill: f64| Sighting {
             fill,
             raw_name: None,
             resolved: Resolved::Unclear,
+            inferred_number: false,
         };
-        feed(&mut h, 9000, vec![unread(1.0), unread(0.7)]);
-        assert_eq!(
-            kill_arrived(&mut h, 10_000, 10_500),
-            KillStamp::Unnamed(Unnamed::Indistinct)
+        let mature = |h: &mut MobHistory| {
+            feed(
+                h,
+                5000,
+                (0..4)
+                    .map(|k| seen(&c, "Combibo Mature", Some(4), 0.9 - k as f64 * 0.2))
+                    .collect(),
+            )
+        };
+        for fills in [[1.0, 0.7], [0.9, 0.7]] {
+            let mut h = history();
+            mature(&mut h);
+            feed(&mut h, 9000, vec![unread(fills[0]), unread(fills[1])]);
+            match kill_arrived(&mut h, 10_000, 10_500) {
+                KillStamp::Stamped(MobStamp::Guess { creature, .. }) => {
+                    assert_eq!(creature, creature_of("Combibo", "Mature"));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_plate_whose_name_never_reads_is_a_creature_of_its_own_where_two_were_read() {
+        // As above, but Young was read too within the kill's moments: the
+        // unread plate may be either, so the kill is given no creature (at
+        // most the latest one read, as a suggestion it does not take).
+        let unsettled = |answer: KillStamp| {
+            assert!(
+                !matches!(
+                    answer,
+                    KillStamp::Stamped(MobStamp::Named { .. } | MobStamp::Guess { .. })
+                ),
+                "{answer:?}"
+            );
+        };
+        let c = catalogue(Vec::new());
+        let unread = |fill: f64| Sighting {
+            fill,
+            raw_name: None,
+            resolved: Resolved::Unclear,
+            inferred_number: false,
+        };
+        let mut h = history();
+        feed(
+            &mut h,
+            5000,
+            vec![
+                seen(&c, "Combibo Mature", Some(4), 0.9),
+                seen(&c, "Combibo Mature", Some(4), 0.7),
+                seen(&c, "Combibo Young", Some(3), 0.9),
+                seen(&c, "Combibo Mature", Some(4), 0.5),
+            ],
         );
-        // Read twice, damaged, its name never read: the latest fight decides
-        // nothing, so there is no latest creature read either.
+        feed(&mut h, 9000, vec![unread(1.0), unread(0.7)]);
+        unsettled(kill_arrived(&mut h, 10_000, 10_500));
+        // A name read after the kill that is another creature's says the
+        // same: the hunt there is of more than one.
         let mut h = history();
         feed(
             &mut h,
@@ -2902,12 +3119,93 @@ mod tests {
                 .map(|k| seen(&c, "Combibo Mature", Some(4), 0.9 - k as f64 * 0.2))
                 .collect(),
         );
-        feed(&mut h, 9000, vec![unread(0.9), unread(0.7)]);
-        assert_eq!(h.fights.len(), 2);
-        assert_eq!(
-            kill_arrived(&mut h, 10_000, 10_500),
-            KillStamp::Unnamed(Unnamed::Indistinct)
+        feed(&mut h, 9000, vec![unread(1.0), unread(0.7)]);
+        read_at(&mut h, 11_000, seen(&c, "Atrox Young", Some(4), 1.0));
+        unsettled(kill_arrived(&mut h, 10_000, 10_500));
+        // And a name read that names nothing is a creature the reader
+        // cannot vouch for.
+        let mut h = history();
+        feed(
+            &mut h,
+            5000,
+            (0..4)
+                .map(|k| seen(&c, "Combibo Mature", Some(4), 0.9 - k as f64 * 0.2))
+                .collect(),
         );
+        feed(
+            &mut h,
+            9000,
+            vec![
+                unread(1.0),
+                Sighting {
+                    fill: 0.7,
+                    raw_name: Some("Xq".into()),
+                    resolved: Resolved::Unclear,
+                    inferred_number: false,
+                },
+            ],
+        );
+        unsettled(kill_arrived(&mut h, 10_000, 10_500));
+    }
+
+    #[test]
+    fn a_number_the_list_does_not_have_is_a_creature_only_once_read_twice() {
+        // The list has the drone at Gen 01 and Gen 07. One reading of Gen 04
+        // may be either misread: its fight decides nothing.
+        let c = catalogue(Vec::new());
+        let mut h = history();
+        let first = seen(&c, "Drone Gen 04", None, 0.6);
+        assert!(first.inferred_number);
+        assert!(!seen(&c, "Drone Gen 07", None, 0.6).inferred_number);
+        read_at(&mut h, 5000, first);
+        assert!(!matches!(kill(&mut h, 6000), KillStamp::Stamped(_)));
+        // Read again, in another fight, the number is believed.
+        feed(
+            &mut h,
+            30_000,
+            vec![
+                seen(&c, "Drone Gen 04", None, 0.9),
+                seen(&c, "Drone Gen 04", None, 0.5),
+            ],
+        );
+        match kill(&mut h, 32_000) {
+            KillStamp::Stamped(MobStamp::Named { creature, .. }) => {
+                assert_eq!(creature, creature_of("Drone", "Gen 04"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_way_a_plate_prints_a_number_is_noted_once_and_kept_at_its_longest() {
+        // The list has the dog at 4; its plate prints 04.
+        let names = bundled_profile().mob_names;
+        let c = MobCatalogue::new(
+            [mob("Zed Dog", Some("4"), 12)],
+            Vec::<String>::new(),
+            &names,
+        );
+        let dog = creature_of("Zed Dog", "4");
+        let mut h = history();
+        assert_eq!(h.printed_maturity(&dog), None);
+        // A reading that dropped the zero, then the plate whole.
+        read_at(&mut h, 1000, seen(&c, "Zed Dog 4", None, 1.0));
+        assert_eq!(h.printed_maturity(&dog), Some("4"));
+        read_at(&mut h, 2000, seen(&c, "Zed Dog 04", None, 0.8));
+        assert_eq!(h.printed_maturity(&dog), Some("04"));
+        assert_eq!(
+            h.take_printed(),
+            vec![
+                (dog.clone(), "4".to_string()),
+                (dog.clone(), "04".to_string())
+            ]
+        );
+        // Read so again, nothing new is noted; a shorter printing never
+        // replaces a longer.
+        read_at(&mut h, 3000, seen(&c, "Zed Dog 04", None, 0.6));
+        read_at(&mut h, 4000, seen(&c, "Zed Dog 4", None, 0.4));
+        assert!(h.take_printed().is_empty());
+        assert_eq!(h.printed_maturity(&dog), Some("04"));
     }
 
     #[test]
@@ -2997,6 +3295,7 @@ mod tests {
             fill,
             raw_name: Some("Xq".into()),
             resolved: Resolved::Unclear,
+            inferred_number: false,
         };
         let mut h = history();
         read_at(&mut h, 9000, seen(&c, "Atrox Old", Some(6), 1.0));
@@ -3898,7 +4197,8 @@ mod tests {
             Sighting {
                 fill: 0.5,
                 raw_name: None,
-                resolved: Resolved::Unclear
+                resolved: Resolved::Unclear,
+                inferred_number: false,
             }
         );
     }
@@ -4465,6 +4765,7 @@ mod tests {
             fill,
             raw_name: None,
             resolved: Resolved::Unclear,
+            inferred_number: false,
         };
         let layout = |h: &mut MobHistory, at: i64, left: &str, level: u32| {
             feed(
@@ -5407,11 +5708,12 @@ mod tests {
                         }
                         Err(_) => Resolved::Unclear,
                     };
-                    Some(Sighting {
-                        fill: read.fill,
-                        raw_name: read.name.ok(),
-                        resolved: resolution,
-                    })
+                    Some(Sighting::resolved(
+                        read.fill,
+                        read.name.ok(),
+                        resolution,
+                        &catalogue,
+                    ))
                 }
             };
             observed = (t * 1000.0).round() as i64;
@@ -5927,26 +6229,25 @@ mod tests {
     simulated_hunts! {
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_11: 11, LineAlign::Left,
         33, 0, 0, [
-            (NamedRight, 5), (GuessRight, 20), (GuessWrong, 1), (ProvisionalRight, 14),
-            (LatestWrong, 1), (Unnamed(StillRead), 1), (Unnamed(Indistinct), 11),
-            (Unnamed(Undecided), 2),
+            (NamedRight, 5), (GuessRight, 20), (GuessWrong, 3), (ProvisionalRight, 14),
+            (Unnamed(StillRead), 1), (Unnamed(Indistinct), 9), (Unnamed(Undecided), 3),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_12: 12, LineAlign::Centred,
         32, 0, 0, [
             (NamedRight, 9), (GuessRight, 10), (ProvisionalRight, 13), (SuggestedRight, 2),
-            (SuggestedWrong, 2), (LatestRight, 3), (Unnamed(NoFight), 2),
-            (Unnamed(StillRead), 3), (Unnamed(Indistinct), 11), (Unnamed(Undecided), 1),
+            (SuggestedWrong, 4), (LatestRight, 4), (Unnamed(NoFight), 2),
+            (Unnamed(StillRead), 3), (Unnamed(Indistinct), 8), (Unnamed(Undecided), 1),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_13: 13, LineAlign::Left,
         28, 0, 0, [
-            (NamedRight, 8), (GuessRight, 13), (GuessWrong, 2), (ProvisionalRight, 13),
+            (NamedRight, 8), (GuessRight, 13), (GuessWrong, 3), (ProvisionalRight, 13),
             (SuggestedRight, 1), (LatestRight, 6), (LatestWrong, 2), (Unnamed(StillRead), 1),
-            (Unnamed(Indistinct), 7), (Unnamed(Undecided), 1),
+            (Unnamed(Indistinct), 6), (Unnamed(Undecided), 1),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_14: 14, LineAlign::Centred,
         28, 0, 0, [
-            (NamedRight, 10), (GuessRight, 15), (GuessWrong, 1), (ProvisionalRight, 7),
-            (SuggestedWrong, 2), (LatestRight, 1), (LatestWrong, 1), (Unnamed(NoFight), 2),
+            (NamedRight, 10), (GuessRight, 15), (GuessWrong, 2), (ProvisionalRight, 7),
+            (SuggestedWrong, 2), (LatestRight, 1), (Unnamed(NoFight), 2),
             (Unnamed(StillRead), 3), (Unnamed(Indistinct), 9), (Unnamed(Undecided), 7),
         ],
     }

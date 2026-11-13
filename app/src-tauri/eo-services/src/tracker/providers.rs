@@ -202,6 +202,9 @@ pub struct Providers {
     /// the history a session keeps of it. Inert where nothing looks at a
     /// screen.
     pub detector: Arc<dyn crate::mob_watch::MobDetector>,
+    /// What to show for each mob: the labels the player chose, and how
+    /// plates print the mobs graded by number.
+    pub mob_names: Arc<crate::mob_display::MobDisplayNames>,
     /// The held-tool watcher that reads the tool in hand off the screen.
     /// Inert where nothing looks at a screen.
     pub tool_detector: Arc<dyn crate::tool_watch::ToolDetector>,
@@ -224,6 +227,7 @@ impl Default for Providers {
             player_name: String::new(),
             doses: DoseBoard::new(Arc::new(RealClock::new())),
             detector: Arc::new(crate::mob_watch::NoDetector),
+            mob_names: Arc::default(),
             tool_detector: Arc::new(crate::tool_watch::NoToolDetector),
             items: None,
             bundled_tools: None,

@@ -844,10 +844,9 @@ impl TrackerActor {
         // release commands write the config first, so this also covers
         // a settings-page edit landing mid-session). A pin is the
         // session's own and stands.
-        active.mob.typed = providers
-            .config
-            .manual_mob()
-            .map(|(species, maturity)| DeclaredMob::from_parts(species, maturity));
+        active.mob.typed = providers.config.manual_mob().map(|(species, maturity)| {
+            DeclaredMob::labelled(species, maturity, &providers.mob_names)
+        });
     }
 
     /// Start a new tracking session; any prior session stops first, so
@@ -1007,7 +1006,11 @@ impl TrackerActor {
         // Seed the typed creature from the configured declaration, when
         // one is set (the same seeding the declare command performs).
         if let Some((species, maturity)) = self.providers.config.manual_mob() {
-            active.mob.typed = Some(DeclaredMob::from_parts(species, maturity));
+            active.mob.typed = Some(DeclaredMob::labelled(
+                species,
+                maturity,
+                &self.providers.mob_names,
+            ));
         }
 
         self.session = SessionState::Active(Box::new(active));

@@ -2171,6 +2171,8 @@ fn build_providers(
         doses,
         // Bound by `compose_producers`, which owns the detector slot.
         detector: Arc::new(eo_services::mob_watch::NoDetector),
+        // Filled by the tracker from the database as it starts.
+        mob_names: Arc::default(),
         // Bound by `compose_producers`, which owns the held-tool slot.
         tool_detector: Arc::new(eo_services::tool_watch::NoToolDetector),
         items: None,

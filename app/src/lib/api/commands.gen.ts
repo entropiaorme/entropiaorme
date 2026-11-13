@@ -2440,48 +2440,14 @@ export interface MobComparison {
 }
 
 /**
- * How detection named a creature. The upper four are the screen's own
- * evidence and stamped the kills; the latest-read two are suggestions the
- * kills did not take; the continuity two are the creature being hunted,
- * given where the screen could not settle the kills, and stamped them; the
- * pinned one is an unlisted creature the player pinned from a reading.
- */
-export type MobDetectionGrade = 'named' | 'guess' | 'provisional' | 'provisional_guess' | 'latest_read' | 'provisional_latest_read' | 'continuity' | 'provisional_continuity' | 'provisional_pinned';
-
-/**
- * One group of the session's detections.
- */
-export interface MobDetectionGroup {
-	group: MobDetectionGroupRef;
-	killCount: number;
-	/** The text read off the plate most often for the group's kills; null for the creature being hunted or a pin, which no reading of these kills gave. */
-	exampleText: string | null;
-	/** What the group's kills are recorded as now, when they agree. */
-	currentName: string | null;
-	/** The player has settled the group. */
-	reviewed: boolean;
-}
-
-/**
- * Which group of a session's detections: the creature, at one grade,
- * with the session's own key for a creature on no list (two such
- * creatures can share a spelling, read at different levels).
- */
-export interface MobDetectionGroupRef {
-	grade: MobDetectionGrade;
-	creature: DetectedCreature;
-	provisionalKey: string | null;
-}
-
-/**
- * Every creature and suggestion detection gave an ended session's kills,
- * the least certain first.
+ * An ended session's kills by the mob detection gave them: the lines that
+ * ask for the player first, the kills the screen could not name last.
  */
 export interface MobDetectionReview {
 	sessionId: string;
-	/** The session has ended, so its detections can be settled. */
+	/** The session has ended, so its kills can be settled. */
 	ended: boolean;
-	groups: MobDetectionGroup[];
+	mobs: ReviewedMob[];
 }
 
 /**
@@ -2539,6 +2505,20 @@ export interface MobEditResult {
 export type MobEntryMode = 'mob' | 'tag';
 
 /**
+ * A label a mob is shown by.
+ */
+export interface MobLabel {
+	/** The mob as its kills are recorded. */
+	species: string;
+	maturity: string;
+	/** The mob as the game prints it, without any label. */
+	printed: string;
+	label: string;
+	/** The player chose it; otherwise it is how the mob's plate was read to print it. */
+	byPlayer: boolean;
+}
+
+/**
  * The creature every kill takes while it stands.
  */
 export interface MobPin {
@@ -2562,6 +2542,21 @@ export type MobPinTarget = {
  * How the player pinned a creature.
  */
 export type MobPinnedBy = 'read' | 'typed';
+
+/**
+ * Which line of a session's review: a mob detection named, as its kills
+ * were recorded (its name and maturity; with the session's own key for a
+ * mob on no list, since two such mobs can share a spelling), or the kills
+ * the screen could not name.
+ */
+export type MobReviewRef = {
+		species: string;
+		maturity: string;
+		provisionalKey: string | null;
+		kind: 'mob';
+	} | {
+		kind: 'unnamed';
+	};
 
 /**
  * The session's one source for its kills' creature, as the overlay shows
@@ -3618,6 +3613,27 @@ export interface ReturnsBreakdown {
 	codexPes: number;
 	questPes: number;
 	ledger: Record<string, number>;
+}
+
+/**
+ * One line of the session's review: a mob and every kill given it, or the
+ * kills the screen could not name.
+ */
+export interface ReviewedMob {
+	mob: MobReviewRef;
+	/** The mob as shown; null for the kills the screen could not name. */
+	name: string | null;
+	killCount: number;
+	/** How many of the kills the screen was less than sure of. */
+	unsureCount: number;
+	/** The text read off the plate most often for the mob's kills, when any was read. */
+	exampleText: string | null;
+	/** What the kills are recorded as now, when they agree. */
+	currentName: string | null;
+	/** The mob is on no list: its spelling is the screen's, to be confirmed. */
+	unlisted: boolean;
+	/** The player has settled the line. */
+	reviewed: boolean;
 }
 
 /**
@@ -6024,7 +6040,14 @@ export async function trackingMobDetections(sessionId: string): Promise<MobDetec
 	return invokeCommand('tracking_mob_detections', { session_id: sessionId });
 }
 
-export async function trackingMobDetectionSettle(sessionId: string, group: MobDetectionGroupRef, target: {
+export async function trackingMobDetectionSettle(sessionId: string, mob: {
+		species: string;
+		maturity: string;
+		provisionalKey: string | null;
+		kind: 'mob';
+	} | {
+		kind: 'unnamed';
+	}, target: {
 		name: string;
 		kind: 'creature';
 	} | {
@@ -6037,7 +6060,7 @@ export async function trackingMobDetectionSettle(sessionId: string, group: MobDe
 		creature: DetectedCreature;
 		kind: 'didYouMean';
 	}> {
-	return invokeCommand('tracking_mob_detection_settle', { session_id: sessionId, group, target });
+	return invokeCommand('tracking_mob_detection_settle', { session_id: sessionId, mob, target });
 }
 
 export async function creatureEntries(): Promise<CreatureEntry[]> {
@@ -6067,6 +6090,18 @@ export async function creatureEntrySave(text: string, species: string | null, re
 
 export async function creatureEntryRemove(name: string): Promise<CreatureEntry[]> {
 	return invokeCommand('creature_entry_remove', { name });
+}
+
+export async function mobLabels(): Promise<MobLabel[]> {
+	return invokeCommand('mob_labels', {});
+}
+
+export async function mobLabelSet(mob: string, label: string): Promise<MobLabel[]> {
+	return invokeCommand('mob_label_set', { mob, label });
+}
+
+export async function mobLabelClear(species: string, maturity: string): Promise<MobLabel[]> {
+	return invokeCommand('mob_label_clear', { species, maturity });
 }
 
 export async function trackingToolSightings(sessionId: string): Promise<ToolSightingReview> {

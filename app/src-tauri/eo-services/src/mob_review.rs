@@ -45,9 +45,10 @@ use crate::game_ui::mob_names::{
     numbered_maturity, resolve, split_numbered, KeptCreature, MobCatalogue, MobNameProfile,
     Resolved, Spelling,
 };
+use crate::mob_display::MobDisplayNames;
 use crate::mob_watch::CatalogueCell;
 use crate::time::naive_to_epoch;
-use crate::tracker::{DeclaredMob, MobDetectionGrade, MobStampSource};
+use crate::tracker::{MobDetectionGrade, MobStampSource};
 
 /// A creature as a kill's stamp carries it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,6 +276,8 @@ pub struct MobReviewService {
     catalogue: Arc<CatalogueCell>,
     store: Option<Arc<GameDataStore>>,
     names: Option<MobNameProfile>,
+    /// What is shown for each mob, shared with the tracker.
+    labels: Arc<MobDisplayNames>,
 }
 
 impl MobReviewService {
@@ -294,6 +297,24 @@ impl MobReviewService {
             catalogue,
             store,
             names,
+            labels: Arc::default(),
+        }
+    }
+
+    /// Name mobs by `labels`, the ones the tracker names kills by, and
+    /// keep them in step when the player changes one.
+    pub fn with_labels(mut self, labels: Arc<MobDisplayNames>) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    /// The stamp of a mob recorded by `name` and `maturity`, under the
+    /// label it is shown by.
+    fn stamp_of(&self, name: String, maturity: String) -> DetectedCreature {
+        DetectedCreature {
+            name: self.labels.shown(&name, &maturity, None),
+            species: name,
+            maturity,
         }
     }
 
@@ -414,16 +435,15 @@ impl MobReviewService {
     ) -> Result<SettleOutcome, MobReviewError> {
         let (text, names) = self.checked_name(typed)?;
         let catalogue = self.catalogue.current();
-        // A listed species typed without its maturity.
+        // A listed mob typed without its maturity.
         let key = label_key(&text);
-        if let Some(species) = catalogue.mobs().iter().find_map(|mob| {
-            let species = mob.species.clone().unwrap_or_else(|| mob.name.clone());
-            (label_key(&species) == key).then_some(species)
+        if let Some(name) = catalogue.mobs().iter().find_map(|mob| {
+            let name = MobCatalogue::printed_name(&mob.name);
+            (label_key(name) == key).then(|| name.to_string())
         }) {
-            return Ok(SettleOutcome::Settled(Settled::Listed(stamp_of(
-                species,
-                String::new(),
-            ))));
+            return Ok(SettleOutcome::Settled(Settled::Listed(
+                self.stamp_of(name, String::new()),
+            )));
         }
         // A near miss is the player's typing slip and stands for the
         // creature; a loose match is only a guess, offered back.
@@ -435,11 +455,14 @@ impl MobReviewService {
         match resolve(&text, None, &catalogue, names) {
             Resolved::Known {
                 name,
-                species,
                 maturity,
                 spelling,
+                ..
             } => {
-                let creature = stamp_of(species.unwrap_or(name), maturity.unwrap_or_default());
+                let creature = self.stamp_of(
+                    MobCatalogue::printed_name(&name).to_string(),
+                    maturity.unwrap_or_default(),
+                );
                 Ok(settle_or_offer(
                     spelling,
                     creature.clone(),
@@ -447,12 +470,12 @@ impl MobReviewService {
                 ))
             }
             Resolved::Species {
-                species,
+                name,
                 maturity,
                 spelling,
                 ..
             } => {
-                let creature = stamp_of(species, maturity.unwrap_or_default());
+                let creature = self.stamp_of(name, maturity.unwrap_or_default());
                 Ok(settle_or_offer(
                     spelling,
                     creature.clone(),
@@ -460,7 +483,7 @@ impl MobReviewService {
                 ))
             }
             Resolved::Confirmed { name, spelling } => {
-                let creature = stamp_of(name, String::new());
+                let creature = self.stamp_of(name, String::new());
                 Ok(settle_or_offer(
                     spelling,
                     creature.clone(),
@@ -486,7 +509,7 @@ impl MobReviewService {
                          name; type the known creature as it is named"
                     )));
                 }
-                Ok(SettleOutcome::Settled(Settled::NewName(stamp_of(
+                Ok(SettleOutcome::Settled(Settled::NewName(self.stamp_of(
                     creature.name,
                     creature.maturity.unwrap_or_default(),
                 ))))
@@ -575,31 +598,31 @@ impl MobReviewService {
             None => KeptCreature::from(text.clone()),
         };
         let without = MobCatalogue::from_store(store, kept.clone(), names);
-        let known = |name: String, species: String, maturity: Option<String>| EntryCheck::Known {
+        let known = |name: String, maturity: Option<String>| EntryCheck::Known {
+            creature: self.stamp_of(
+                MobCatalogue::printed_name(&name).to_string(),
+                maturity.clone().unwrap_or_default(),
+            ),
             name,
-            creature: stamp_of(species, maturity.clone().unwrap_or_default()),
             maturity,
         };
         match resolve(&text, None, &without, names) {
             Resolved::Known {
                 name,
-                species,
                 maturity,
                 spelling: Spelling::Exact | Spelling::Near,
-            } => {
-                let species = species.unwrap_or_else(|| name.clone());
-                return Ok(known(name, species, maturity));
+                ..
             }
-            Resolved::Species {
+            | Resolved::Species {
                 name,
-                species,
                 maturity,
                 spelling: Spelling::Exact | Spelling::Near,
-            } => return Ok(known(name, species, maturity)),
+                ..
+            } => return Ok(known(name, maturity)),
             Resolved::Confirmed {
                 name,
                 spelling: Spelling::Exact | Spelling::Near,
-            } => return Ok(known(name.clone(), name, None)),
+            } => return Ok(known(name, None)),
             _ => {}
         }
         if !self.kept_reads_as_itself(&creature, kept, &text) {
@@ -724,17 +747,6 @@ impl MobReviewService {
             }
             _ => false,
         }
-    }
-}
-
-/// The stamp of a creature named by its species and maturity, as the
-/// declaration would give it.
-fn stamp_of(species: String, maturity: String) -> DetectedCreature {
-    let declared = DeclaredMob::from_parts(species, maturity);
-    DetectedCreature {
-        name: declared.name,
-        species: declared.species,
-        maturity: declared.maturity,
     }
 }
 
@@ -978,18 +990,7 @@ fn settle_group(
     // kill carries them any more.
     let mut carried: Vec<String> = Vec::new();
     for (_, _, _, current, species) in &kills {
-        let kept: Option<String> = tx
-            .query_row(
-                "SELECT name FROM confirmed_mob_names WHERE name = ?1 OR name = ?2 LIMIT 1",
-                rusqlite::params![current, species],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(name) = kept {
-            if !carried.contains(&name) {
-                carried.push(name);
-            }
-        }
+        note_kept_name(tx, current, species, &mut carried)?;
     }
     let kind = match settled {
         Settled::Listed(_) => "listed",
@@ -1026,6 +1027,44 @@ fn settle_group(
             ],
         )?;
     }
+    finish_settlement(tx, session_id, carried, settled, now).map(Ok)
+}
+
+/// The confirmed name a kill recorded as `current` (of `species`) carries,
+/// if it carries one, noted among `carried` once.
+fn note_kept_name(
+    tx: &rusqlite::Transaction<'_>,
+    current: &str,
+    species: &str,
+    carried: &mut Vec<String>,
+) -> Result<(), DbError> {
+    use rusqlite::OptionalExtension as _;
+    let kept: Option<String> = tx
+        .query_row(
+            "SELECT name FROM confirmed_mob_names WHERE name = ?1 OR name = ?2 LIMIT 1",
+            rusqlite::params![current, species],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(name) = kept {
+        if !carried.contains(&name) {
+            carried.push(name);
+        }
+    }
+    Ok(())
+}
+
+/// What every settlement ends with: the confirmed names its kills carried
+/// before (`carried`) are retired when no kill carries them any more, a new
+/// name is kept, and the session's summary, days and settled cells are
+/// repaired. Answers whether the confirmed names changed.
+fn finish_settlement(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    carried: Vec<String>,
+    settled: &Settled,
+    now: f64,
+) -> Result<bool, DbError> {
     let mut names_changed = false;
     for name in carried {
         let retired = tx.execute(
@@ -1046,8 +1085,11 @@ fn settle_group(
     crate::session_summary::write_session_summary(tx, session_id)?;
     crate::daily_rollup::refresh_session_days(tx, session_id)?;
     crate::session_rollup::recompute_session(tx, session_id)?;
-    Ok(Ok(names_changed))
+    Ok(names_changed)
 }
+
+mod mobs;
+pub use mobs::{KeptLabel, MobReview, ReviewedMob, ReviewedRef};
 
 #[cfg(test)]
 mod tests;

@@ -131,10 +131,10 @@ export async function reassignSession(sessionId: string, definitionId: string) {
 }
 export const renameSessionMob = commands.trackingRenameMob;
 export const restoreSessionMob = commands.trackingRestoreMob;
-/** Every mob and suggestion the screen gave an ended session's kills,
- * grouped by mob and grade, the least certain first. */
+/** An ended session's kills by the mob the screen gave them: a line for
+ * each mob, and one for the kills it could not name. */
 export const getMobDetections = commands.trackingMobDetections;
-/** Settle every kill of one group: name the mob, or put back the
+/** Settle every kill of one line: name the mob, or put back the
  * declared mob each kill had. Answers with the refreshed review. */
 export const settleMobDetection = commands.trackingMobDetectionSettle;
 /** The mobs kept for the name reader beside the bundled list. */
@@ -147,6 +147,13 @@ export const checkCreatureEntry = commands.creatureEntryCheck;
 export const saveCreatureEntry = commands.creatureEntrySave;
 /** Stop keeping a mob; answers with the list as it now stands. */
 export const removeCreatureEntry = commands.creatureEntryRemove;
+/** The labels mobs are shown by in place of their printed names. */
+export const getMobLabels = commands.mobLabels;
+/** Show a mob (typed as the game prints it) under a label, from now on
+ * and everywhere it is recorded; answers with the labels as they stand. */
+export const setMobLabel = commands.mobLabelSet;
+/** Show a mob as the game prints it again. */
+export const clearMobLabel = commands.mobLabelClear;
 /** What the screen read as the tool in hand during a session that is not
  * in the library: tools of the game's data held without an entry, and
  * names that matched no tool. The ones still to be settled come first. */

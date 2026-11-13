@@ -104,14 +104,19 @@ fn instance(dice: &mut Dice, opening: usize, swarm: usize, hound: bool) -> Vec<K
     kills
 }
 
+/// How often a plate's name does not read at all, as the replay has it by
+/// default, and as play measured it in such a swarm (89 of 419 readings).
+const UNREAD: f64 = 0.05;
+const UNREAD_IN_PLAY: f64 = 0.21;
+
 /// The name as the recogniser reads it: whole most of the time, a letter
-/// off now and then, and now and then not at all.
-fn read(name: &str, dice: &mut Dice) -> Option<String> {
+/// off now and then, and not at all `unread` of the time.
+fn read(name: &str, dice: &mut Dice, unread: f64) -> Option<String> {
     let u = dice.unit();
-    if u < 0.05 {
+    if u < unread {
         return None;
     }
-    if u < 0.15 {
+    if u < unread + 0.1 {
         let mut chars: Vec<char> = name.chars().collect();
         let letters: Vec<usize> = (0..chars.len())
             .filter(|i| chars[*i].is_alphabetic())
@@ -150,6 +155,11 @@ struct Outcome {
 
 /// Replay the instance against the bundled list and `kept`.
 fn replay(seed: u64, kept: Vec<KeptCreature>, hound: bool) -> Outcome {
+    replay_reading(seed, kept, hound, UNREAD)
+}
+
+/// The same, a plate's name not reading at all `unread` of the time.
+fn replay_reading(seed: u64, kept: Vec<KeptCreature>, hound: bool, unread: f64) -> Outcome {
     let profile = bundled_profile();
     let catalogue = MobCatalogue::from_entities(&bundled_mobs(), kept, &profile.mob_names);
     let mut dice = Dice(seed);
@@ -174,15 +184,12 @@ fn replay(seed: u64, kept: Vec<KeptCreature>, hound: bool) -> Outcome {
         let lock = kills.iter().find(|k| k.locked <= t && t < k.died);
         let sighting = lock.map(|k| {
             let fill = 1.0 - (t - k.locked) / (k.died - k.locked);
-            let raw = read(k.creature, &mut dice);
-            Sighting {
-                fill: (fill * 20.0).round() / 20.0,
-                resolved: match &raw {
-                    Some(text) => resolve(text, Some(LEVEL), &catalogue, &profile.mob_names),
-                    None => Resolved::Unclear,
-                },
-                raw_name: raw,
-            }
+            let raw = read(k.creature, &mut dice, unread);
+            let resolved = match &raw {
+                Some(text) => resolve(text, Some(LEVEL), &catalogue, &profile.mob_names),
+                None => Resolved::Unclear,
+            };
+            Sighting::resolved((fill * 20.0).round() / 20.0, raw, resolved, &catalogue)
         });
         if lock.is_some_and(|k| k.creature != DOG)
             && sighting.as_ref().is_some_and(|s| s.raw_name.is_some())
@@ -387,6 +394,40 @@ fn a_creature_on_no_list_is_never_taken_for_another_and_is_named_once_kept() {
         assert!(
             right * 2 >= of,
             "seed {seed}: the hound named {right} of {of}"
+        );
+    }
+}
+
+/// The swarm read as play read it, one plate in five giving no name at
+/// all: a plate whose name never read is only a doubt where every name read
+/// round the kill was one creature's, so kills still take their creature,
+/// and none is taken for another at the top grade.
+#[test]
+fn a_swarm_whose_plates_often_do_not_read_still_names_its_kills() {
+    for seed in [1, 2, 3, 4, 5] {
+        let out = replay_reading(seed, Vec::new(), false, UNREAD_IN_PLAY);
+        let kills = kills_of(&out);
+        eprintln!(
+            "seed {seed}: {} right, {} carried, {} unnamed, {} wrong of {kills}",
+            out.right,
+            out.carried_right,
+            out.unnamed,
+            out.wrong.len()
+        );
+        assert_eq!(out.named_wrong, 0, "seed {seed}: {:#?}", out.wrong);
+        assert!(
+            out.wrong.len() * 100 <= kills * 2,
+            "seed {seed}: {:#?}",
+            out.wrong
+        );
+        assert!(
+            (out.right + out.carried_right) * 100 >= kills * 60,
+            "seed {seed}: {} of {kills} named",
+            out.right + out.carried_right
+        );
+        assert_eq!(
+            out.carried_swarm, 0,
+            "seed {seed}: carried once the hunt was mixed"
         );
     }
 }

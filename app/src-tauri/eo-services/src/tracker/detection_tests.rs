@@ -224,10 +224,13 @@ impl Hunt {
 
     fn deliver(&mut self, session: Option<&str>, at: i64, plate: Option<(&str, u32, f64)>) {
         let names = bundled_profile().mob_names;
-        let sighting = plate.map(|(text, level, fill)| Sighting {
-            fill,
-            raw_name: Some(text.to_string()),
-            resolved: resolve(text, Some(level), &self.catalogue, &names),
+        let sighting = plate.map(|(text, level, fill)| {
+            Sighting::resolved(
+                fill,
+                Some(text.to_string()),
+                resolve(text, Some(level), &self.catalogue, &names),
+                &self.catalogue,
+            )
         });
         let Some((watched, sink)) = self.watcher.sink.lock().unwrap().clone() else {
             return;
@@ -487,13 +490,13 @@ fn a_simulated_hunt_stamps_what_the_screen_proved_and_keeps_the_declaration_othe
 
     // What each kill truly was, in order.
     let truth = [
-        "Young Atrox",
+        "Atrox Young",
         "Gloomrat",
-        "Mature Daikiba",
-        "Old Atrox",
-        "Mature Daikiba",
-        "Young Atrox",
-        "Old Atrox",
+        "Daikiba Mature",
+        "Atrox Old",
+        "Daikiba Mature",
+        "Atrox Young",
+        "Atrox Old",
     ];
     let mut t = 0;
     // 1. A listed creature read cleanly.
@@ -556,11 +559,11 @@ fn a_simulated_hunt_stamps_what_the_screen_proved_and_keeps_the_declaration_othe
 
     let stamps = hunt.stamps();
     assert_eq!(stamps.len(), truth.len());
-    let declared = (s("Young Atrox"), s("declared"), None, None);
+    let declared = (s("Atrox Young"), s("declared"), None, None);
     assert_eq!(
         stamps[0],
         (
-            s("Young Atrox").unwrap(),
+            s("Atrox Young").unwrap(),
             s("detected"),
             s("named"),
             s("Atrox Young")
@@ -578,13 +581,13 @@ fn a_simulated_hunt_stamps_what_the_screen_proved_and_keeps_the_declaration_othe
     assert_eq!(
         stamps[2],
         (
-            s("Mature Daikiba").unwrap(),
+            s("Daikiba Mature").unwrap(),
             s("detected"),
             s("named"),
             s("Daikiba Mature")
         )
     );
-    assert_eq!(stamps[4].0, "Mature Daikiba");
+    assert_eq!(stamps[4].0, "Daikiba Mature");
     for i in [3, 5] {
         assert_eq!(
             (
@@ -622,7 +625,7 @@ fn a_simulated_hunt_stamps_what_the_screen_proved_and_keeps_the_declaration_othe
     assert_eq!(kept_rows.len(), 4);
     assert!(kept_rows
         .iter()
-        .all(|(_, _, declared)| declared == "Young Atrox"));
+        .all(|(_, _, declared)| declared == "Atrox Young"));
 
     // Stopping the session stops the watcher; its looks no longer reach it.
     hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
@@ -640,7 +643,7 @@ fn a_kill_unanswered_when_the_session_stops_keeps_its_declaration() {
     assert!(t > 0);
     assert_eq!(
         hunt.stamps(),
-        [(s("Young Atrox").unwrap(), s("declared"), None, None)]
+        [(s("Atrox Young").unwrap(), s("declared"), None, None)]
     );
     assert!(hunt.kept().is_empty());
 }
@@ -661,7 +664,7 @@ fn looks_that_reach_the_tracker_late_still_answer_the_kill_they_watched() {
     assert_eq!(
         hunt.stamps(),
         [(
-            s("Young Atrox").unwrap(),
+            s("Atrox Young").unwrap(),
             s("detected"),
             s("named"),
             s("Atrox Young")
@@ -689,7 +692,7 @@ fn a_kill_that_reaches_the_tracker_late_waits_for_the_looks_behind_it() {
     assert_eq!(
         hunt.stamps(),
         [(
-            s("Young Atrox").unwrap(),
+            s("Atrox Young").unwrap(),
             s("detected"),
             s("named"),
             s("Atrox Young")
@@ -702,7 +705,7 @@ fn a_kill_that_reaches_the_tracker_late_waits_for_the_looks_behind_it() {
 fn the_lowest_grade_is_a_suggestion_the_kill_does_not_take() {
     let mut hunt = hunt(true);
     hunt.start();
-    // A Daikiba fought and left, then an Old Atrox locked for two looks
+    // A Daikiba fought and left, then an Atrox Old locked for two looks
     // that stops a pulse before the screen goes empty: both were read in the
     // kill's moments, the Atrox was not read on the last look before the
     // report, and the player had not been on it long enough to have left
@@ -719,15 +722,15 @@ fn the_lowest_grade_is_a_suggestion_the_kill_does_not_take() {
     hunt.idle(7_000, 4);
     assert_eq!(
         hunt.stamps(),
-        [(s("Young Atrox").unwrap(), s("declared"), None, None)],
+        [(s("Atrox Young").unwrap(), s("declared"), None, None)],
         "the kill keeps its declared mob"
     );
     assert_eq!(
         hunt.kept(),
         [(
             "latest_read".to_string(),
-            "Old Atrox".to_string(),
-            "Young Atrox".to_string()
+            "Atrox Old".to_string(),
+            "Atrox Young".to_string()
         )],
         "exactly one suggestion, at the lowest grade"
     );
@@ -761,7 +764,7 @@ fn a_failure_inside_the_history_ends_detection_and_the_session_carries_on() {
     hunt.kill(2_000, Some(2_400));
     assert_eq!(
         hunt.stamps(),
-        [(s("Young Atrox").unwrap(), s("declared"), None, None)]
+        [(s("Atrox Young").unwrap(), s("declared"), None, None)]
     );
     assert!(hunt.tracker.is_tracking());
 }
@@ -834,7 +837,7 @@ fn with_detection_off_nothing_watches_and_every_kill_keeps_its_declaration() {
     hunt.kill(1_000, Some(1_600));
     assert_eq!(
         hunt.stamps(),
-        [(s("Young Atrox").unwrap(), s("declared"), None, None)]
+        [(s("Atrox Young").unwrap(), s("declared"), None, None)]
     );
     assert!(hunt.kept().is_empty());
 
@@ -874,7 +877,7 @@ fn a_look_taken_for_another_session_is_dropped() {
     }
     assert_eq!(
         hunt.stamps(),
-        [(s("Young Atrox").unwrap(), s("declared"), None, None)],
+        [(s("Atrox Young").unwrap(), s("declared"), None, None)],
         "the other session's looks name nothing here"
     );
 }
@@ -923,18 +926,18 @@ fn each_kill_is_named_by_the_screen_then_continuity_then_the_backstop_then_nothi
     // 6: with no backstop either, nothing names the kill.
     assert_eq!(
         hunt.rig.wait(hunt.tracker.release_declared_mob()),
-        Some("Young Atrox".to_string())
+        Some("Atrox Young".to_string())
     );
     hunt.quiet_kill(t);
 
     assert_eq!(
         hunt.routes(),
         [
-            route("Mature Daikiba", Some("named")),
-            route("Mature Daikiba", Some("named")),
-            route("Mature Daikiba", Some("named")),
-            route("Mature Daikiba", Some("continuity")),
-            route("Young Atrox", Some("backstop")),
+            route("Daikiba Mature", Some("named")),
+            route("Daikiba Mature", Some("named")),
+            route("Daikiba Mature", Some("named")),
+            route("Daikiba Mature", Some("continuity")),
+            route("Atrox Young", Some("backstop")),
             route("Unknown", None),
         ]
     );
@@ -943,11 +946,11 @@ fn each_kill_is_named_by_the_screen_then_continuity_then_the_backstop_then_nothi
     // its evidence was an earlier kill's.
     assert_eq!(
         stamps[3],
-        (s("Mature Daikiba").unwrap(), s("detected"), None, None)
+        (s("Daikiba Mature").unwrap(), s("detected"), None, None)
     );
     assert_eq!(
         stamps[4],
-        (s("Young Atrox").unwrap(), s("declared"), None, None)
+        (s("Atrox Young").unwrap(), s("declared"), None, None)
     );
     assert_eq!(stamps[5], (s("Unknown").unwrap(), None, None, None));
     // The screen's answers are kept with what was read; the continuity
@@ -955,7 +958,7 @@ fn each_kill_is_named_by_the_screen_then_continuity_then_the_backstop_then_nothi
     assert_eq!(hunt.kept().len(), 3);
     assert_eq!(
         hunt.continued(),
-        [("Mature Daikiba".to_string(), "Young Atrox".to_string())]
+        [("Daikiba Mature".to_string(), "Atrox Young".to_string())]
     );
     // Every kill answered keeps a trace of why, named or not.
     let traces = hunt.traces();
@@ -1048,9 +1051,9 @@ fn a_pin_from_the_screen_or_by_typing_names_every_kill_until_it_is_released() {
     assert_eq!(
         hunt.routes(),
         [
-            route("Old Atrox", Some("pinned_read")),
-            route("Mature Daikiba", Some("pinned_typed")),
-            route("Young Atrox", Some("backstop")),
+            route("Atrox Old", Some("pinned_read")),
+            route("Daikiba Mature", Some("pinned_typed")),
+            route("Atrox Young", Some("backstop")),
         ]
     );
     let stamps = hunt.stamps();
@@ -1148,13 +1151,13 @@ fn without_detection_the_typed_creature_is_pinned_by_typing() {
     hunt.kill(1_000, Some(1_600));
     assert_eq!(
         hunt.rig.wait(hunt.tracker.release_declared_mob()),
-        Some("Young Atrox".to_string())
+        Some("Atrox Young".to_string())
     );
     hunt.kill(3_000, Some(3_600));
     assert_eq!(
         hunt.routes(),
         [
-            route("Young Atrox", Some("pinned_typed")),
+            route("Atrox Young", Some("pinned_typed")),
             route("Unknown", None)
         ]
     );
@@ -1212,7 +1215,7 @@ fn a_watch_that_ends_by_itself_leaves_the_typed_creature_pinned_and_says_so_once
     hunt.kill(2_000, Some(2_600));
     assert_eq!(
         hunt.routes(),
-        [route("Young Atrox", Some("pinned_typed"))],
+        [route("Atrox Young", Some("pinned_typed"))],
         "no detecting state: the typed creature is the player's word"
     );
 }
@@ -1258,7 +1261,7 @@ fn a_pin_stands_whether_detection_is_on_or_off_until_it_is_released_or_replaced(
         .wait(hunt.tracker.pin_typed(mob("Daikiba", "Mature")))
         .unwrap();
     hunt.rig
-        .wait(hunt.tracker.set_declared_mob("Old Atrox", "Atrox", "Old"))
+        .wait(hunt.tracker.set_declared_mob("Atrox Old", "Atrox", "Old"))
         .unwrap();
     let view = hunt.view();
     assert_eq!(
@@ -1277,9 +1280,9 @@ fn a_pin_stands_whether_detection_is_on_or_off_until_it_is_released_or_replaced(
     assert_eq!(
         hunt.routes(),
         [
-            route("Mature Daikiba", Some("pinned_typed")),
-            route("Young Atrox", Some("pinned_typed")),
-            route("Old Atrox", Some("pinned_typed")),
+            route("Daikiba Mature", Some("pinned_typed")),
+            route("Atrox Young", Some("pinned_typed")),
+            route("Atrox Old", Some("pinned_typed")),
         ]
     );
 }
@@ -1321,7 +1324,7 @@ fn a_creature_on_no_list_pinned_from_the_screen_is_kept_for_the_review() {
             "provisional_pinned".to_string(),
             "Gloomrat".to_string(),
             Some(key),
-            "Young Atrox".to_string()
+            "Atrox Young".to_string()
         )]
     );
     // The kill itself stays the player's word.
@@ -1422,9 +1425,163 @@ fn nothing_is_captured_while_a_creature_is_pinned_and_capture_resumes_on_release
         shots.recv().expect("the watch resumes after release");
     }
     assert_eq!(captures.load(Ordering::SeqCst), 5);
-    assert_eq!(hunt.routes(), [route("Old Atrox", Some("pinned_typed"))]);
+    assert_eq!(hunt.routes(), [route("Atrox Old", Some("pinned_typed"))]);
 
     hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
     assert!(watch.wait_for_workers(BOUND));
     assert_eq!(captures.load(Ordering::SeqCst), 5);
+}
+
+/// Event creatures graded by number, as the bundled list has them: one
+/// filed under a wider species at another number, one with no species.
+fn event_creatures() -> MobCatalogue {
+    MobCatalogue::new(
+        [
+            CatalogueMob {
+                name: "Survival Rage Zombie".into(),
+                species: Some("Halloween Creatures".into()),
+                maturity: Some("6".into()),
+                level: Some(14),
+            },
+            CatalogueMob {
+                name: "Survival Zombie Dog".into(),
+                species: None,
+                maturity: Some("4".into()),
+                level: Some(8),
+            },
+        ],
+        Vec::<String>::new(),
+        &bundled_profile().mob_names,
+    )
+}
+
+impl Hunt {
+    /// Each kill as recorded, in order: its name, and the mob it is (name
+    /// and maturity).
+    fn recorded(&self) -> Vec<(String, String, String)> {
+        self.settle();
+        self.rig
+            .wait(self.rig.db.with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT mob_name, mob_species, mob_maturity FROM kills \
+                     ORDER BY timestamp, rowid",
+                )?;
+                let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            }))
+            .unwrap()
+    }
+
+    /// The labels kept, in order: the mob (name and maturity), what it is
+    /// shown as, and who chose it.
+    fn labels(&self) -> Vec<(String, String, String, String)> {
+        self.rig
+            .wait(self.rig.db.with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT species, maturity, label, source FROM mob_display_names \
+                     ORDER BY species, maturity",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?;
+                Ok(rows.collect::<Result<_, _>>()?)
+            }))
+            .unwrap()
+    }
+}
+
+fn row(a: &str, b: &str, c: &str) -> (String, String, String) {
+    (a.into(), b.into(), c.into())
+}
+
+#[test]
+fn a_kill_is_recorded_as_its_own_creature_and_shown_as_its_plate_prints_it() {
+    let mut hunt = hunt(true);
+    hunt.catalogue = event_creatures();
+    hunt.start();
+    let next = hunt.fight(0, &["Survival Zombie Dog 04"; 4], 8);
+    let next = hunt.idle(next, 6);
+    let next = hunt.fight(next, &["Survival Rage Zombie 04"; 4], 8);
+    hunt.idle(next, 6);
+    // Each kill is its own creature at its number, never the wider species
+    // the list files the zombie under; shown with the number as the plate
+    // prints it, where the list has it unpadded.
+    assert_eq!(
+        hunt.recorded(),
+        [
+            row("Survival Zombie Dog 04", "Survival Zombie Dog", "4"),
+            row("Survival Rage Zombie 04", "Survival Rage Zombie", "4"),
+        ]
+    );
+    // The printing is kept, so the mob reads so before its plate is read
+    // again, and what the overlay shows of the screen reads the same.
+    assert_eq!(
+        hunt.labels(),
+        [
+            (
+                "Survival Rage Zombie".into(),
+                "4".into(),
+                "Survival Rage Zombie 04".into(),
+                "plate".into()
+            ),
+            (
+                "Survival Zombie Dog".into(),
+                "4".into(),
+                "Survival Zombie Dog 04".into(),
+                "plate".into()
+            ),
+        ]
+    );
+    assert_eq!(
+        hunt.tracker.mob_names().chosen("Survival Zombie Dog", "4"),
+        s("Survival Zombie Dog 04")
+    );
+}
+
+#[test]
+fn the_players_label_for_a_mob_names_its_kills_and_no_reading_replaces_it() {
+    let mut hunt = hunt(true);
+    hunt.catalogue = event_creatures();
+    hunt.start();
+    let next = hunt.fight(0, &["Survival Zombie Dog 04"; 4], 8);
+    let next = hunt.idle(next, 6);
+    // The player labels the mob: every kill of it reads so, the one already
+    // recorded too.
+    hunt.settle();
+    let labels = hunt
+        .rig
+        .wait(hunt.rig.db.with_writer(|conn| {
+            let tx = conn.transaction()?;
+            crate::mob_display::set_label(
+                &tx,
+                "Survival Zombie Dog",
+                "4",
+                "Dog IV",
+                crate::mob_display::LabelSource::Player,
+                10.0,
+            )?;
+            let labels = crate::mob_display::labels(&tx)?;
+            tx.commit()?;
+            Ok(labels)
+        }))
+        .unwrap();
+    hunt.tracker.mob_names().replace(labels);
+    let next = hunt.fight(next, &["Survival Zombie Dog 04"; 4], 8);
+    hunt.idle(next, 6);
+    assert_eq!(
+        hunt.recorded(),
+        [
+            row("Dog IV", "Survival Zombie Dog", "4"),
+            row("Dog IV", "Survival Zombie Dog", "4"),
+        ]
+    );
+    assert_eq!(
+        hunt.labels(),
+        [(
+            "Survival Zombie Dog".into(),
+            "4".into(),
+            "Dog IV".into(),
+            "player".into()
+        )]
+    );
 }

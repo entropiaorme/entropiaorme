@@ -42,7 +42,7 @@ vi.mock('$lib/api', () => ({
 	getSessionDetail: vi.fn(),
 	renameSessionMob: vi.fn(),
 	restoreSessionMob: vi.fn(),
-	getMobDetections: vi.fn(async () => ({ sessionId: 's1', ended: true, groups: [] })),
+	getMobDetections: vi.fn(async () => ({ sessionId: 's1', ended: true, mobs: [] })),
 	settleMobDetection: vi.fn(),
 	getToolSightings: vi.fn(async () => ({ sessionId: 's1', ended: true, sightings: [] })),
 	settleToolSighting: vi.fn(),

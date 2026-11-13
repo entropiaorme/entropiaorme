@@ -1591,11 +1591,7 @@ impl Api {
         let maturity = maturity.unwrap_or_default();
         let species = species.trim();
         let maturity = maturity.trim();
-        let display = if maturity.is_empty() {
-            species.to_string()
-        } else {
-            format!("{maturity} {species}")
-        };
+        let display = eo_services::mob_display::printed(species, maturity);
         // Validate and write inside a block so the (non-`Send`) config
         // guard is gone before the tracker await below.
         {

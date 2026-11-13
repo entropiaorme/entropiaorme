@@ -1944,10 +1944,8 @@ pub fn clear_manual_mob() -> Map<String, Value> {
 pub fn mob_display(species: &str, maturity: &str) -> Value {
     if species.is_empty() {
         Value::Null
-    } else if maturity.is_empty() {
-        Value::String(species.to_string())
     } else {
-        Value::String(format!("{maturity} {species}"))
+        Value::String(crate::mob_display::printed(species, maturity))
     }
 }
 
@@ -3610,7 +3608,7 @@ mod tests {
         // Species with and without maturity, and a whitespace-only species.
         config.manual_mob_species = "Argonaut".to_string();
         config.manual_mob_maturity = "Young".to_string();
-        assert_eq!(name(&config).as_deref(), Some("Young Argonaut"));
+        assert_eq!(name(&config).as_deref(), Some("Argonaut Young"));
         assert_eq!(
             declared_mob(&config).map(|mob| (mob.species, mob.maturity)),
             Some(("Argonaut".to_string(), "Young".to_string()))
@@ -3664,7 +3662,7 @@ mod tests {
 
     #[test]
     fn mob_display_joins_maturity_and_species() {
-        assert_eq!(mob_display("Argonaut", "Young"), json!("Young Argonaut"));
+        assert_eq!(mob_display("Argonaut", "Young"), json!("Argonaut Young"));
         assert_eq!(mob_display("Argonaut", ""), json!("Argonaut"));
         assert_eq!(mob_display("", ""), Value::Null);
     }

@@ -2409,6 +2409,7 @@ fn a_gone_tracker_lets_a_declaration_go_the_way_a_press_does() {
         sender,
         status,
         doses: crate::consumables::DoseBoard::new(rig.clock.clone()),
+        mob_names: Arc::default(),
     };
     assert_eq!(
         rig.wait(gone.declare_tool(item(2, "Cannon", HotbarItemKind::Weapon), 1.0)),

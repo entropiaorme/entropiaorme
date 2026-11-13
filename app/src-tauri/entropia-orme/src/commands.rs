@@ -55,8 +55,8 @@ use eo_api::market::{
     MarketPastePreview, MarketUnitPriceResult,
 };
 use eo_api::mob_detection::{
-    CreatureEntry, CreatureEntryCheck, MobDetectionGroupRef, MobDetectionReview,
-    MobDetectionSettleResult, MobDetectionTarget, MobPin, MobPinTarget,
+    CreatureEntry, CreatureEntryCheck, MobDetectionReview, MobDetectionSettleResult,
+    MobDetectionTarget, MobLabel, MobPin, MobPinTarget, MobReviewRef,
 };
 use eo_api::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
@@ -1498,11 +1498,11 @@ pub async fn tracking_mob_detections(
 pub async fn tracking_mob_detection_settle(
     app: tauri::AppHandle,
     session_id: String,
-    group: MobDetectionGroupRef,
+    mob: MobReviewRef,
     target: MobDetectionTarget,
 ) -> Result<MobDetectionSettleResult, ApiError> {
     facade(&app)?
-        .tracking_mob_detection_settle(session_id, group, target)
+        .tracking_mob_detection_settle(session_id, mob, target)
         .await
 }
 
@@ -1538,6 +1538,29 @@ pub async fn creature_entry_remove(
     name: String,
 ) -> Result<Vec<CreatureEntry>, ApiError> {
     facade(&app)?.creature_entry_remove(name).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mob_labels(app: tauri::AppHandle) -> Result<Vec<MobLabel>, ApiError> {
+    facade(&app)?.mob_labels().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mob_label_set(
+    app: tauri::AppHandle,
+    mob: String,
+    label: String,
+) -> Result<Vec<MobLabel>, ApiError> {
+    facade(&app)?.mob_label_set(mob, label).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mob_label_clear(
+    app: tauri::AppHandle,
+    species: String,
+    maturity: String,
+) -> Result<Vec<MobLabel>, ApiError> {
+    facade(&app)?.mob_label_clear(species, maturity).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

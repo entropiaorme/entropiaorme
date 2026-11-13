@@ -89,8 +89,9 @@ describe('tracking wrappers dispatch typed commands', () => {
 				api.settleMobDetection(
 					's1',
 					{
-						grade: 'provisional',
-						creature: { name: 'Gloomrat', species: '', maturity: '' },
+						kind: 'mob',
+						species: 'Gloomrat',
+						maturity: '',
 						provisionalKey: 'GLOOMRAT L4 #0',
 					},
 					{ kind: 'declared' },
@@ -98,9 +99,10 @@ describe('tracking wrappers dispatch typed commands', () => {
 			'tracking_mob_detection_settle',
 			{
 				session_id: 's1',
-				group: {
-					grade: 'provisional',
-					creature: { name: 'Gloomrat', species: '', maturity: '' },
+				mob: {
+					kind: 'mob',
+					species: 'Gloomrat',
+					maturity: '',
 					provisionalKey: 'GLOOMRAT L4 #0',
 				},
 				target: { kind: 'declared' },

@@ -96,6 +96,14 @@
 	}
 
 	function schedulePlace() {
+		// A window that is not on screen is given no animation frames, so
+		// the placement that puts it there cannot wait for one: until the
+		// window has been shown (to be measured, or revealed) it is placed
+		// at once.
+		if (!revealed && !measuring) {
+			void place();
+			return;
+		}
 		if (frame != null) return;
 		frame = window.requestAnimationFrame(() => {
 			frame = null;

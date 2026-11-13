@@ -161,6 +161,17 @@ describe('showing', () => {
 		expect(screen.getByTestId('sub-window').dataset.subWindow).toBe('picker');
 	});
 
+	it('reveals itself without an animation frame, which a window not on screen is never given', async () => {
+		const frames = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(1);
+		try {
+			await mount();
+			await emit(channel.show, envelope());
+			expect(seams.order).toEqual(['setSize', 'setPosition', 'show', 'setFocus']);
+		} finally {
+			frames.mockRestore();
+		}
+	});
+
 	it('sits above its control where there is no room below', async () => {
 		await mount();
 		await emit(

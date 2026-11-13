@@ -18,7 +18,7 @@ use crate::bus_events::{
 };
 use crate::clock::Clock;
 use crate::consumables::ConsumableProfile;
-use crate::healing_profile::HealingProfile;
+use crate::healing_profile::{HealingMode, HealingProfile};
 use crate::hotbar_listener::ResolvedHotbarItem;
 use crate::screen_watch::WatchEnded;
 use crate::time::{clock_epoch_ms, naive_to_epoch};
@@ -221,6 +221,35 @@ fn finder() -> ResolvedHotbarItem {
     }
 }
 
+/// Leech: a weapon whose hits heal half their damage back.
+fn leech() -> ResolvedHotbarItem {
+    ResolvedHotbarItem {
+        lifesteal_percent: Some(50.0),
+        ..item(9, "Leech", HotbarItemKind::Weapon)
+    }
+}
+
+/// Mender: heals 60-100 at once and opens an effect ticking 60-70 for
+/// twenty seconds, 3 s to reload, at 4 PEC a use. Its ticks fall inside its
+/// direct band, so a tick and a fresh use can read the same.
+fn mender() -> ResolvedHotbarItem {
+    ResolvedHotbarItem {
+        cost_per_use_ped: 0.04,
+        reload_seconds: 3.0,
+        healing_profile: Some(HealingProfile {
+            mode: HealingMode::Compound,
+            direct_min: Some(60.0),
+            direct_max: Some(100.0),
+            effect_duration_seconds: Some(20.0),
+            tick_min: Some(60.0),
+            tick_max: Some(70.0),
+            tick_seconds: Some(2.0),
+            ..HealingProfile::default()
+        }),
+        ..item(10, "Mender", HotbarItemKind::Healing)
+    }
+}
+
 fn vita() -> ConsumableProfile {
     ConsumableProfile {
         duration_seconds: 60.0,
@@ -314,6 +343,8 @@ fn hunt_over(reading: bool, keyless: bool, weapons: Vec<CarriedWeaponProfile>) -
             4 => Some(fap()),
             6 => Some(finder()),
             7 => Some(item(7, "Zapper", HotbarItemKind::Weapon)),
+            9 => Some(leech()),
+            10 => Some(mender()),
             _ => None,
         })),
         bundled_tools: Some(Arc::new(bundled)),
@@ -414,6 +445,7 @@ impl Hunt {
             "Cannon" => item(2, "Cannon", kind),
             "Rifle" => item(3, "Rifle", kind),
             "FAP" => fap(),
+            "Mender" => mender(),
             "Restoration" => ResolvedHotbarItem {
                 healing_profile: Some(fap_profile()),
                 ..item(8, "Restoration", kind)
@@ -2843,4 +2875,120 @@ fn a_declaration_from_an_intent_alone_does_not_claim_to_know_the_parts() {
     assert_eq!(setup.kind, HotbarItemKind::Healing);
     assert_eq!(setup.parts, None);
     assert!((setup.cost_per_use.value() - 0.03).abs() < 1e-12);
+}
+
+// The healer in hand while the screen is the source: holding it is a
+// standing claim, not a press.
+
+#[test]
+fn a_heal_below_the_held_healers_band_is_not_billed_without_a_press() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(4), 0.0);
+    hunt.advance(0.5);
+    hunt.heal(80.0);
+    assert_eq!(activations(&hunt).len(), 1, "an in-band heal is a use");
+    // Past the reload, a small heal (a regeneration tick, a buff): it
+    // could be a use capped by full health, or passive healing; with no
+    // press it cannot be told apart, so it costs nothing.
+    hunt.advance(4.0);
+    hunt.heal(20.0);
+    assert_eq!(activations(&hunt).len(), 1, "not billed");
+    assert_eq!(
+        heal_classes(&hunt).last().map(String::as_str),
+        Some("unattributed")
+    );
+}
+
+#[test]
+fn a_capped_heal_on_a_press_of_the_held_healer_is_billed_and_a_late_one_is_not() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(4), 0.0);
+    hunt.advance(4.0);
+    hunt.key("FAP", HotbarItemKind::Healing);
+    hunt.advance(0.3);
+    hunt.heal(20.0);
+    let stored = activations(&hunt);
+    assert_eq!(stored.len(), 1, "the press makes the small heal a use");
+    assert_eq!(stored[0].0.as_deref(), Some("key"));
+
+    // A press whose edge has passed vouches for nothing.
+    hunt.advance(4.0);
+    hunt.key("FAP", HotbarItemKind::Healing);
+    hunt.advance(2.0);
+    hunt.heal(20.0);
+    assert_eq!(activations(&hunt).len(), 1);
+    // An in-band heal past the reload is still a use without the edge.
+    hunt.advance(2.0);
+    hunt.heal(80.0);
+    assert_eq!(activations(&hunt).len(), 2);
+}
+
+#[test]
+fn a_heal_the_held_weapons_lifesteal_explains_is_not_a_use_of_the_healer() {
+    let weapons = || {
+        vec![
+            carried(1, "Pistol", 10.0, 0.05),
+            carried(9, "Leech", 160.0, 0.5),
+        ]
+    };
+    let hunt = hunt_over(true, false, weapons());
+    hunt.start();
+    hunt.see(holding(9), 0.0);
+    hunt.shot(150.0);
+    // Swapped to the healer as the hit's lifesteal (75) lands, inside the
+    // healer's band.
+    hunt.see(holding(4), 0.0);
+    hunt.heal(75.0);
+    assert!(
+        activations(&hunt).is_empty(),
+        "the lifesteal, not the healer"
+    );
+    assert_eq!(heal_classes(&hunt), vec!["passive".to_string()]);
+
+    // A heal the lifesteal does not explain is the healer's.
+    let hunt = hunt_over(true, false, weapons());
+    hunt.start();
+    hunt.see(holding(9), 0.0);
+    hunt.shot(150.0);
+    hunt.see(holding(4), 0.0);
+    hunt.heal(98.0);
+    assert_eq!(activations(&hunt).len(), 1);
+}
+
+#[test]
+fn the_screen_seeing_a_healer_gives_a_tick_no_edge_and_a_press_does() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(10), 0.0);
+    hunt.advance(0.5);
+    hunt.heal(90.0);
+    assert_eq!(
+        activations(&hunt).len(),
+        1,
+        "the first use opens its effect"
+    );
+
+    // Put away and taken up again past the reload: a heal inside the
+    // effect's ticks and the direct band is the effect's tick.
+    hunt.advance(4.0);
+    hunt.see(holding(1), 0.0);
+    hunt.see(holding(10), 0.0);
+    hunt.advance(0.3);
+    hunt.heal(65.0);
+    assert_eq!(activations(&hunt).len(), 1, "a tick, not a use");
+    assert_eq!(
+        heal_classes(&hunt).last().map(String::as_str),
+        Some("effect")
+    );
+
+    // A press of the held healer is a use: the same heal is its output.
+    hunt.advance(1.0);
+    hunt.key("Mender", HotbarItemKind::Healing);
+    hunt.advance(0.3);
+    hunt.heal(65.0);
+    let stored = activations(&hunt);
+    assert_eq!(stored.len(), 2);
+    assert_eq!(stored[1].0.as_deref(), Some("key"));
 }

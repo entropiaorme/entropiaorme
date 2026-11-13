@@ -7,6 +7,16 @@
 //! handled by retaining a short unresolved output tail and reconciling it
 //! when the earlier OS key occurrence arrives.
 //!
+//! While the tool in hand is read off the game screen, the screen says
+//! which healer is held but not that it was used: holding it is a standing
+//! claim, not a press. Only a press of the held healer's key (which passes
+//! through as a use) gives a heal the edge a press gives. Under a standing
+//! claim, a heal is a paid use only when it fits the healer's band, its
+//! reload has passed, no open effect window takes it, and the held weapon's
+//! lifesteal does not explain it; a capped heal (below the band) needs that
+//! fresh press, since without one it cannot be told from passive healing.
+//! A session whose keys are the source keeps the press-led rules above.
+//!
 //! A keyless session (a machine that cannot read keys) has no press to open
 //! a candidate, so the healer last declared in the overlay stays in hand and
 //! a heal it explains is inferred as a paid use: it must fit the healer's
@@ -323,6 +333,22 @@ impl HealingRuntime {
             })
     }
 
+    /// Whether a heal at `observed_at` lands on `intent`'s fresh edge: inside
+    /// the delivery tail of the moment it opened.
+    fn on_fresh_edge(intent: &HealingIntent, observed_at: f64) -> bool {
+        observed_at >= intent.occurred_at - 0.05
+            && observed_at - intent.occurred_at <= DELIVERY_TAIL_SECONDS
+    }
+
+    /// Whether `intent` is only a standing claim on a heal at `observed_at`:
+    /// the screen is the source of the tool in hand (`screen`), and the heal
+    /// is not on the fresh edge of a press of the held healer's key. The
+    /// screen seeing a healer, or the player choosing one in the overlay, is
+    /// not a use.
+    fn standing(intent: &HealingIntent, observed_at: f64, screen: bool) -> bool {
+        screen && !(intent.source == IntentSource::Key && Self::on_fresh_edge(intent, observed_at))
+    }
+
     fn activation_match(&self, intent: &HealingIntent, amount: f64) -> Option<&'static str> {
         intent
             .profile
@@ -494,6 +520,7 @@ impl TrackerActor {
             return false;
         }
         let observed_at = instant_to_epoch(resolve_local(self.clock.now()));
+        let screen = self.screen_is_source();
         let decision = {
             let Some(active) = self.session.active_mut() else {
                 return false;
@@ -501,15 +528,24 @@ impl TrackerActor {
             active.healing.prune(observed_at);
             let context_id = active.intervals.context_id();
             let session_id = active.session.id.clone();
+            let standing =
+                |intent: &HealingIntent| HealingRuntime::standing(intent, observed_at, screen);
+            // A standing claim is not billed for a heal the held weapon's
+            // lifesteal explains, as an inferred use is not.
             let direct = active.healing.candidate(observed_at).and_then(|intent| {
                 active
                     .healing
                     .activation_match(intent, amount)
                     .filter(|_| active.healing.cooldown_ready(intent, observed_at))
+                    .filter(|_| {
+                        !standing(intent) || !active.healing.lifesteal_explains(observed_at, amount)
+                    })
                     .map(|provenance| (intent.clone(), provenance))
             });
+            // A capped heal is told from passive healing only by a press.
             let capped = active.healing.candidate(observed_at).and_then(|intent| {
-                (!active.healing.damage_correlated(observed_at, amount)
+                (!standing(intent)
+                    && !active.healing.damage_correlated(observed_at, amount)
                     && intent.profile.health_capped_direct_matches(amount)
                     && active.healing.cooldown_ready(intent, observed_at))
                 .then(|| intent.clone())
@@ -520,11 +556,11 @@ impl TrackerActor {
             // activation evidence even when an old effect overlaps it. Once
             // that edge ages out, the effect receives the conservative claim:
             // a merely held healer cannot turn an ambiguous tick into cost.
-            let direct_has_fresh_edge = direct.as_ref().is_some_and(|(intent, _)| {
-                observed_at >= intent.occurred_at - 0.05
-                    && observed_at - intent.occurred_at <= DELIVERY_TAIL_SECONDS
+            // Under a standing claim there is no edge: the screen seeing the
+            // healer is not a press.
+            let fresh_direct = direct.clone().filter(|(intent, _)| {
+                HealingRuntime::on_fresh_edge(intent, observed_at) && !standing(intent)
             });
-            let fresh_direct = direct.clone().filter(|_| direct_has_fresh_edge);
 
             if let Some((intent, provenance)) = fresh_direct {
                 HealingDecision::Activation {
@@ -619,6 +655,7 @@ impl TrackerActor {
     }
 
     async fn reconcile_pending_heal(&mut self, intent_at: f64) {
+        let screen = self.screen_is_source();
         let pending = {
             let Some(active) = self.session.active_mut() else {
                 return;
@@ -639,7 +676,11 @@ impl TrackerActor {
                         .activation_match(&intent, output.amount)
                         .is_some();
                     let cooldown = active.healing.cooldown_ready(&intent, output.observed_at);
-                    (within_tail && matches && cooldown).then(|| output.clone())
+                    let lifesteal = HealingRuntime::standing(&intent, output.observed_at, screen)
+                        && active
+                            .healing
+                            .lifesteal_explains(output.observed_at, output.amount);
+                    (within_tail && matches && cooldown && !lifesteal).then(|| output.clone())
                 })
         };
         let Some(output) = pending else {

@@ -505,7 +505,7 @@ impl TrackerActor {
 
     /// Whether the screen is the source of the tool in hand for the
     /// running session.
-    fn screen_is_source(&self) -> bool {
+    pub(super) fn screen_is_source(&self) -> bool {
         self.session
             .active()
             .is_some_and(|active| active.held_tool.is_some())

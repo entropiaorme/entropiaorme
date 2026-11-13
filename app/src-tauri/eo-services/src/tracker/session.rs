@@ -162,9 +162,16 @@ pub(super) struct ActiveSession {
     /// The tool in hand as read off the screen, while the screen is the
     /// source of it for this session.
     pub(super) held_tool: Option<super::held_tool::SessionHeldTool>,
-    /// When the screen stopped being read by itself this session (epoch
-    /// milliseconds): the keys are the source since.
-    pub(super) screen_stopped: Option<i64>,
+    /// Why the keys are the source though the reading is on: the watch
+    /// ended by itself, or never started.
+    pub(super) screen_off: Option<super::held_tool::ScreenOff>,
+    /// A tool unseen when the reading ended whose settlement could not be
+    /// saved then: the stop settles it.
+    pub(super) unsettled: Vec<super::held_tool::Unsettled>,
+    /// Steps taken over the accumulator's rows and the kills when shots are
+    /// moved, for tests that bound the cost.
+    #[cfg(test)]
+    pub(super) steps: u64,
 }
 
 impl ActiveSession {
@@ -203,7 +210,10 @@ impl ActiveSession {
             detection: None,
             reading_told: false,
             held_tool: None,
-            screen_stopped: None,
+            screen_off: None,
+            unsettled: Vec::new(),
+            #[cfg(test)]
+            steps: 0,
         }
     }
 
@@ -1141,7 +1151,7 @@ impl TrackerActor {
         let (settled, restore) = match settlement {
             Some(settlement) => (
                 Some(settlement.moved),
-                Some((settlement.backup, settlement.hold)),
+                Some((settlement.backup, settlement.hold, settlement.unsettled)),
             ),
             None => (None, None),
         };
@@ -1186,11 +1196,19 @@ impl TrackerActor {
                 Ok(())
             })
             .await;
-        if let Err(error) = stopped {
-            if let Some((backup, hold)) = restore {
-                self.restore_stop_settlement(backup, hold);
+        match (stopped, restore) {
+            (Err(error), Some((backup, hold, unsettled))) => {
+                self.restore_stop_settlement(backup, hold, unsettled);
+                return Err(error);
             }
-            return Err(error);
+            (Err(error), None) => return Err(error),
+            // Saved: the settlement stands.
+            (Ok(()), Some((backup, _, _))) => {
+                if let Some(active) = self.session.active_mut() {
+                    backup.commit(active);
+                }
+            }
+            (Ok(()), None) => {}
         }
         self.unsubscribe_handlers();
         self.drop_detection();

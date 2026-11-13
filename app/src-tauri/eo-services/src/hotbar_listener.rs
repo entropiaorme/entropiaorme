@@ -252,11 +252,13 @@ impl HotbarListener {
     }
 
     /// Resolve an equipment item as a declaration of it would, without
-    /// declaring it: a running session is needed, as for a declaration.
+    /// declaring it: a running session is needed, as for a declaration, and
+    /// is answered with the item, for [`Self::declare_resolved`] to require.
     /// Resolves synchronously (a database read), so call it off the async
     /// runtime.
-    pub fn resolve(&self, equipment_id: i64) -> Result<ResolvedHotbarItem, DeclareError> {
-        self.gate
+    pub fn resolve(&self, equipment_id: i64) -> Result<(String, ResolvedHotbarItem), DeclareError> {
+        let session_id = self
+            .gate
             .active_session_id
             .lock()
             .expect("active session")
@@ -269,29 +271,31 @@ impl HotbarListener {
             .expect("item resolver")
             .clone()
             .ok_or(DeclareError::UnknownItem)?;
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resolver(equipment_id)))
-            .unwrap_or(None)
-            .ok_or(DeclareError::UnknownItem)
+        let item =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resolver(equipment_id)))
+                .unwrap_or(None)
+                .ok_or(DeclareError::UnknownItem)?;
+        if !session_matches(&self.gate, &session_id) {
+            return Err(DeclareError::NoSession);
+        }
+        Ok((session_id, item))
     }
 
     /// Declare an item already resolved (see [`Self::resolve`]) as in hand,
-    /// as its press would: published for the running session.
+    /// as its press would, for the session it was resolved in: refused when
+    /// that session is no longer the running one.
     pub fn declare_resolved(
         &self,
+        session_id: &str,
         item: &ResolvedHotbarItem,
         occurred_at: f64,
     ) -> Result<(), DeclareError> {
-        let session_id = self
-            .gate
-            .active_session_id
-            .lock()
-            .expect("active session")
-            .clone()
-            .filter(|_| self.gate.session_active.load(Ordering::SeqCst))
-            .ok_or(DeclareError::NoSession)?;
+        if !session_matches(&self.gate, session_id) {
+            return Err(DeclareError::NoSession);
+        }
         publish_intent(
             &self.bus,
-            session_id,
+            session_id.to_string(),
             String::new(),
             crate::bus_events::IntentSource::Overlay,
             occurred_at,
@@ -583,6 +587,50 @@ mod tests {
             }),
             _ => None,
         })
+    }
+
+    #[test]
+    fn a_resolved_declaration_is_published_only_into_the_session_it_was_resolved_in() {
+        let rig = rig(None);
+        rig.listener
+            .set_item_resolver(Arc::new(|id: i64| standard_resolver()(&id.to_string())));
+        assert_eq!(rig.listener.resolve(2), Err(DeclareError::NoSession));
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        assert_eq!(rig.listener.resolve(9), Err(DeclareError::UnknownItem));
+        let (session_id, item) = rig.listener.resolve(2).expect("resolved");
+        assert_eq!(session_id, "s1");
+        // The session is swapped between the resolve and the declaration:
+        // the declaration is refused, as a declaration across a swap is.
+        rig.bus
+            .publish(&BusEvent::SessionStopped(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s2".into(),
+            }));
+        assert_eq!(
+            rig.listener.declare_resolved(&session_id, &item, 100.0),
+            Err(DeclareError::NoSession)
+        );
+        let (session_id, item) = rig.listener.resolve(2).expect("resolved");
+        rig.listener
+            .declare_resolved(&session_id, &item, 100.5)
+            .expect("declared");
+        let intents: Vec<Value> = rig
+            .stream
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(topic, _)| *topic == Topic::HotbarIntent)
+            .map(|(_, payload)| payload.clone())
+            .collect();
+        assert_eq!(intents.len(), 1, "only the declaration in its own session");
+        assert_eq!(intents[0]["session_id"], "s2");
+        assert_eq!(intents[0]["source"], "overlay");
     }
 
     #[test]

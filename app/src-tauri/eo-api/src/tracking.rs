@@ -1514,7 +1514,7 @@ impl Api {
         let hotbar = self.hotbar.clone();
         let occurred_at =
             eo_services::time::instant_to_epoch(eo_services::time::resolve_local(self.clock.now()));
-        let item = tokio::task::spawn_blocking(move || hotbar.resolve(equipment_id))
+        let (session_id, item) = tokio::task::spawn_blocking(move || hotbar.resolve(equipment_id))
             .await
             .map_err(ApiError::internal("equipment declaration"))?
             .map_err(declare_error)?;
@@ -1525,7 +1525,7 @@ impl Api {
             .map_err(tracker_conflict)?;
         if declared == ToolDeclared::KeysAreSource {
             self.hotbar
-                .declare_resolved(&item, occurred_at)
+                .declare_resolved(&session_id, &item, occurred_at)
                 .map_err(declare_error)?;
         }
         Ok(DeclaredEquipment {

@@ -459,7 +459,19 @@ pub(super) struct AttributionRuntime {
     /// The shots kept past the regime floor, while something may still
     /// move them (see [`ShotRetention`]); None keeps none.
     retention: Option<ShotRetention>,
+    /// While a change may be taken back: the regime log as it stood before
+    /// the change first touched it (None: not touched yet).
+    journal: Option<Option<Vec<ShotRecord>>>,
+    /// Steps taken over the regime log, for tests that bound the cost.
+    #[cfg(test)]
+    log_steps: u64,
 }
+
+/// The attribution state apart from the regime log and the kept shots,
+/// saved before a change that may have to be taken back; the log and the
+/// kept shots are journaled instead (see [`AttributionRuntime::snapshot`]).
+#[derive(Debug, Clone)]
+pub(super) struct AttributionSnapshot(Box<AttributionRuntime>);
 
 /// A held tool the equipment library does not hold, known only from the
 /// game's data: its name and band, apart from the carried weapons, since
@@ -473,59 +485,7 @@ pub(super) struct ProvisionalBand {
     pub(super) until: Option<f64>,
 }
 
-/// Where and how a shot was recorded, beyond what the regime log keeps:
-/// what a stored row written for it later needs.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct ShotContext {
-    pub(super) context_id: Option<i64>,
-    pub(super) reload_speed_percent: f64,
-}
-
-/// One shot kept by the retention, with where it was recorded.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct RetainedShot {
-    pub(super) record: ShotRecord,
-    pub(super) context: ShotContext,
-    /// What the shot added to the unpriced shots' bound while it is
-    /// unpriced; None while it is priced.
-    pub(super) charge: Option<UnpricedCharge>,
-}
-
-/// What one unpriced shot adds to the session's disclosure of unpriced
-/// cost: the dearest carried weapon that could explain it, or a count of
-/// shots no weapon explains.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) enum UnpricedCharge {
-    Bound(crate::ped::Ped),
-    NoFit,
-}
-
-/// The shots something read after them may still move: every shot of the
-/// last `window` seconds, and every shot since `pinned` while it is set.
-/// The regime log forgets what no decision can reach; a change read off
-/// the screen can reach further, since it can arrive after shots it
-/// predates, and a tool unseen for a while is settled only when the
-/// screen shows it again.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub(super) struct ShotRetention {
-    window: f64,
-    pinned: Option<f64>,
-    /// Every shot observed at or after this moment is kept: when the
-    /// retention began, raised as older shots are let go.
-    floor: f64,
-    shots: Vec<RetainedShot>,
-}
-
-impl ShotRetention {
-    fn prune(&mut self, latest: f64) {
-        let mut floor = latest - self.window;
-        if let Some(pinned) = self.pinned {
-            floor = floor.min(pinned);
-        }
-        self.shots.retain(|shot| shot.record.observed_at >= floor);
-        self.floor = self.floor.max(floor);
-    }
-}
+pub(super) use super::retention::{RetainedShot, ShotContext, ShotRetention, UnpricedCharge};
 
 impl AttributionRuntime {
     /// Replace the carried set (session start, or a configuration reload).
@@ -603,7 +563,103 @@ impl AttributionRuntime {
 
     #[cfg(test)]
     pub(super) fn record_mut(&mut self, seq: u64) -> Option<&mut ShotRecord> {
+        self.touch_log();
         self.log.iter_mut().find(|record| record.seq == seq)
+    }
+
+    /// Save the regime log once, before a change that may be taken back
+    /// first touches it.
+    fn touch_log(&mut self) {
+        if let Some(saved) = self.journal.as_mut() {
+            if saved.is_none() {
+                #[cfg(test)]
+                {
+                    self.log_steps += self.log.len() as u64;
+                }
+                *saved = Some(self.log.clone());
+            }
+        }
+    }
+
+    /// The logged shot with this sequence number: the log is in sequence
+    /// order, so it is found by halving.
+    fn logged_mut(&mut self, seq: u64) -> Option<&mut ShotRecord> {
+        #[cfg(test)]
+        let mut probes = 0;
+        let found = self.log.binary_search_by(|record| {
+            #[cfg(test)]
+            {
+                probes += 1;
+            }
+            record.seq.cmp(&seq)
+        });
+        #[cfg(test)]
+        {
+            self.log_steps += probes;
+        }
+        let index = found.ok()?;
+        self.touch_log();
+        self.log.get_mut(index)
+    }
+
+    /// Whether observations are kept for a change read later: only then is
+    /// anything built for the retention.
+    pub(super) fn retaining(&self) -> bool {
+        self.retention.is_some()
+    }
+
+    /// Whether a change is being journaled now.
+    #[cfg(test)]
+    pub(super) fn journal_open(&self) -> bool {
+        self.journal.is_some()
+    }
+
+    /// Steps taken over the regime log so far: elements compared when
+    /// finding a shot, and elements copied when saving it for a change.
+    #[cfg(test)]
+    pub(super) fn log_steps(&self) -> u64 {
+        self.log_steps
+    }
+
+    /// Save the state before a change that may have to be taken back: all
+    /// but the log and the kept shots outright, those by journal, so the
+    /// saving costs what the change touches.
+    pub(super) fn snapshot(&mut self) -> AttributionSnapshot {
+        let log = std::mem::take(&mut self.log);
+        let retention = self.retention.take();
+        let journal = self.journal.take();
+        let saved = AttributionSnapshot(Box::new(self.clone()));
+        self.log = log;
+        self.retention = retention;
+        self.journal = journal;
+        self.journal = Some(None);
+        if let Some(retention) = self.retention.as_mut() {
+            retention.begin_journal();
+        }
+        saved
+    }
+
+    /// Take the change back to the snapshot.
+    pub(super) fn restore(&mut self, snapshot: AttributionSnapshot) {
+        let mut log = std::mem::take(&mut self.log);
+        if let Some(Some(saved)) = self.journal.take() {
+            log = saved;
+        }
+        let mut retention = self.retention.take();
+        if let Some(retention) = retention.as_mut() {
+            retention.rollback();
+        }
+        *self = *snapshot.0;
+        self.log = log;
+        self.retention = retention;
+    }
+
+    /// The change stands.
+    pub(super) fn commit(&mut self) {
+        self.journal = None;
+        if let Some(retention) = self.retention.as_mut() {
+            retention.commit();
+        }
     }
 
     /// Open an effect window whose ticks are outcomes of an earlier paid
@@ -634,6 +690,7 @@ impl AttributionRuntime {
     fn floor(&mut self) {
         self.mismatch = None;
         self.kept.clear();
+        self.touch_log();
         self.log.clear();
         self.recent_hits.clear();
     }
@@ -686,6 +743,14 @@ impl AttributionRuntime {
         });
     }
 
+    /// The provisional tool is no longer held from `at`, and is not tested
+    /// after it at all: the screen could not say what is in hand.
+    pub(super) fn end_provisional(&mut self, at: f64) {
+        if let Some(provisional) = self.provisional.as_mut() {
+            provisional.until = Some(at);
+        }
+    }
+
     /// The provisional tool is no longer held from `at`: it is tested for
     /// the switch tail after, then not at all.
     pub(super) fn release_provisional(&mut self, at: f64) {
@@ -717,79 +782,108 @@ impl AttributionRuntime {
         self.provisional.as_ref()
     }
 
-    /// Keep every shot of the last `window` seconds past the regime floor
-    /// (see [`ShotRetention`]), until [`Self::stop_retaining`].
+    /// Keep every observation of the last `window` seconds past the regime
+    /// floor (see [`ShotRetention`]), until [`Self::stop_retaining`].
     pub(super) fn retain_shots(&mut self, window: f64, now: f64) {
-        let retention = self.retention.get_or_insert_with(|| ShotRetention {
-            floor: now,
-            ..ShotRetention::default()
-        });
-        retention.window = window;
+        match self.retention.as_mut() {
+            Some(retention) => retention.set_window(window),
+            None => self.retention = Some(ShotRetention::new(window, now)),
+        }
     }
 
-    /// The moment from which every shot is retained; None while none are.
+    /// The moment from which every observation is retained; None while
+    /// none are.
     pub(super) fn retention_floor(&self) -> Option<f64> {
-        self.retention.as_ref().map(|retention| retention.floor)
+        self.retention.as_ref().map(ShotRetention::floor)
     }
 
-    /// Take the retained shots observed at or after `from` out of the
-    /// retention, oldest first, to be placed again.
+    /// Take the kept observations at or after `from` out of the retention
+    /// and the regime log, oldest first, to be placed again. Those a
+    /// decision moved stay.
     pub(super) fn take_retained_since(&mut self, from: f64) -> Vec<RetainedShot> {
         let Some(retention) = self.retention.as_mut() else {
             return Vec::new();
         };
-        let (taken, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut retention.shots)
-            .into_iter()
-            .partition(|shot| shot.record.observed_at >= from);
-        retention.shots = kept;
+        let taken = retention.take_since(from);
+        if !taken.is_empty() {
+            let seqs: BTreeSet<u64> = taken.iter().map(|shot| shot.record.seq).collect();
+            self.touch_log();
+            self.log.retain(|record| !seqs.contains(&record.seq));
+        }
         taken
     }
 
-    /// Put a shot back in the retention as it was, in its place by time.
+    /// Put an observation back in the retention as it was.
     pub(super) fn restore_retained(&mut self, shot: RetainedShot) {
         if let Some(retention) = self.retention.as_mut() {
-            let index = retention
-                .shots
-                .iter()
-                .position(|kept| {
-                    (kept.record.observed_at, kept.record.seq)
-                        > (shot.record.observed_at, shot.record.seq)
-                })
-                .unwrap_or(retention.shots.len());
-            retention.shots.insert(index, shot);
+            retention.restore(shot);
         }
+    }
+
+    /// Put an observation that could not be placed again back as it was:
+    /// in the retention, and a shot in the regime log too, in its place by
+    /// sequence, where a decision on a mismatch can still reach it.
+    pub(super) fn restore_unplaced(&mut self, shot: RetainedShot) {
+        if !matches!(shot.record.attribution, Attribution::EffectTick { .. }) {
+            self.touch_log();
+            let index = self
+                .log
+                .partition_point(|record| record.seq < shot.record.seq);
+            self.log.insert(index, shot.record.clone());
+        }
+        self.restore_retained(shot);
+    }
+
+    /// Keep every observation since `since` while a settlement of them is
+    /// owed, whatever pin is set meanwhile; None once it is paid.
+    pub(super) fn owe_retention(&mut self, since: Option<f64>, now: f64) {
+        if let Some(retention) = self.retention.as_mut() {
+            retention.owe(since, now);
+        }
+    }
+
+    /// A kept observation, to change in a test.
+    #[cfg(test)]
+    pub(super) fn retained_mut(&mut self, seq: u64) -> Option<&mut RetainedShot> {
+        self.retention.as_mut()?.get_mut(seq)
     }
 
     pub(super) fn stop_retaining(&mut self) {
         self.retention = None;
     }
 
-    /// Keep every shot since `since` as well, however old, while set; None
-    /// lets them go once they leave the window.
+    /// Keep every observation since `since` as well, however old, while
+    /// set; None lets them go once they leave the window.
     pub(super) fn pin_retention(&mut self, since: Option<f64>, now: f64) {
         if let Some(retention) = self.retention.as_mut() {
-            retention.pinned = since;
-            retention.prune(now);
+            retention.pin(since, now);
         }
     }
 
-    /// The retained shots observed at or after `from`, oldest first.
+    /// The retained observations at or after `from`, oldest first.
     pub(super) fn retained_since(&self, from: f64) -> Vec<RetainedShot> {
         self.retention
             .as_ref()
-            .map(|retention| {
-                retention
-                    .shots
-                    .iter()
-                    .filter(|shot| shot.record.observed_at >= from)
-                    .cloned()
-                    .collect()
-            })
+            .map(|retention| retention.since(from))
             .unwrap_or_default()
     }
 
+    /// How many observations are kept.
+    #[cfg(test)]
+    pub(super) fn retained_count(&self) -> usize {
+        self.retention.as_ref().map_or(0, ShotRetention::len)
+    }
+
+    /// Steps taken over kept observations so far.
+    #[cfg(test)]
+    pub(super) fn retention_steps(&self) -> u64 {
+        self.retention
+            .as_ref()
+            .map_or(0, |retention| retention.steps)
+    }
+
     /// Remember a shot of the current regime (see [`Self::remember`]), and
-    /// keep it with where it was recorded while shots are retained.
+    /// keep it with where it was recorded while observations are retained.
     pub(super) fn remember_shot(
         &mut self,
         record: ShotRecord,
@@ -797,39 +891,61 @@ impl AttributionRuntime {
         charge: Option<UnpricedCharge>,
     ) {
         if let Some(retention) = self.retention.as_mut() {
-            let latest = record.observed_at;
-            retention.shots.push(RetainedShot {
+            retention.keep(RetainedShot {
                 record: record.clone(),
                 context,
                 charge,
+                decided_by: None,
             });
-            retention.prune(latest);
         }
         self.remember(record);
     }
 
-    /// What a retained shot now adds to the unpriced shots' bound.
-    pub(super) fn set_charge(&mut self, seq: u64, charge: Option<UnpricedCharge>) {
+    /// Keep an effect tick while observations are retained: it is no shot,
+    /// so the regime log never holds it, but a change read later may make
+    /// it one.
+    pub(super) fn retain_tick(&mut self, record: ShotRecord, context: ShotContext) {
         if let Some(retention) = self.retention.as_mut() {
-            for shot in &mut retention.shots {
-                if shot.record.seq == seq {
-                    shot.charge = charge;
-                }
-            }
+            retention.keep(RetainedShot {
+                record,
+                context,
+                charge: None,
+                decided_by: None,
+            });
         }
     }
 
-    /// Whether an open effect window could tick an observation at `at`.
-    pub(super) fn ticks_at(&self, observation: Observation, at: f64) -> bool {
-        match observation {
-            Observation::Hit { amount, critical } => !self.ticking(at, amount, critical).is_empty(),
-            Observation::Countered => false,
+    /// What a retained shot now adds to the unpriced shots' bound.
+    pub(super) fn set_charge(&mut self, seq: u64, charge: Option<UnpricedCharge>) {
+        if let Some(shot) = self
+            .retention
+            .as_mut()
+            .and_then(|retention| retention.get_mut(seq))
+        {
+            shot.charge = charge;
+        }
+    }
+
+    /// The player's decision moved a shot: nothing read later moves it.
+    pub(super) fn mark_decided(&mut self, seq: u64, review_id: &str) {
+        if let Some(shot) = self
+            .retention
+            .as_mut()
+            .and_then(|retention| retention.get_mut(seq))
+        {
+            shot.decided_by = Some(review_id.to_string());
         }
     }
 
     /// Take one shot's tally back out: it is about to be placed again.
     pub(super) fn untally(&mut self, attribution: &Attribution) {
         Self::tally(&mut self.counts, attribution, -1);
+    }
+
+    /// An open effect window taken back: the paid hit that opened it is
+    /// being placed again.
+    pub(super) fn withdraw_effect_window(&mut self, id: &str) {
+        self.effect_windows.retain(|window| window.id != id);
     }
 
     /// A shot moved to another weapon (or to none): how it is attributed,
@@ -843,15 +959,7 @@ impl AttributionRuntime {
         cost: crate::ped::Ped,
         evidence_id: Option<String>,
     ) {
-        let retained = self
-            .retention
-            .as_mut()
-            .into_iter()
-            .flat_map(|retention| retention.shots.iter_mut().map(|shot| &mut shot.record));
-        for record in self.log.iter_mut().chain(retained) {
-            if record.seq != seq {
-                continue;
-            }
+        let apply = |record: &mut ShotRecord| {
             if let Some(attribution) = attribution {
                 record.attribution = attribution.clone();
             }
@@ -860,6 +968,16 @@ impl AttributionRuntime {
             if evidence_id.is_some() {
                 record.evidence_id = evidence_id.clone();
             }
+        };
+        if let Some(record) = self.logged_mut(seq) {
+            apply(record);
+        }
+        if let Some(shot) = self
+            .retention
+            .as_mut()
+            .and_then(|retention| retention.get_mut(seq))
+        {
+            apply(&mut shot.record);
         }
     }
 
@@ -1296,8 +1414,14 @@ impl AttributionRuntime {
     /// weapon being recorded, and the tallies. Returns the sequence number
     /// the shot is remembered under once [`Self::remember`] logs it.
     pub(super) fn apply(&mut self, resolved: &Resolved, at: f64) -> u64 {
+        // While observations are retained, a window stays as long as an
+        // observation kept could still fall inside it.
+        let prune_before = self
+            .retention
+            .as_ref()
+            .map_or(at, |retention| at.min(retention.floor()));
         self.effect_windows
-            .retain(|window| window.expires_at + SWITCH_TAIL_SECONDS >= at);
+            .retain(|window| window.expires_at + SWITCH_TAIL_SECONDS >= prune_before);
         match &resolved.attribution {
             Attribution::Agrees { reason, .. } => {
                 match reason.margin() {
@@ -1363,6 +1487,7 @@ impl AttributionRuntime {
                 ..
             }
         ) && record.fits.len() == 1;
+        self.touch_log();
         if proves_declared {
             self.log
                 .retain(|older| matches!(older.attribution, Attribution::Evidence { .. }));
@@ -1372,15 +1497,14 @@ impl AttributionRuntime {
 
     /// Every pending shot settled into this kill.
     pub(super) fn settle_kill(&mut self, kill_id: &str) {
-        let retained = self
-            .retention
-            .as_mut()
-            .into_iter()
-            .flat_map(|retention| retention.shots.iter_mut().map(|shot| &mut shot.record));
-        for record in self.log.iter_mut().chain(retained) {
+        self.touch_log();
+        for record in &mut self.log {
             if record.location == ShotLocation::Pending {
                 record.location = ShotLocation::Kill(kill_id.to_string());
             }
+        }
+        if let Some(retention) = self.retention.as_mut() {
+            retention.settle_kill(kill_id);
         }
     }
 
@@ -1395,6 +1519,7 @@ impl AttributionRuntime {
     /// fits (unless an open effect could equally have ticked it) all move.
     pub(super) fn confirm(&mut self, at: f64) -> Option<Decision> {
         let mismatch = self.mismatch.take()?;
+        self.touch_log();
         let evidence = mismatch.evidence.clone();
         let mut moves = Vec::new();
         for record in self.log.iter_mut().rev() {
@@ -1468,6 +1593,7 @@ impl AttributionRuntime {
     /// says no such cast happened, so it explains no later tick.
     pub(super) fn keep(&mut self) -> Option<Decision> {
         let mismatch = self.mismatch.take()?;
+        self.touch_log();
         let declared = mismatch.declared.clone();
         let mut moves = Vec::new();
         let mut withdrawn = Vec::new();

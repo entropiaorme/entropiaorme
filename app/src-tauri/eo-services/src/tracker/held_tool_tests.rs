@@ -64,7 +64,7 @@ impl TrackingConfig for ScreenConfig {
 
 /// A library of three weapons on, of which the hotbar binds only the
 /// pistol: Pistol 5-10, Cannon 20-40, Rifle 8-16 (overlapping the pistol).
-struct Library;
+struct Library(Vec<CarriedWeaponProfile>);
 
 fn library_weapons() -> Vec<CarriedWeaponProfile> {
     vec![
@@ -88,7 +88,7 @@ impl EquipmentLibrary for Library {
     }
 
     fn enabled_weapons(&self) -> Vec<CarriedWeaponProfile> {
-        library_weapons()
+        self.0.clone()
     }
 
     fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
@@ -112,6 +112,30 @@ fn rusty() -> f64 {
     carried_cost(200.0, 1.0)
 }
 
+/// Zapper: its paid hit prints 100-160 and opens an effect ticking 50-75
+/// for ten seconds.
+fn zapper() -> CarriedWeaponProfile {
+    let mut profile = carried(7, "Zapper", 160.0, 2.0);
+    profile.props.insert(
+        crate::weapon_effect::EFFECT_PROFILE_KEY.to_string(),
+        serde_json::json!({
+            "mode": "compound",
+            "hit_min": 100.0,
+            "hit_max": 160.0,
+            "duration_seconds": 10.0,
+            "tick_min": 50.0,
+            "tick_max": 75.0,
+            "tick_seconds": 1.0,
+        }),
+    );
+    profile.weapon = super::CarriedWeapon::from_props(
+        7,
+        "Zapper".into(),
+        &serde_json::Value::Object(profile.props.clone()),
+    );
+    profile
+}
+
 /// A watcher that looks at no screen: the test hands the tracker each
 /// change through the sink the tracker gave it.
 #[derive(Default)]
@@ -122,12 +146,17 @@ struct ScriptedWatcher {
     stops: Mutex<usize>,
     permits: Mutex<usize>,
     hints: Mutex<usize>,
+    /// While set, a start does not take: capture is not running.
+    refuse: Mutex<bool>,
 }
 
 impl ToolDetector for ScriptedWatcher {
     fn start(&self, session_id: &str, sink: ToolPulseSink, ended: WatchEnded) {
-        *self.ended.lock().unwrap() = Some(ended);
         self.starts.lock().unwrap().push(session_id.to_string());
+        if *self.refuse.lock().unwrap() {
+            return;
+        }
+        *self.ended.lock().unwrap() = Some(ended);
         *self.sink.lock().unwrap() = Some((session_id.to_string(), sink));
     }
 
@@ -263,6 +292,10 @@ fn hunt(reading: bool) -> Hunt {
 }
 
 fn hunt_with(reading: bool, keyless: bool) -> Hunt {
+    hunt_over(reading, keyless, library_weapons())
+}
+
+fn hunt_over(reading: bool, keyless: bool, weapons: Vec<CarriedWeaponProfile>) -> Hunt {
     let rig = rig();
     let watcher = Arc::new(ScriptedWatcher::default());
     let reading = Arc::new(Mutex::new(reading));
@@ -271,7 +304,7 @@ fn hunt_with(reading: bool, keyless: bool) -> Hunt {
             reading: reading.clone(),
             keyless,
         }),
-        equipment: Arc::new(Library),
+        equipment: Arc::new(Library(weapons)),
         tool_detector: watcher.clone(),
         items: Some(Arc::new(|id| match id {
             1 => Some(item(1, "Pistol", HotbarItemKind::Weapon)),
@@ -279,6 +312,7 @@ fn hunt_with(reading: bool, keyless: bool) -> Hunt {
             3 => Some(item(3, "Rifle", HotbarItemKind::Weapon)),
             4 => Some(fap()),
             6 => Some(finder()),
+            7 => Some(item(7, "Zapper", HotbarItemKind::Weapon)),
             _ => None,
         })),
         bundled_tools: Some(Arc::new(bundled)),
@@ -309,8 +343,11 @@ struct Placed {
     counts: AttributionCounts,
     mismatch: Option<WeaponMismatch>,
     bound: (f64, i64),
-    kills: Vec<(f64, Vec<Phase>)>,
+    kills: Vec<(f64, i64, i64, Vec<Phase>)>,
     stored_rows: Vec<String>,
+    windows: Vec<String>,
+    stored_windows: Vec<String>,
+    shots: (i64, i64),
 }
 
 impl Hunt {
@@ -529,121 +566,160 @@ impl Hunt {
                 .unwrap()
                 .weapons
                 .attribution
-                .retained_since(f64::NEG_INFINITY)
-                .len()
+                .retained_count()
         })
     }
 
     fn placed(&self) -> Placed {
-        let (retained, log, pending, rows, counts, mismatch, bound, kills, kill_ids) =
-            self.rig.probe(&self.tracker, |actor| {
-                let active = actor.session.active().unwrap();
-                let kill_ids: Vec<String> = active
-                    .session
-                    .kills
-                    .iter()
-                    .map(|kill| kill.id.clone())
-                    .collect();
-                let place = |location: &ShotLocation| match location {
-                    ShotLocation::Pending => "pending".to_string(),
-                    ShotLocation::Kill(id) => format!(
-                        "kill {}",
-                        kill_ids.iter().position(|kill| kill == id).unwrap()
-                    ),
-                };
-                let runtime = &active.weapons.attribution;
-                let retained = runtime
-                    .retained_since(f64::NEG_INFINITY)
-                    .iter()
-                    .map(|shot| {
-                        let record = &shot.record;
-                        format!(
-                            "{:.3} {:?} {:?} {:?} {:.6} row:{} {} {:?}",
-                            record.observed_at,
-                            record.attribution,
-                            record.fits,
-                            record.booked,
-                            record.cost.value(),
-                            record.evidence_id.is_some(),
-                            place(&record.location),
-                            shot.charge,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let log = runtime
-                    .log()
-                    .iter()
-                    .map(|record| {
-                        format!(
-                            "{:.3} {:?} {:?}",
-                            record.observed_at, record.attribution, record.booked
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let pending = active
-                    .accumulator
-                    .tool_stats
-                    .iter()
-                    .map(|(_, stats)| {
-                        (
-                            stats.tool_name.clone(),
-                            stats.shots_fired,
-                            stats.cost_per_shot.value(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let rows = active
-                    .accumulator
-                    .evidence
-                    .iter()
-                    .map(|row| {
-                        format!(
-                            "{:.3} {:?} {:?} {:?} {:.6} {} {:?} {:?}",
-                            row.observed_at,
-                            row.kind,
-                            row.hotbar_tool,
-                            row.tool_name,
-                            row.cost_per_shot.value(),
-                            row.reason,
-                            row.context_id,
-                            row.amount,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let mut rows = rows;
-                rows.sort();
-                let kills = active
-                    .session
-                    .kills
-                    .iter()
-                    .map(|kill| {
-                        (
-                            kill.cost_ped.value(),
-                            kill.tool_stats
-                                .iter()
-                                .map(|(_, stats)| {
-                                    (
-                                        stats.tool_name.clone(),
-                                        stats.shots_fired,
-                                        stats.cost_per_shot.value(),
-                                    )
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
+        let (
+            retained,
+            log,
+            pending,
+            rows,
+            counts,
+            mismatch,
+            bound,
+            kills,
+            kill_ids,
+            windows,
+            shots,
+        ) = self.rig.probe(&self.tracker, |actor| {
+            let active = actor.session.active().unwrap();
+            let kill_ids: Vec<String> = active
+                .session
+                .kills
+                .iter()
+                .map(|kill| kill.id.clone())
+                .collect();
+            let place = |location: &ShotLocation| match location {
+                ShotLocation::Pending => "pending".to_string(),
+                ShotLocation::Kill(id) => format!(
+                    "kill {}",
+                    kill_ids.iter().position(|kill| kill == id).unwrap()
+                ),
+            };
+            let runtime = &active.weapons.attribution;
+            let retained = runtime
+                .retained_since(f64::NEG_INFINITY)
+                .iter()
+                .map(|shot| {
+                    let record = &shot.record;
+                    let attribution = match &record.attribution {
+                        // A tick names its window by an id each run mints.
+                        super::attribution::Attribution::EffectTick { window_id } => {
+                            format!("tick of one window: {}", window_id.is_some())
+                        }
+                        other => format!("{other:?}"),
+                    };
+                    format!(
+                        "{:.3} {} {:?} {:?} {:.6} row:{} {} {:?} opened:{} decided:{}",
+                        record.observed_at,
+                        attribution,
+                        record.fits,
+                        record.booked,
+                        record.cost.value(),
+                        record.evidence_id.is_some(),
+                        place(&record.location),
+                        shot.charge,
+                        record.opened_window.is_some(),
+                        shot.decided_by.is_some(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let log = runtime
+                .log()
+                .iter()
+                .map(|record| {
+                    format!(
+                        "{:.3} {:?} {:?}",
+                        record.observed_at, record.attribution, record.booked
+                    )
+                })
+                .collect::<Vec<_>>();
+            let pending = active
+                .accumulator
+                .tool_stats
+                .iter()
+                .map(|(_, stats)| {
+                    (
+                        stats.tool_name.clone(),
+                        stats.shots_fired,
+                        stats.cost_per_shot.value(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let rows = active
+                .accumulator
+                .evidence
+                .iter()
+                .map(|row| {
+                    format!(
+                        "{:.3} {:?} {:?} {:?} {:.6} {} {:?} {:?}",
+                        row.observed_at,
+                        row.kind,
+                        row.hotbar_tool,
+                        row.tool_name,
+                        row.cost_per_shot.value(),
+                        row.reason,
+                        row.context_id,
+                        row.amount,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut rows = rows;
+            rows.sort();
+            let kills = active
+                .session
+                .kills
+                .iter()
+                .map(|kill| {
+                    (
+                        kill.cost_ped.value(),
+                        kill.shots_fired,
+                        kill.critical_hits,
+                        kill.tool_stats
+                            .iter()
+                            .map(|(_, stats)| {
+                                (
+                                    stats.tool_name.clone(),
+                                    stats.shots_fired,
+                                    stats.cost_per_shot.value(),
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (
+                retained,
+                log,
+                pending,
+                rows,
+                runtime.counts(),
+                runtime.mismatch().cloned(),
+                (active.unpriced_cost_bound.value(), active.unpriced_no_fit),
+                kills,
+                kill_ids,
+                {
+                    let mut windows = runtime
+                        .effect_windows()
+                        .iter()
+                        .map(|window| {
+                            format!(
+                                "{} {:.3} {:.3}",
+                                window.tool, window.started_at, window.expires_at
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    windows.sort();
+                    windows
+                },
                 (
-                    retained,
-                    log,
-                    pending,
-                    rows,
-                    runtime.counts(),
-                    runtime.mismatch().cloned(),
-                    (active.unpriced_cost_bound.value(), active.unpriced_no_fit),
-                    kills,
-                    kill_ids,
-                )
-            });
+                    active.accumulator.shots_fired,
+                    active.accumulator.critical_hits,
+                ),
+            )
+        });
         let stored_rows: Vec<(String, f64, String, Option<String>, f64, String)> = self
             .rig
             .wait(self.rig.db.with_reader(|conn| {
@@ -672,6 +748,19 @@ impl Hunt {
             })
             .collect();
         stored_rows.sort();
+        let mut stored_windows: Vec<String> = self
+            .rig
+            .wait(self.rig.db.with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT tool_name || ' ' || printf('%.3f', started_at) || ' ' || \
+                     printf('%.3f', expires_at) || ' ' || (withdrawn_at IS NULL) \
+                     FROM weapon_effect_windows",
+                )?;
+                let rows = stmt.query_map([], |row| row.get(0))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
+            }))
+            .unwrap();
+        stored_windows.sort();
         Placed {
             retained,
             log,
@@ -682,6 +771,9 @@ impl Hunt {
             bound,
             kills,
             stored_rows,
+            windows,
+            stored_windows,
+            shots,
         }
     }
 }
@@ -1864,15 +1956,16 @@ fn a_look_older_than_the_shots_kept_is_taken_as_of_the_oldest_one_kept() {
     }
     // Seen at the second shot, told after the twentieth: only the last five
     // seconds of shots are still kept, so the change is taken as of the
-    // oldest of them. Older shots keep their bookings; the first two placed
-    // again fall in the pistol's tail.
+    // oldest of them. Older shots keep their bookings; a moment the screen
+    // did not show starts no switch tail, so none placed again stays the
+    // pistol's by timing.
     hunt.see(holding(2), 18.0);
     let floor = hunt.now() - 5.0;
     assert_eq!(
         hunt.screen().last.unwrap().at_ms,
         (floor * 1000.0).round() as i64
     );
-    assert_eq!(hunt.pending(), phases(&[("Pistol", 16), ("Unknown", 4)]));
+    assert_eq!(hunt.pending(), phases(&[("Pistol", 14), ("Unknown", 6)]));
 }
 
 // With the reading off.
@@ -1903,4 +1996,652 @@ fn with_the_reading_off_a_look_is_dropped_and_nothing_changes() {
     assert_eq!((hunt.pending(), hunt.declared(), hunt.held()), before);
     assert_eq!(*hunt.watcher.hints.lock().unwrap(), 0, "a key asks nothing");
     assert_eq!(hunt.retained(), 0, "nothing is kept");
+}
+
+// Second round: placing again, effects, decisions, failed writes, cost.
+
+#[test]
+fn a_healer_look_places_nothing_again_and_the_log_holds_each_shot_once() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(2.0);
+    // Fits the pistol and the rifle: the pistol's.
+    hunt.shot(9.0);
+    // A first-aid pack seen a second before the shot, told after it.
+    hunt.see(holding(4), 1.0);
+    let seqs: Vec<u64> = hunt.rig.probe(&hunt.tracker, |actor| {
+        let runtime = &actor.session.active().unwrap().weapons.attribution;
+        runtime.log().iter().map(|record| record.seq).collect()
+    });
+    let mut unique = seqs.clone();
+    unique.dedup();
+    assert_eq!(seqs, unique, "each shot once in the regime log");
+    assert_eq!(seqs.len(), 1);
+    // Only the rifle fits: a mismatch, confirmed.
+    hunt.shot(12.0);
+    assert!(hunt
+        .rig
+        .wait(
+            hunt.tracker
+                .decide_weapon_mismatch(super::MismatchDecision::Confirm)
+        )
+        .unwrap());
+    assert_eq!(hunt.pending(), phases(&[("Rifle", 2)]));
+    assert_eq!(hunt.counts().agreed + hunt.counts().evidenced, 2);
+}
+
+#[test]
+fn an_uncertain_bar_ends_a_bundled_tool_at_once_with_no_tail() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(rusty_seen(), 0.0);
+    hunt.advance(1.0);
+    hunt.see(ToolSeen::Uncertain(Why::Unreadable), 0.0);
+    hunt.advance(0.5);
+    // Only the bundled rifle could explain 150.
+    hunt.shot(150.0);
+    assert_eq!(hunt.pending(), phases(&[("Unknown", 1)]));
+}
+
+#[test]
+fn a_late_change_to_a_weapon_with_an_effect_places_its_hit_and_ticks_as_on_arrival() {
+    let script = |hunt: &Hunt, look_first: bool| {
+        hunt.see(holding(1), 0.0);
+        hunt.advance(9.5);
+        if look_first {
+            hunt.see(holding(7), 0.0);
+        }
+        hunt.advance(0.5);
+        hunt.shot(130.0);
+        hunt.advance(0.5);
+        hunt.shot(60.0);
+        hunt.advance(0.5);
+        hunt.shot(60.0);
+        if !look_first {
+            hunt.see(holding(7), 1.5);
+        }
+    };
+    let (in_order, late) = placed_effect_either_way(script);
+    assert_eq!(late, in_order);
+    assert_eq!(in_order.shots, (1, 0), "one paid hit, two free ticks");
+    assert_eq!(in_order.counts.effect_ticks, 2);
+    assert_eq!(in_order.windows.len(), 1);
+    assert_eq!(in_order.stored_windows.len(), 1);
+}
+
+#[test]
+fn a_late_change_away_from_a_weapon_with_an_effect_places_its_ticks_as_on_arrival() {
+    let script = |hunt: &Hunt, look_first: bool| {
+        hunt.see(holding(7), 0.0);
+        hunt.advance(1.0);
+        hunt.shot(130.0);
+        hunt.advance(4.0);
+        if look_first {
+            hunt.see(holding(2), 0.0);
+        }
+        hunt.advance(1.0);
+        hunt.shot(60.0);
+        hunt.shot(30.0);
+        hunt.advance(0.5);
+        hunt.shot(130.0);
+        if !look_first {
+            hunt.see(holding(2), 1.5);
+        }
+    };
+    let (in_order, late) = placed_effect_either_way(script);
+    assert_eq!(late, in_order);
+}
+
+#[test]
+fn a_late_unclear_bar_over_an_effect_places_its_ticks_and_hits_as_on_arrival() {
+    let script = |hunt: &Hunt, look_first: bool| {
+        hunt.see(holding(7), 0.0);
+        hunt.advance(1.0);
+        hunt.shot(130.0);
+        hunt.advance(2.0);
+        let unclear = ToolSeen::Uncertain(Why::Unreadable);
+        if look_first {
+            hunt.see(unclear.clone(), 0.0);
+        }
+        hunt.advance(1.0);
+        hunt.shot(60.0);
+        hunt.advance(0.5);
+        hunt.shot(130.0);
+        if !look_first {
+            hunt.see(unclear, 1.5);
+        }
+    };
+    let (in_order, late) = placed_effect_either_way(script);
+    assert_eq!(late, in_order);
+    assert_eq!(
+        in_order.windows.len(),
+        2,
+        "the hit after opens its own window"
+    );
+}
+
+/// [`placed_either_way`] over a library holding the weapon with an effect.
+fn placed_effect_either_way(script: impl Fn(&Hunt, bool)) -> (Placed, Placed) {
+    let mut weapons = library_weapons();
+    weapons.push(zapper());
+    let in_order = hunt_over(true, false, weapons.clone());
+    in_order.start();
+    script(&in_order, true);
+    let late = hunt_over(true, false, weapons);
+    late.start();
+    script(&late, false);
+    (in_order.placed(), late.placed())
+}
+
+#[test]
+fn a_late_look_leaves_what_the_player_decided() {
+    let hunt = hunt(true);
+    let session = hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(2.0);
+    // Short of the pistol's band: the pistol's, as a reduced hit.
+    hunt.shot(3.0);
+    // Only the cannon fits: a mismatch, confirmed, which moves the short
+    // hit to the cannon.
+    hunt.shot(30.0);
+    assert!(hunt
+        .rig
+        .wait(
+            hunt.tracker
+                .decide_weapon_mismatch(super::MismatchDecision::Confirm)
+        )
+        .unwrap());
+    assert_eq!(hunt.pending(), phases(&[("Cannon", 2)]));
+    let review = || {
+        hunt.rig.scalar_string(
+            "SELECT repriced_shots || '|' || printf('%.6f', cost_delta_ped) \
+             FROM weapon_attribution_reviews WHERE session_id = ?",
+            &[&session],
+        )
+    };
+    let before = review();
+    // The rifle seen before both shots, told after the decision.
+    hunt.see(holding(3), 1.0);
+    assert_eq!(
+        hunt.pending(),
+        phases(&[("Cannon", 2)]),
+        "the decision stands"
+    );
+    assert_eq!(review(), before);
+    let decided_row: (Option<String>, String) = hunt.rig.probe(&hunt.tracker, |actor| {
+        let row = actor
+            .session
+            .active()
+            .unwrap()
+            .accumulator
+            .evidence
+            .iter()
+            .find(|row| row.amount == Some(3.0))
+            .unwrap()
+            .clone();
+        (row.review_id, row.tool_name.unwrap_or_default())
+    });
+    assert!(decided_row.0.is_some());
+    assert_eq!(decided_row.1, "Cannon");
+    hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
+    assert_eq!(
+        hunt.rig.scalar_i64(
+            "SELECT COUNT(*) FROM weapon_shot_evidence WHERE session_id = ? \
+             AND review_id IS NOT NULL",
+            &[&session],
+        ),
+        1
+    );
+}
+
+fn break_kill_phases(hunt: &Hunt) {
+    hunt.rig
+        .wait(hunt.rig.db.with_writer(|conn| {
+            conn.execute_batch("ALTER TABLE kill_tool_stats RENAME TO kill_tool_stats_gone")?;
+            Ok(())
+        }))
+        .unwrap();
+}
+
+fn mend_kill_phases(hunt: &Hunt) {
+    hunt.rig
+        .wait(hunt.rig.db.with_writer(|conn| {
+            conn.execute_batch("ALTER TABLE kill_tool_stats_gone RENAME TO kill_tool_stats")?;
+            Ok(())
+        }))
+        .unwrap();
+}
+
+#[test]
+fn a_failed_settlement_at_switch_off_hands_the_source_to_the_keys_and_the_stop_settles_it() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(1.0);
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    hunt.shot(9.0);
+    hunt.loot();
+    break_kill_phases(&hunt);
+    hunt.advance(1.0);
+    *hunt.reading.lock().unwrap() = false;
+    hunt.reload();
+    assert_eq!(hunt.source(), ToolSource::Keys);
+    assert_eq!(
+        *hunt.watcher.stops.lock().unwrap(),
+        1,
+        "the watcher is stopped"
+    );
+    hunt.key("Cannon", HotbarItemKind::Weapon);
+    assert_eq!(hunt.declared().as_deref(), Some("Cannon"), "keys declare");
+    hunt.shot(3.0);
+    mend_kill_phases(&hunt);
+    hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
+    assert_eq!(
+        hunt.rig.scalar_string(
+            "SELECT group_concat(tool_name || ':' || shots_fired) FROM kill_tool_stats",
+            &[],
+        ),
+        "Unknown:1",
+        "the covered shot is settled at the stop"
+    );
+}
+
+#[test]
+fn a_failed_settlement_when_the_watch_ends_hands_the_source_to_the_keys() {
+    let hunt = hunt(true);
+    let session = hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(1.0);
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    hunt.shot(9.0);
+    hunt.loot();
+    break_kill_phases(&hunt);
+    hunt.advance(1.0);
+    let ended = hunt.watcher.ended.lock().unwrap().clone().unwrap();
+    hunt.watcher.stop();
+    ended(&session);
+    assert!(matches!(hunt.source(), ToolSource::ScreenStopped { .. }));
+    hunt.key("Cannon", HotbarItemKind::Weapon);
+    assert_eq!(hunt.declared().as_deref(), Some("Cannon"));
+    mend_kill_phases(&hunt);
+    hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
+    assert_eq!(
+        hunt.rig.scalar_string(
+            "SELECT group_concat(tool_name || ':' || shots_fired) FROM kill_tool_stats",
+            &[],
+        ),
+        "Unknown:1"
+    );
+}
+
+#[test]
+fn a_placement_that_cannot_be_saved_takes_the_look_back_whole() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(2.0);
+    hunt.shot(9.0);
+    hunt.loot();
+    break_kill_phases(&hunt);
+    // The cannon seen before the shot, told after it settled into a kill.
+    hunt.see(holding(2), 1.0);
+    assert_eq!(
+        hunt.declared().as_deref(),
+        Some("Pistol"),
+        "the hand is put back"
+    );
+    assert_eq!(hunt.held(), Some(("Pistol".into(), HotbarItemKind::Weapon)));
+    let screen = hunt.screen();
+    assert_eq!(
+        screen.last.unwrap().seen,
+        holding(1),
+        "as if the look never came"
+    );
+    let kill = hunt.rig.probe(&hunt.tracker, |actor| {
+        actor.session.active().unwrap().session.kills[0]
+            .tool_stats
+            .iter()
+            .map(|(_, stats)| stats.tool_name.clone())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(kill, ["Pistol"]);
+    mend_kill_phases(&hunt);
+    // The next look decides.
+    hunt.see(holding(2), 0.0);
+    assert_eq!(hunt.declared().as_deref(), Some("Cannon"));
+}
+
+#[test]
+fn settling_ten_thousand_covered_shots_takes_steps_in_proportion() {
+    const SHOTS: u64 = 10_000;
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(1.0);
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    for _ in 0..SHOTS {
+        hunt.shot(9.0);
+    }
+    let steps = |hunt: &Hunt| {
+        hunt.rig.probe(&hunt.tracker, |actor| {
+            actor
+                .session
+                .active()
+                .unwrap()
+                .weapons
+                .attribution
+                .retention_steps()
+        })
+    };
+    let before = steps(&hunt);
+    let all_before = work(&hunt);
+    hunt.advance(1.0);
+    hunt.see(holding(2), 0.0);
+    let taken = steps(&hunt) - before;
+    let all = work(&hunt) - all_before;
+    assert_eq!(hunt.pending(), phases(&[("Unknown", SHOTS as i64)]));
+    // Each shot settled is found by its number a fixed few times.
+    assert!(taken <= 4 * SHOTS, "{taken} steps for {SHOTS} shots");
+    // The regime log is found by halving and saved once; the rows are
+    // indexed once: about log2 of the shots per shot over everything.
+    assert!(
+        all <= 24 * SHOTS,
+        "{all} steps over everything for {SHOTS} shots"
+    );
+}
+
+#[test]
+fn a_gone_tracker_lets_a_declaration_go_the_way_a_press_does() {
+    let rig = rig();
+    let (sender, inbox) = tokio::sync::mpsc::unbounded_channel();
+    drop(inbox);
+    let (_status_tx, status) = tokio::sync::watch::channel(super::actor::TrackerStatus::default());
+    let gone = HuntTracker {
+        db: rig.db.clone(),
+        sender,
+        status,
+        doses: crate::consumables::DoseBoard::new(rig.clock.clone()),
+    };
+    assert_eq!(
+        rig.wait(gone.declare_tool(item(2, "Cannon", HotbarItemKind::Weapon), 1.0)),
+        Ok(ToolDeclared::KeysAreSource)
+    );
+}
+
+#[test]
+fn a_watch_that_does_not_start_leaves_the_keys_the_source() {
+    let hunt = hunt(true);
+    *hunt.watcher.refuse.lock().unwrap() = true;
+    hunt.start();
+    assert_eq!(hunt.source(), ToolSource::ScreenNotStarted);
+    assert_eq!(hunt.retained(), 0);
+    hunt.key("Cannon", HotbarItemKind::Weapon);
+    assert_eq!(
+        hunt.declared().as_deref(),
+        Some("Cannon"),
+        "the key declares"
+    );
+    assert_eq!(*hunt.watcher.hints.lock().unwrap(), 0);
+    // Every settings change tries again; while capture is still not
+    // running, nothing changes.
+    hunt.reload();
+    assert_eq!(hunt.source(), ToolSource::ScreenNotStarted);
+    // Turned off and on with capture now running: the screen takes over.
+    *hunt.watcher.refuse.lock().unwrap() = false;
+    *hunt.reading.lock().unwrap() = false;
+    hunt.reload();
+    assert_eq!(hunt.source(), ToolSource::Keys);
+    *hunt.reading.lock().unwrap() = true;
+    hunt.reload();
+    assert!(matches!(hunt.source(), ToolSource::Screen(_)));
+    hunt.see(holding(1), 0.0);
+    assert_eq!(hunt.declared().as_deref(), Some("Pistol"));
+}
+
+#[test]
+fn a_new_session_tries_a_watch_that_did_not_start_again() {
+    let hunt = hunt(true);
+    *hunt.watcher.refuse.lock().unwrap() = true;
+    hunt.start();
+    assert_eq!(hunt.source(), ToolSource::ScreenNotStarted);
+    hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
+    *hunt.watcher.refuse.lock().unwrap() = false;
+    hunt.start();
+    assert!(matches!(hunt.source(), ToolSource::Screen(_)));
+}
+
+// Third round.
+
+#[test]
+fn an_owed_stretch_survives_the_reading_turned_on_again_a_cover_and_the_bar_back() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(3), 0.0);
+    hunt.advance(100.0);
+    // Covered from T100 with the rifle in hand, a shot a second to T200.
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    for _ in 0..100 {
+        hunt.advance(1.0);
+        hunt.shot(12.0);
+    }
+    // A kill settles the stretch's shots; turned off at T200, the
+    // settlement cannot be saved.
+    hunt.loot();
+    break_kill_phases(&hunt);
+    *hunt.reading.lock().unwrap() = false;
+    hunt.reload();
+    mend_kill_phases(&hunt);
+    // On again at T300, covered at T320, the bar back at T330.
+    hunt.advance(100.0);
+    *hunt.reading.lock().unwrap() = true;
+    hunt.reload();
+    hunt.see(holding(3), 0.0);
+    hunt.advance(20.0);
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    hunt.advance(10.0);
+    hunt.see(holding(3), 0.0);
+    hunt.advance(1.0);
+    hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
+    assert_eq!(
+        hunt.rig.scalar_string(
+            "SELECT group_concat(tool_name || ':' || shots_fired) FROM kill_tool_stats",
+            &[],
+        ),
+        "Unknown:100",
+        "every shot of the owed stretch is unpriced at the stop"
+    );
+}
+
+/// Shots that could not be placed again go back where a decision can
+/// still reach them.
+#[test]
+fn a_shot_that_cannot_be_placed_again_goes_back_into_the_regime_log() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(2.0);
+    hunt.shot(9.0);
+    // Its phase is gone from under it: it cannot be taken back out.
+    let seq = hunt.rig.probe(&hunt.tracker, |actor| {
+        let active = actor.session.active_mut().unwrap();
+        active.accumulator.tool_stats.clear();
+        active.weapons.attribution.log()[0].seq
+    });
+    hunt.see(holding(2), 1.0);
+    let logged: Vec<u64> = hunt.rig.probe(&hunt.tracker, |actor| {
+        let runtime = &actor.session.active().unwrap().weapons.attribution;
+        runtime.log().iter().map(|record| record.seq).collect()
+    });
+    assert_eq!(logged, [seq]);
+    assert_eq!(hunt.retained(), 1);
+}
+
+#[test]
+fn a_tick_left_as_it_was_loses_the_window_its_opener_gave_up() {
+    let mut weapons = library_weapons();
+    weapons.push(zapper());
+    let hunt = hunt_over(true, false, weapons);
+    hunt.start();
+    hunt.see(holding(7), 0.0);
+    hunt.advance(2.0);
+    hunt.shot(130.0);
+    hunt.advance(0.5);
+    hunt.shot(60.0);
+    // The tick is made to sit in a kill that is gone: it cannot be placed
+    // again, while its opener is.
+    let tick = hunt.rig.probe(&hunt.tracker, |actor| {
+        let runtime = &mut actor.session.active_mut().unwrap().weapons.attribution;
+        let tick = runtime
+            .retained_since(f64::NEG_INFINITY)
+            .into_iter()
+            .find(|shot| {
+                matches!(
+                    shot.record.attribution,
+                    super::attribution::Attribution::EffectTick { .. }
+                )
+            })
+            .unwrap()
+            .record
+            .seq;
+        runtime.retained_mut(tick).unwrap().record.location = ShotLocation::Kill("gone".into());
+        tick
+    });
+    hunt.see(holding(2), 1.0);
+    let (attribution, windows, row_window) = hunt.rig.probe(&hunt.tracker, move |actor| {
+        let active = actor.session.active().unwrap();
+        let shot = active
+            .weapons
+            .attribution
+            .retained_since(f64::NEG_INFINITY)
+            .into_iter()
+            .find(|shot| shot.record.seq == tick)
+            .unwrap();
+        let row = active
+            .accumulator
+            .evidence
+            .iter()
+            .find(|row| Some(&row.id) == shot.record.evidence_id.as_ref())
+            .unwrap()
+            .effect_window_id
+            .clone();
+        (shot.record.attribution, shot.record.windows, row)
+    });
+    assert_eq!(
+        attribution,
+        super::attribution::Attribution::EffectTick { window_id: None }
+    );
+    assert!(windows.is_empty());
+    assert_eq!(row_window, None);
+}
+
+#[test]
+fn a_decision_that_cannot_be_saved_rolls_back_its_marks_with_the_screen_the_source() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(2.0);
+    hunt.shot(3.0);
+    hunt.shot(30.0);
+    let before = hunt.placed();
+    hunt.rig
+        .wait(hunt.rig.db.with_writer(|conn| {
+            conn.execute_batch(
+                "ALTER TABLE weapon_attribution_reviews RENAME TO weapon_attribution_reviews_gone",
+            )?;
+            Ok(())
+        }))
+        .unwrap();
+    assert_eq!(
+        hunt.rig.wait(
+            hunt.tracker
+                .decide_weapon_mismatch(super::MismatchDecision::Confirm)
+        ),
+        Err(super::WeaponDecisionError::NotSaved)
+    );
+    assert_eq!(hunt.placed(), before, "no shot is marked decided");
+    hunt.rig
+        .wait(hunt.rig.db.with_writer(|conn| {
+            conn.execute_batch(
+                "ALTER TABLE weapon_attribution_reviews_gone RENAME TO weapon_attribution_reviews",
+            )?;
+            Ok(())
+        }))
+        .unwrap();
+    assert_eq!(
+        hunt.rig.wait(
+            hunt.tracker
+                .decide_weapon_mismatch(super::MismatchDecision::Confirm)
+        ),
+        Ok(true)
+    );
+    assert!(hunt
+        .placed()
+        .retained
+        .iter()
+        .any(|shot| shot.ends_with("decided:true")));
+}
+
+/// Every step taken over the kept shots, the regime log, the
+/// accumulator's rows and the kills.
+fn work(hunt: &Hunt) -> u64 {
+    hunt.rig.probe(&hunt.tracker, |actor| {
+        let active = actor.session.active().unwrap();
+        let runtime = &active.weapons.attribution;
+        runtime.retention_steps() + runtime.log_steps() + active.steps
+    })
+}
+
+#[test]
+fn settling_covered_shots_with_rows_waiting_and_stored_takes_steps_in_proportion() {
+    const SHOTS: u64 = 4_000;
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(1.0);
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    // Short of the pistol's band: each keeps a row; every hundred settle
+    // into a kill, so rows wait both stored and with the accumulator.
+    for index in 0..SHOTS {
+        hunt.shot(3.0);
+        if index % 100 == 99 {
+            hunt.loot();
+        }
+    }
+    hunt.shot(3.0);
+    let before = work(&hunt);
+    hunt.advance(1.0);
+    hunt.see(holding(2), 0.0);
+    let taken = work(&hunt) - before;
+    // Each move finds its shot in the regime log by halving (about twelve
+    // comparisons for four thousand) and its row by id: n log n, where a
+    // scan per move would take thousands of steps a shot.
+    assert!(
+        taken <= 24 * SHOTS,
+        "{taken} steps settling {SHOTS} shots with their rows"
+    );
+}
+
+#[test]
+fn placing_a_long_pinned_stretch_again_takes_steps_in_proportion() {
+    const SHOTS: u64 = 4_000;
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(1), 0.0);
+    hunt.advance(1.0);
+    hunt.see(ToolSeen::NotVisible, 0.0);
+    for _ in 0..SHOTS {
+        hunt.advance(0.001);
+        hunt.shot(9.0);
+    }
+    let before = work(&hunt);
+    // Back, with the cannon, seen a second after the cover began: the
+    // first thousand are settled, the rest placed again.
+    hunt.see(holding(2), SHOTS as f64 * 0.001 - 1.0);
+    let taken = work(&hunt) - before;
+    assert_eq!(hunt.pending(), phases(&[("Unknown", SHOTS as i64)]));
+    assert!(
+        taken <= 24 * SHOTS,
+        "{taken} steps placing {SHOTS} shots again"
+    );
 }

@@ -110,6 +110,20 @@ impl WeaponRuntime {
         }
     }
 
+    /// The provisional tool's props as they stand, to put back later.
+    pub(super) fn provisional_props(&self) -> Option<(String, Arc<Value>)> {
+        self.provisional.clone()
+    }
+
+    /// Put the provisional tool's props back as they stood.
+    pub(super) fn set_provisional_props(&mut self, saved: Option<(String, Arc<Value>)>) {
+        if let Some((name, _)) = self.provisional.take() {
+            self.carried_profiles.remove(&name);
+        }
+        self.provisional = saved;
+        self.restore_provisional();
+    }
+
     /// The provisional tool held now, if one is.
     #[cfg(test)]
     pub(super) fn provisional_name(&self) -> Option<&str> {

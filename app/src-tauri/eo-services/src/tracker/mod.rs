@@ -45,6 +45,7 @@ mod loot;
 mod mob;
 mod persistence;
 mod providers;
+mod retention;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -434,7 +435,8 @@ impl HuntTracker {
     /// resolved as a press resolves it: taken here while the tool in hand
     /// is read off the screen and the screen cannot say, refused while it
     /// shows the tool; otherwise the declaration goes the way a press does
-    /// (see [`ToolDeclared`]). A tracker that is gone has no session.
+    /// (see [`ToolDeclared`]). A tracker that is gone reads no screen, so
+    /// the declaration goes the way a press does.
     pub async fn declare_tool(
         &self,
         item: crate::hotbar_listener::ResolvedHotbarItem,
@@ -446,7 +448,7 @@ impl HuntTracker {
             reply,
         })
         .await
-        .unwrap_or(Err(TrackerCommandError::NoActiveSession))
+        .unwrap_or(Ok(ToolDeclared::KeysAreSource))
     }
 
     /// Run the dose expiry sweep now (what the wake-up at an expiry does).

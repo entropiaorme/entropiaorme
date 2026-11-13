@@ -396,23 +396,70 @@ fn a_decision_needs_a_session_and_a_standing_mismatch() {
     );
 }
 
+/// What a decision may change in memory: the regime log, the tallies, the
+/// unpriced bound, and each kill's cost.
+fn decision_state(rig: &Rig, tracker: &HuntTracker) -> (Vec<String>, String, (f64, i64), Vec<f64>) {
+    rig.probe(tracker, |actor| {
+        let active = actor.session.active().unwrap();
+        let runtime = &active.weapons.attribution;
+        (
+            runtime
+                .log()
+                .iter()
+                .map(|record| {
+                    format!(
+                        "{} {:?} {:?} {:?}",
+                        record.seq, record.attribution, record.booked, record.location
+                    )
+                })
+                .collect(),
+            format!("{:?}", runtime.counts()),
+            (active.unpriced_cost_bound.value(), active.unpriced_no_fit),
+            active
+                .session
+                .kills
+                .iter()
+                .map(|kill| kill.cost_ped.value())
+                .collect(),
+        )
+    })
+}
+
+/// The scenario a decision is made over: a pistol proved in hand, a jam
+/// settled into a kill, then a hit only the cannon explains.
+fn mismatch_scenario(rig: &Rig) -> Arc<HuntTracker> {
+    let tracker = tracker_with(rig, arsenal());
+    rig.wait(tracker.start_session()).unwrap();
+    press(rig, "Pistol");
+    rig.bus.publish(&hit(6.0));
+    jam(rig);
+    loot(rig);
+    rig.clock.advance(2.0).unwrap();
+    rig.bus.publish(&hit(30.0));
+    tracker
+}
+
+fn review_row(rig: &Rig) -> String {
+    rig.scalar_string(
+        "SELECT repriced_shots || '|' || printf('%.9f', cost_delta_ped) FROM weapon_attribution_reviews",
+        &[],
+    )
+}
+
 #[test]
 fn a_decision_that_cannot_be_saved_changes_nothing() {
     let rig = rig();
-    let tracker = tracker_with(&rig, arsenal());
-    rig.wait(tracker.start_session()).unwrap();
-    press(&rig, "Pistol");
-    rig.bus.publish(&hit(6.0));
-    jam(&rig);
-    loot(&rig);
-    rig.clock.advance(2.0).unwrap();
-    rig.bus.publish(&hit(30.0));
+    let tracker = mismatch_scenario(&rig);
     let kill = kill_ids(&rig).pop().unwrap();
     let phases_before = stored_phases(&rig, &kill);
     let pending_before = pending(&rig, &tracker);
+    let state_before = decision_state(&rig, &tracker);
 
     rig.wait(rig.db.with_writer(|conn| {
-        conn.execute("DROP TABLE weapon_attribution_reviews", [])?;
+        conn.execute(
+            "ALTER TABLE weapon_attribution_reviews RENAME TO weapon_attribution_reviews_gone",
+            [],
+        )?;
         Ok(())
     }))
     .unwrap();
@@ -423,6 +470,11 @@ fn a_decision_that_cannot_be_saved_changes_nothing() {
 
     assert_eq!(stored_phases(&rig, &kill), phases_before);
     assert_eq!(pending(&rig, &tracker), pending_before);
+    assert_eq!(
+        decision_state(&rig, &tracker),
+        state_before,
+        "the regime log, tallies, bound and kill costs are as they were"
+    );
     let readout = rig.wait(tracker.snapshot()).unwrap();
     assert_eq!(readout.current_tool.as_deref(), Some("Pistol"));
     let cue = readout.active.unwrap().weapon_guardrail_mismatch;
@@ -433,6 +485,10 @@ fn a_decision_that_cannot_be_saved_changes_nothing() {
     rig.probe(&tracker, |actor| {
         let active = actor.session.active().unwrap();
         assert_eq!(active.weapons.attribution.declared(), Some("Pistol"));
+        assert!(
+            !active.weapons.attribution.journal_open(),
+            "the journal is closed"
+        );
         let kill = active.session.kills.last().unwrap();
         assert_eq!(
             kill.tool_stats.len(),
@@ -441,6 +497,53 @@ fn a_decision_that_cannot_be_saved_changes_nothing() {
         );
         assert_eq!(kill.tool_stats[0].1.shots_fired, 2);
     });
+
+    // Once it can be saved, the decision reprices exactly what a clean
+    // decision does.
+    rig.wait(rig.db.with_writer(|conn| {
+        conn.execute(
+            "ALTER TABLE weapon_attribution_reviews_gone RENAME TO weapon_attribution_reviews",
+            [],
+        )?;
+        Ok(())
+    }))
+    .unwrap();
+    assert_eq!(
+        rig.wait(tracker.decide_weapon_mismatch(MismatchDecision::Confirm)),
+        Ok(true)
+    );
+    let clean = super::tests::rig();
+    let clean_tracker = mismatch_scenario(&clean);
+    assert_eq!(
+        clean.wait(clean_tracker.decide_weapon_mismatch(MismatchDecision::Confirm)),
+        Ok(true)
+    );
+    assert_eq!(review_row(&rig), review_row(&clean));
+    assert_eq!(pending(&rig, &tracker), pending(&clean, &clean_tracker));
+    assert_eq!(
+        decision_state(&rig, &tracker).1,
+        decision_state(&clean, &clean_tracker).1
+    );
+}
+
+#[test]
+fn nothing_to_decide_leaves_no_journal_open() {
+    let rig = rig();
+    let tracker = tracker_with(&rig, arsenal());
+    rig.wait(tracker.start_session()).unwrap();
+    press(&rig, "Pistol");
+    rig.bus.publish(&hit(7.0));
+    assert_eq!(
+        rig.wait(tracker.decide_weapon_mismatch(MismatchDecision::Keep)),
+        Ok(false)
+    );
+    assert!(!rig.probe(&tracker, |actor| actor
+        .session
+        .active()
+        .unwrap()
+        .weapons
+        .attribution
+        .journal_open()));
 }
 
 #[test]

@@ -134,7 +134,32 @@ impl TrackerActor {
                 None,
                 Ped::ZERO,
             );
+            if !active.weapons.attribution.retaining() {
+                active.accumulator.evidence.push(row);
+                return None;
+            }
+            let evidence_id = row.id.clone();
             active.accumulator.evidence.push(row);
+            let context = ShotContext {
+                context_id: active.intervals.context_id(),
+                reload_speed_percent: active.reload_speed_percent,
+            };
+            active.weapons.attribution.retain_tick(
+                ShotRecord {
+                    seq,
+                    observed_at,
+                    observation,
+                    attribution: resolved.attribution,
+                    fits: resolved.fits,
+                    windows: resolved.windows,
+                    location: ShotLocation::Pending,
+                    evidence_id: Some(evidence_id),
+                    booked: None,
+                    cost: Ped::ZERO,
+                    opened_window: None,
+                },
+                context,
+            );
             return None;
         }
         active.accumulator.shots_fired += 1;

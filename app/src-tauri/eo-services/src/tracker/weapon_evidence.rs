@@ -22,8 +22,8 @@ use crate::tracking_models::{Kill, ToolStats};
 
 use super::actor::TrackerActor;
 use super::attribution::{
-    Attribution, AttributionKind, AttributionRuntime, Observation, Reprice, Resolved, ShotContext,
-    ShotLocation, ShotRecord, UnpricedCharge,
+    Attribution, AttributionKind, AttributionRuntime, AttributionSnapshot, Observation, Reprice,
+    Resolved, ShotContext, ShotLocation, ShotRecord, UnpricedCharge,
 };
 use super::combat::UNPRICED_TOOL;
 use super::providers::Providers;
@@ -301,10 +301,12 @@ pub(super) fn unbook(
 
 /// Everything a move of shots may change, restored if its write fails.
 pub(super) struct Backup {
-    attribution: AttributionRuntime,
+    attribution: AttributionSnapshot,
     tool_stats: Vec<(String, ToolStats)>,
     evidence: Vec<ShotEvidence>,
     kills: Vec<(usize, Kill)>,
+    /// The kills saved, by their place, so saving looks once.
+    saved_kills: std::collections::HashSet<usize>,
     active_key: Option<String>,
     observed_name: Option<String>,
     held_item: Option<(String, crate::bus_events::HotbarItemKind)>,
@@ -314,20 +316,26 @@ pub(super) struct Backup {
 
 impl Backup {
     pub(super) fn of(
-        active: &ActiveSession,
+        active: &mut ActiveSession,
         held_item: &Option<(String, crate::bus_events::HotbarItemKind)>,
     ) -> Self {
         Self {
-            attribution: active.weapons.attribution.clone(),
+            attribution: active.weapons.attribution.snapshot(),
             tool_stats: active.accumulator.tool_stats.clone(),
             evidence: active.accumulator.evidence.clone(),
             kills: Vec::new(),
+            saved_kills: std::collections::HashSet::new(),
             active_key: active.weapons.active_key.clone(),
             observed_name: active.weapons.observed_name.clone(),
             held_item: held_item.clone(),
             unpriced_cost_bound: active.unpriced_cost_bound,
             unpriced_no_fit: active.unpriced_no_fit,
         }
+    }
+
+    /// The move was saved: it stands.
+    pub(super) fn commit(self, active: &mut ActiveSession) {
+        active.weapons.attribution.commit();
     }
 
     /// The kills the move changed, as they stand now.
@@ -340,7 +348,7 @@ impl Backup {
 
     /// Save a kill as it stood before the move first changes it.
     pub(super) fn save_kill(&mut self, index: usize, kill: &Kill) {
-        if !self.kills.iter().any(|(saved, _)| *saved == index) {
+        if self.saved_kills.insert(index) {
             self.kills.push((index, kill.clone()));
         }
     }
@@ -351,7 +359,7 @@ impl Backup {
         active: &mut ActiveSession,
         held_item: &mut Option<(String, crate::bus_events::HotbarItemKind)>,
     ) {
-        active.weapons.attribution = self.attribution;
+        active.weapons.attribution.restore(self.attribution);
         active.accumulator.tool_stats = self.tool_stats;
         active.accumulator.evidence = self.evidence;
         for (index, kill) in self.kills {
@@ -426,6 +434,14 @@ pub(super) struct Moved {
     /// Stored rows of settled shots that are gone: a shot placed again
     /// keeps a row only if its new attribution does.
     pub(super) row_deletes: Vec<String>,
+    /// Effect windows opened by hits placed again, which their placing
+    /// again re-opens (or not) as the shot path would.
+    pub(super) window_deletes: Vec<String>,
+    /// Effect windows opened by hits placed again.
+    pub(super) window_inserts: Vec<super::weapon_effects::EffectActivation>,
+    /// Stored rows of ticks left as they were whose window was taken back:
+    /// they no longer name it.
+    pub(super) tick_unlinks: Vec<String>,
 }
 
 impl TrackerActor {
@@ -445,7 +461,31 @@ impl TrackerActor {
         backup: &mut Backup,
     ) -> Moved {
         let mut moved = Moved::default();
+        // The rows waiting with the accumulator and the kills, found by id
+        // once rather than searched for each move.
+        let mut pending_rows: std::collections::HashMap<String, usize> = active
+            .accumulator
+            .evidence
+            .iter()
+            .enumerate()
+            .map(|(index, row)| (row.id.clone(), index))
+            .collect();
+        let kill_places: std::collections::HashMap<String, usize> = active
+            .session
+            .kills
+            .iter()
+            .enumerate()
+            .map(|(index, kill)| (kill.id.clone(), index))
+            .collect();
+        #[cfg(test)]
+        {
+            active.steps += (pending_rows.len() + kill_places.len()) as u64;
+        }
         for shot in moves {
+            #[cfg(test)]
+            {
+                active.steps += 1;
+            }
             let record = &shot.record;
             let (to_cost, to_evidence) = match &shot.to_tool {
                 Some(to_tool) => (
@@ -464,19 +504,10 @@ impl TrackerActor {
             let tool_stats = match &record.location {
                 ShotLocation::Pending => &mut active.accumulator.tool_stats,
                 ShotLocation::Kill(kill_id) => {
-                    let Some(index) = active
-                        .session
-                        .kills
-                        .iter()
-                        .rposition(|kill| &kill.id == kill_id)
-                    else {
+                    let Some(&index) = kill_places.get(kill_id) else {
                         continue;
                     };
-                    if !backup.kills.iter().any(|(saved, _)| *saved == index) {
-                        backup
-                            .kills
-                            .push((index, active.session.kills[index].clone()));
-                    }
+                    backup.save_kill(index, &active.session.kills[index]);
                     &mut active.session.kills[index].tool_stats
                 }
             };
@@ -504,13 +535,8 @@ impl TrackerActor {
                 stats.critical_hits += 1;
             }
             if let ShotLocation::Kill(kill_id) = &record.location {
-                if let Some(kill) = active
-                    .session
-                    .kills
-                    .iter_mut()
-                    .rev()
-                    .find(|kill| &kill.id == kill_id)
-                {
+                if let Some(&index) = kill_places.get(kill_id) {
+                    let kill = &mut active.session.kills[index];
                     kill.cost_ped += to_cost - record.cost;
                 }
             }
@@ -518,11 +544,9 @@ impl TrackerActor {
             moved.repriced += 1;
             let mut written = None;
             match &record.evidence_id {
-                Some(evidence_id) => match active
-                    .accumulator
-                    .evidence
-                    .iter_mut()
-                    .find(|row| &row.id == evidence_id)
+                Some(evidence_id) => match pending_rows
+                    .get(evidence_id)
+                    .and_then(|&index| active.accumulator.evidence.get_mut(index))
                 {
                     Some(row) => {
                         row.tool_name = shot.to_tool.clone();
@@ -544,7 +568,10 @@ impl TrackerActor {
                     let row = Self::unpriced_row(active, shot);
                     written = Some(row.id.clone());
                     match &record.location {
-                        ShotLocation::Pending => active.accumulator.evidence.push(row),
+                        ShotLocation::Pending => {
+                            pending_rows.insert(row.id.clone(), active.accumulator.evidence.len());
+                            active.accumulator.evidence.push(row);
+                        }
                         ShotLocation::Kill(kill_id) => {
                             moved.row_inserts.push((row, kill_id.clone()));
                         }
@@ -563,6 +590,10 @@ impl TrackerActor {
                 // A shot leaving unpriced takes back what it added.
                 Self::unnote_unpriced(active, charge);
                 active.weapons.attribution.set_charge(shot.seq, None);
+            }
+            if let Some(review_id) = review_id {
+                // What the player decided stands against anything read later.
+                active.weapons.attribution.mark_decided(shot.seq, review_id);
             }
             if let Some(attribution) = &shot.attribution {
                 active
@@ -646,12 +677,17 @@ impl TrackerActor {
             let Some(active) = session.active_mut() else {
                 return Err(WeaponDecisionError::NoActiveSession);
             };
+            // Nothing to decide changes nothing, and saves nothing.
+            if active.weapons.attribution.mismatch().is_none() {
+                return Ok(false);
+            }
             let mut backup = Backup::of(active, held_item);
             let decided = match decision {
                 MismatchDecision::Confirm => active.weapons.attribution.confirm(now),
                 MismatchDecision::Keep => active.weapons.attribution.keep(),
             };
             let Some(decided) = decided else {
+                backup.restore(active, held_item);
                 return Ok(false);
             };
 
@@ -727,6 +763,9 @@ impl TrackerActor {
             }
             return Err(WeaponDecisionError::NotSaved);
         }
+        if let Some(active) = self.session.active_mut() {
+            backup.commit(active);
+        }
 
         self.emit_session_event(
             eo_wire::domain_events::TrackingReason::Updated,
@@ -748,6 +787,33 @@ pub(super) fn write_moved(
 ) -> Result<(), DbError> {
     for kill in &moved.kills {
         write_kill_phases(conn, kill)?;
+    }
+    if review_id.is_none() {
+        // Placing shots again can turn a tick into a shot or back, so a
+        // rewritten kill's shot counts land with its phases, and its day is
+        // recomputed for the daily rollup as a correction's is.
+        for kill in &moved.kills {
+            conn.execute(
+                "UPDATE kills SET shots_fired = ?1, critical_hits = ?2 WHERE id = ?3",
+                rusqlite::params![kill.shots_fired, kill.critical_hits, kill.id],
+            )?;
+        }
+        crate::daily_rollup::refresh_days(
+            conn,
+            moved
+                .kills
+                .iter()
+                .map(|kill| crate::daily_rollup::epoch_day(kill.timestamp)),
+        )?;
+    }
+    for id in &moved.window_deletes {
+        conn.execute(
+            "DELETE FROM weapon_effect_windows WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+    }
+    for activation in &moved.window_inserts {
+        activation.insert(conn)?;
     }
     for update in &moved.row_updates {
         match (&update.tool, review_id) {
@@ -783,6 +849,13 @@ pub(super) fn write_moved(
     }
     for (row, kill_id) in &moved.row_inserts {
         row.insert(conn, Some(kill_id))?;
+    }
+    for id in &moved.tick_unlinks {
+        conn.execute(
+            "UPDATE weapon_shot_evidence SET effect_window_id = NULL, \
+             effect_candidates_json = '[]' WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
     }
     Ok(())
 }

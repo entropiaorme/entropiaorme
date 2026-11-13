@@ -352,6 +352,9 @@ fn screen_readout(source: &ToolSource) -> serde_json::Value {
         ToolSource::ScreenStopped { .. } => {
             return serde_json::Value::String("keys, the screen stopped".into())
         }
+        ToolSource::ScreenNotStarted => {
+            return serde_json::Value::String("keys, the screen not read".into())
+        }
     };
     let seen = screen.last.as_ref().map(|last| match &last.seen {
         ToolSeen::Holding(HeldTool::Library { id }) => format!("holding {id}"),

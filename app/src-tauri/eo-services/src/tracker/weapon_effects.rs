@@ -68,7 +68,7 @@ impl EffectActivation {
         })
     }
 
-    fn insert(&self, conn: &rusqlite::Connection) -> Result<(), DbError> {
+    pub(super) fn insert(&self, conn: &rusqlite::Connection) -> Result<(), DbError> {
         let profile = serde_json::to_string(&self.profile).map_err(|source| DbError::Decode {
             context: "weapon effect profile encode",
             source,

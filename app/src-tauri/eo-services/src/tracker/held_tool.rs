@@ -52,7 +52,25 @@
 //! regime's own memory of them). A look older than the shots still kept is
 //! taken as of the oldest one kept, and a look older than one already
 //! applied is dropped. A shot arriving after a change it predates is the
-//! switch tail's to place, as after a press.
+//! switch tail's to place, as after a press. What the player decided on a
+//! mismatch stands: a shot a decision moved is never placed again. A heal
+//! already billed is not placed again either: a late look at the bar
+//! changes which shots its weapon fired, not which heals were paid.
+//!
+//! The observations kept for this cost memory in proportion to the shots
+//! fired while the bar is covered, with no cap (see `retention`), and are
+//! settled in steps in proportion to their number. While a covered stretch
+//! is owed, the damage-over-time windows opened during it are kept too, so
+//! memory also grows with the paid hits of weapons with an effect fired
+//! meanwhile.
+//!
+//! A look taken back because the shots it placed again could not be saved
+//! puts back the shots, the tool in hand, the healing state, the declared
+//! healer, the harvesting tool and what the screen showed before it. It does
+//! not put back the weapon prices worked out meanwhile (they are worked out
+//! again from the same stored set-up), a tool sighting already noted (it was
+//! seen), a covered stretch already settled earlier in the same look (that
+//! settlement was saved), or the readout updates already sent.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -99,8 +117,33 @@ pub enum ToolSource {
     Screen(ScreenTool),
     /// The keys again, because the screen stopped being read during the
     /// session (capture was refused or stopped), since this moment (epoch
-    /// milliseconds).
+    /// milliseconds). Tried again when the setting is turned on anew, or
+    /// at the next session.
     ScreenStopped { at_ms: i64 },
+    /// The keys, because the screen could not be read at all: the watch did
+    /// not start (capture is not running, or nothing to read the bar with
+    /// was loaded). Tried again at every settings change and at the next
+    /// session.
+    ScreenNotStarted,
+}
+
+/// Why the keys are the source while the reading is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScreenOff {
+    /// The watch ended by itself at this moment (epoch milliseconds).
+    Stopped { at_ms: i64 },
+    /// The watch did not start.
+    NotStarted,
+}
+
+/// A tool unseen when the reading ended whose settlement could not be
+/// saved then: the stop settles it, in its own transaction.
+#[derive(Debug, Clone)]
+pub(super) struct Unsettled {
+    pub(super) hold: Hold,
+    /// When the reading ended: shots after it were booked with the keys
+    /// the source, and stand.
+    pub(super) until: f64,
 }
 
 /// What the screen has shown of the tool in hand this session.
@@ -306,9 +349,10 @@ impl TrackerActor {
         let Some(active) = self.session.active() else {
             return ToolSource::Keys;
         };
-        match (&active.held_tool, active.screen_stopped) {
+        match (&active.held_tool, active.screen_off) {
             (Some(state), _) => ToolSource::Screen(state.view()),
-            (None, Some(at_ms)) => ToolSource::ScreenStopped { at_ms },
+            (None, Some(ScreenOff::Stopped { at_ms })) => ToolSource::ScreenStopped { at_ms },
+            (None, Some(ScreenOff::NotStarted)) => ToolSource::ScreenNotStarted,
             (None, None) => ToolSource::Keys,
         }
     }
@@ -375,7 +419,7 @@ impl TrackerActor {
     /// then on the keys are the source again, with the tool last in hand
     /// still declared, as a pressed one would be. A reading whose watch
     /// ended by itself is tried again only when the setting is turned on
-    /// anew.
+    /// anew; one whose watch never started is tried at every sync.
     pub(super) async fn sync_tool_reading(&mut self) {
         let enabled = self.providers.config.tool_reading_enabled();
         let turned_on = enabled && !self.tool_reading_setting;
@@ -391,13 +435,13 @@ impl TrackerActor {
                 self.nudge_readout();
             }
             if let Some(active) = self.session.active_mut() {
-                active.screen_stopped = None;
+                active.screen_off = None;
             }
         } else if !running {
             let stopped = self
                 .session
                 .active()
-                .is_some_and(|active| active.screen_stopped.is_some());
+                .is_some_and(|active| matches!(active.screen_off, Some(ScreenOff::Stopped { .. })));
             if turned_on || !stopped {
                 self.start_tool_reading().await;
                 self.nudge_readout();
@@ -444,7 +488,7 @@ impl TrackerActor {
             sightings,
             ..SessionHeldTool::default()
         });
-        active.screen_stopped = None;
+        active.screen_off = None;
         active
             .weapons
             .attribution
@@ -464,6 +508,17 @@ impl TrackerActor {
             ));
         });
         self.providers.tool_detector.start(&session_id, sink, ended);
+        // A watch that did not take (capture not running, or nothing to read
+        // the bar with) reads nothing: the keys stay the source.
+        if !self.providers.tool_detector.watches(&session_id) {
+            if let Some(active) = self.session.active_mut() {
+                active.held_tool = None;
+                if active.unsettled.is_empty() {
+                    active.weapons.attribution.stop_retaining();
+                }
+                active.screen_off = Some(ScreenOff::NotStarted);
+            }
+        }
     }
 
     /// End the reading for the rest of the session at `at` (the setting
@@ -474,8 +529,22 @@ impl TrackerActor {
     /// tool stays declared. A settlement that could not be saved keeps the
     /// reading, and its unseen tool, for the stop to settle.
     async fn end_tool_reading(&mut self, at: f64, watch_ended: bool) {
-        if !self.settle_hold(at).await {
-            return;
+        // Every shot recorded so far, the one at this very moment included,
+        // was fired while the tool was unseen.
+        let until = at.next_up();
+        if let Err(hold) = self.settle_hold(until).await {
+            // Not saved: the stop settles it, while the keys are the source.
+            if let Some(active) = self.session.active_mut() {
+                // Owed: nothing since the earliest stretch owed began is let
+                // go until the stop, whatever pin a later reading sets.
+                let since = active
+                    .unsettled
+                    .iter()
+                    .map(|owed| owed.hold.since)
+                    .fold(hold.since, f64::min);
+                active.weapons.attribution.owe_retention(Some(since), since);
+                active.unsettled.push(Unsettled { hold, until });
+            }
         }
         self.close_showing(at);
         self.write_sightings(true).await;
@@ -491,7 +560,9 @@ impl TrackerActor {
         self.drop_tool_reading();
         if watch_ended {
             if let Some(active) = self.session.active_mut() {
-                active.screen_stopped = Some(epoch_ms(at));
+                active.screen_off = Some(ScreenOff::Stopped {
+                    at_ms: epoch_ms(at),
+                });
             }
         }
     }
@@ -502,25 +573,28 @@ impl TrackerActor {
             return;
         };
         if active.held_tool.take().is_some() {
-            active.weapons.attribution.stop_retaining();
+            // A settlement still owed keeps its shots until the stop.
+            if active.unsettled.is_empty() {
+                active.weapons.attribution.stop_retaining();
+            }
             self.providers.tool_detector.stop();
         }
     }
 
     /// Settle a tool unseen since the hold began, up to `until`: every shot
-    /// booked to it since is left unpriced. Answers whether nothing was
-    /// left to settle; a failed write keeps the hold.
-    async fn settle_hold(&mut self, until: f64) -> bool {
+    /// booked to it since is left unpriced. A failed write answers the hold
+    /// back, the shots as they were booked.
+    async fn settle_hold(&mut self, until: f64) -> Result<(), Hold> {
         let now = instant_to_epoch(resolve_local(self.clock.now()));
         let Some(active) = self.session.active_mut() else {
-            return true;
+            return Ok(());
         };
         let Some(hold) = active
             .held_tool
             .as_mut()
             .and_then(|state| state.hold.take())
         else {
-            return true;
+            return Ok(());
         };
         // The moves are taken while the hold still keeps its shots.
         let moves = hold
@@ -532,10 +606,9 @@ impl TrackerActor {
             if let Some(active) = self.session.active_mut() {
                 active.weapons.attribution.pin_retention(None, now);
             }
-            true
+            Ok(())
         } else {
-            self.restore_hold(hold);
-            false
+            Err(hold)
         }
     }
 
@@ -563,23 +636,33 @@ impl TrackerActor {
                 ..
             } = &mut *self;
             let active = session.active_mut()?;
-            let hold = active.held_tool.as_mut()?.hold.take();
-            match hold {
-                Some(hold) => {
-                    let moves = hold
-                        .hand
-                        .as_ref()
-                        .map(|hand| unseen_moves(active, hold.since, None, hand.name()))
-                        .unwrap_or_default();
-                    let mut backup = Backup::of(active, held_item);
-                    let moved = Self::move_shots(providers, active, &moves, None, &mut backup);
-                    Some(StopSettlement {
-                        backup,
-                        hold,
-                        moved,
-                    })
+            let hold = active
+                .held_tool
+                .as_mut()
+                .and_then(|state| state.hold.take());
+            let unsettled = std::mem::take(&mut active.unsettled);
+            if hold.is_none() && unsettled.is_empty() {
+                None
+            } else {
+                let mut moves = Vec::new();
+                for Unsettled { hold, until } in &unsettled {
+                    if let Some(hand) = &hold.hand {
+                        moves.extend(unseen_moves(active, hold.since, Some(*until), hand.name()));
+                    }
                 }
-                None => None,
+                if let Some(hold) = &hold {
+                    if let Some(hand) = &hold.hand {
+                        moves.extend(unseen_moves(active, hold.since, None, hand.name()));
+                    }
+                }
+                let mut backup = Backup::of(active, held_item);
+                let moved = Self::move_shots(providers, active, &moves, None, &mut backup);
+                Some(StopSettlement {
+                    backup,
+                    hold,
+                    unsettled,
+                    moved,
+                })
             }
         };
         let now = instant_to_epoch(resolve_local(self.clock.now()));
@@ -590,14 +673,22 @@ impl TrackerActor {
 
     /// The stop failed: the session stays live, and so do the shots and
     /// the unseen tool the settlement moved.
-    pub(super) fn restore_stop_settlement(&mut self, backup: Backup, hold: Hold) {
+    pub(super) fn restore_stop_settlement(
+        &mut self,
+        backup: Backup,
+        hold: Option<Hold>,
+        unsettled: Vec<Unsettled>,
+    ) {
         let Self {
             session, held_item, ..
         } = &mut *self;
         if let Some(active) = session.active_mut() {
             backup.restore(active, held_item);
+            active.unsettled = unsettled;
         }
-        self.restore_hold(hold);
+        if let Some(hold) = hold {
+            self.restore_hold(hold);
+        }
     }
 
     /// The watch ended by itself: the screen is no longer read, so the keys
@@ -719,10 +810,12 @@ impl TrackerActor {
         if state.applied_at.is_some_and(|applied| seen_at < applied) {
             return;
         }
+        let before = (state.view.clone(), state.applied_at);
         // A look older than every shot still kept is taken as of the oldest
         // moment from which every shot is kept: older shots cannot be
         // placed again and keep their bookings.
         let at = floor.map_or(seen_at, |floor| seen_at.max(floor));
+        let clamped = at > seen_at;
         state.applied_at = Some(at);
         let at_ms = epoch_ms(at);
         state.view.last = Some(SeenTool {
@@ -756,7 +849,9 @@ impl TrackerActor {
         if unconfirmed {
             // A failed settlement keeps the hold, for the next look or the
             // stop to settle again.
-            self.settle_hold(at).await;
+            if let Err(hold) = self.settle_hold(at).await {
+                self.restore_hold(hold);
+            }
         } else if let Some(active) = self.session.active_mut() {
             if let Some(state) = active.held_tool.as_mut() {
                 if state.hold.take().is_some() {
@@ -766,7 +861,13 @@ impl TrackerActor {
         }
         self.close_showing(at);
 
-        let changed = match pulse.seen {
+        // Everything the change touches is saved first: if the shots it
+        // places again cannot be saved, the look is taken back whole.
+        let Some(look) = self.look_backup(before) else {
+            return;
+        };
+        let declared_before = self.declared_weapon();
+        match pulse.seen {
             ToolSeen::Holding(tool) => {
                 let held = self
                     .session
@@ -774,40 +875,107 @@ impl TrackerActor {
                     .and_then(|active| active.held_tool.as_ref())
                     .and_then(|state| state.hand.as_ref())
                     .is_some_and(|hand| hand.is(&tool));
-                if held {
-                    false
-                } else {
+                if !held {
                     self.declare_seen(tool, at).await;
-                    true
                 }
             }
-            ToolSeen::Nothing | ToolSeen::NotTracked { .. } => self.undeclare_hand(at),
+            ToolSeen::Nothing | ToolSeen::NotTracked { .. } => {
+                self.undeclare_hand(at);
+            }
             ToolSeen::Uncertain(why) => {
                 if let Why::Unknown { text } = &why {
                     self.see_unknown(text, at);
                 }
-                let changed = self.undeclare_hand(at);
+                self.undeclare_hand(at);
                 // Unclear is not a putting away: no shot is the last tool's
-                // by timing.
+                // by timing, a tool known only from the game's data included.
                 if let Some(active) = self.session.active_mut() {
                     active.weapons.attribution.forget_previous();
+                    active.weapons.attribution.end_provisional(at);
                 }
-                changed
             }
             ToolSeen::NotVisible => unreachable!("handled above"),
-        };
-        if unconfirmed {
-            // The tool in hand before was not seen up to the change, so no
+        }
+        if unconfirmed || clamped {
+            // The tool in hand before was not seen up to the change (or the
+            // change is taken at a moment the screen did not show): no
             // later shot is its by timing.
             if let Some(active) = self.session.active_mut() {
                 active.weapons.attribution.forget_previous();
             }
         }
-        if changed {
-            self.place_again_since(at).await;
+        // Shots are placed again only when the weapon in hand changed: a
+        // healer or a finder taken up leaves every shot where it was.
+        if self.declared_weapon() != declared_before {
+            self.place_again_since(look, at).await;
+        } else if let Some(active) = self.session.active_mut() {
+            look.backup.commit(active);
         }
         self.write_sightings(false).await;
         self.nudge_readout();
+    }
+
+    /// The weapon declared now, the tool known only from the game's data
+    /// included.
+    fn declared_weapon(&self) -> Option<String> {
+        self.session
+            .active()
+            .and_then(|active| active.weapons.attribution.declared().map(str::to_string))
+    }
+
+    /// Save what a change of the tool in hand touches: the shots and the
+    /// attribution state (see [`Backup`]), the hand and what the screen
+    /// showed before the look, the healing state, the declared healer, the
+    /// harvesting tool and a tool known only from the game's data.
+    fn look_backup(&mut self, before: (ScreenTool, Option<f64>)) -> Option<LookBackup> {
+        let Self {
+            session,
+            held_item,
+            declared_healer,
+            harvest_tool,
+            ..
+        } = &mut *self;
+        let active = session.active_mut()?;
+        let hand = active.held_tool.as_ref()?.hand.clone();
+        Some(LookBackup {
+            backup: Backup::of(active, held_item),
+            hand,
+            view: before.0,
+            applied_at: before.1,
+            healing: active.healing.clone(),
+            declared_healer: declared_healer.clone(),
+            harvest_tool: harvest_tool
+                .as_ref()
+                .map(|tool| (tool.name.clone(), tool.cost_per_use)),
+            provisional: active.weapons.provisional_props(),
+        })
+    }
+
+    /// Take a look back whole: the shots and state as they stood, and what
+    /// the screen showed before it, so the next look (or the stop) decides.
+    fn restore_look(&mut self, look: LookBackup) {
+        let Self {
+            session,
+            held_item,
+            declared_healer,
+            harvest_tool,
+            ..
+        } = &mut *self;
+        let Some(active) = session.active_mut() else {
+            return;
+        };
+        look.backup.restore(active, held_item);
+        active.healing = look.healing;
+        active.weapons.set_provisional_props(look.provisional);
+        if let Some(state) = active.held_tool.as_mut() {
+            state.hand = look.hand;
+            state.view = look.view;
+            state.applied_at = look.applied_at;
+        }
+        *declared_healer = look.declared_healer;
+        *harvest_tool = look
+            .harvest_tool
+            .map(|(name, cost_per_use)| super::HarvestTool { name, cost_per_use });
     }
 
     /// Declare the tool the bar names, from `at`.
@@ -1147,6 +1315,23 @@ impl TrackerActor {
     /// Write what a move changed in one transaction; a failed write puts
     /// memory back from `backup`.
     async fn save_moved(&mut self, backup: Backup, moved: Moved) -> bool {
+        if self.write_placed(moved).await {
+            if let Some(active) = self.session.active_mut() {
+                backup.commit(active);
+            }
+            true
+        } else {
+            let Self {
+                session, held_item, ..
+            } = &mut *self;
+            if let Some(active) = session.active_mut() {
+                backup.restore(active, held_item);
+            }
+            false
+        }
+    }
+
+    async fn write_placed(&mut self, moved: Moved) -> bool {
         let stored = self
             .db
             .with_writer(move |conn| {
@@ -1160,49 +1345,92 @@ impl TrackerActor {
             Ok(()) => true,
             Err(error) => {
                 tracing::error!(target: "eo::tracker", %error, "shots placed by the held tool could not be saved");
-                let Self {
-                    session, held_item, ..
-                } = &mut *self;
-                if let Some(active) = session.active_mut() {
-                    backup.restore(active, held_item);
-                }
                 false
             }
         }
     }
 
     /// Place again, as the regime that began at `at` places them, every
-    /// kept shot at or after `at`: what a look arriving after shots it
-    /// predates owes them.
-    async fn place_again_since(&mut self, at: f64) {
-        let (backup, moved) = {
+    /// kept observation at or after `at`: what a look arriving after shots
+    /// it predates owes them. If that cannot be saved, the look is taken
+    /// back whole: the overlay keeps showing what the screen showed before
+    /// it, the tool in hand and every shot stay as they were, and the next
+    /// look the watcher tells (or the stop, for a tool unseen) decides.
+    async fn place_again_since(&mut self, mut look: LookBackup, at: f64) {
+        let moved = {
             let Self {
-                session,
-                providers,
-                held_item,
-                ..
+                session, providers, ..
             } = &mut *self;
             let Some(active) = session.active_mut() else {
                 return;
             };
-            let mut backup = Backup::of(active, held_item);
-            let Some(moved) = Self::place_shots_again(providers, active, at, &mut backup) else {
-                return;
-            };
+            let moved = Self::place_shots_again(providers, active, at, &mut look.backup);
             active.dirty = true;
-            (backup, moved)
+            moved
         };
-        self.save_moved(backup, moved).await;
+        let saved = match moved {
+            Some(moved) => self.write_placed(moved).await,
+            None => true,
+        };
+        if saved {
+            if let Some(active) = self.session.active_mut() {
+                look.backup.commit(active);
+            }
+        } else {
+            self.restore_look(look);
+        }
     }
 
-    /// Take every kept shot at or after `at` back out of its phase, its
-    /// row, the tallies and the unpriced bound, then record each again in
-    /// order, as the shot path records a shot arriving now, into the place
-    /// its cost sits (the accumulator, or the kill it settled into). A shot
-    /// an effect window touches (one whose hit opened a window, or that a
-    /// window could tick) is left as booked: the windows are paid
-    /// activations of their own, not placed again. None when no shot was
-    /// placed again.
+    /// Put back what could not be placed again: each as it was, a shot in
+    /// the regime log too. A tick of a window taken back loses its link to
+    /// the window (in memory and in its row), since the hit that opened it
+    /// was placed again.
+    fn restore_unplaced(
+        active: &mut ActiveSession,
+        unplaced: Vec<RetainedShot>,
+        moved: &mut Moved,
+    ) {
+        for mut shot in unplaced {
+            let withdrawn = |id: &String| moved.window_deletes.contains(id);
+            if let Attribution::EffectTick { window_id } = &mut shot.record.attribution {
+                let linked = window_id.as_ref().is_some_and(withdrawn)
+                    || shot.record.windows.iter().any(withdrawn);
+                if linked {
+                    *window_id = None;
+                    shot.record
+                        .windows
+                        .retain(|id| !moved.window_deletes.contains(id));
+                    if let Some(evidence_id) = &shot.record.evidence_id {
+                        match active
+                            .accumulator
+                            .evidence
+                            .iter_mut()
+                            .find(|row| &row.id == evidence_id)
+                        {
+                            Some(row) => {
+                                row.effect_window_id = None;
+                                row.effect_candidates.retain(|window| {
+                                    !moved.window_deletes.contains(&window.window_id)
+                                });
+                            }
+                            None => moved.tick_unlinks.push(evidence_id.clone()),
+                        }
+                    }
+                }
+            }
+            active.weapons.attribution.restore_unplaced(shot);
+        }
+    }
+
+    /// Take every kept observation at or after `at` back out of where it
+    /// was recorded (its phase, its counts, its row, the tallies, the
+    /// unpriced bound, the effect window its hit opened), then record each
+    /// again in order, exactly as the shot path records an observation
+    /// arriving now, into the place its cost sits (the accumulator, or the
+    /// kill it settled into): an effect tick may become a shot and a shot a
+    /// tick, and a paid hit opens its effect again only if it still pays
+    /// for one. A shot the player's decision moved keeps what was decided.
+    /// None when nothing was placed again.
     fn place_shots_again(
         providers: &Providers,
         active: &mut ActiveSession,
@@ -1215,60 +1443,87 @@ impl TrackerActor {
         }
         let mut moved = Moved::default();
         let mut taken: Vec<RetainedShot> = Vec::new();
+        // What could not be placed again goes back as it was, once every
+        // window taken back is known.
+        let mut unplaced: Vec<RetainedShot> = Vec::new();
+        // The rows waiting with the accumulator, found by id once rather
+        // than searched for each shot; those taken out go in one pass.
+        let pending_rows: std::collections::HashSet<String> = active
+            .accumulator
+            .evidence
+            .iter()
+            .map(|row| row.id.clone())
+            .collect();
+        #[cfg(test)]
+        {
+            active.steps += pending_rows.len() as u64;
+        }
+        let mut taken_rows: std::collections::HashSet<String> = std::collections::HashSet::new();
         for shot in shots {
-            let touched = shot.record.opened_window.is_some()
-                || !shot.record.windows.is_empty()
-                || active
-                    .weapons
-                    .attribution
-                    .ticks_at(shot.record.observation, shot.record.observed_at);
-            if touched {
-                active.weapons.attribution.restore_retained(shot);
-                continue;
-            }
             let record = &shot.record;
-            let amount = super::attribution::AttributionRuntime::amount_of(record);
+            let tick = matches!(record.attribution, Attribution::EffectTick { .. });
             let critical = matches!(record.observation, Observation::Hit { critical: true, .. });
-            let Some(tool_stats) = Self::phases_of(active, &record.location, backup) else {
-                active.weapons.attribution.restore_retained(shot);
-                continue;
-            };
-            if !unbook(
-                tool_stats,
-                record.booked.as_deref(),
-                record.cost,
-                amount,
-                critical,
-            ) {
-                tracing::warn!(
-                    target: "eo::tracker",
-                    "a shot to place again was not found in its phase; left as booked",
-                );
-                active.weapons.attribution.restore_retained(shot);
-                continue;
-            }
-            if let ShotLocation::Kill(kill_id) = &record.location {
-                if let Some(kill) = active
-                    .session
-                    .kills
-                    .iter_mut()
-                    .rev()
-                    .find(|kill| &kill.id == kill_id)
-                {
-                    kill.cost_ped = kill.cost_ped - record.cost;
+            let kill = match &record.location {
+                ShotLocation::Pending => None,
+                ShotLocation::Kill(kill_id) => {
+                    match active
+                        .session
+                        .kills
+                        .iter()
+                        .rposition(|kill| &kill.id == kill_id)
+                    {
+                        Some(index) => Some(index),
+                        None => {
+                            unplaced.push(shot);
+                            continue;
+                        }
+                    }
                 }
+            };
+            if let Some(index) = kill {
+                backup.save_kill(index, &active.session.kills[index]);
+            }
+            if !tick {
+                let amount = super::attribution::AttributionRuntime::amount_of(record);
+                let tool_stats = match kill {
+                    Some(index) => &mut active.session.kills[index].tool_stats,
+                    None => &mut active.accumulator.tool_stats,
+                };
+                if !unbook(
+                    tool_stats,
+                    record.booked.as_deref(),
+                    record.cost,
+                    amount,
+                    critical,
+                ) {
+                    tracing::warn!(
+                        target: "eo::tracker",
+                        "a shot to place again was not found in its phase; left as booked",
+                    );
+                    unplaced.push(shot);
+                    continue;
+                }
+                match kill {
+                    Some(index) => {
+                        let kill = &mut active.session.kills[index];
+                        kill.shots_fired -= 1;
+                        kill.critical_hits -= i64::from(critical);
+                        kill.cost_ped = kill.cost_ped - record.cost;
+                    }
+                    None => {
+                        active.accumulator.shots_fired -= 1;
+                        active.accumulator.critical_hits -= i64::from(critical);
+                    }
+                }
+                moved.cost_delta = moved.cost_delta - record.cost;
             }
             if let Some(evidence_id) = &record.evidence_id {
-                let pending = active
-                    .accumulator
-                    .evidence
-                    .iter()
-                    .any(|row| &row.id == evidence_id);
-                if pending {
-                    active
-                        .accumulator
-                        .evidence
-                        .retain(|row| &row.id != evidence_id);
+                #[cfg(test)]
+                {
+                    active.steps += 1;
+                }
+                if pending_rows.contains(evidence_id) {
+                    taken_rows.insert(evidence_id.clone());
                 } else {
                     moved.row_deletes.push(evidence_id.clone());
                 }
@@ -1277,11 +1532,29 @@ impl TrackerActor {
             if let Some(charge) = shot.charge {
                 Self::unnote_unpriced(active, charge);
             }
-            moved.cost_delta = moved.cost_delta - record.cost;
+            if let Some(window) = &record.opened_window {
+                active.weapons.attribution.withdraw_effect_window(window);
+                moved.window_deletes.push(window.clone());
+            }
             taken.push(shot);
         }
+        if !taken_rows.is_empty() {
+            #[cfg(test)]
+            {
+                active.steps += active.accumulator.evidence.len() as u64;
+            }
+            active
+                .accumulator
+                .evidence
+                .retain(|row| !taken_rows.contains(&row.id));
+        }
+        Self::restore_unplaced(active, unplaced, &mut moved);
         if taken.is_empty() {
-            return None;
+            return if moved.tick_unlinks.is_empty() {
+                None
+            } else {
+                Some(moved)
+            };
         }
         taken.sort_by(|a, b| {
             (a.record.observed_at, a.record.seq)
@@ -1294,36 +1567,83 @@ impl TrackerActor {
             } = shot;
             let observation = record.observation;
             let observed_at = record.observed_at;
+            let location = record.location;
+            let kill = match &location {
+                ShotLocation::Pending => None,
+                ShotLocation::Kill(kill_id) => active
+                    .session
+                    .kills
+                    .iter()
+                    .rposition(|kill| &kill.id == kill_id),
+            };
             let resolved = active
                 .weapons
                 .attribution
                 .classify(observation, observed_at);
             let seq = active.weapons.attribution.apply(&resolved, observed_at);
-            let charge = matches!(resolved.attribution, Attribution::Unresolved)
-                .then(|| Self::note_unpriced(providers, active, observation, &resolved.fits));
             let (amount, critical) = match observation {
                 Observation::Hit { amount, critical } => (amount, critical),
                 Observation::Countered => (0.0, false),
             };
+            let mut place_row = |active: &mut ActiveSession, mut row: ShotEvidence| -> String {
+                row.context_id = context.context_id;
+                row.reload_speed_percent = context.reload_speed_percent;
+                let id = row.id.clone();
+                match &location {
+                    ShotLocation::Pending => active.accumulator.evidence.push(row),
+                    ShotLocation::Kill(kill_id) => {
+                        moved.row_inserts.push((row, kill_id.clone()));
+                    }
+                }
+                id
+            };
+            if matches!(resolved.attribution, Attribution::EffectTick { .. }) {
+                let row = ShotEvidence::for_shot(
+                    active,
+                    observation,
+                    observed_at,
+                    &resolved,
+                    None,
+                    Ped::ZERO,
+                );
+                let evidence_id = place_row(active, row);
+                active.weapons.attribution.retain_tick(
+                    ShotRecord {
+                        seq,
+                        observed_at,
+                        observation,
+                        attribution: resolved.attribution,
+                        fits: resolved.fits,
+                        windows: resolved.windows,
+                        location,
+                        evidence_id: Some(evidence_id),
+                        booked: None,
+                        cost: Ped::ZERO,
+                        opened_window: None,
+                    },
+                    context,
+                );
+                continue;
+            }
+            let charge = matches!(resolved.attribution, Attribution::Unresolved)
+                .then(|| Self::note_unpriced(providers, active, observation, &resolved.fits));
             let tool = resolved.attribution.priced_tool().map(str::to_string);
             let looters = active.hunting_looters;
-            let cost = match &record.location {
-                ShotLocation::Pending => Self::book_into(
-                    providers,
-                    &mut active.weapons,
-                    looters,
-                    &mut active.accumulator.tool_stats,
-                    tool.as_deref(),
-                    amount,
-                    critical,
-                ),
-                ShotLocation::Kill(kill_id) => {
-                    let index = active
-                        .session
-                        .kills
-                        .iter()
-                        .rposition(|kill| &kill.id == kill_id)
-                        .expect("a shot taken back from a kill finds it again");
+            let cost = match kill {
+                None => {
+                    active.accumulator.shots_fired += 1;
+                    active.accumulator.critical_hits += i64::from(critical);
+                    Self::book_into(
+                        providers,
+                        &mut active.weapons,
+                        looters,
+                        &mut active.accumulator.tool_stats,
+                        tool.as_deref(),
+                        amount,
+                        critical,
+                    )
+                }
+                Some(index) => {
                     let cost = Self::book_into(
                         providers,
                         &mut active.weapons,
@@ -1333,7 +1653,10 @@ impl TrackerActor {
                         amount,
                         critical,
                     );
-                    active.session.kills[index].cost_ped += cost;
+                    let kill = &mut active.session.kills[index];
+                    kill.shots_fired += 1;
+                    kill.critical_hits += i64::from(critical);
+                    kill.cost_ped += cost;
                     cost
                 }
             };
@@ -1342,7 +1665,7 @@ impl TrackerActor {
             let evidence_id =
                 ShotEvidence::keeps_row(&resolved.attribution, &active.weapons.attribution).then(
                     || {
-                        let mut row = ShotEvidence::for_shot(
+                        let row = ShotEvidence::for_shot(
                             active,
                             observation,
                             observed_at,
@@ -1350,18 +1673,29 @@ impl TrackerActor {
                             tool.clone(),
                             cost,
                         );
-                        row.context_id = context.context_id;
-                        row.reload_speed_percent = context.reload_speed_percent;
-                        let id = row.id.clone();
-                        match &record.location {
-                            ShotLocation::Pending => active.accumulator.evidence.push(row),
-                            ShotLocation::Kill(kill_id) => {
-                                moved.row_inserts.push((row, kill_id.clone()));
-                            }
-                        }
-                        id
+                        place_row(active, row)
                     },
                 );
+            // A paid hit of a weapon with an effect opens it, as on arrival.
+            let activation = tool.as_deref().and_then(|tool| {
+                super::weapon_effects::EffectActivation::for_shot(
+                    active,
+                    tool,
+                    observation,
+                    observed_at,
+                    cost,
+                )
+            });
+            let opened_window = activation.map(|mut activation| {
+                activation.context_id = context.context_id;
+                active
+                    .weapons
+                    .attribution
+                    .open_effect_window(activation.window.clone());
+                let id = activation.window.id.clone();
+                moved.window_inserts.push(activation);
+                id
+            });
             active.weapons.attribution.remember_shot(
                 ShotRecord {
                     seq,
@@ -1370,11 +1704,11 @@ impl TrackerActor {
                     attribution: resolved.attribution,
                     fits: resolved.fits,
                     windows: resolved.windows,
-                    location: record.location,
+                    location,
                     evidence_id,
                     booked: tool,
                     cost,
-                    opened_window: None,
+                    opened_window,
                 },
                 context,
                 charge,
@@ -1386,27 +1720,6 @@ impl TrackerActor {
         }
         moved.kills = backup.saved_kills_now(active);
         Some(moved)
-    }
-
-    /// The phases a shot's cost sits in: the accumulator's, or those of the
-    /// kill it settled into, saved in `backup` before the first change.
-    fn phases_of<'a>(
-        active: &'a mut ActiveSession,
-        location: &ShotLocation,
-        backup: &mut Backup,
-    ) -> Option<&'a mut Vec<(String, crate::tracking_models::ToolStats)>> {
-        match location {
-            ShotLocation::Pending => Some(&mut active.accumulator.tool_stats),
-            ShotLocation::Kill(kill_id) => {
-                let index = active
-                    .session
-                    .kills
-                    .iter()
-                    .rposition(|kill| &kill.id == kill_id)?;
-                backup.save_kill(index, &active.session.kills[index]);
-                Some(&mut active.session.kills[index].tool_stats)
-            }
-        }
     }
 
     /// Tell the readouts the tool in hand, or what is known of it, moved.
@@ -1426,11 +1739,24 @@ impl TrackerActor {
     }
 }
 
+/// What a change of the tool in hand touches, saved before it.
+struct LookBackup {
+    backup: Backup,
+    hand: Option<InHand>,
+    view: ScreenTool,
+    applied_at: Option<f64>,
+    healing: super::healing::HealingRuntime,
+    declared_healer: Option<super::healing::HealingIntent>,
+    harvest_tool: Option<(String, Ped)>,
+    provisional: Option<(String, std::sync::Arc<serde_json::Value>)>,
+}
+
 /// A tool unseen at the stop, settled in memory: the write the stop's
 /// transaction makes, and what to put back if it fails.
 pub(super) struct StopSettlement {
     pub(super) backup: Backup,
-    pub(super) hold: Hold,
+    pub(super) hold: Option<Hold>,
+    pub(super) unsettled: Vec<Unsettled>,
     pub(super) moved: Moved,
 }
 
@@ -1449,6 +1775,8 @@ fn unseen_moves(
         .into_iter()
         .filter(|shot| until.is_none_or(|until| shot.record.observed_at < until))
         .filter(|shot| shot.record.booked.as_deref() == Some(tool))
+        // What the player decided stands.
+        .filter(|shot| shot.decided_by.is_none())
         .map(|shot| ShotMove {
             seq: shot.record.seq,
             to_tool: None,

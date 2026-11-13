@@ -2336,9 +2336,13 @@ mod tests {
             tx.execute_batch(migration.sql).expect("migration SQL");
             tx.commit().expect("migration commit");
         }
-        let shape = |connection: &Connection| -> (Vec<String>, Vec<String>, Vec<String>) {
+        type Shape = (Vec<String>, Vec<String>, Vec<String>, Vec<String>, String);
+        let shape = |connection: &Connection| -> Shape {
             let columns = connection
-                .prepare("SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk FROM pragma_table_info('healing_activations')")
+                .prepare(
+                    "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk || ':' || \
+                     COALESCE(dflt_value, 'no default') FROM pragma_table_info('healing_activations')",
+                )
                 .unwrap()
                 .query_map([], |row| row.get(0))
                 .unwrap()
@@ -2366,7 +2370,55 @@ mod tests {
                 .unwrap()
                 .collect::<Result<Vec<String>, _>>()
                 .unwrap();
-            (columns, indexes, referencing)
+            let foreign_keys = connection
+                .prepare(
+                    "SELECT \"table\" || ':' || \"from\" || ':' || \"to\" || ':' || on_update || \
+                     ':' || on_delete || ':' || \"match\" \
+                     FROM pragma_foreign_key_list('healing_activations') ORDER BY \"from\"",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            // The table's statement with layout and quoting set aside and the
+            // one widened check taken out: every other column, constraint,
+            // reference and action must read the same.
+            let sql: String = connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' \
+                     AND name = 'healing_activations'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let mut sql: String = sql
+                .chars()
+                .filter(|c| !c.is_whitespace() && *c != '"')
+                .collect();
+            let widened = "CHECK(intent_sourceISNULLORintent_sourceIN(";
+            let start = sql.find(widened).expect("the widened check");
+            let end = start + sql[start..].find("))").expect("its end") + 2;
+            sql.replace_range(start..end, "");
+            (columns, indexes, referencing, foreign_keys, sql)
+        };
+        // A row in every table that names an activation, to prove the
+        // rebuild keeps them and what they point at.
+        let children = |connection: &Connection| -> Vec<String> {
+            connection
+                .prepare(
+                    "SELECT 'window:' || id || ':' || activation_id FROM healing_effect_windows \
+                     UNION ALL SELECT 'output:' || id || ':' || COALESCE(activation_id, '') || ':' \
+                       || COALESCE(prior_activation_id, '') FROM healing_outputs \
+                     UNION ALL SELECT 'correction:' || id || ':' || activation_id \
+                       FROM healing_corrections \
+                     ORDER BY 1",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap()
         };
         let row_sql = "SELECT id, session_id, equipment_id, tool_name, intent_at, observed_at, \
                        chat_timestamp, context_id, cost_ped, profile_json, provenance, \
@@ -2400,10 +2452,20 @@ mod tests {
                  ('b', 's', NULL, 'Vivo T1', 20, 21, '2026-01-01 00:00:21', NULL, 0, '{}', \
                   'retrospective', 30, NULL, 'c1', NULL, 'inferred'), \
                  ('c', 's', 5, 'Chip', 40, 41, '2026-01-01 00:00:41', 2, 0.5, '{}', \
-                  'health_capped', NULL, NULL, NULL, 0, NULL);",
+                  'health_capped', NULL, NULL, NULL, 0, NULL); \
+                 INSERT INTO healing_effect_windows (id, activation_id, session_id, tool_name, \
+                  started_at, expires_at) VALUES ('w1', 'a', 's', 'Vivo T1', 11.25, 30); \
+                 INSERT INTO healing_outputs (id, session_id, activation_id, effect_window_id, \
+                  observed_at, chat_timestamp, amount, classification, reason, \
+                  prior_activation_id) VALUES ('o1', 's', 'a', 'w1', 11.25, 't', 30, 'direct', \
+                  'r', 'b'); \
+                 INSERT INTO healing_corrections (id, session_id, kind, activation_id, output_id, \
+                  cost_delta_ped, corrected_at) VALUES ('c1', 's', 'not_paid_use', 'b', 'o1', \
+                  -0.01, 40);",
             )
             .expect("v81 rows");
-        let before = (shape(&connection), rows(&connection));
+        let before = (shape(&connection), rows(&connection), children(&connection));
+        assert_eq!(before.2.len(), 3, "a child row in every referencing table");
 
         let migration = &MIGRATIONS[81];
         assert_eq!(migration.version, 82);
@@ -2411,8 +2473,54 @@ mod tests {
         tx.execute_batch(migration.sql).expect("migration SQL");
         tx.commit().expect("migration commit");
 
-        assert_eq!((shape(&connection), rows(&connection)), before);
+        assert_eq!(
+            (shape(&connection), rows(&connection), children(&connection)),
+            before
+        );
         assert_eq!(before.0 .1.len(), 4, "the autoindex and the three indexes");
+        assert_eq!(before.0 .3.len(), 5, "every reference and its actions");
+        assert!(
+            before
+                .0
+                 .4
+                .contains("REFERENCEStracking_sessions(id)ONDELETECASCADE"),
+            "the session reference keeps its cascade"
+        );
+        // The cascade still reaches the rows: a session removed takes its
+        // activations, as before.
+        let cascaded: i64 = {
+            connection
+                .pragma_update(None, "foreign_keys", true)
+                .expect("foreign keys on");
+            connection
+                .execute("DELETE FROM healing_corrections", [])
+                .unwrap();
+            connection
+                .execute("DELETE FROM healing_outputs", [])
+                .unwrap();
+            connection
+                .execute("DELETE FROM healing_effect_windows", [])
+                .unwrap();
+            connection
+                .execute("DELETE FROM tracking_sessions WHERE id = 's'", [])
+                .unwrap();
+            let left = connection
+                .query_row("SELECT COUNT(*) FROM healing_activations", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            connection
+                .pragma_update(None, "foreign_keys", false)
+                .expect("foreign keys off");
+            connection
+                .execute(
+                    "INSERT INTO tracking_sessions (id, started_at) VALUES ('s', 1)",
+                    [],
+                )
+                .unwrap();
+            left
+        };
+        assert_eq!(cascaded, 0, "the session's activations leave with it");
         assert_eq!(
             before.0 .2,
             [

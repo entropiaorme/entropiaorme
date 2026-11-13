@@ -212,6 +212,17 @@ impl Hunt {
 
     fn look_for(&mut self, session: Option<&str>, at: i64, plate: Option<(&str, u32, f64)>) {
         self.at(at);
+        self.deliver(session, at, plate);
+    }
+
+    /// A look taken at `at` that reaches the tracker only now, the clock
+    /// already past it: what a tracker running behind its watcher sees.
+    fn look_late(&mut self, at: i64, plate: Option<(&str, u32, f64)>) {
+        assert!(at <= self.now_ms, "a late look was taken before now");
+        self.deliver(None, at, plate);
+    }
+
+    fn deliver(&mut self, session: Option<&str>, at: i64, plate: Option<(&str, u32, f64)>) {
         let names = bundled_profile().mob_names;
         let sighting = plate.map(|(text, level, fill)| Sighting {
             fill,
@@ -613,6 +624,59 @@ fn a_kill_unanswered_when_the_session_stops_keeps_its_declaration() {
         [(s("Young Atrox").unwrap(), s("declared"), None, None)]
     );
     assert!(hunt.kept().is_empty());
+}
+
+#[test]
+fn looks_that_reach_the_tracker_late_still_answer_the_kill_they_watched() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    // A clean fight, its kill read live at 5.2 s.
+    let t = hunt.fight(0, &["Atrox Young"; 5], 5);
+    // The tracker falls behind its watcher: by the time the looks taken
+    // after the kill reach it, the clock reads long past the moment the
+    // kill would have been given up on had the screen gone unwatched.
+    hunt.at(t + 30_000);
+    for k in 0..6 {
+        hunt.look_late(t + k * 1_000, None);
+    }
+    assert_eq!(
+        hunt.stamps(),
+        [(
+            s("Young Atrox").unwrap(),
+            s("detected"),
+            s("named"),
+            s("Atrox Young")
+        )],
+        "the screen watched the kill, however late its looks arrived"
+    );
+}
+
+#[test]
+fn a_kill_that_reaches_the_tracker_late_waits_for_the_looks_behind_it() {
+    let mut hunt = hunt(true);
+    hunt.start();
+    for (i, at) in [0, 1_000, 2_000, 3_000].into_iter().enumerate() {
+        hunt.look(at, Some(("Atrox Young", 5, 1.0 - 0.2 * i as f64)));
+    }
+    hunt.look(4_000, None);
+    // The creature died at 3.5 s and its line was read at 4.2 s, but the
+    // tracker, running behind, takes the kill only when the clock reads
+    // long past that, with the looks taken after it still to come.
+    hunt.at(40_000);
+    hunt.report_kill(3_000, Some(4_200));
+    for k in 5..11 {
+        hunt.look_late(k * 1_000, None);
+    }
+    assert_eq!(
+        hunt.stamps(),
+        [(
+            s("Young Atrox").unwrap(),
+            s("detected"),
+            s("named"),
+            s("Atrox Young")
+        )],
+        "the kill waited for the looks that watched it"
+    );
 }
 
 #[test]

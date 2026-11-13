@@ -451,7 +451,8 @@ impl TrackerActor {
     /// asked one last time, the watcher stops, and whatever is still
     /// unanswered keeps the stamp it was recorded with.
     pub(super) async fn end_detection(&mut self) {
-        self.answer_pending().await;
+        self.answer_pending(clock_epoch_ms(self.clock.as_ref()))
+            .await;
         self.drop_detection();
     }
 
@@ -512,7 +513,11 @@ impl TrackerActor {
         }
         let at_ms = pulse.at_ms;
         let looked = detection.follow(at_ms);
-        self.answer_pending().await;
+        // Asked as of the look itself, not of when the tracker got to it:
+        // looks still queued behind this one may be the ones that watched
+        // a kill far enough past, so a tracker running behind its watcher
+        // must not give that kill up as unwatched.
+        self.answer_pending(at_ms).await;
         let answered = self.follow_answers(at_ms);
         if looked || answered {
             self.emit_mob_source_changed();
@@ -565,7 +570,10 @@ impl TrackerActor {
             },
             declared,
         });
-        self.answer_pending().await;
+        // Asked as of when its line was read, as a look is as of when it
+        // was taken: the looks that watched past it may still be queued
+        // behind it when the tracker is running behind.
+        self.answer_pending(arrived_ms).await;
         // A kill whose line arrives after the looks that answer it changes
         // what the latest kills were with no further look to show it.
         if self.follow_answers(clock_epoch_ms(self.clock.as_ref())) {
@@ -576,13 +584,14 @@ impl TrackerActor {
     /// Ask about every kill still waiting, one last time before the stop
     /// sums the session (see `stop_session`).
     pub(super) async fn answer_waiting_kills(&mut self) {
-        self.answer_pending().await;
+        self.answer_pending(clock_epoch_ms(self.clock.as_ref()))
+            .await;
     }
 
-    /// Ask the history about every kill still waiting, oldest first, and
-    /// apply each answer.
-    async fn answer_pending(&mut self) {
-        let now_ms = clock_epoch_ms(self.clock.as_ref());
+    /// Ask the history about every kill still waiting, oldest first, as of
+    /// `now_ms` (past which a kill not yet watched far enough is given up
+    /// on), and apply each answer.
+    async fn answer_pending(&mut self, now_ms: i64) {
         let Some(active) = self.session.active_mut() else {
             return;
         };

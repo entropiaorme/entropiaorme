@@ -1225,7 +1225,12 @@ impl TrackerActor {
                 close_healing_intent(&mut active.healing, at);
                 match tool.kind {
                     HotbarItemKind::Weapon => {
-                        active.healing.weapon_lifesteal_percent = None;
+                        active.healing.weapon_lifesteal_percent =
+                            tool.weapon.as_ref().and_then(|weapon| {
+                                crate::equipment_pricing::lifesteal_percent_from_props(
+                                    &serde_json::Value::Object(weapon.props.clone()).to_string(),
+                                )
+                            });
                         if let Some(weapon) = tool.weapon {
                             active.weapons.carry_provisional(&tool.name, weapon);
                         }

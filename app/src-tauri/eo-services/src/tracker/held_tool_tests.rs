@@ -446,6 +446,7 @@ impl Hunt {
             "Rifle" => item(3, "Rifle", kind),
             "FAP" => fap(),
             "Mender" => mender(),
+            "Leech" => leech(),
             "Restoration" => ResolvedHotbarItem {
                 healing_profile: Some(fap_profile()),
                 ..item(8, "Restoration", kind)
@@ -830,6 +831,19 @@ fn activations(hunt: &Hunt) -> Vec<(Option<String>, f64, f64)> {
             )?;
             let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        }))
+        .unwrap()
+}
+
+/// Each paid use stored, by how it was confirmed.
+fn provenances(hunt: &Hunt) -> Vec<String> {
+    hunt.rig
+        .wait(hunt.rig.db.with_reader(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT provenance FROM healing_activations ORDER BY observed_at, rowid",
+            )?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
         }))
         .unwrap()
 }
@@ -2991,4 +3005,108 @@ fn the_screen_seeing_a_healer_gives_a_tick_no_edge_and_a_press_does() {
     let stored = activations(&hunt);
     assert_eq!(stored.len(), 2);
     assert_eq!(stored[1].0.as_deref(), Some("key"));
+}
+
+#[test]
+fn a_healer_the_screen_saw_stays_a_standing_claim_once_the_reading_stops() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(holding(4), 0.0);
+    hunt.advance(0.5);
+    hunt.heal(80.0);
+    *hunt.reading.lock().unwrap() = false;
+    hunt.reload();
+    // The keys are the source now, but nothing was pressed: a small heal
+    // past the reload is not a capped use.
+    hunt.advance(4.0);
+    hunt.heal(20.0);
+    assert_eq!(provenances(&hunt), vec!["direct".to_string()]);
+}
+
+#[test]
+fn lifesteal_is_judged_by_the_weapon_that_landed_the_hit_across_an_unclear_swap() {
+    let hunt = hunt_over(
+        true,
+        false,
+        vec![
+            carried(1, "Pistol", 10.0, 0.05),
+            carried(9, "Leech", 160.0, 0.5),
+        ],
+    );
+    hunt.start();
+    hunt.see(holding(9), 0.0);
+    hunt.shot(150.0);
+    // The bar is unclear for a moment between the weapon and the healer.
+    hunt.see(ToolSeen::Uncertain(Why::Unreadable), 0.0);
+    hunt.see(holding(4), 0.0);
+    hunt.heal(75.0);
+    assert!(activations(&hunt).is_empty(), "the hit's lifesteal");
+}
+
+#[test]
+fn a_lifesteal_heal_read_before_the_screen_saw_the_healer_is_not_reconciled_as_a_use() {
+    let hunt = hunt_over(
+        true,
+        false,
+        vec![
+            carried(1, "Pistol", 10.0, 0.05),
+            carried(9, "Leech", 160.0, 0.5),
+        ],
+    );
+    hunt.start();
+    hunt.see(holding(9), 0.0);
+    hunt.shot(150.0);
+    hunt.heal(75.0);
+    // The look showing the healer arrives after the heal, dated at it.
+    hunt.see(holding(4), 0.0);
+    assert!(activations(&hunt).is_empty());
+}
+
+#[test]
+fn choosing_a_healer_in_the_overlay_is_not_a_press() {
+    let hunt = hunt(true);
+    hunt.start();
+    hunt.see(ToolSeen::Uncertain(Why::Unreadable), 0.0);
+    hunt.intent(IntentSource::Overlay, "FAP", HotbarItemKind::Healing);
+    hunt.advance(0.3);
+    hunt.heal(20.0);
+    assert!(
+        activations(&hunt).is_empty(),
+        "no press vouches for a capped heal"
+    );
+    hunt.heal(80.0);
+    assert_eq!(provenances(&hunt), vec!["direct".to_string()]);
+}
+
+// With the keys the source, the press-led rules stand unchanged.
+
+#[test]
+fn with_the_keys_the_source_a_held_healer_still_bills_capped_and_lifesteal_sized_heals() {
+    let hunt = hunt_over(
+        false,
+        false,
+        vec![
+            carried(1, "Pistol", 10.0, 0.05),
+            carried(9, "Leech", 160.0, 0.5),
+        ],
+    );
+    hunt.start();
+    hunt.key("FAP", HotbarItemKind::Healing);
+    hunt.advance(0.3);
+    hunt.heal(80.0);
+    // Long past the press, a small heal is a use capped by full health.
+    hunt.advance(4.0);
+    hunt.heal(20.0);
+    assert_eq!(
+        provenances(&hunt),
+        vec!["direct".to_string(), "health_capped".to_string()]
+    );
+
+    // A lifesteal-sized heal in band while the healer is held is a use.
+    hunt.key("Leech", HotbarItemKind::Weapon);
+    hunt.key("FAP", HotbarItemKind::Healing);
+    hunt.advance(4.0);
+    hunt.shot(150.0);
+    hunt.heal(75.0);
+    assert_eq!(activations(&hunt).len(), 3);
 }

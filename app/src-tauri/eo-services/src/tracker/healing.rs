@@ -100,7 +100,10 @@ pub(super) struct HealingRuntime {
     pub(super) effect_windows: Vec<HealingEffectWindow>,
     last_activation: HashMap<i64, f64>,
     pending_outputs: Vec<PendingOutput>,
-    last_damage: Option<(f64, f64)>,
+    /// The latest hit: when, how much, and the lifesteal percent of the
+    /// weapon declared when it landed (so a later swap cannot change which
+    /// weapon's lifesteal the hit carried).
+    last_damage: Option<(f64, f64, Option<f64>)>,
     pub(super) weapon_lifesteal_percent: Option<f64>,
     /// The session runs keyless (snapshotted at start): heals the declared
     /// healer explains are inferred as paid uses.
@@ -230,7 +233,7 @@ impl HealingRuntime {
     }
 
     pub(super) fn note_damage(&mut self, observed_at: f64, amount: f64) {
-        self.last_damage = Some((observed_at, amount));
+        self.last_damage = Some((observed_at, amount, self.weapon_lifesteal_percent));
     }
 
     fn prune(&mut self, observed_at: f64) {
@@ -283,29 +286,41 @@ impl HealingRuntime {
         }
     }
 
+    /// The latest hit (its damage, and the lifesteal it carried), when a
+    /// heal at `observed_at` falls just after it.
+    fn recent_hit(&self, observed_at: f64) -> Option<(f64, Option<f64>)> {
+        let (damage_at, damage, percent) = self.last_damage?;
+        (observed_at - damage_at <= DAMAGE_CORRELATION_SECONDS && observed_at >= damage_at - 0.05)
+            .then_some((damage, percent))
+    }
+
+    /// Whether `amount` is the lifesteal share of a hit of `damage`.
+    fn lifesteal_share(damage: f64, percent: f64, amount: f64) -> bool {
+        let expected = damage * percent / 100.0;
+        let tolerance = (expected * 0.2).max(0.5);
+        (amount - expected).abs() <= tolerance
+    }
+
     fn damage_correlated(&self, observed_at: f64, amount: f64) -> bool {
-        let Some((damage_at, damage)) = self.last_damage else {
+        let Some((damage, _)) = self.recent_hit(observed_at) else {
             return false;
         };
-        if observed_at - damage_at > DAMAGE_CORRELATION_SECONDS || observed_at < damage_at - 0.05 {
-            return false;
-        }
         match self.weapon_lifesteal_percent {
-            Some(percent) => {
-                let expected = damage * percent / 100.0;
-                let tolerance = (expected * 0.2).max(0.5);
-                (amount - expected).abs() <= tolerance
-            }
+            Some(percent) => Self::lifesteal_share(damage, percent, amount),
             None => true,
         }
     }
 
-    /// Whether the held weapon's lifesteal explains this heal: a hit landed
-    /// just before it, and the heal is that hit's lifesteal share. Unlike
-    /// [`Self::damage_correlated`], a weapon with no lifesteal explains
-    /// nothing, so a keyless heal in the middle of a fight still counts.
+    /// Whether a weapon's lifesteal explains this heal: a hit landed just
+    /// before it, and the heal is that hit's lifesteal share, at the
+    /// lifesteal of the weapon that landed it (whatever is held since).
+    /// Unlike [`Self::damage_correlated`], a weapon with no lifesteal
+    /// explains nothing, so a heal in the middle of a fight still counts.
     fn lifesteal_explains(&self, observed_at: f64, amount: f64) -> bool {
-        self.weapon_lifesteal_percent.is_some() && self.damage_correlated(observed_at, amount)
+        self.recent_hit(observed_at)
+            .is_some_and(|(damage, percent)| {
+                percent.is_some_and(|percent| Self::lifesteal_share(damage, percent, amount))
+            })
     }
 
     /// The declared healer as an inferred use's intent, when this keyless
@@ -345,8 +360,11 @@ impl HealingRuntime {
     /// is not on the fresh edge of a press of the held healer's key. The
     /// screen seeing a healer, or the player choosing one in the overlay, is
     /// not a use.
+    /// A claim the screen opened stays standing after the reading stops: it
+    /// was never a press.
     fn standing(intent: &HealingIntent, observed_at: f64, screen: bool) -> bool {
-        screen && !(intent.source == IntentSource::Key && Self::on_fresh_edge(intent, observed_at))
+        (screen || intent.source == IntentSource::Screen)
+            && !(intent.source == IntentSource::Key && Self::on_fresh_edge(intent, observed_at))
     }
 
     fn activation_match(&self, intent: &HealingIntent, amount: f64) -> Option<&'static str> {

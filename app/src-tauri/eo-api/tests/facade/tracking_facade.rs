@@ -2853,6 +2853,7 @@ async fn tool_reading_api(
             healing_profile: None,
             lifesteal_percent: None,
             consumable_profile: None,
+            setup: Default::default(),
         })
     });
     let bundled: eo_services::tracker::BundledToolResolver =

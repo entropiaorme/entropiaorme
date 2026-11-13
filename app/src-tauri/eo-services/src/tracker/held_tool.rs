@@ -81,6 +81,7 @@ use crate::bus_events::{
 use crate::hotbar_listener::ResolvedHotbarItem;
 use crate::ped::Ped;
 use crate::screen_watch::WatchEnded;
+use crate::tool_setup::{SetupPart, ToolSetup};
 use crate::tool_watch::{HeldTool, ToolPulse, ToolPulseSink, ToolSeen, Why};
 
 use super::actor::{TrackerActor, TrackerMsg};
@@ -90,6 +91,7 @@ use super::providers::Providers;
 use super::session::ActiveSession;
 use super::time::{instant_to_epoch, resolve_local};
 use super::weapon_evidence::{unbook, write_moved, Backup, Moved, ShotEvidence, ShotMove};
+use super::weapons::WeaponRuntime;
 use super::TrackerCommandError;
 
 /// How long after a shot a look that predates it may still arrive and
@@ -182,13 +184,41 @@ pub struct ManualDeclaration {
 }
 
 /// The tool in hand as the reading knows it, for display: its name, its
-/// library entry, or that it is known only from the game's data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// library entry, or that it is known only from the game's data, and the
+/// set-up its uses are priced at.
+#[derive(Debug, Clone, PartialEq)]
 pub struct HandView {
     pub name: String,
     /// The library entry it is; None for a tool known only from the game's
     /// data.
     pub library_id: Option<i64>,
+    pub setup: Option<HandSetup>,
+}
+
+/// What a use of the tool in hand is priced at now, and the set-up behind
+/// the price: for a weapon, its props as the session prices its shots (the
+/// enhancers still fitted included); for any other tool, the price it was
+/// declared at.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HandSetup {
+    pub kind: HotbarItemKind,
+    /// The parts fitted; None where the declaration did not say (a healer
+    /// declared by its key while the bar was unclear).
+    pub parts: Option<Vec<SetupPart>>,
+    /// A weapon's damage enhancers: still fitted, and as set up. None when
+    /// it is set up with none.
+    pub enhancers: Option<Enhancers>,
+    pub cost_per_use: Ped,
+    /// The TT of one use, before markup, where it is known.
+    pub tt_per_use: Option<Ped>,
+}
+
+/// A weapon's damage enhancers: how many are still fitted, of those set
+/// up (each wears out with use).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Enhancers {
+    pub active: i64,
+    pub fitted: i64,
 }
 
 impl HandView {
@@ -225,13 +255,20 @@ enum InHand {
         id: i64,
         name: String,
         kind: HotbarItemKind,
+        /// The price of one use it was declared at.
+        cost_per_use: Ped,
+        /// What it was resolved with; None when it was declared from an
+        /// intent alone.
+        setup: Option<ToolSetup>,
     },
     /// Known only from the game's data, by the name its shots are booked
-    /// under.
+    /// under, at its bare price.
     Provisional {
         endpoint: String,
         item_id: String,
         name: String,
+        kind: HotbarItemKind,
+        cost_per_use: Ped,
     },
 }
 
@@ -259,12 +296,58 @@ impl InHand {
         }
     }
 
-    fn view(&self) -> HandView {
+    fn view(&self, weapons: &WeaponRuntime) -> HandView {
         HandView {
             name: self.name().to_string(),
             library_id: match self {
                 InHand::Library { id, .. } => Some(*id),
                 InHand::Provisional { .. } => None,
+            },
+            setup: Some(self.setup(weapons)),
+        }
+    }
+
+    /// What a use of it is priced at now: a weapon as the session prices
+    /// its shots, when the session prices it; anything else (or a weapon
+    /// the session has no props for) at the price it was declared at.
+    fn setup(&self, weapons: &WeaponRuntime) -> HandSetup {
+        let (kind, cost_per_use) = match self {
+            InHand::Library {
+                kind, cost_per_use, ..
+            }
+            | InHand::Provisional {
+                kind, cost_per_use, ..
+            } => (*kind, *cost_per_use),
+        };
+        if kind == HotbarItemKind::Weapon {
+            if let Some(priced) = weapons.shot_pricing(self.name()) {
+                return HandSetup {
+                    kind,
+                    parts: Some(priced.parts),
+                    enhancers: (priced.enhancers.fitted > 0).then_some(priced.enhancers),
+                    cost_per_use: priced.cost_per_shot,
+                    tt_per_use: Some(priced.tt_per_shot),
+                };
+            }
+        }
+        match self {
+            InHand::Library { setup, .. } => HandSetup {
+                kind,
+                parts: setup.as_ref().map(|setup| setup.parts.clone()),
+                enhancers: None,
+                cost_per_use,
+                tt_per_use: setup
+                    .as_ref()
+                    .and_then(|setup| setup.tt_per_use_ped)
+                    .map(Ped),
+            },
+            // The bare tool: nothing fitted, no markup over TT.
+            InHand::Provisional { .. } => HandSetup {
+                kind,
+                parts: Some(Vec::new()),
+                enhancers: None,
+                cost_per_use,
+                tt_per_use: None,
             },
         }
     }
@@ -397,16 +480,26 @@ impl TrackerActor {
     /// Where the tool in hand comes from now, with the reading's knowledge
     /// of the hand (none while the keys are the source).
     pub(super) fn tool_display(&self) -> ToolDisplay {
-        let state = self
+        let source = self.tool_source();
+        let Some((state, weapons)) = self
             .session
             .active()
-            .and_then(|active| active.held_tool.as_ref());
+            .and_then(|active| Some((active.held_tool.as_ref()?, &active.weapons)))
+        else {
+            return ToolDisplay {
+                source,
+                hand: None,
+                unseen_hand: None,
+            };
+        };
         ToolDisplay {
-            source: self.tool_source(),
-            hand: state.and_then(|state| state.hand.as_ref().map(InHand::view)),
+            source,
+            hand: state.hand.as_ref().map(|hand| hand.view(weapons)),
             unseen_hand: state
-                .and_then(|state| state.hold.as_ref())
-                .and_then(|hold| hold.hand.as_ref().map(InHand::view)),
+                .hold
+                .as_ref()
+                .and_then(|hold| hold.hand.as_ref())
+                .map(|hand| hand.view(weapons)),
         }
     }
 
@@ -460,7 +553,7 @@ impl TrackerActor {
             lifesteal_percent: item.lifesteal_percent,
             consumable_profile: None,
         };
-        self.take_declaration(&payload);
+        self.take_declaration(&payload, Some(item.setup));
         self.on_hotbar_intent(&BusEvent::HotbarIntent(Box::new(payload)))
             .await;
         Ok(ToolDeclared::Taken)
@@ -793,7 +886,7 @@ impl TrackerActor {
                         );
                         return;
                     }
-                    self.take_declaration(payload);
+                    self.take_declaration(payload, None);
                 }
                 IntentSource::Screen => {}
             }
@@ -820,7 +913,7 @@ impl TrackerActor {
 
     /// The player's declaration while the screen is the source and cannot
     /// say: it stands until the screen next shows something conclusive.
-    fn take_declaration(&mut self, payload: &HotbarIntentPayload) {
+    fn take_declaration(&mut self, payload: &HotbarIntentPayload, setup: Option<ToolSetup>) {
         let at = payload.occurred_at;
         self.leave_provisional(at);
         if payload.item_kind != HotbarItemKind::Healing {
@@ -838,6 +931,8 @@ impl TrackerActor {
             id: payload.equipment_id,
             name: payload.item_name.clone(),
             kind: payload.item_kind,
+            cost_per_use: Ped(payload.cost_per_use_ped),
+            setup,
         });
     }
 
@@ -1067,6 +1162,8 @@ impl TrackerActor {
                         id,
                         name: item.name.clone(),
                         kind: item.kind,
+                        cost_per_use: Ped(item.cost_per_use_ped),
+                        setup: Some(item.setup.clone()),
                     });
                 }
                 let payload = HotbarIntentPayload {
@@ -1121,6 +1218,8 @@ impl TrackerActor {
                         endpoint,
                         item_id,
                         name: tool.name.clone(),
+                        kind: tool.kind,
+                        cost_per_use: Ped(tool.cost_per_use_ped),
                     });
                 }
                 close_healing_intent(&mut active.healing, at);

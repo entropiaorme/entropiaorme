@@ -11,10 +11,12 @@
 
 use std::collections::BTreeMap;
 
+use eo_services::bus_events::HotbarItemKind;
 use eo_services::db::Db;
 use eo_services::game_ui::tool_names::Candidate;
+use eo_services::tool_setup::{part_names, SetupPart, SetupRole};
 use eo_services::tool_watch::{HeldTool, ToolSeen, Why};
-use eo_services::tracker::{HandView, ScreenTool, ToolDisplay, ToolSource};
+use eo_services::tracker::{HandSetup, HandView, ScreenTool, ToolDisplay, ToolSource};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -77,16 +79,122 @@ pub enum ToolUncertainty {
     Unreadable,
 }
 
-/// What the screen shows is in hand.
+/// What one use of a tool is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolUse {
+    Shot,
+    Heal,
+    Swing,
+}
+
+/// The part an attachment plays in a set-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolPartRole {
+    Amplifier,
+    Scope,
+    Absorber,
+    Implant,
+}
+
+/// One attachment fitted to the tool in hand.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolPart {
+    pub role: ToolPartRole,
+    pub name: String,
+}
+
+/// A weapon's damage enhancers: how many are still fitted, of those it is
+/// set up with (each wears out with use).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolEnhancers {
+    pub active: i64,
+    pub fitted: i64,
+}
+
+/// What a use of the tool in hand is priced at now, and the set-up behind
+/// the price: for a weapon, as the session prices its shots.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolSetupView {
+    /// What one use is.
+    pub per: ToolUse,
+    /// The parts fitted, in the order a player names them; null where the
+    /// declaration did not say (a healer declared by its key while the bar
+    /// was unclear).
+    pub parts: Nullable<Vec<ToolPart>>,
+    /// Null when the weapon is set up with none (or it is not a weapon).
+    pub enhancers: Nullable<ToolEnhancers>,
+    /// The price of one use, markup included (PED).
+    pub cost_per_use_ped: f64,
+    /// The TT one use consumes, before markup (PED), where known.
+    pub tt_per_use_ped: Nullable<f64>,
+}
+
+impl ToolSetupView {
+    fn of(setup: HandSetup) -> Self {
+        Self {
+            per: match setup.kind {
+                HotbarItemKind::Healing => ToolUse::Heal,
+                HotbarItemKind::Harvesting => ToolUse::Swing,
+                HotbarItemKind::Weapon | HotbarItemKind::Consumable => ToolUse::Shot,
+            },
+            parts: setup
+                .parts
+                .map(|parts| parts.into_iter().map(ToolPart::of).collect())
+                .into(),
+            enhancers: setup
+                .enhancers
+                .map(|enhancers| ToolEnhancers {
+                    active: enhancers.active,
+                    fitted: enhancers.fitted,
+                })
+                .into(),
+            cost_per_use_ped: setup.cost_per_use.0,
+            tt_per_use_ped: setup.tt_per_use.map(|tt| tt.0).into(),
+        }
+    }
+}
+
+impl ToolPart {
+    fn of(part: SetupPart) -> Self {
+        Self {
+            role: match part.role {
+                SetupRole::Amplifier => ToolPartRole::Amplifier,
+                SetupRole::Scope => ToolPartRole::Scope,
+                SetupRole::Absorber => ToolPartRole::Absorber,
+                SetupRole::Implant => ToolPartRole::Implant,
+            },
+            name: part.name,
+        }
+    }
+}
+
+/// The set-up of `hand`, for the wire.
+fn setup_of(hand: Option<&HandView>) -> Nullable<ToolSetupView> {
+    hand.and_then(|hand| hand.setup.clone())
+        .map(ToolSetupView::of)
+        .into()
+}
+
+/// What the screen shows is in hand.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ToolHeld {
     /// Nothing read yet: the screen is not the source, or has not been
     /// looked at this session.
     NotRead,
     /// A tool. `provisional`: known only from the game's data, not the
-    /// library, and costed as the bare tool.
-    Tool { name: String, provisional: bool },
+    /// library, and costed as the bare tool. `setup`: what its uses are
+    /// priced at, where the reading knows the hand.
+    Tool {
+        name: String,
+        provisional: bool,
+        setup: Nullable<ToolSetupView>,
+    },
     /// Nothing is held.
     Nothing,
     /// Something the player said is not a tracked tool.
@@ -94,10 +202,11 @@ pub enum ToolHeld {
     /// The bar is in view but does not say which tool is in hand.
     Uncertain { why: ToolUncertainty },
     /// The bar is out of view; the tool in hand when it went, if any, is
-    /// still taken to be held (`provisional` as for a tool).
+    /// still taken to be held (`provisional` and `setup` as for a tool).
     NotVisible {
         last: Nullable<String>,
         provisional: bool,
+        setup: Nullable<ToolSetupView>,
     },
 }
 
@@ -105,7 +214,7 @@ pub enum ToolHeld {
 /// keys are the source (the setting off, or no session running) only
 /// `notReading` says anything, and the snapshot's `currentTool` keeps its
 /// meaning.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSourceView {
     /// The screen is the source of the tool in hand for the running
@@ -143,29 +252,11 @@ impl ToolSourceView {
 /// on.
 pub(crate) type LibraryRow = (i64, String, String, String, bool);
 
-/// The attachments that tell one set-up of a tool from another, in the
-/// order a player names them.
-const SETUP_PARTS: [&str; 4] = [
-    "amp_entity",
-    "scope_entity",
-    "absorber_entity",
-    "implant_entity",
-];
-
-/// The names of an entry's attachments, in [`SETUP_PARTS`] order (None
-/// where it has none).
-fn setup_parts(properties_json: &str) -> Vec<Option<String>> {
+/// The names of an entry's attachments, in the order a player names them
+/// (None where it has none).
+fn setup_parts(properties_json: &str) -> [Option<String>; 4] {
     let props: Value = serde_json::from_str(properties_json).unwrap_or(Value::Null);
-    SETUP_PARTS
-        .iter()
-        .map(|key| {
-            props
-                .get(key)
-                .and_then(|entity| entity.get("name"))
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect()
+    part_names(&props)
 }
 
 /// How the player tells apart entries the held-tool bar cannot: each
@@ -176,7 +267,7 @@ fn setup_parts(properties_json: &str) -> Vec<Option<String>> {
 /// uses: the overlay's choices, the equipment page's flags, its switches
 /// and the hotbar's idle slots.
 pub fn lookalike_labels(rows: &[&LibraryRow]) -> Vec<String> {
-    let parts: Vec<Vec<Option<String>>> = rows.iter().map(|row| setup_parts(&row.3)).collect();
+    let parts: Vec<[Option<String>; 4]> = rows.iter().map(|row| setup_parts(&row.3)).collect();
     let label_at = |index: usize, depth: usize| -> String {
         let mut label = rows[index].1.clone();
         for part in parts[index].iter().take(depth).flatten() {
@@ -192,7 +283,7 @@ pub fn lookalike_labels(rows: &[&LibraryRow]) -> Vec<String> {
             .all(|(i, label)| labels.iter().skip(i + 1).all(|other| other != label))
     };
     let mut labels: Vec<String> = Vec::new();
-    for depth in 0..=SETUP_PARTS.len() {
+    for depth in 0..=SetupRole::ALL.len() {
         labels = (0..rows.len())
             .map(|index| label_at(index, depth))
             .collect();
@@ -302,9 +393,13 @@ fn screen_view(
         held,
     };
     if let Some(manual) = screen.manual {
+        let declared = hand
+            .as_ref()
+            .filter(|hand| hand.library_id == Some(manual.equipment_id));
         return view(
             true,
             ToolHeld::Tool {
+                setup: setup_of(declared),
                 name: manual.name,
                 provisional: false,
             },
@@ -312,6 +407,7 @@ fn screen_view(
     }
     let covered = |hand: Option<HandView>| ToolHeld::NotVisible {
         provisional: hand.as_ref().is_some_and(HandView::provisional),
+        setup: setup_of(hand.as_ref()),
         last: hand.map(|hand| hand.name).into(),
     };
     if screen.unseen.is_some() {
@@ -327,8 +423,13 @@ fn screen_view(
                 .or_else(|| rows.iter().find(|row| row.0 == id).map(|row| row.1.clone()))
                 .unwrap_or_default(),
             provisional: false,
+            setup: setup_of(hand.as_ref().filter(|hand| hand.library_id == Some(id))),
         },
         ToolSeen::Holding(HeldTool::Bundled { name, .. }) => ToolHeld::Tool {
+            setup: setup_of(
+                hand.as_ref()
+                    .filter(|hand| hand.provisional() && hand.name == name),
+            ),
             name,
             provisional: true,
         },
@@ -416,6 +517,7 @@ mod tests {
         HandView {
             name: name.into(),
             library_id: Some(id),
+            setup: None,
         }
     }
 
@@ -423,6 +525,7 @@ mod tests {
         HandView {
             name: name.into(),
             library_id: None,
+            setup: None,
         }
     }
 
@@ -483,7 +586,8 @@ mod tests {
             view_of(holding, &[]).held,
             ToolHeld::Tool {
                 name: "Rifle".into(),
-                provisional: false
+                provisional: false,
+                setup: None.into()
             }
         );
         // A hand that is not that entry (not declared yet): its row is read.
@@ -493,7 +597,8 @@ mod tests {
             held(unnamed),
             ToolHeld::Tool {
                 name: "Rifle".into(),
-                provisional: false
+                provisional: false,
+                setup: None.into()
             }
         );
         assert_eq!(
@@ -507,7 +612,8 @@ mod tests {
             )),
             ToolHeld::Tool {
                 name: "Rusty Rifle".into(),
-                provisional: true
+                provisional: true,
+                setup: None.into()
             }
         );
     }
@@ -656,21 +762,24 @@ mod tests {
             held(with(Some(library(4, "Rifle")))),
             ToolHeld::NotVisible {
                 last: Some("Rifle".to_string()).into(),
-                provisional: false
+                provisional: false,
+                setup: None.into()
             }
         );
         assert_eq!(
             held(with(Some(bundled("Rusty Rifle")))),
             ToolHeld::NotVisible {
                 last: Some("Rusty Rifle".to_string()).into(),
-                provisional: true
+                provisional: true,
+                setup: None.into()
             }
         );
         assert_eq!(
             held(with(None)),
             ToolHeld::NotVisible {
                 last: None.into(),
-                provisional: false
+                provisional: false,
+                setup: None.into()
             }
         );
         assert!(ids_to_read(&with(None)).is_empty());
@@ -701,7 +810,8 @@ mod tests {
             view.held,
             ToolHeld::Tool {
                 name: "Pistol".into(),
-                provisional: false
+                provisional: false,
+                setup: None.into()
             }
         );
     }

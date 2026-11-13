@@ -112,6 +112,7 @@ use eo_services::skill_scan::{
 use eo_services::skill_tracker::SkillTracker;
 pub use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::time::naive_to_epoch;
+use eo_services::tool_setup::ToolSetup;
 use eo_services::tracker::{
     ActivityKey, CarriedWeapon, CarriedWeaponProfile, EquipmentLibrary, EquipmentProfile,
     GuardrailTool, HarvestGuardrailTools, HuntTracker, Providers, TrackingConfig,
@@ -1737,9 +1738,9 @@ fn build_item_resolver(
                     healing_profile.base_reload_seconds = Some(base_reload_seconds);
                     healing_profile.reload_speed_percent = Some(reload_speed);
                     healing_profile.effective_reload_seconds = Some(reload_seconds);
-                    healing_profile.tt_per_use_ped = Some(
-                        eo_services::equipment_pricing::heal_tt_from_props(&properties_json),
-                    );
+                    let tt_per_use_ped =
+                        eo_services::equipment_pricing::heal_tt_from_props(&properties_json);
+                    healing_profile.tt_per_use_ped = Some(tt_per_use_ped);
                     healing_profile.on_use = serde_json::from_str::<Value>(&properties_json)
                         .ok()
                         .and_then(|props| on_use_effect_from_props(&props, game_data.as_deref()));
@@ -1752,6 +1753,7 @@ fn build_item_resolver(
                         healing_profile: Some(healing_profile),
                         lifesteal_percent: None,
                         consumable_profile: None,
+                        setup: ToolSetup::from_props_json(&properties_json, Some(tt_per_use_ped)),
                     }
                 }
                 "consumable" => {
@@ -1770,6 +1772,7 @@ fn build_item_resolver(
                         healing_profile: None,
                         lifesteal_percent: None,
                         consumable_profile: Some(profile),
+                        setup: ToolSetup::default(),
                     }
                 }
                 // A harvesting tool stores the same single-entity props
@@ -1777,6 +1780,8 @@ fn build_item_resolver(
                 // heal per-use recipe prices it; no reload semantics.
                 "tool" => {
                     let (cost_ped, _) = heal_cost_from_props(&properties_json);
+                    let tt_per_use_ped =
+                        eo_services::equipment_pricing::heal_tt_from_props(&properties_json);
                     ResolvedHotbarItem {
                         equipment_id: equip_id,
                         name,
@@ -1786,6 +1791,7 @@ fn build_item_resolver(
                         healing_profile: None,
                         lifesteal_percent: None,
                         consumable_profile: None,
+                        setup: ToolSetup::from_props_json(&properties_json, Some(tt_per_use_ped)),
                     }
                 }
                 _ => {
@@ -1809,6 +1815,10 @@ fn build_item_resolver(
                             })
                             .or_else(|| lifesteal_percent_from_props(&properties_json)),
                         consumable_profile: None,
+                        // A weapon's price and its TT follow the tracker's
+                        // own pricing of it (its enhancers wear down), so only
+                        // its parts are taken here.
+                        setup: ToolSetup::from_props_json(&properties_json, None),
                     }
                 }
             };

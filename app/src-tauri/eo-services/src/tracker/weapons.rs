@@ -12,9 +12,11 @@ use crate::expected_hunting::{
     evidence_from_equipment_props, HuntingLooterLevels, OffensiveLoadoutEvidence,
 };
 use crate::ped::Ped;
+use crate::tool_setup::{setup_parts, tt_per_shot_pec, SetupPart};
 
 use super::actor::TrackerActor;
 use super::attribution::AttributionRuntime;
+use super::held_tool::Enhancers;
 use super::providers::{BundledWeapon, CarriedWeaponProfile, Providers};
 
 /// The session-scoped weapon runtime: which weapons are carried and which
@@ -173,6 +175,26 @@ impl WeaponRuntime {
     }
 }
 
+/// The damage enhancers a weapon's props are set up with:
+/// `max(0, int(props.get("damage_enhancers", 0) or 0))`.
+fn configured_enhancers(props: &Value) -> i64 {
+    (props
+        .get("damage_enhancers")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as i64)
+        .max(0)
+}
+
+/// How the session prices a shot of a weapon now, and the set-up behind
+/// the price.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ShotPricing {
+    pub(super) parts: Vec<SetupPart>,
+    pub(super) enhancers: Enhancers,
+    pub(super) cost_per_shot: Ped,
+    pub(super) tt_per_shot: Ped,
+}
+
 /// Per-weapon damage-enhancer state within the current session.
 pub(super) struct DamageEnhancerState {
     pub(super) tool_name: String,
@@ -183,12 +205,7 @@ pub(super) struct DamageEnhancerState {
 
 impl DamageEnhancerState {
     pub(super) fn from_props(tool_name: &str, props: Arc<Value>) -> Self {
-        // `max(0, int(props.get("damage_enhancers", 0) or 0))`.
-        let configured = props
-            .get("damage_enhancers")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0) as i64;
-        let configured = configured.max(0);
+        let configured = configured_enhancers(&props);
         Self {
             tool_name: tool_name.to_string(),
             props,
@@ -250,6 +267,53 @@ impl DamageEnhancerState {
 }
 
 impl WeaponRuntime {
+    /// How a shot of `name` is priced now, as [`TrackerActor::current_cost_for_tool`]
+    /// prices it from the weapon's props (its enhancer state, when the
+    /// session has one, setting the enhancers still fitted), without
+    /// touching that state. None for a weapon the session holds no props
+    /// for (it is priced from elsewhere).
+    pub(super) fn shot_pricing(&self, name: &str) -> Option<ShotPricing> {
+        let (key, props) = match self.carried_profiles.get(name) {
+            Some(props) => (name, props),
+            None => match self.profile_cache.get(name) {
+                Some(Some((canonical, props))) => (canonical.as_str(), props),
+                _ => return None,
+            },
+        };
+        let state = self.enhancer_states.get(key);
+        let props = state.map_or(props, |state| &state.props);
+        if props.get("weapon_entity").is_none_or(Value::is_null) {
+            return None;
+        }
+        let enhancers = match state {
+            Some(state) => Enhancers {
+                active: state.active_slots(),
+                fitted: state.stacks.len() as i64,
+            },
+            None => {
+                let fitted = configured_enhancers(props);
+                Enhancers {
+                    active: fitted,
+                    fitted,
+                }
+            }
+        };
+        let priced = cost_per_shot_from_props(props, Some(enhancers.active));
+        let total = priced
+            .get("totalCostPerUse")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        Some(ShotPricing {
+            parts: setup_parts(props),
+            enhancers,
+            // The cost engine prices in PEC; the tracker accounts in PED.
+            cost_per_shot: state
+                .and_then(|state| state.cached_cost)
+                .unwrap_or(Ped(total / 100.0)),
+            tt_per_shot: Ped(tt_per_shot_pec(&priced) / 100.0),
+        })
+    }
+
     /// The per-shot price a carried weapon's props give with its configured
     /// enhancers, as review prices an assignment: what an unpriced shot of
     /// it would cost. Leaves the live enhancer state alone. None for a

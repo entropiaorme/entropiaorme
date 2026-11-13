@@ -34,6 +34,9 @@ pub struct ResolvedHotbarItem {
     pub healing_profile: Option<HealingProfile>,
     pub lifesteal_percent: Option<f64>,
     pub consumable_profile: Option<crate::consumables::ConsumableProfile>,
+    /// What is fitted to the entry, and the TT of one use, as it was
+    /// resolved: what the overlay names as the set-up of the tool in hand.
+    pub setup: crate::tool_setup::ToolSetup,
 }
 
 /// The resolver: slot key to the current equipment snapshot, or None for an
@@ -560,6 +563,7 @@ mod tests {
                 healing_profile: None,
                 lifesteal_percent: None,
                 consumable_profile: None,
+                setup: Default::default(),
             }),
             "2" => Some(ResolvedHotbarItem {
                 equipment_id: 2,
@@ -574,6 +578,7 @@ mod tests {
                 }),
                 lifesteal_percent: None,
                 consumable_profile: None,
+                setup: Default::default(),
             }),
             "3" => Some(ResolvedHotbarItem {
                 equipment_id: 3,
@@ -584,6 +589,7 @@ mod tests {
                 healing_profile: None,
                 lifesteal_percent: None,
                 consumable_profile: None,
+                setup: Default::default(),
             }),
             _ => None,
         })
@@ -969,6 +975,7 @@ mod tests {
                 healing_profile: None,
                 lifesteal_percent: None,
                 consumable_profile: None,
+                setup: Default::default(),
             })
         });
         let rig = rig(Some(resolver));

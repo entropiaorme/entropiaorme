@@ -538,6 +538,7 @@ fn screen_providers(
                     healing_profile: None,
                     lifesteal_percent: None,
                     consumable_profile: None,
+                    setup: Default::default(),
                 })
         })),
         bundled_tools: Some(Arc::new(move |endpoint, item_id| {

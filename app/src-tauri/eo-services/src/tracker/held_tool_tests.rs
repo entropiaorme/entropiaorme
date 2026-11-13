@@ -192,6 +192,7 @@ fn item(id: i64, name: &str, kind: HotbarItemKind) -> ResolvedHotbarItem {
         healing_profile: None,
         lifesteal_percent: None,
         consumable_profile: None,
+        setup: Default::default(),
     }
 }
 

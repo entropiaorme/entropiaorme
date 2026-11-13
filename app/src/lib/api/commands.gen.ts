@@ -4411,6 +4411,15 @@ export interface ToolCandidate {
 }
 
 /**
+ * A weapon's damage enhancers: how many are still fitted, of those it is
+ * set up with (each wears out with use).
+ */
+export interface ToolEnhancers {
+	active: number;
+	fitted: number;
+}
+
+/**
  * A library entry, by id and name, with the label the player tells it
  * apart from the others listed with it by (see [`lookalike_labels`]).
  */
@@ -4433,6 +4442,7 @@ export type ToolHeld = {
 	} | {
 		name: string;
 		provisional: boolean;
+		setup: ToolSetupView | null;
 		kind: 'tool';
 	} | {
 		kind: 'nothing';
@@ -4445,14 +4455,45 @@ export type ToolHeld = {
 	} | {
 		last: string | null;
 		provisional: boolean;
+		setup: ToolSetupView | null;
 		kind: 'notVisible';
 	};
+
+/**
+ * One attachment fitted to the tool in hand.
+ */
+export interface ToolPart {
+	role: ToolPartRole;
+	name: string;
+}
+
+/**
+ * The part an attachment plays in a set-up.
+ */
+export type ToolPartRole = 'amplifier' | 'scope' | 'absorber' | 'implant';
 
 /**
  * Why the keys are the source of the tool in hand while reading it off
  * the screen is turned on.
  */
 export type ToolScreenUnread = 'stopped' | 'notStarted';
+
+/**
+ * What a use of the tool in hand is priced at now, and the set-up behind
+ * the price: for a weapon, as the session prices its shots.
+ */
+export interface ToolSetupView {
+	/** What one use is. */
+	per: ToolUse;
+	/** The parts fitted, in the order a player names them; null where the declaration did not say (a healer declared by its key while the bar was unclear). */
+	parts: ToolPart[] | null;
+	/** Null when the weapon is set up with none (or it is not a weapon). */
+	enhancers: ToolEnhancers | null;
+	/** The price of one use, markup included (PED). */
+	costPerUsePed: number;
+	/** The TT one use consumes, before markup (PED), where known. */
+	ttPerUsePed: number | null;
+}
 
 /**
  * What the screen read.
@@ -4634,6 +4675,11 @@ export type ToolUncertainty = {
 	} | {
 		kind: 'unreadable';
 	};
+
+/**
+ * What one use of a tool is.
+ */
+export type ToolUse = 'shot' | 'heal' | 'swing';
 
 /**
  * How an added tool's uses this session are costed.

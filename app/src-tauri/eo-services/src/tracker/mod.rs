@@ -66,8 +66,8 @@ pub(crate) use cycled::read_session_armour;
 pub(crate) use detection::{write_detection, KillDetection, KillReading, StampedMob};
 pub use doses::{DoseError, DoseStart};
 pub use held_tool::{
-    HandView, ManualDeclaration, ScreenTool, SeenTool, ToolDeclared, ToolDisplay, ToolSource,
-    Unseen,
+    Enhancers, HandSetup, HandView, ManualDeclaration, ScreenTool, SeenTool, ToolDeclared,
+    ToolDisplay, ToolSource, Unseen,
 };
 pub use intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec, OpenInterval,

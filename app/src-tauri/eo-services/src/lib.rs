@@ -84,6 +84,7 @@ pub mod stock_allocation;
 pub mod time;
 pub mod tool_catalogue;
 pub mod tool_review;
+pub mod tool_setup;
 pub mod tool_watch;
 pub mod tracker;
 pub mod tracking_models;

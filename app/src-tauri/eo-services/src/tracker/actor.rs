@@ -143,7 +143,7 @@ pub(super) enum TrackerMsg {
     ToolSource(oneshot::Sender<super::held_tool::ToolSource>),
     /// A tool the player declared by hand, resolved as a press resolves it.
     DeclareTool {
-        item: crate::hotbar_listener::ResolvedHotbarItem,
+        item: Box<crate::hotbar_listener::ResolvedHotbarItem>,
         occurred_at: f64,
         reply: oneshot::Sender<Result<super::held_tool::ToolDeclared, TrackerCommandError>>,
     },
@@ -389,7 +389,7 @@ impl TrackerActor {
                 occurred_at,
                 reply,
             } => {
-                let _ = reply.send(self.declare_by_hand(item, occurred_at).await);
+                let _ = reply.send(self.declare_by_hand(*item, occurred_at).await);
             }
             #[cfg(test)]
             TrackerMsg::Inspect(probe) => probe(self),

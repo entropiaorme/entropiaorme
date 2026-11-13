@@ -446,7 +446,7 @@ impl HuntTracker {
         occurred_at: f64,
     ) -> Result<ToolDeclared, TrackerCommandError> {
         self.try_call(|reply| TrackerMsg::DeclareTool {
-            item,
+            item: Box::new(item),
             occurred_at,
             reply,
         })

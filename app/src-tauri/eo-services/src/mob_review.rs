@@ -369,26 +369,26 @@ impl MobReviewService {
     fn checked_name(&self, typed: &str) -> Result<(String, &MobNameProfile), MobReviewError> {
         let text = typed.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
-            return Err(MobReviewError::Invalid("Type the creature's name".into()));
+            return Err(MobReviewError::Invalid("Type the mob's name".into()));
         }
         if typed.chars().any(|c| c.is_control() || is_format(c)) {
             return Err(MobReviewError::Invalid(
-                "A creature's name cannot hold control or invisible characters".into(),
+                "A mob's name cannot hold control or invisible characters".into(),
             ));
         }
         if text.chars().count() > MAX_NAME_CHARS {
             return Err(MobReviewError::Invalid(format!(
-                "A creature's name is at most {MAX_NAME_CHARS} characters"
+                "A mob's name is at most {MAX_NAME_CHARS} characters"
             )));
         }
         if text.eq_ignore_ascii_case(NO_CREATURE) {
             return Err(MobReviewError::Invalid(format!(
-                "\"{NO_CREATURE}\" means no creature; choose the declared mob instead"
+                "\"{NO_CREATURE}\" means no mob; choose the declared mob instead"
             )));
         }
         let Some(names) = &self.names else {
             return Err(MobReviewError::Invalid(
-                "Creature names cannot be checked on this installation".into(),
+                "Mob names cannot be checked on this installation".into(),
             ));
         };
         let letters = text.chars().filter(|c| c.is_alphabetic()).count();
@@ -397,7 +397,7 @@ impl MobReviewService {
             || (letters as f64) < names.min_letter_share * visible as f64
         {
             return Err(MobReviewError::Invalid(format!(
-                "\"{text}\" does not read as a creature's name"
+                "\"{text}\" does not read as a mob's name"
             )));
         }
         Ok((text, names))
@@ -492,7 +492,7 @@ impl MobReviewService {
                 ))))
             }
             Resolved::Unclear => Err(MobReviewError::Invalid(format!(
-                "\"{text}\" is as close to two listed creatures as to either; type it in full"
+                "\"{text}\" is as close to two listed mobs as to either; type it in full"
             ))),
         }
     }
@@ -559,7 +559,7 @@ impl MobReviewService {
         };
         let Some(store) = &self.store else {
             return Ok(EntryCheck::Refused {
-                reason: "Creature names cannot be checked on this installation".into(),
+                reason: "Mob names cannot be checked on this installation".into(),
             });
         };
         let mut kept = self.db.with_reader(|conn| kept_creatures(conn)).await?;
@@ -686,7 +686,7 @@ impl MobReviewService {
             })
             .await?;
         if removed == 0 {
-            return Err(MobReviewError::NotFound("No kept creature has that name"));
+            return Err(MobReviewError::NotFound("No kept mob has that name"));
         }
         self.rebuild_catalogue().await?;
         self.entries().await
@@ -944,7 +944,7 @@ fn settle_group(
     drop(stmt);
     if kills.is_empty() {
         return Ok(Err(MobReviewError::NotFound(
-            "No kills of this session were detected as that creature",
+            "No kills of this session were detected as that mob",
         )));
     }
     let stamp_for = |declared: &DetectedCreature| -> DetectedCreature {

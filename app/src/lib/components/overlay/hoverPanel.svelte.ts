@@ -4,7 +4,7 @@
  * on the control or its panel, letting it close a moment after the pointer
  * leaves, so crossing from the control into the panel does not close it.
  *
- * Shared by every such control on the strip (the creature and the tool in
+ * Shared by every such control on the strip (the mob and the tool in
  * hand) so they open, hold and close alike. While the control is not
  * available (its session ended, its source moved) the panel is closed and
  * forgotten, never left to reopen by itself when it is available again: an

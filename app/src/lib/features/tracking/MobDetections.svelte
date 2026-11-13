@@ -1,9 +1,9 @@
 <script lang="ts">
-	// The after-session review of which creatures the session's kills were
+	// The after-session review of which mobs the session's kills were
 	// detected as. Each group is settled in one action for all its kills:
-	// name the creature (a listed one, or a new name to keep), or put back
+	// name the mob (a listed one, or a new name to keep), or put back
 	// the declared mob. The least certain groups come first. Kills given the
-	// creature being hunted (continuity) come last, each creature as one
+	// mob being hunted (continuity) come last, each mob as one
 	// quiet line with nothing asking to be done; the same settlement is a
 	// click away. Shown for an ended session only (the model gives no groups
 	// otherwise).
@@ -34,7 +34,7 @@
 			class="min-w-[12rem] flex-1"
 			value={model.draft(group)}
 			maxlength={MAX_NAME_LENGTH}
-			aria-label="Creature for {isContinuity(group.group.grade)
+			aria-label="Mob for {isContinuity(group.group.grade)
 				? continuityLine(group.killCount)
 				: group.exampleText === null
 					? `${killCount(group.killCount)} pinned`
@@ -65,7 +65,7 @@
 {#if model.groups.length > 0}
 	<SessionReviewBlock
 		id="mob-detections"
-		heading="Detected creatures"
+		heading="Detected mobs"
 		error={model.error}
 		onDismissError={model.dismissError}
 		notice={model.notice}
@@ -97,8 +97,8 @@
 					</div>
 					{#if correcting[key]}
 						<p class="mt-1 text-xs text-text-tertiary">
-							Kills nothing on screen named took the creature the kills before them were.
-							After a change of creature whose name was not read, the first few can be the
+							Kills nothing on screen named took the mob the kills before them were.
+							After a change of mob whose name was not read, the first few can be the
 							one before.
 						</p>
 						{@render settle(group, acting, offered)}

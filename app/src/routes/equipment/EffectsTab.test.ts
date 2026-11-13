@@ -3,12 +3,22 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ updateSettings: vi.fn() }));
+// The tab also hosts the skill boost, which reads the tracking snapshot.
+const api = vi.hoisted(() => ({
+	updateSettings: vi.fn(),
+	getTrackingSnapshot: vi.fn(async () => ({ status: 'idle' })),
+	setSessionConfig: vi.fn(async () => ({})),
+	selectDefinition: vi.fn(async () => ({})),
+	ApiError: class ApiError extends Error {},
+}));
 vi.mock('$lib/api', () => api);
 
 import EffectsTab from './EffectsTab.svelte';
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+	vi.clearAllMocks();
+	api.getTrackingSnapshot.mockResolvedValue({ status: 'idle' });
+});
 
 describe('persistent effects', () => {
 	it('saves a named reload-speed source through the typed settings boundary', async () => {

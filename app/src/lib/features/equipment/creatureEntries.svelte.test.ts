@@ -51,14 +51,14 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe('the plate text of a kept creature', () => {
+describe('the plate text of a kept mob', () => {
 	it('is the name then the maturity, or the name alone', () => {
 		expect(plateText(zombie)).toBe('Survival Zombie 04');
 		expect(plateText(gloomrat)).toBe('Gloomrat');
 	});
 });
 
-describe('loading the kept creatures', () => {
+describe('loading the kept mobs', () => {
 	it('lists them and marks the model loaded', async () => {
 		const { model } = rig();
 		expect(model.loaded).toBe(false);
@@ -167,7 +167,7 @@ describe('when the entry can be kept', () => {
 	});
 });
 
-describe('keeping a creature', () => {
+describe('keeping a mob', () => {
 	it('sends the text and species, replaces the list and resets the entry', async () => {
 		const { deps, model } = rig();
 		model.text = '  Survival Zombie 04 ';
@@ -214,7 +214,7 @@ describe('keeping a creature', () => {
 	});
 });
 
-describe('editing a kept creature', () => {
+describe('editing a kept mob', () => {
 	it('loads it as its plate text with its species, and checks it as a replacement', async () => {
 		const { deps, model } = rig();
 		model.edit(zombie);
@@ -225,7 +225,7 @@ describe('editing a kept creature', () => {
 		expect(deps.check).toHaveBeenCalledWith('Survival Zombie 04', 'Survival Zombie');
 	});
 
-	it('loads a creature without species or maturity as a bare name and blank species', () => {
+	it('loads a mob without species or maturity as a bare name and blank species', () => {
 		const { model } = rig();
 		model.edit(gloomrat);
 		expect(model.text).toBe('Gloomrat');
@@ -255,7 +255,7 @@ describe('editing a kept creature', () => {
 	});
 });
 
-describe('removing a kept creature', () => {
+describe('removing a kept mob', () => {
 	it('removes it by name and takes the list it answers with', async () => {
 		const { deps, model } = rig();
 		await model.load();

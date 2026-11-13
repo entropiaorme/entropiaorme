@@ -200,11 +200,9 @@ describe('steering the source', () => {
 		expect(await pinning).toBe(true);
 		expect(model.busy).toBeNull();
 
-		deps.unpin.mockRejectedValueOnce(
-			new Error('The creature being read has changed; pin it again'),
-		);
+		deps.unpin.mockRejectedValueOnce(new Error('The mob being read has changed; pin it again'));
 		expect(await model.release()).toBe(false);
-		expect(model.error).toBe('The creature being read has changed; pin it again');
+		expect(model.error).toBe('The mob being read has changed; pin it again');
 		model.dismissError();
 		expect(model.error).toBeNull();
 	});

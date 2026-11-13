@@ -131,11 +131,11 @@ pub enum TrackerCommandError {
     #[error("The screen is not being read")]
     NotReadingScreen,
     /// A pin from the screen was asked for while it reads no creature.
-    #[error("No creature is being read")]
+    #[error("No mob is being read")]
     NothingRead,
     /// The creature the screen reads changed after the player asked to
     /// pin it.
-    #[error("The creature being read has changed; pin it again")]
+    #[error("The mob being read has changed; pin it again")]
     ReadingChanged,
     /// A tool was declared by hand while the screen shows which tool is
     /// in hand: the screen's reading stands.

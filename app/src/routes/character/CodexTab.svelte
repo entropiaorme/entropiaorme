@@ -445,7 +445,7 @@
 
 							<p class="text-xs text-text-tertiary/70">
 								Mastery choices and values reflect limited in-game observation and may
-								vary by creature; if the game offers different options, please report
+								vary by mob; if the game offers different options, please report
 								it on the project's GitHub issues.
 							</p>
 						</Card>

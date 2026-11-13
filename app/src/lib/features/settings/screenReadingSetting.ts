@@ -1,5 +1,5 @@
 /**
- * The settings that read the game screen while a session runs: creature
+ * The settings that read the game screen while a session runs: mob
  * detection and reading the held tool. Both are one control (a toggle, a
  * line of copy, and a note when capture cannot run), so they share one
  * component and are described here. Both are ordinary settings, shown in
@@ -27,10 +27,10 @@ export interface ScreenReading {
 
 export const CREATURE_DETECTION: ScreenReading = {
 	key: 'creatureDetection',
-	title: 'Detect the creature I am fighting',
+	title: 'Detect the mob I am fighting',
 	description:
-		'While you hunt with the game in front, reads the name over the creature you are locked on to about once a second and records which creature each kill was. A kill it misses between looks takes the creature you have been hunting while you hunt only one, else the mob you typed; pin a creature on the overlay to stop reading.',
-	failure: 'Failed to update creature detection',
+		'While you hunt with the game in front, reads the name over the mob you are locked on to about once a second and records which mob each kill was. A kill it misses between looks takes the mob you have been hunting while you hunt only one, else the mob you typed; pin a mob on the overlay to stop reading.',
+	failure: 'Failed to update mob detection',
 	state: (settings) => ({
 		enabled: settings.mobDetectionEnabled,
 		capture: settings.mobDetectionCapture,

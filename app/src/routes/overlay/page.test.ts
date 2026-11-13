@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 // once, and showing a menu must wait on the popup route's readiness handshake
 // (its `:ready` event) before emitting the show payload and revealing the
 // window; a popup that never reports ready times out into a rendered launch
-// error. Every Tauri seam is mocked; the page, OverlayStrip, and the
+// error. Every Tauri seam is mocked; the page, the readout, and the
 // handshake logic run for real.
 const seams = vi.hoisted(() => {
 	const listeners = new Map<string, ((event: { payload?: unknown }) => void)[]>();
@@ -376,7 +376,7 @@ describe('the mob suggestion menu', () => {
 		]);
 		seams.getTrackingSnapshot.mockResolvedValue({ status: 'idle' });
 		render(OverlayPage);
-		const input = (await screen.findByPlaceholderText('Mob...')) as HTMLInputElement;
+		const input = (await screen.findByPlaceholderText('Type a mob...')) as HTMLInputElement;
 		await act(async () => {
 			input.focus();
 			input.value = 'atr';

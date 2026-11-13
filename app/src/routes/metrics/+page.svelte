@@ -146,9 +146,9 @@
 		<section class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
 			{@render histogramCard('OCR inference latency', snapshot.ocr_latency)}
 			{@render histogramCard('Database query latency', snapshot.db_query_latency)}
-			{@render histogramCard('Creature watcher: capture', snapshot.plate_capture_latency)}
-			{@render histogramCard('Creature watcher: plate search', snapshot.plate_search_latency)}
-			{@render histogramCard('Creature watcher: plate reading', snapshot.plate_read_latency)}
+			{@render histogramCard('Mob watcher: capture', snapshot.plate_capture_latency)}
+			{@render histogramCard('Mob watcher: plate search', snapshot.plate_search_latency)}
+			{@render histogramCard('Mob watcher: plate reading', snapshot.plate_read_latency)}
 			{@render histogramCard('Held-tool watcher: capture', snapshot.tool_capture_latency)}
 			{@render histogramCard('Held-tool watcher: bar search', snapshot.tool_search_latency)}
 			{@render histogramCard('Held-tool watcher: name reading', snapshot.tool_read_latency)}

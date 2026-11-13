@@ -1,12 +1,12 @@
 /**
- * The creature list behind Equipment's Mobs tab: the creatures kept for the
+ * The mob list behind Equipment's Mobs tab: the mobs kept for the
  * name reader beside the bundled list, and the entry that adds or edits one.
  *
- * A creature is typed as its plate prints it. A name ending in a number
+ * A mob is typed as its plate prints it. A name ending in a number
  * (`Survival Zombie 04`, `Kal-Rahm The Cannibal S04`) is kept at every
- * number, as the bundled list's creatures graded by number are. While the
+ * number, as the bundled list's mobs graded by number are. While the
  * player types, the entry is checked against what the reader already knows,
- * so a creature it reads already, or one it could not tell from another, is
+ * so a mob it reads already, or one it could not tell from another, is
  * said before anything is saved.
  */
 
@@ -41,7 +41,7 @@ const LIVE: CreatureEntryDeps = {
 	remove: removeCreatureEntry,
 };
 
-/** A kept creature as its plate prints it: the name, then its maturity. */
+/** A kept mob as its plate prints it: the name, then its maturity. */
 export function plateText(entry: Pick<CreatureEntry, 'name' | 'maturity'>): string {
 	return entry.maturity ? `${entry.name} ${entry.maturity}` : entry.name;
 }
@@ -51,7 +51,7 @@ export function createCreatureEntries(deps: CreatureEntryDeps = LIVE) {
 	let loaded = $state(false);
 	let error = $state<string | null>(null);
 	let busy = $state(false);
-	/** The kept creature being edited, by name; `null` while adding. */
+	/** The kept mob being edited, by name; `null` while adding. */
 	let editing = $state<string | null>(null);
 	let text = $state('');
 	let species = $state('');
@@ -65,7 +65,7 @@ export function createCreatureEntries(deps: CreatureEntryDeps = LIVE) {
 			entries = await deps.list();
 			error = null;
 		} catch (e) {
-			error = describeError(e, 'Failed to load kept creatures');
+			error = describeError(e, 'Failed to load kept mobs');
 		} finally {
 			loaded = true;
 		}
@@ -184,10 +184,10 @@ export function createCreatureEntries(deps: CreatureEntryDeps = LIVE) {
 			const typed = text.trim();
 			const kept = species.trim() || null;
 			const replacing = editing;
-			return write(() => deps.save(typed, kept, replacing), 'Failed to keep the creature');
+			return write(() => deps.save(typed, kept, replacing), 'Failed to keep the mob');
 		},
 		remove(entry: CreatureEntry) {
-			return write(() => deps.remove(entry.name), 'Failed to remove the creature');
+			return write(() => deps.remove(entry.name), 'Failed to remove the mob');
 		},
 		destroy() {
 			clearTimer();

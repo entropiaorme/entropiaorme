@@ -2,9 +2,9 @@
  * What the overlay's mob control shows, as pure functions over the
  * session's mob source.
  *
- * A session names its kills' creature from one source the player steers.
- * While the screen is read the control shows one creature, the one standing
- * highest: the pinned creature; else the one the screen reads now; else the
+ * A session names its kills' mob from one source the player steers.
+ * While the screen is read the control shows one mob, the one standing
+ * highest: the pinned mob; else the one the screen reads now; else the
  * one the latest kills were; else the typed backstop; else nothing. Beside
  * it is one action: pin what is shown, or release the pin. Expanding it
  * reveals the others in plain words. Without screen reading (detection off
@@ -14,7 +14,7 @@
 
 import type { DetectedCreature, MobSourceView } from '$lib/api';
 
-/** Where the creature shown comes from. */
+/** Where the mob shown comes from. */
 export type MobStandingKind = 'pinned' | 'reading' | 'continuity' | 'backstop';
 
 export type MobStanding =
@@ -27,7 +27,7 @@ export function isSteered(view: MobSourceView | null | undefined): boolean {
 	return Boolean(view && (view.readingScreen || view.pin));
 }
 
-/** The one creature the control shows by default. */
+/** The one mob the control shows by default. */
 export function standing(view: MobSourceView | null | undefined): MobStanding {
 	if (!view) return { kind: 'none', creature: null };
 	if (view.pin) return { kind: 'pinned', creature: view.pin.creature };
@@ -39,7 +39,7 @@ export function standing(view: MobSourceView | null | undefined): MobStanding {
 	return { kind: 'none', creature: null };
 }
 
-/** The one action beside the creature shown: release a pin, or pin what
+/** The one action beside the mob shown: release a pin, or pin what
  * is shown while the screen is read; nothing otherwise. */
 export function primaryAction(view: MobSourceView | null | undefined): 'pin' | 'release' | null {
 	if (!view) return null;
@@ -70,7 +70,7 @@ export function expandedLines(view: MobSourceView | null | undefined): MobSource
 			kind: 'continuity',
 			label: 'Recent kills',
 			creature: view.continuity,
-			note: 'Kills not read take this. After you change creature, pin the new one if its name is not being read.',
+			note: 'Kills not read take this. After you change mob, pin the new one if its name is not being read.',
 		});
 	}
 	lines.push({
@@ -82,7 +82,7 @@ export function expandedLines(view: MobSourceView | null | undefined): MobSource
 	return lines;
 }
 
-/** The pin request for what is shown: the creature the screen reads (or the
+/** The pin request for what is shown: the mob the screen reads (or the
  * latest kills were) is pinned as read, provided the screen still shows it;
  * the backstop alone is pinned as typed. */
 export function pinShownTarget(

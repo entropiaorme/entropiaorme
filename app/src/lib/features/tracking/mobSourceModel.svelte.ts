@@ -1,6 +1,6 @@
 /**
  * Runes-native state for the overlay's mob control: whether it is expanded,
- * the creature picked from the typeahead and waiting for the player to say
+ * the mob picked from the typeahead and waiting for the player to say
  * what it is for, and the writes that steer the session's mob source.
  *
  * Expanded is either sticky (the player opened it, by click or keyboard,
@@ -30,9 +30,9 @@ export interface MobSourceDeps {
 	steerable?: () => boolean;
 	pin: (target: MobPinTarget) => Promise<unknown>;
 	unpin: () => Promise<unknown>;
-	/** Set the typed creature (the backstop while the screen is read). */
+	/** Set the typed mob (the backstop while the screen is read). */
 	setTyped: (species: string, maturity: string) => Promise<unknown>;
-	/** Clear the typed creature. */
+	/** Clear the typed mob. */
 	clearTyped: () => Promise<unknown>;
 	/** Re-read the snapshot. */
 	refresh: () => Promise<unknown>;
@@ -54,7 +54,7 @@ export function createMobSourceModel(deps: MobSourceDeps) {
 	});
 	const expanded = $derived(panel.expanded);
 	// The typeahead's input: in the panel while steered, else in the strip
-	// while no creature is typed (a typed one shows as a label instead).
+	// while no mob is typed (a typed one shows as a label instead).
 	const inputShown = $derived(steered ? expanded : !deps.view()?.typed);
 
 	async function write(kind: MobSourceBusy, action: () => Promise<unknown>, failure: string) {
@@ -106,13 +106,13 @@ export function createMobSourceModel(deps: MobSourceDeps) {
 		async pinShown() {
 			const target = pinShownTarget(deps.view());
 			if (!target) return false;
-			return write('pin', () => deps.pin(target), 'Could not pin the creature.');
+			return write('pin', () => deps.pin(target), 'Could not pin the mob.');
 		},
 		async release() {
-			return write('release', () => deps.unpin(), 'Could not release the pinned creature.');
+			return write('release', () => deps.unpin(), 'Could not release the pinned mob.');
 		},
 
-		/** A creature picked from the typeahead: while steered it waits for the
+		/** A mob picked from the typeahead: while steered it waits for the
 		 * player to pin it or keep it as the backstop; otherwise it is the
 		 * typed mob at once, as it always was. */
 		async choose(option: ManualMobSuggestion) {
@@ -136,7 +136,7 @@ export function createMobSourceModel(deps: MobSourceDeps) {
 				'pin',
 				() =>
 					deps.pin({ kind: 'typed', species: picked.species, maturity: picked.maturity || null }),
-				'Could not pin the creature.',
+				'Could not pin the mob.',
 			);
 			if (done) draft = null;
 			return done;
@@ -152,9 +152,9 @@ export function createMobSourceModel(deps: MobSourceDeps) {
 			if (done) draft = null;
 			return done;
 		},
-		/** Clear the typed creature (the backstop, or the typed mob). */
+		/** Clear the typed mob (the backstop, or the typed mob). */
 		async clearTyped() {
-			return write('clear', () => deps.clearTyped(), 'Could not clear the creature.');
+			return write('clear', () => deps.clearTyped(), 'Could not clear the mob.');
 		},
 
 		destroy: panel.destroy,

@@ -36,7 +36,7 @@ const creature = { name: 'Survival Zombie 04', species: 'Zombie', maturity: '04'
 
 /** Type into the plate entry and let the check delay pass. */
 async function type(text: string) {
-	const input = screen.getByLabelText('Creature as its plate shows it');
+	const input = screen.getByLabelText('Mob as its plate shows it');
 	await fireEvent.input(input, { target: { value: text } });
 	await vi.advanceTimersByTimeAsync(300);
 }
@@ -56,13 +56,13 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
-describe('the list of kept creatures', () => {
+describe('the list of kept mobs', () => {
 	it('says so when none are kept', async () => {
 		await mount([]);
-		await waitFor(() => expect(screen.getByText('No creatures kept yet.')).toBeTruthy());
+		await waitFor(() => expect(screen.getByText('No mobs kept yet.')).toBeTruthy());
 	});
 
-	it('shows each creature as its plate prints it, with what is worth saying about it', async () => {
+	it('shows each mob as its plate prints it, with what is worth saying about it', async () => {
 		await mount([plain, numbered]);
 		await waitFor(() => expect(screen.getByText('Gloomrat Old')).toBeTruthy());
 		// Species equal to the name is not repeated.
@@ -111,9 +111,9 @@ describe('the line under the entry', () => {
 	});
 
 	it('gives the reason when the entry is refused', async () => {
-		await mount([], { kind: 'refused', reason: 'That is not a creature name.' });
+		await mount([], { kind: 'refused', reason: 'That is not a mob name.' });
 		await type('???');
-		expect(screen.getByRole('status').textContent).toBe('That is not a creature name.');
+		expect(screen.getByRole('status').textContent).toBe('That is not a mob name.');
 	});
 });
 
@@ -135,7 +135,7 @@ describe('adding and editing', () => {
 		expect(add.disabled).toBe(false);
 	});
 
-	it('switches Add to Save and offers Cancel while a creature is edited', async () => {
+	it('switches Add to Save and offers Cancel while a mob is edited', async () => {
 		await mount([numbered]);
 		await waitFor(() => expect(screen.getByText('Survival Zombie 04')).toBeTruthy());
 		expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
@@ -143,9 +143,9 @@ describe('adding and editing', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 		expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
 		expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
-		expect(
-			(screen.getByLabelText('Creature as its plate shows it') as HTMLInputElement).value,
-		).toBe('Survival Zombie 04');
+		expect((screen.getByLabelText('Mob as its plate shows it') as HTMLInputElement).value).toBe(
+			'Survival Zombie 04',
+		);
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 		expect(screen.getByRole('button', { name: 'Add' })).toBeTruthy();

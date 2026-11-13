@@ -1,12 +1,12 @@
 /**
- * Runes-native state for the after-session review of detected creatures.
+ * Runes-native state for the after-session review of detected mobs.
  *
  * The review is read for the session shown and re-read when the session
  * changes; a read that lands after the player moved to another session is
  * dropped. Only an ended session's review is shown. Settling a group answers
  * with the refreshed review, applied here, and tells the owner so the
- * session's own figures re-read; a name typed only loosely like a creature
- * changes nothing and offers that creature, to accept in one action. While
+ * session's own figures re-read; a name typed only loosely like a mob
+ * changes nothing and offers that mob, to accept in one action. While
  * a settlement is being saved every other one is refused at once.
  */
 
@@ -35,7 +35,7 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 	let busy = $state<string | null>(null);
 	let drafts = $state<Record<string, string>>({});
 	let ended = $state(false);
-	/** The creature offered for a group whose typed name read only loosely. */
+	/** The mob offered for a group whose typed name read only loosely. */
 	let offer = $state<{ key: string; creature: DetectedCreature } | null>(null);
 	let generation = 0;
 
@@ -55,7 +55,7 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 			drafts = {};
 			offer = null;
 		} catch (e) {
-			if (run === generation) error = describeError(e, 'Could not load the detected creatures.');
+			if (run === generation) error = describeError(e, 'Could not load the detected mobs.');
 		}
 	}
 
@@ -82,7 +82,7 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 			notice = describeSettled(result.settled);
 			await options.onSettled();
 		} catch (e) {
-			error = describeError(e, 'Could not record that creature.');
+			error = describeError(e, 'Could not record that mob.');
 		} finally {
 			busy = null;
 		}
@@ -93,11 +93,11 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 		get groups() {
 			return loadedFor === options.sessionId() && ended ? groups : [];
 		},
-		/** The creature offered for `group`, when its typed name read loosely. */
+		/** The mob offered for `group`, when its typed name read loosely. */
 		offerFor(group: MobDetectionGroup): DetectedCreature | null {
 			return offer?.key === groupKey(group.group) ? offer.creature : null;
 		},
-		/** Accept the creature offered for `group`. */
+		/** Accept the mob offered for `group`. */
 		acceptOffer(group: MobDetectionGroup) {
 			const offered = offer?.key === groupKey(group.group) ? offer.creature : null;
 			if (!offered) return Promise.resolve();
@@ -117,7 +117,7 @@ export function createMobDetectionModel(options: MobDetectionOptions) {
 			drafts = { ...drafts, [groupKey(group.group)]: value };
 		},
 		refresh,
-		/** Record every kill of the group as the creature typed for it. */
+		/** Record every kill of the group as the mob typed for it. */
 		name(group: MobDetectionGroup) {
 			return settle(group, { kind: 'creature', name: draftOf(group) });
 		},

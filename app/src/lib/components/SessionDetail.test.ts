@@ -127,7 +127,7 @@ describe('the recorded session name', () => {
 });
 
 describe('the mob attribution', () => {
-	it('says how sure each creature is, and marks an unlisted one until it is confirmed', () => {
+	it('says how sure each mob is, and marks an unlisted one until it is confirmed', () => {
 		render(SessionDetail, {
 			props: {
 				detail: detail({
@@ -145,9 +145,9 @@ describe('the mob attribution', () => {
 				}),
 			},
 		});
-		expect(screen.getAllByText('not in the creature list, unconfirmed')).toHaveLength(1);
+		expect(screen.getAllByText('not in the mob list, unconfirmed')).toHaveLength(1);
 		expect(screen.getAllByText('probably')).toHaveLength(1);
-		expect(screen.getAllByText('probably; not in the creature list, unconfirmed')).toHaveLength(1);
+		expect(screen.getAllByText('probably; not in the mob list, unconfirmed')).toHaveLength(1);
 	});
 });
 
@@ -216,14 +216,14 @@ describe('the after-session reviews in a build that hides surfaces in developmen
 		}
 	});
 
-	it('still reads creature detection', async () => {
+	it('still reads mob detection', async () => {
 		channel.visible = false;
 		render(SessionDetail, { props: { detail: detail() } });
 		await waitFor(() => expect(api.getMobDetections).toHaveBeenCalled());
 		expect(api.getToolSightings).toHaveBeenCalled();
 	});
 
-	it('reads creature detection wherever surfaces in development show too', async () => {
+	it('reads mob detection wherever surfaces in development show too', async () => {
 		render(SessionDetail, { props: { detail: detail() } });
 		await waitFor(() => expect(api.getMobDetections).toHaveBeenCalled());
 		expect(api.getToolSightings).toHaveBeenCalled();

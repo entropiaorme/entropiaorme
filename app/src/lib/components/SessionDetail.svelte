@@ -88,7 +88,7 @@
 		},
 	});
 
-	// Which creatures the kills were detected as: settling a group restamps
+	// Which mobs the kills were detected as: settling a group restamps
 	// its kills, so the session's figures re-read.
 	const mobDetections = createMobDetectionModel({
 		sessionId: () => detail.sessionId,

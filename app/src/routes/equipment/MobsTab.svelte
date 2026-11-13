@@ -1,6 +1,6 @@
 <script lang="ts">
-	// Equipment's Mobs tab: the creatures kept for the name reader beside the
-	// bundled list. One entry adds or edits a creature, typed as its plate
+	// Equipment's Mobs tab: the mobs kept for the name reader beside the
+	// bundled list. One entry adds or edits a mob, typed as its plate
 	// prints it and checked as it is typed; the list below holds what is kept.
 	import { onMount } from 'svelte';
 	import { Button, ErrorNotice, Input } from '$lib/components';
@@ -54,9 +54,9 @@
 
 <div class="max-w-3xl space-y-6">
 	<header>
-		<h2 class="text-sm font-medium text-text">Creatures</h2>
+		<h2 class="text-sm font-medium text-text">Mobs</h2>
 		<p class="mt-1 text-sm leading-6 text-text-secondary">
-			Creatures the bundled list lacks, so creature detection can name them. Type one as its
+			Mobs the bundled list lacks, so mob detection can name them. Type one as its
 			plate shows it; a name ending in a number covers every number.
 		</p>
 	</header>
@@ -74,7 +74,7 @@
 			<Input
 				class="flex-1 min-w-64"
 				placeholder="As the plate shows it, e.g. Survival Zombie 04"
-				aria-label="Creature as its plate shows it"
+				aria-label="Mob as its plate shows it"
 				bind:value={() => model.text, (value) => (model.text = String(value ?? ''))}
 			/>
 			<Input
@@ -107,7 +107,7 @@
 	</form>
 
 	{#if model.loaded && model.entries.length === 0}
-		<p class="text-sm text-text-tertiary">No creatures kept yet.</p>
+		<p class="text-sm text-text-tertiary">No mobs kept yet.</p>
 	{:else if model.entries.length > 0}
 		<ul class="divide-y divide-border/40 border-t border-border/40">
 			{#each model.entries as entry (entry.name)}

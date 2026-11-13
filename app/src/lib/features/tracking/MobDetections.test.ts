@@ -41,7 +41,7 @@ function model(
 	};
 }
 
-describe('the detected creatures section', () => {
+describe('the detected mobs section', () => {
 	it('is absent when nothing was detected', () => {
 		render(MobDetections, { props: { model: model([]) } });
 		expect(screen.queryByTestId('mob-detections')).toBeNull();
@@ -51,13 +51,13 @@ describe('the detected creatures section', () => {
 		const shown = group();
 		const m = model([shown]);
 		render(MobDetections, { props: { model: m } });
-		// Creature detection is an ordinary setting: its heading carries no mark.
+		// Mob detection is an ordinary setting: its heading carries no mark.
 		expect(screen.queryByText('In development')).toBeNull();
 		expect(screen.getByText('Gloomrat')).toBeTruthy();
-		expect(screen.getByText('Not in the creature list')).toBeTruthy();
+		expect(screen.getByText('Not in the mob list')).toBeTruthy();
 		expect(screen.getByText('2 kills')).toBeTruthy();
 		expect(screen.getByText(/Read as “Gloomrot”; recorded as Gloomrat/)).toBeTruthy();
-		await fireEvent.click(screen.getByRole('button', { name: 'Keep as a new creature' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Keep as a new mob' }));
 		expect(m.name).toHaveBeenCalledWith(shown);
 		await fireEvent.click(screen.getByRole('button', { name: 'Use declared mob' }));
 		expect(m.restoreDeclared).toHaveBeenCalledWith(shown);
@@ -81,10 +81,10 @@ describe('the detected creatures section', () => {
 			},
 		});
 		expect(screen.getByText(/recorded as Young Atrox, your declared mob/)).toBeTruthy();
-		expect(screen.getByText('Suggested: the last creature read before the kill')).toBeTruthy();
+		expect(screen.getByText('Suggested: the last mob read before the kill')).toBeTruthy();
 	});
 
-	it('offers the creature a loosely typed name may mean', async () => {
+	it('offers the mob a loosely typed name may mean', async () => {
 		const shown = group();
 		const m = model([shown], { name: 'Young Atrox', species: 'Atrox', maturity: 'Young' });
 		render(MobDetections, { props: { model: m } });
@@ -99,7 +99,7 @@ describe('the detected creatures section', () => {
 	});
 });
 
-describe('kills given the creature being hunted', () => {
+describe('kills given the mob being hunted', () => {
 	const continued = group({
 		group: {
 			grade: 'continuity',
@@ -111,7 +111,7 @@ describe('kills given the creature being hunted', () => {
 		killCount: 3,
 	});
 
-	it('shows one quiet line per creature, after the groups that ask for checking, with nothing to act on', () => {
+	it('shows one quiet line per mob, after the groups that ask for checking, with nothing to act on', () => {
 		render(MobDetections, { props: { model: model([group(), continued]) } });
 		const rows = screen.getAllByTestId('mob-detection');
 		expect(rows.map((row) => row.dataset.grade)).toEqual(['provisional', 'continuity']);
@@ -131,7 +131,7 @@ describe('kills given the creature being hunted', () => {
 		expect(correct.getAttribute('aria-expanded')).toBe('false');
 		await fireEvent.click(correct);
 		expect(correct.getAttribute('aria-expanded')).toBe('true');
-		expect(screen.getByLabelText('Creature for 3 kills assigned on continuity')).toBeTruthy();
+		expect(screen.getByLabelText('Mob for 3 kills assigned on continuity')).toBeTruthy();
 		await fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 		expect(m.name).toHaveBeenCalledWith(continued);
 		await fireEvent.click(screen.getByRole('button', { name: 'Use declared mob' }));
@@ -139,7 +139,7 @@ describe('kills given the creature being hunted', () => {
 	});
 });
 
-describe('a group settled to another creature, and an unlisted pin', () => {
+describe('a group settled to another mob, and an unlisted pin', () => {
 	it('shows a corrected continuity group as recorded now', () => {
 		render(MobDetections, {
 			props: {
@@ -163,7 +163,7 @@ describe('a group settled to another creature, and an unlisted pin', () => {
 		).toBeTruthy();
 	});
 
-	it('does not repeat the creature on an uncorrected continuity line', () => {
+	it('does not repeat the mob on an uncorrected continuity line', () => {
 		render(MobDetections, {
 			props: {
 				model: model([
@@ -183,7 +183,7 @@ describe('a group settled to another creature, and an unlisted pin', () => {
 		expect(screen.getByText('2 kills assigned on continuity')).toBeTruthy();
 	});
 
-	it('asks to confirm a creature on no list the player pinned', async () => {
+	it('asks to confirm a mob on no list the player pinned', async () => {
 		const pinned = group({
 			group: {
 				grade: 'provisional_pinned',
@@ -196,12 +196,12 @@ describe('a group settled to another creature, and an unlisted pin', () => {
 		});
 		const m = model([pinned]);
 		render(MobDetections, { props: { model: m } });
-		expect(screen.getByText('Pinned, not in the creature list')).toBeTruthy();
+		expect(screen.getByText('Pinned, not in the mob list')).toBeTruthy();
 		expect(
 			screen.getByText(/Pinned from what the screen read; recorded as Shadowmaw/),
 		).toBeTruthy();
 		expect(screen.queryByText(/Read as/)).toBeNull();
-		await fireEvent.click(screen.getByRole('button', { name: 'Keep as a new creature' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Keep as a new mob' }));
 		expect(m.name).toHaveBeenCalledWith(pinned);
 	});
 });

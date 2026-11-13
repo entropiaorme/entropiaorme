@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The shell of an overlay control that shows one thing quietly and
-	// expands into a panel saying more: the creature control and the tool in
+	// expands into a panel saying more: the mob control and the tool in
 	// hand both use it. The owner lays out the control (its label, what it
 	// shows, any action beside it) and places the toggle this shell gives it;
 	// the shell owns the toggle's wiring, the hover hold, Escape, and the

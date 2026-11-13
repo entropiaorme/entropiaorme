@@ -36,7 +36,7 @@ describe('the screen-reading settings', () => {
 		expect(new Set(SCREEN_READINGS.map((reading) => reading.key)).size).toBe(2);
 	});
 
-	it('leaves creature detection unmarked: it is not in development', () => {
+	it('leaves mob detection unmarked: it is not in development', () => {
 		expect(creatures.mark).toBeUndefined();
 		expect(IN_DEVELOPMENT_SURFACES.map((surface) => surface.id)).not.toContain(
 			'creature-detection',
@@ -59,12 +59,12 @@ describe('the screen-reading settings', () => {
 		expect(heldTool.patch(false)).toEqual({ tool_reading_enabled: false });
 	});
 
-	it("names creature detection in the player's terms, as it always has", () => {
-		expect(creatures.title).toBe('Detect the creature I am fighting');
+	it("names mob detection in the player's terms, as it always has", () => {
+		expect(creatures.title).toBe('Detect the mob I am fighting');
 		expect(creatures.description).toBe(
-			'While you hunt with the game in front, reads the name over the creature you are locked on to about once a second and records which creature each kill was. A kill it misses between looks takes the creature you have been hunting while you hunt only one, else the mob you typed; pin a creature on the overlay to stop reading.',
+			'While you hunt with the game in front, reads the name over the mob you are locked on to about once a second and records which mob each kill was. A kill it misses between looks takes the mob you have been hunting while you hunt only one, else the mob you typed; pin a mob on the overlay to stop reading.',
 		);
-		expect(creatures.failure).toBe('Failed to update creature detection');
+		expect(creatures.failure).toBe('Failed to update mob detection');
 		expect(creatures.patch(false)).toEqual({ mob_detection_enabled: false });
 	});
 

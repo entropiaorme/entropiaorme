@@ -22,7 +22,7 @@ function view(overrides: Partial<MobSourceView> = {}): MobSourceView {
 	};
 }
 
-describe('the one creature the control shows', () => {
+describe('the one mob the control shows', () => {
 	it('stands the pin above everything', () => {
 		const pinned = view({
 			readingScreen: false,
@@ -34,7 +34,7 @@ describe('the one creature the control shows', () => {
 		expect(isSteered(pinned)).toBe(true);
 	});
 
-	it('shows the creature read now over recent kills and the backstop, with Pin beside it', () => {
+	it('shows the mob read now over recent kills and the backstop, with Pin beside it', () => {
 		const reading = view({ reading: atrox, continuity: atrox, typed: young });
 		expect(standing(reading)).toEqual({ kind: 'reading', creature: atrox });
 		expect(primaryAction(reading)).toBe('pin');
@@ -56,7 +56,7 @@ describe('the one creature the control shows', () => {
 		});
 	});
 
-	it('shows a quiet nothing, with no action, when nothing names a creature', () => {
+	it('shows a quiet nothing, with no action, when nothing names a mob', () => {
 		const nothing = view();
 		expect(standing(nothing)).toEqual({ kind: 'none', creature: null });
 		expect(primaryAction(nothing)).toBeNull();

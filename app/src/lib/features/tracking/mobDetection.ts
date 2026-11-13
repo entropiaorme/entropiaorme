@@ -1,5 +1,5 @@
 /**
- * What the after-session review of detected creatures says, as pure
+ * What the after-session review of detected mobs says, as pure
  * functions over the wire shapes: how sure each group is, in the player's
  * words, and what a settlement did.
  */
@@ -19,28 +19,28 @@ export function describeGrade(grade: MobDetectionGrade): string {
 		case 'guess':
 			return 'Probably';
 		case 'provisional':
-			return 'Not in the creature list';
+			return 'Not in the mob list';
 		case 'provisional_guess':
-			return 'Not in the creature list, probably';
+			return 'Not in the mob list, probably';
 		case 'latest_read':
 		case 'provisional_latest_read':
-			return 'Suggested: the last creature read before the kill';
+			return 'Suggested: the last mob read before the kill';
 		case 'continuity':
 		case 'provisional_continuity':
 			return 'From the kills before';
 		case 'provisional_pinned':
-			return 'Pinned, not in the creature list';
+			return 'Pinned, not in the mob list';
 	}
 }
 
-/** Kills given the creature being hunted, where the screen could not settle
+/** Kills given the mob being hunted, where the screen could not settle
  * them: listed quietly, after the groups that ask for checking. */
 export function isContinuity(grade: MobDetectionGrade): boolean {
 	return grade === 'continuity' || grade === 'provisional_continuity';
 }
 
 /** The one quiet line a continuity group shows, with what its kills are
- * recorded as once that is another creature (a correction). */
+ * recorded as once that is another mob (a correction). */
 export function continuityLine(count: number, creature?: string, current?: string | null): string {
 	const line = `${killCount(count)} assigned on continuity`;
 	return current && current !== creature ? `${line}; recorded as ${current}` : line;
@@ -51,7 +51,7 @@ export function isSuggestion(grade: MobDetectionGrade): boolean {
 	return grade === 'latest_read' || grade === 'provisional_latest_read';
 }
 
-/** A creature on no list, by the spelling the screen read. */
+/** A mob on no list, by the spelling the screen read. */
 export function isUnlisted(grade: MobDetectionGrade): boolean {
 	return (
 		grade === 'provisional' ||
@@ -62,7 +62,7 @@ export function isUnlisted(grade: MobDetectionGrade): boolean {
 	);
 }
 
-/** A stable key for a group: the same creature at another grade, or an
+/** A stable key for a group: the same mob at another grade, or an
  * unlisted name read at another level, is another group. */
 export function groupKey(group: MobDetectionGroupRef): string {
 	const { creature } = group;
@@ -93,18 +93,18 @@ export function describeSettled(settled: MobDetectionSettled): string {
 	}
 }
 
-/** The longest name the backend keeps for a creature. */
+/** The longest name the backend keeps for a mob. */
 export const MAX_NAME_LENGTH = 64;
 
 /** What naming a group does, in its button: keeping an unlisted spelling
- * as a new creature is said as such, apart from confirming a listed one. */
+ * as a new mob is said as such, apart from confirming a listed one. */
 export function nameAction(grade: MobDetectionGrade, draft: string, detected: string): string {
 	if (draft.trim() !== detected) return 'Save';
-	return isUnlisted(grade) ? 'Keep as a new creature' : 'Confirm';
+	return isUnlisted(grade) ? 'Keep as a new mob' : 'Confirm';
 }
 
 /** How sure a mob attribution row is, where the session shows it; nothing
- * for a creature as recorded. */
+ * for a mob as recorded. */
 export function describeCertainty(certainty: MobCertainty): string | null {
 	switch (certainty) {
 		case 'recorded':
@@ -112,8 +112,8 @@ export function describeCertainty(certainty: MobCertainty): string | null {
 		case 'probable':
 			return 'probably';
 		case 'unlisted':
-			return 'not in the creature list, unconfirmed';
+			return 'not in the mob list, unconfirmed';
 		case 'unlisted_probable':
-			return 'probably; not in the creature list, unconfirmed';
+			return 'probably; not in the mob list, unconfirmed';
 	}
 }

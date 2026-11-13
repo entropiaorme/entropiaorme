@@ -66,7 +66,7 @@ describe('the words the review uses', () => {
 	it('says how sure the screen was, never a backend grade name', () => {
 		expect(describeGrade('named')).toBe('Read clearly');
 		expect(describeGrade('guess')).toBe('Probably');
-		expect(describeGrade('provisional')).toBe('Not in the creature list');
+		expect(describeGrade('provisional')).toBe('Not in the mob list');
 		expect(describeGrade('latest_read')).toMatch(/^Suggested/);
 		expect(describeGrade('provisional_latest_read')).toMatch(/^Suggested/);
 		expect(isSuggestion('latest_read')).toBe(true);
@@ -104,7 +104,7 @@ describe('the words the review uses', () => {
 	});
 });
 
-describe('the detected creatures model', () => {
+describe('the detected mobs model', () => {
 	it('lists the session review and drops a read for a session no longer shown', async () => {
 		const h = harness();
 		let answer: (value: MobDetectionReview) => void = () => {};
@@ -184,9 +184,9 @@ describe('the detected creatures model', () => {
 		expect(h.model.busy).toBe(groupKey(shown.group));
 		await h.model.restoreDeclared(shown);
 		expect(mocked.settleMobDetection).toHaveBeenCalledTimes(1);
-		fail(new Error('"42" does not read as a creature\'s name'));
+		fail(new Error('"42" does not read as a mob\'s name'));
 		await first;
-		expect(h.model.error).toMatch(/does not read as a creature/);
+		expect(h.model.error).toMatch(/does not read as a mob/);
 		expect(h.model.groups).toEqual([shown]);
 		expect(h.settled).not.toHaveBeenCalled();
 		h.model.dismissError();
@@ -200,7 +200,7 @@ describe('the detected creatures model', () => {
 		expect(h.model.groups).toEqual([]);
 	});
 
-	it('offers the creature a loosely typed name may mean, and records it in one action', async () => {
+	it('offers the mob a loosely typed name may mean, and records it in one action', async () => {
 		const h = harness();
 		const shown = group();
 		mocked.getMobDetections.mockResolvedValueOnce(review('s1', [shown]));
@@ -228,19 +228,19 @@ describe('the detected creatures model', () => {
 });
 
 describe('the words beside a name', () => {
-	it('says keeping an unlisted spelling is keeping a new creature', () => {
-		expect(nameAction('provisional', 'Gloomrat', 'Gloomrat')).toBe('Keep as a new creature');
+	it('says keeping an unlisted spelling is keeping a new mob', () => {
+		expect(nameAction('provisional', 'Gloomrat', 'Gloomrat')).toBe('Keep as a new mob');
 		expect(nameAction('provisional_latest_read', ' Gloomrat ', 'Gloomrat')).toBe(
-			'Keep as a new creature',
+			'Keep as a new mob',
 		);
 		expect(nameAction('named', 'Young Atrox', 'Young Atrox')).toBe('Confirm');
 		expect(nameAction('provisional', 'Young Atrox', 'Gloomrat')).toBe('Save');
 	});
 
-	it('says how sure a recorded creature is', () => {
+	it('says how sure a recorded mob is', () => {
 		expect(describeCertainty('recorded')).toBeNull();
 		expect(describeCertainty('probable')).toBe('probably');
-		expect(describeCertainty('unlisted')).toBe('not in the creature list, unconfirmed');
-		expect(describeCertainty('unlisted_probable')).toMatch(/^probably; not in the creature list/);
+		expect(describeCertainty('unlisted')).toBe('not in the mob list, unconfirmed');
+		expect(describeCertainty('unlisted_probable')).toMatch(/^probably; not in the mob list/);
 	});
 });

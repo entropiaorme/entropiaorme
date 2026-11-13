@@ -3,6 +3,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
+	import SkillBoostField from '$lib/features/tracking/SkillBoostField.svelte';
 	import { describeReloadLimit } from '$lib/features/equipment/attackRate';
 	import type {
 		AppSettings,
@@ -112,6 +113,8 @@
 </script>
 
 <div class="space-y-5">
+	<SkillBoostField />
+	<div class="border-t border-border/70"></div>
 	<div class="flex items-start justify-between gap-6">
 		<div>
 			<h2 class="text-sm font-medium text-text">Passive effects</h2>

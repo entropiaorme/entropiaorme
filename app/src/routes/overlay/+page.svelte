@@ -66,7 +66,7 @@
 		OVERLAY_ARMOUR_COST_SHOW_EVENT,
 		OVERLAY_ARMOUR_COST_WINDOW_LABEL
 	} from '$lib/windows/overlayArmourCost';
-	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
+	import OverlayReadout from '$lib/components/overlay/OverlayReadout.svelte';
 	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
 	import { toolInHand } from '$lib/features/tracking/heldTool';
@@ -185,7 +185,7 @@
 		refresh: () => snapshot.hydrate()
 	});
 	$effect(() => () => mobSource.destroy());
-	// The tool in hand's panels, closed with the creature's when the overlay hides.
+	// The tool in hand's panels, closed with the mob's when the overlay hides.
 	const heldTool = createHeldToolModel({ source: () => data.toolSource });
 	$effect(() => () => heldTool.destroy());
 	// Its typed entry: the catalogue typeahead and the suggestion menu.
@@ -758,16 +758,6 @@
 	$effect(() => () => notices.destroy());
 
 
-	// Keep the boost buffer in step with its persisted facet while the
-	// user is not editing it (an idle overlay re-read, a session start
-	// snapshotting the declaration).
-	$effect(() => {
-		void data.skillBoostPercent;
-		untrack(() => {
-			facets.syncBoostDraft();
-		});
-	});
-
 	async function handleStart() {
 		starting = true;
 		try {
@@ -788,7 +778,7 @@
 <!-- Kept: mousedown is the frameless overlay window's drag handle (pointer-only by nature); the controls inside are native buttons. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex flex-col items-start overlay-frame w-max" bind:this={overlayRoot} onmousedown={handleDrag}>
-	<OverlayStrip
+	<OverlayReadout
 		{data}
 		{status}
 		statContext={{
@@ -805,12 +795,10 @@
 		definitionMenuOpen={overlayMenuKind === 'definition'}
 		savingDefinition={facets.savingDefinition}
 		definitionEditable={facets.definitionEditable}
-		savingBoost={facets.savingBoost}
 		savingActivity={activities.saving}
 		activitiesMenuOpen={overlayMenuKind === 'activities' || overlayMenuKind === 'questHandIn'}
 		bind:mobQuery={mobEntry.query}
 		bind:mobInput={mobEntry.input}
-		bind:boostDraft={facets.boostDraft}
 		onStart={handleStart}
 		onStop={flow.requestStop}
 		onReleaseMob={mobEntry.release}
@@ -818,7 +806,6 @@
 		onMobBlur={mobEntry.blur}
 		onMobKeydown={mobEntry.keydown}
 		onDefinitionTrigger={toggleDefinitionMenu}
-		onBoostCommit={facets.commitBoost}
 		onActivitiesTrigger={toggleActivitiesMenu}
 		onWeaponDecision={handleWeaponDecision}
 		onArmourCostToggle={armourCost.toggle}

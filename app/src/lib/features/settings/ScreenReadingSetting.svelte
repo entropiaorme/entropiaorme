@@ -1,5 +1,5 @@
 <script lang="ts">
-	// A setting that reads the game screen while a session runs (creature
+	// A setting that reads the game screen while a session runs (mob
 	// detection, reading the held tool): its toggle, its line of copy, and a
 	// note when, turned on, capture cannot run. A setting still in
 	// development carries its mark, and its owner renders it only inside a

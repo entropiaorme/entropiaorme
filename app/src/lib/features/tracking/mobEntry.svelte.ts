@@ -5,8 +5,8 @@
  * The menu is the overlay's shared popup window, which the owner presents
  * (`menu`); this module decides when it shows and what it holds. A pick goes
  * to the mob source (`MobSourceModel.choose`): the typed mob at once, or,
- * while steered, a creature waiting in the panel to be pinned or kept as the
- * backstop. Only a catalogue creature can be entered, so Enter takes the top
+ * while steered, a mob waiting in the panel to be pinned or kept as the
+ * backstop. Only a catalogue mob can be entered, so Enter takes the top
  * match rather than inventing a name.
  *
  * Call it while a component initialises: it runs effects that follow the
@@ -26,7 +26,7 @@ const BLUR_CLOSE_MS = 120;
 
 export interface MobEntryDeps {
 	source: MobSourceModel;
-	/** The strip is in a state that takes a typed creature. */
+	/** The strip is in a state that takes a typed mob. */
 	available: () => boolean;
 	search: (query: string) => Promise<ManualMobSuggestion[]>;
 	menu: {

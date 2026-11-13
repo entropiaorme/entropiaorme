@@ -27,9 +27,9 @@ describe('a screen-reading setting', () => {
 		expect(screen.queryByText('In development')).toBeNull();
 	});
 
-	it('shows creature detection with no in-development mark', () => {
+	it('shows mob detection with no in-development mark', () => {
 		render(ScreenReadingSetting, { props: props({ reading: CREATURE_DETECTION }) });
-		expect(screen.getByText('Detect the creature I am fighting')).toBeTruthy();
+		expect(screen.getByText('Detect the mob I am fighting')).toBeTruthy();
 		expect(screen.queryByText('In development')).toBeNull();
 	});
 

@@ -56,7 +56,7 @@ function settings(): AppSettings {
 }
 
 const HELD_TOOL = 'Read the held tool from the screen';
-const CREATURES = 'Detect the creature I am fighting';
+const CREATURES = 'Detect the mob I am fighting';
 
 /** The toggles' accessible names, in page order. */
 function toggles(): string[] {
@@ -78,7 +78,7 @@ describe('the screen-reading settings', () => {
 		expect(screen.queryByText('In development')).toBeNull();
 	});
 
-	it('shows creature detection in a published build too, unmarked, right after the held tool', async () => {
+	it('shows mob detection in a published build too, unmarked, right after the held tool', async () => {
 		channel.visible = false;
 		render(SettingsPage);
 		expect(await screen.findByText(CREATURES)).toBeTruthy();

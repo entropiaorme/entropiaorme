@@ -55,7 +55,7 @@ export interface TrackingLive {
 	trackProtectionCosts?: boolean | null;
 	skillBoostPercent?: number | null;
 	/** The session's one source for its kills' creature: the typed
-	 * creature (idle: the one the next session starts with), the pin, and
+	 * mob (idle: the one the next session starts with), the pin, and
 	 * what the screen reads. */
 	mobSource?: MobSourceView | null;
 	/** Where the tool in hand comes from (the hotbar keys, or the game
@@ -102,10 +102,10 @@ export type { HarvestGuardrailAlert, RecentEvent, TrackingSnapshot };
 
 export const startTracking = commands.trackingStart;
 export const stopTracking = commands.trackingStop;
-/** Clear the typed creature (the declared mob; the backstop while the
+/** Clear the typed mob (the declared mob; the backstop while the
  * screen is read). A pin stands. */
 export const releaseMob = commands.trackingReleaseMob;
-/** Pin a creature for the running session: the one shown as read (refused
+/** Pin a mob for the running session: the one shown as read (refused
  * if the screen no longer shows it) or one typed. Every kill takes it, and
  * the screen is not read, until it is released. */
 export const pinMob = commands.trackingMobPin;
@@ -131,21 +131,21 @@ export async function reassignSession(sessionId: string, definitionId: string) {
 }
 export const renameSessionMob = commands.trackingRenameMob;
 export const restoreSessionMob = commands.trackingRestoreMob;
-/** Every creature and suggestion the screen gave an ended session's kills,
- * grouped by creature and grade, the least certain first. */
+/** Every mob and suggestion the screen gave an ended session's kills,
+ * grouped by mob and grade, the least certain first. */
 export const getMobDetections = commands.trackingMobDetections;
-/** Settle every kill of one group: name the creature, or put back the
+/** Settle every kill of one group: name the mob, or put back the
  * declared mob each kill had. Answers with the refreshed review. */
 export const settleMobDetection = commands.trackingMobDetectionSettle;
-/** The creatures kept for the name reader beside the bundled list. */
+/** The mobs kept for the name reader beside the bundled list. */
 export const getCreatureEntries = commands.creatureEntries;
-/** What keeping a creature typed as its plate prints it would come to:
+/** What keeping a mob typed as its plate prints it would come to:
  * ready (and as what), already known, or refused with the reason. */
 export const checkCreatureEntry = commands.creatureEntryCheck;
-/** Keep a creature typed as its plate prints it, in place of the one being
+/** Keep a mob typed as its plate prints it, in place of the one being
  * edited; answers with the list as it now stands. */
 export const saveCreatureEntry = commands.creatureEntrySave;
-/** Stop keeping a creature; answers with the list as it now stands. */
+/** Stop keeping a mob; answers with the list as it now stands. */
 export const removeCreatureEntry = commands.creatureEntryRemove;
 /** What the screen read as the tool in hand during a session that is not
  * in the library: tools of the game's data held without an entry, and

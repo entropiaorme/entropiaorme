@@ -219,8 +219,15 @@ recogniser seam the readers are handed",
     },
     Allowed {
         path: "app/src-tauri/eo-services/examples/capture_probe.rs",
-        names: &["capture_region_png", "capture_frame_generation"],
-        reason: "a maintainer tool that saves what the capturer sees",
+        names: &[
+            "capture_region_png",
+            "capture_region_bgr",
+            "capture_frame_generation",
+            "capture_frames_offered",
+            "capturable_area",
+            "start_capture",
+        ],
+        reason: "a maintainer tool that saves what the capturer sees and measures its stream",
     },
     Allowed {
         path: "app/src-tauri/eo-services/tests/ocr_bench_differential.rs",

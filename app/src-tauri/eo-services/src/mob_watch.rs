@@ -215,8 +215,8 @@ pub struct PlateLook {
 /// What the creature watcher keeps from one look to the next.
 pub struct PlateMemory {
     scratch: PlateScratch,
-    /// A capture taking longer than this, in seconds, is too late to stand
-    /// for the moment it was stamped with: a gap, not an observation.
+    /// A capture whose pixels took longer than this to grab, in seconds,
+    /// cannot be placed in time well enough: a gap, not an observation.
     slack: f64,
 }
 
@@ -245,7 +245,6 @@ impl Watcher for PlateLook {
     }
 
     fn look(&self, reader: &Reader, memory: &mut PlateMemory, eyes: &Eyes) -> Look<MobPulse> {
-        let clock = eyes.clock();
         let metrics = eo_wire::metrics::metrics();
         // Stamped as the capture starts, once the capture lock is held: the
         // profile allows for how far the capture lags this moment.
@@ -258,7 +257,7 @@ impl Watcher for PlateLook {
                 // Only a capture that found the window is a measure of what
                 // capturing costs.
                 metrics.record_plate_capture(capture.took);
-                if clock.monotonic() - capture.began > memory.slack {
+                if capture.age.as_secs_f64() > memory.slack {
                     return Look::Quiet;
                 }
                 frame.image

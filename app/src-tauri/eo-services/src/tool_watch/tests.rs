@@ -152,6 +152,7 @@ fn capture_of(image: &BgrImage, area: FrameArea) -> GameFrame {
                 image: crop(image, rect),
                 origin: (i64::from(x0), i64::from(y0)),
                 offset: (i64::from(x0), i64::from(y0)),
+                age: Duration::ZERO,
             }
         }
     }
@@ -199,13 +200,17 @@ fn rig_with(
                 asked.push((area, clock.monotonic()));
                 asked.len()
             };
+            // A hook that moves the clock is a slow grab of the pixels:
+            // they are as old as it took.
+            let before = clock.monotonic();
             if let Some(hook) = on_capture.lock().unwrap().as_mut() {
                 hook(n);
             }
+            let age = Duration::from_secs_f64(clock.monotonic() - before);
             if let Some(why) = *failing.lock().unwrap() {
                 return Err(why);
             }
-            Ok(capture_of(&image.lock().unwrap(), area))
+            Ok(capture_of(&image.lock().unwrap(), area).aged(age))
         })
     };
     let read_text: FrameReader = {

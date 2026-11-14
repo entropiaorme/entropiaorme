@@ -159,6 +159,16 @@ pub fn capture_frame_generation() -> Option<u64> {
     portal::frame_generation()
 }
 
+/// How many frames the compositor has sent the Linux portal stream, kept
+/// or dropped: the capture probe's measure of whether the compositor
+/// keeps to the frame-rate limit. Hidden like
+/// [`capture_frame_generation`].
+#[cfg(all(target_os = "linux", feature = "linux-capture"))]
+#[doc(hidden)]
+pub fn capture_frames_offered() -> u64 {
+    portal::frames_offered()
+}
+
 #[cfg(windows)]
 mod platform {
     use windows::Win32::Graphics::Gdi::{

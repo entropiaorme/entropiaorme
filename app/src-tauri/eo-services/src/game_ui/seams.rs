@@ -6,6 +6,7 @@
 //! every reader that needs one takes the same shape.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::game_ui::geometry::{BgrImage, Rect};
 
@@ -74,6 +75,13 @@ pub struct GameFrame {
     /// The image's top-left pixel within the game window's client area:
     /// what a later capture of only part of the window is asked for in.
     pub offset: (i64, i64),
+    /// How long before the frame was handed over its pixels were taken.
+    /// A reader that keeps time stamps what it sees this long before the
+    /// moment it receives the frame, so finding the game window first
+    /// (which can be slow on a busy machine) never dates the pixels
+    /// early, and only the grab itself counts against how late a capture
+    /// may be.
+    pub age: Duration,
 }
 
 impl GameFrame {
@@ -84,7 +92,14 @@ impl GameFrame {
             image,
             origin,
             offset: (0, 0),
+            age: Duration::ZERO,
         }
+    }
+
+    /// The same capture, its pixels taken `age` before it was handed
+    /// over.
+    pub fn aged(self, age: Duration) -> Self {
+        Self { age, ..self }
     }
 }
 

@@ -47,3 +47,59 @@ fn a_late_bound_detector_is_absent_until_bound_and_bound_once() {
         "a second bind is ignored"
     );
 }
+
+/// One capture through `seam` on a mock clock the seam may move, with the
+/// clock's readings before the capture.
+fn capture_through(
+    seam: impl Fn(&MockClock) -> Result<GameFrame, FrameUnavailable> + Send + Sync + 'static,
+) -> (Capture, i64, f64) {
+    let clock = Arc::new(MockClock::new(None, 50.0));
+    let frame: GameWindowFrame = {
+        let clock = clock.clone();
+        Arc::new(move |_| seam(&clock))
+    };
+    let (at_ms, began) = (clock_epoch_ms(clock.as_ref()), clock.monotonic());
+    let running = || true;
+    let eyes = Eyes {
+        frame: &frame,
+        clock: clock.as_ref(),
+        session_id: "s1",
+        hinted_at: None,
+        running: &running,
+    };
+    (eyes.capture(FrameArea::Whole).unwrap(), at_ms, began)
+}
+
+fn one_pixel() -> GameFrame {
+    let image = crate::game_ui::geometry::BgrImage {
+        data: vec![0; 3],
+        h: 1,
+        w: 1,
+    };
+    GameFrame::whole(image, (0, 0))
+}
+
+#[test]
+fn a_capture_is_stamped_when_its_pixels_were_taken_not_when_it_was_asked_for() {
+    // Two seconds pass finding the game window, then the pixels are
+    // grabbed in 100 ms: the look is of the screen 100 ms before it was
+    // handed over, and only those 100 ms count as the capture's age.
+    let (capture, asked_ms, asked) = capture_through(|clock| {
+        clock.advance(2.1).unwrap();
+        Ok(one_pixel().aged(Duration::from_millis(100)))
+    });
+    assert_eq!(capture.at_ms, asked_ms + 2_000);
+    assert!((capture.began - (asked + 2.0)).abs() < 1e-9);
+    assert_eq!(capture.age, Duration::from_millis(100));
+}
+
+#[test]
+fn a_capture_that_got_no_frame_is_stamped_when_it_was_told_so() {
+    let (capture, asked_ms, asked) = capture_through(|clock| {
+        clock.advance(0.5).unwrap();
+        Err(FrameUnavailable::CaptureFailed)
+    });
+    assert_eq!(capture.at_ms, asked_ms + 500);
+    assert!((capture.began - (asked + 0.5)).abs() < 1e-9);
+    assert_eq!(capture.age, Duration::ZERO);
+}

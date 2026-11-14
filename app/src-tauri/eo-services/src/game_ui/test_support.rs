@@ -58,6 +58,7 @@ pub fn window_frame(
         image: super::geometry::crop(image, part),
         origin: (origin.0 + part.x0 as i64, origin.1 + part.y0 as i64),
         offset: (part.x0 as i64, part.y0 as i64),
+        age: std::time::Duration::ZERO,
     })
 }
 

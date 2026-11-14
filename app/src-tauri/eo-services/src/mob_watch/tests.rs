@@ -75,7 +75,16 @@ fn rig_with(
                 "the watcher captures the whole window"
             );
             let n = captures.fetch_add(1, Ordering::SeqCst) + 1;
-            on_capture(n, &clock)
+            // A capture that moves the clock is a slow grab of the
+            // pixels: they are as old as it took, unless the frame
+            // already says how old they are.
+            let before = clock.monotonic();
+            let frame = on_capture(n, &clock)?;
+            if frame.age > Duration::ZERO {
+                return Ok(frame);
+            }
+            let age = Duration::from_secs_f64(clock.monotonic() - before);
+            Ok(frame.aged(age))
         })
     };
     let wait = wait(clock.clone(), focus.clone());
@@ -649,6 +658,27 @@ fn a_capture_slower_than_its_slack_is_a_gap() {
     rig.start("s1", 2);
     rig.finish();
     assert_eq!(rig.offsets(start), [0, 2_000]);
+}
+
+#[test]
+fn time_spent_before_the_pixels_are_taken_is_no_gap() {
+    // Each capture spends 400 ms finding the window and grabs its pixels
+    // at once: every look stands, stamped when its pixels were taken.
+    let rig = rig_with(
+        Arc::new(|_, clock| {
+            clock.advance(0.4).unwrap();
+            // Marked as already aged, so the rig adds nothing for the
+            // time the clock moved.
+            blank_frame().map(|frame| frame.aged(Duration::from_nanos(1)))
+        }),
+        driven(),
+        None,
+        MobCatalogue::default(),
+    );
+    let start = clock_epoch_ms(rig.clock.as_ref());
+    rig.start("s1", 2);
+    rig.finish();
+    assert_eq!(rig.offsets(start), [400, 1_400]);
 }
 
 /// Starts `session` on `rig`, recording each session a self-ended watch

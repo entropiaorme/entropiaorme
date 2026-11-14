@@ -91,6 +91,9 @@ fn capture_window(area: FrameArea, may_start: bool) -> Result<GameFrame, FrameUn
         }
         None => client,
     };
+    // Timed from here: finding the window and asking what can be captured
+    // are over, so what follows is the grab of the pixels alone.
+    let taken = std::time::Instant::now();
     let pixels = if may_start {
         capture_region_bgr(x, y, w, h)
     } else {
@@ -101,6 +104,7 @@ fn capture_window(area: FrameArea, may_start: bool) -> Result<GameFrame, FrameUn
             image,
             origin: (x, y),
             offset: (x - window.0, y - window.1),
+            age: taken.elapsed(),
         })
         .ok_or(FrameUnavailable::CaptureFailed)
 }

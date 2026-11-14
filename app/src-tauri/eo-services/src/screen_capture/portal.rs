@@ -12,6 +12,19 @@
 //! outside the captured monitor, returns None, exactly as the Windows
 //! path returns None on a GDI failure.
 //!
+//! The stream costs what it delivers, so it is kept small. The compositor
+//! is asked for no more than [`MAX_FRAME_RATE`] frames a second (a
+//! compositor that refuses the limit is used without it), and a frame
+//! arriving sooner than that after the last one kept is dropped before it
+//! is copied.
+//!
+//! The stream is not paused while nobody reads it, though that would
+//! cost nothing at all: measured on GNOME 50 with PipeWire 1.6, the
+//! compositor frees a paused stream's buffers and the source then fails
+//! on resume ("all buffers have been removed"), which would end screen
+//! reading until the player turned it on again. A stream held to the
+//! limit is the dependable rest; `capture_probe rate` measures it.
+//!
 //! The restore token lives under the app data dir; the module reads its
 //! location from `EO_CAPTURE_TOKEN_PATH` (set by the shell at startup)
 //! and skips persistence when unset, so a headless test never writes to
@@ -23,7 +36,7 @@
 //! an unsupported host does) and only the shell enables the real path.
 
 use std::os::unix::fs::OpenOptionsExt as _;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -51,7 +64,28 @@ struct Engine {
     // Kept alive for the process: dropping the pipeline tears down
     // the PipeWire stream, and dropping the session revokes the
     // portal grant.
-    _pipeline: gstreamer::Pipeline,
+    pipeline: gstreamer::Pipeline,
+}
+
+/// The most frames a second the stream is asked for and kept at. The
+/// readers look a few times a second at most; ten keeps what a look sees
+/// within a tenth of a second of the screen.
+const MAX_FRAME_RATE: i32 = 10;
+
+/// A frame arriving sooner than this after the last one kept is dropped
+/// uncopied: a little under the interval [`MAX_FRAME_RATE`] gives, so a
+/// compositor keeping to the limit loses no frame to jitter.
+const MIN_FRAME_GAP: Duration = Duration::from_millis(90);
+
+/// How many frames the compositor has sent, kept or not: beside the
+/// frame generation it says whether the compositor keeps to the limit or
+/// the frames past it are being dropped here.
+static OFFERED: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a frame arriving `since_kept` after the last one kept is kept
+/// too (see [`MIN_FRAME_GAP`]); the first frame always is.
+fn keeps_frame(since_kept: Option<Duration>) -> bool {
+    since_kept.is_none_or(|gap| gap >= MIN_FRAME_GAP)
 }
 
 static ENGINE: Mutex<Option<Arc<Engine>>> = Mutex::new(None);
@@ -202,6 +236,57 @@ fn start_engine() -> Result<Arc<Engine>, Box<dyn std::error::Error>> {
     let (node_id, remote_fd, origin_x, origin_y) = open_portal()?;
     tracing::info!(target: "eo::capture", node_id, "screen-cast portal stream acquired");
 
+    // First with the frame rate limited at the compositor; a compositor
+    // that cannot agree a format under the limit is used without it, and
+    // the frames it sends past the limit are dropped on arrival instead.
+    let (latest, pipeline, bus) = match start_pipeline(
+        node_id,
+        remote_fd.try_clone()?,
+        origin_x,
+        origin_y,
+        true,
+    ) {
+        Ok(started) => started,
+        Err(error) => {
+            tracing::warn!(
+                target: "eo::capture",
+                %error,
+                "capture stream did not start with its frame rate limited; starting it unlimited"
+            );
+            start_pipeline(node_id, remote_fd, origin_x, origin_y, false)?
+        }
+    };
+    let generation = guard(&latest)
+        .as_ref()
+        .map(|frame| frame.generation)
+        .unwrap_or_default();
+    tracing::info!(target: "eo::capture", generation, "capture stream produced its first frame");
+
+    let engine = Arc::new(Engine {
+        latest,
+        healthy: AtomicBool::new(true),
+        pipeline,
+    });
+    monitor_pipeline(engine.clone(), bus);
+    Ok(engine)
+}
+
+type Started = (
+    Arc<Mutex<Option<Frame>>>,
+    gstreamer::Pipeline,
+    gstreamer::Bus,
+);
+
+/// Build the pipeline over the portal's stream, play it, and wait for its
+/// first frame. `limited` asks the compositor for at most
+/// [`MAX_FRAME_RATE`] frames a second.
+fn start_pipeline(
+    node_id: u32,
+    remote_fd: std::os::fd::OwnedFd,
+    origin_x: i64,
+    origin_y: i64,
+    limited: bool,
+) -> Result<Started, Box<dyn std::error::Error>> {
     let latest: Arc<Mutex<Option<Frame>>> = Arc::new(Mutex::new(None));
     let pipeline = gstreamer::Pipeline::new();
     // The source rides the portal's own PipeWire remote (its fd),
@@ -224,6 +309,17 @@ fn start_engine() -> Result<Arc<Engine>, Box<dyn std::error::Error>> {
         // which is indistinguishable from slow negotiation at this seam.
         .property_from_str("on-disconnect", "error")
         .build()?;
+    // What the source may negotiate with the compositor: any raw video,
+    // and when limited, no faster than the limit. The compositor paces
+    // its recording by the rate agreed here, so the frames past it are
+    // never produced at all.
+    let mut wanted = gstreamer::Caps::builder("video/x-raw");
+    if limited {
+        wanted = wanted.field("max-framerate", gstreamer::Fraction::new(MAX_FRAME_RATE, 1));
+    }
+    let limit = gstreamer::ElementFactory::make("capsfilter")
+        .property("caps", wanted.build())
+        .build()?;
     let convert = gstreamer::ElementFactory::make("videoconvert").build()?;
     let caps = gstreamer::Caps::builder("video/x-raw")
         .field("format", "BGRx")
@@ -234,14 +330,23 @@ fn start_engine() -> Result<Arc<Engine>, Box<dyn std::error::Error>> {
         .drop(true)
         .build();
 
-    pipeline.add_many([&src, &convert, appsink.upcast_ref()])?;
-    gstreamer::Element::link_many([&src, &convert, appsink.upcast_ref()])?;
+    pipeline.add_many([&src, &limit, &convert, appsink.upcast_ref()])?;
+    gstreamer::Element::link_many([&src, &limit, &convert, appsink.upcast_ref()])?;
 
     let sink_slot = latest.clone();
+    let mut kept_at: Option<Instant> = None;
     appsink.set_callbacks(
         gstreamer_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
                 let sample = sink.pull_sample().map_err(|_| gstreamer::FlowError::Eos)?;
+                // A frame past the limit is dropped here, before the copy
+                // that is most of what a frame costs.
+                OFFERED.fetch_add(1, Ordering::Relaxed);
+                let now = Instant::now();
+                if !keeps_frame(kept_at.map(|kept| now.duration_since(kept))) {
+                    return Ok(gstreamer::FlowSuccess::Ok);
+                }
+                kept_at = Some(now);
                 let caps = sample.caps().ok_or(gstreamer::FlowError::Error)?;
                 let info = gstreamer_video::VideoInfo::from_caps(caps)
                     .map_err(|_| gstreamer::FlowError::Error)?;
@@ -316,21 +421,7 @@ fn start_engine() -> Result<Arc<Engine>, Box<dyn std::error::Error>> {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let generation = latest
-        .lock()
-        .expect("frame slot")
-        .as_ref()
-        .map(|frame| frame.generation)
-        .unwrap_or_default();
-    tracing::info!(target: "eo::capture", generation, "capture stream produced its first frame");
-
-    let engine = Arc::new(Engine {
-        latest,
-        healthy: AtomicBool::new(true),
-        _pipeline: pipeline,
-    });
-    monitor_pipeline(engine.clone(), bus);
-    Ok(engine)
+    Ok((latest, pipeline, bus))
 }
 
 /// Keep observing the pipeline after its first frame. A revoked portal
@@ -376,7 +467,7 @@ fn invalidate_engine(engine: &Arc<Engine>, reason: &str) {
     tracing::warn!(target: "eo::capture", %reason, "screen capture engine invalidated");
     engine.healthy.store(false, Ordering::Release);
     *guard(&engine.latest) = None;
-    let _ = engine._pipeline.set_state(gstreamer::State::Null);
+    let _ = engine.pipeline.set_state(gstreamer::State::Null);
     let mut slot = guard(&ENGINE);
     if slot
         .as_ref()
@@ -470,6 +561,11 @@ fn area_of(engine: Arc<Engine>) -> Option<(i64, i64, i64, i64)> {
     ))
 }
 
+/// How many frames the compositor has sent since the process started.
+pub fn frames_offered() -> u64 {
+    OFFERED.load(Ordering::Relaxed)
+}
+
 pub fn frame_generation() -> Option<u64> {
     let engine = engine()?;
     let generation = engine
@@ -499,7 +595,7 @@ mod tests {
         let engine = Arc::new(Engine {
             latest: latest.clone(),
             healthy: AtomicBool::new(true),
-            _pipeline: gstreamer::Pipeline::new(),
+            pipeline: gstreamer::Pipeline::new(),
         });
         *guard(&ENGINE) = Some(engine.clone());
 
@@ -508,6 +604,17 @@ mod tests {
         assert!(!engine.healthy.load(Ordering::Acquire));
         assert!(guard(&latest).is_none());
         assert!(guard(&ENGINE).is_none());
+    }
+
+    #[test]
+    fn a_frame_sooner_than_the_limit_allows_is_dropped() {
+        assert!(keeps_frame(None), "the first frame is kept");
+        assert!(!keeps_frame(Some(Duration::from_millis(16))));
+        assert!(!keeps_frame(Some(MIN_FRAME_GAP - Duration::from_millis(1))));
+        assert!(keeps_frame(Some(MIN_FRAME_GAP)));
+        // A compositor keeping to the limit loses nothing to jitter.
+        let interval = Duration::from_secs(1) / MAX_FRAME_RATE as u32;
+        assert!(keeps_frame(Some(interval - Duration::from_millis(5))));
     }
 
     #[test]

@@ -24,9 +24,11 @@
 //! watcher or by several: a capture is taken under one lock the whole
 //! process shares, held for the capture alone, so one watcher's reading of
 //! what it captured never holds up another's capture. A look is stamped
-//! once it holds the lock, so waiting behind another watcher's capture
-//! neither makes its time early nor counts against how late a capture may
-//! be; and a watch stopped while it waited captures nothing.
+//! with the moment its pixels were taken, so neither waiting behind
+//! another watcher's capture nor finding the game window (slow on a busy
+//! machine) makes its time early or counts against how late a capture may
+//! be: only the grab of the pixels does. A watch stopped while it waited
+//! captures nothing.
 //!
 //! Starting capture for the player's gesture is done under that lock too,
 //! on purpose: on a desktop that asks the player's consent, the question
@@ -215,9 +217,10 @@ pub enum Look<P> {
     Disabled,
 }
 
-/// One capture of the game window, stamped when the capture lock was
-/// taken: the moment the capture began, on both clocks, and how long the
-/// capture itself took.
+/// One capture of the game window, stamped with the moment its pixels
+/// were taken, on both clocks: the moment the frame was handed over, less
+/// the age the frame gives for its pixels. A capture that got no frame is
+/// stamped with the moment it was told so.
 pub struct Capture {
     /// Epoch milliseconds on the injected clock.
     pub at_ms: i64,
@@ -225,6 +228,9 @@ pub struct Capture {
     pub began: f64,
     /// How long the frame seam took, the lock's wait not included.
     pub took: Duration,
+    /// How long the grab of the pixels alone took: how far the stamp can
+    /// be from the moment the pixels show. Zero when there is no frame.
+    pub age: Duration,
     pub frame: Result<GameFrame, FrameUnavailable>,
 }
 
@@ -242,22 +248,23 @@ pub struct Eyes<'a> {
 
 impl Eyes<'_> {
     /// Capture `area` of the game window, under the lock no other capture
-    /// is taken beside, stamped once the lock is held. `None` when the
-    /// watch stopped while the capture waited for the lock: nothing is
-    /// captured then.
+    /// is taken beside, stamped with the moment its pixels were taken (see
+    /// [`Capture`]). `None` when the watch stopped while the capture
+    /// waited for the lock: nothing is captured then.
     pub fn capture(&self, area: FrameArea) -> Option<Capture> {
         let _gate = capture_gate();
         if !(self.running)() {
             return None;
         }
-        let at_ms = clock_epoch_ms(self.clock);
-        let began = self.clock.monotonic();
         let started = Instant::now();
         let frame = (self.frame)(area);
+        let took = started.elapsed();
+        let age = frame.as_ref().map_or(Duration::ZERO, |frame| frame.age);
         Some(Capture {
-            at_ms,
-            began,
-            took: started.elapsed(),
+            at_ms: clock_epoch_ms(self.clock) - age.as_millis() as i64,
+            began: self.clock.monotonic() - age.as_secs_f64(),
+            took,
+            age,
             frame,
         })
     }

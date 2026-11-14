@@ -46,7 +46,7 @@
 //! shared [`crate::screen_watch`]; this module is what one look does.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::clock::Clock;
 use crate::game_ui::geometry::{BgrImage, Rect};
@@ -549,9 +549,9 @@ impl Watcher for BarLook {
         let frame = match capture.frame {
             Ok(frame) => {
                 metrics.record_tool_capture(capture.took);
-                if clock.monotonic() - began > seconds(watch.capture_slack_ms) {
-                    // Too late to stand for the moment it was stamped
-                    // with: the bar was not seen then.
+                if capture.age > Duration::from_millis(watch.capture_slack_ms.max(0) as u64) {
+                    // The grab took too long to be placed in time: the
+                    // bar was not seen then.
                     return tell(eyes, memory.settle(unreadable, at_ms, began, settle));
                 }
                 frame

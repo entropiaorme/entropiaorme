@@ -14,13 +14,14 @@ use std::sync::Arc;
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use eo_api::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
-    AnalyticsHuntingActivity, AnalyticsOverview, AuctionConfirmInput, AuctionExpireInput,
-    AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput,
-    HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput,
-    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult,
-    ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput,
-    LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, ShrapnelConversionInput,
-    StockConversionInput, StockPosition, StockRemovalInput,
+    AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput,
+    AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput,
+    EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
+    InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
+    InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
+    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
+    RealisedTierMarkup, ShrapnelConversionInput, StockConversionInput, StockPosition,
+    StockRemovalInput,
 };
 use eo_api::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
@@ -1171,6 +1172,36 @@ pub async fn inventory_equipment_trade(
     input: EquipmentTradeInput,
 ) -> Result<AuctionListing, ApiError> {
     facade(&app)?.inventory_equipment_trade(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inventory_purchase_add(
+    app: tauri::AppHandle,
+    item_id: String,
+    purchase: AssetPurchaseInput,
+) -> Result<InventoryItem, ApiError> {
+    facade(&app)?
+        .inventory_purchase_add(item_id, purchase)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inventory_purchase_update(
+    app: tauri::AppHandle,
+    purchase_id: i64,
+    purchase: AssetPurchaseInput,
+) -> Result<InventoryItem, ApiError> {
+    facade(&app)?
+        .inventory_purchase_update(purchase_id, purchase)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inventory_purchase_delete(
+    app: tauri::AppHandle,
+    purchase_id: i64,
+) -> Result<InventoryItem, ApiError> {
+    facade(&app)?.inventory_purchase_delete(purchase_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

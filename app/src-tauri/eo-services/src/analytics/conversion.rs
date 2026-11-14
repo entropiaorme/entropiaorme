@@ -26,6 +26,7 @@ use crate::db::DbError;
 use crate::harvest_yield::HarvestYieldTier;
 use crate::stock_allocation::{self, CreditLine, DerivedFacts, StockProvenance};
 
+use super::asset_positions::{insert_purchase, restore, take_units, Take, TakenUnits};
 use super::{
     as_source_positions, blocked_reason, insert_movement, is_universal_ammo, item_positions,
     naive_to_epoch, record_opening_balance, reversal_blocker, ActivityHistoryRow, AnalyticsError,
@@ -51,8 +52,13 @@ pub enum ConversionInput {
         tt_value: f64,
         markup_paid: f64,
     },
-    /// A whole held asset, consumed with everything it carries.
-    Asset { item_id: String, worth: Option<f64> },
+    /// A held asset, consumed with everything it carries: `quantity` of its
+    /// units at its average cost, or all of them when `None`.
+    Asset {
+        item_id: String,
+        quantity: Option<f64>,
+        worth: Option<f64>,
+    },
 }
 
 /// Which side of Inventory a conversion's result joins.
@@ -389,24 +395,21 @@ pub(super) fn write_conversion(
     now: f64,
     terms: &ConversionTerms,
 ) -> Result<Result<(), String>, DbError> {
-    use rusqlite::OptionalExtension as _;
-
-    // Assets are checked before anything is written.
-    let mut assets: HashMap<&str, (String, f64, f64)> = HashMap::new();
-    for input in &request.inputs {
-        if let ConversionInput::Asset { item_id, .. } = input {
-            let asset: Option<(String, f64, f64)> = tx
-                .query_row(
-                    "SELECT name, tt_value, markup_paid FROM inventory_items \
-                     WHERE id = ? AND state = 'held'",
-                    rusqlite::params![item_id],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .optional()?;
-            let Some(asset) = asset else {
-                return Ok(Err("That asset is no longer held".to_string()));
-            };
-            assets.insert(item_id.as_str(), asset);
+    // Assets are taken before anything else is written; a refusal leaves the
+    // caller's transaction uncommitted, carving included.
+    let mut assets: HashMap<usize, TakenUnits> = HashMap::new();
+    for (index, input) in request.inputs.iter().enumerate() {
+        if let ConversionInput::Asset {
+            item_id, quantity, ..
+        } = input
+        {
+            match take_units(tx, item_id, *quantity, now)? {
+                Take::Taken(taken) => {
+                    assets.insert(index, taken);
+                }
+                Take::Missing => return Ok(Err("That asset is no longer held".to_string())),
+                Take::Refused(reason) => return Ok(Err(reason)),
+            }
         }
     }
 
@@ -421,7 +424,7 @@ pub(super) fn write_conversion(
             quantity,
             ..
         } => (item_name.clone(), *quantity),
-        ConversionInput::Asset { item_id, .. } => (assets[item_id.as_str()].0.clone(), 1.0),
+        ConversionInput::Asset { .. } => (assets[&0].name.clone(), assets[&0].quantity),
     };
     let target = terms.target_label.clone().unwrap_or_else(|| {
         request
@@ -552,8 +555,15 @@ pub(super) fn write_conversion(
                     },
                 )?;
             }
-            ConversionInput::Asset { item_id, worth } => {
-                let (name, tt_value, markup_paid) = assets[item_id.as_str()].clone();
+            ConversionInput::Asset { worth, .. } => {
+                let TakenUnits {
+                    id: item_id,
+                    name,
+                    quantity,
+                    tt_value,
+                    markup_paid,
+                } = assets[&position].clone();
+                let item_id = item_id.as_str();
                 tt_in += tt_value;
                 paid_total += markup_paid;
                 worths.push(*worth);
@@ -564,7 +574,7 @@ pub(super) fn write_conversion(
                         side: ConversionLineSide::Input,
                         position,
                         item_name: &name,
-                        quantity: 1.0,
+                        quantity,
                         tt_value,
                         acquisition: Some(ConversionAcquisition::Asset),
                         markup: *worth,
@@ -663,15 +673,25 @@ pub(super) fn write_conversion(
             ConversionHolding::Asset => {
                 let asset_id = Uuid::new_v4().to_string();
                 tx.execute(
-                    "INSERT INTO inventory_items (id, name, tt_value, markup_paid, acquired_at) \
-                     VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO inventory_items \
+                     (id, name, tt_value, markup_paid, acquired_at, quantity) \
+                     VALUES (?, ?, ?, ?, ?, ?)",
                     rusqlite::params![
                         asset_id,
                         output.item_name,
                         output.tt_value,
                         basis,
                         converted_at,
+                        output.quantity,
                     ],
+                )?;
+                insert_purchase(
+                    tx,
+                    &asset_id,
+                    (output.quantity, output.tt_value, basis),
+                    converted_at,
+                    Some(id),
+                    now,
                 )?;
                 Some(asset_id)
             }
@@ -851,11 +871,17 @@ pub(super) fn conversion_blocker(
     if let Some(found) = reversal_blocker(conn, conversion_id)? {
         return Ok(Some(found));
     }
+    // An asset it made has moved on when it is no longer held whole: sold,
+    // listed, converted, part of it carved out, or bought more of.
     let moved_on: Option<String> = conn
         .query_row(
             "SELECT i.name FROM stock_conversion_lines l \
              JOIN inventory_items i ON i.id = l.inventory_item_id \
-             WHERE l.conversion_id = ? AND l.side = 'output' AND i.state <> 'held' \
+             WHERE l.conversion_id = ? AND l.side = 'output' \
+               AND (i.state <> 'held' \
+                    OR EXISTS(SELECT 1 FROM inventory_items c WHERE c.position_id = i.id) \
+                    OR (SELECT COUNT(*) FROM asset_purchases p \
+                        WHERE p.position_id = i.id) > 1) \
              LIMIT 1",
             rusqlite::params![conversion_id],
             |row| row.get(0),
@@ -868,17 +894,31 @@ pub(super) fn conversion_blocker(
 pub(super) fn unwind_assets_and_credits(
     tx: &rusqlite::Transaction<'_>,
     conversion_id: &str,
+    now: f64,
 ) -> rusqlite::Result<()> {
     tx.execute(
         "DELETE FROM stock_conversion_credits WHERE conversion_id = ?",
         rusqlite::params![conversion_id],
     )?;
+    let inputs: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT inventory_item_id FROM stock_conversion_lines \
+             WHERE conversion_id = ? AND side = 'input' AND inventory_item_id IS NOT NULL \
+             ORDER BY position",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![conversion_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for item_id in &inputs {
+        restore(tx, item_id, now)?;
+    }
     tx.execute(
-        "UPDATE inventory_items SET state = 'held', disposed_at = NULL, \
-             updated_at = unixepoch('now') \
-         WHERE id IN (SELECT inventory_item_id FROM stock_conversion_lines \
-                      WHERE conversion_id = ? AND side = 'input' \
-                        AND inventory_item_id IS NOT NULL)",
+        "DELETE FROM asset_purchases \
+         WHERE position_id IN (SELECT inventory_item_id FROM stock_conversion_lines \
+                               WHERE conversion_id = ? AND side = 'output' \
+                                 AND inventory_item_id IS NOT NULL)",
         rusqlite::params![conversion_id],
     )?;
     tx.execute(
@@ -1267,7 +1307,9 @@ fn validate(request: &mut ItemConversion) -> Result<(), AnalyticsError> {
                 }
                 (Some(item_name), *quantity, *markup_paid)
             }
-            ConversionInput::Asset { worth, .. } => (None, 1.0, worth.unwrap_or(0.0)),
+            ConversionInput::Asset {
+                quantity, worth, ..
+            } => (None, quantity.unwrap_or(1.0), worth.unwrap_or(0.0)),
         };
         if name.is_some_and(|name| name.trim().is_empty()) {
             return Err(invalid("every line needs an item"));
@@ -1284,7 +1326,7 @@ fn validate(request: &mut ItemConversion) -> Result<(), AnalyticsError> {
             return Err(invalid("a markup cannot be negative"));
         }
     }
-    for output in &mut request.outputs {
+    for output in &request.outputs {
         if output.item_name.trim().is_empty() {
             return Err(invalid("every line needs an item"));
         }
@@ -1298,10 +1340,6 @@ fn validate(request: &mut ItemConversion) -> Result<(), AnalyticsError> {
         }
         if !amount(output.tt_value) {
             return Err(invalid("a TT value cannot be negative"));
-        }
-        // An asset is one whole holding, however many it was recorded as.
-        if output.holding == ConversionHolding::Asset {
-            output.quantity = 1.0;
         }
     }
     Ok(())
@@ -1904,17 +1942,61 @@ mod tests {
         assert!((credited(&service, ARIS).await - 152.0).abs() < 1e-9);
     }
 
+    /// Part of an asset with an activity behind it cannot be told from the
+    /// rest by where it came from, so it is sold, converted, and kept whole.
+    #[tokio::test]
+    async fn an_asset_with_an_origin_moves_only_whole() {
+        let (_dir, service) = write_service().await;
+        seed_hunted(&service, ARIS, "Hyperion Daily Voucher", 80, 0.0).await;
+        let mut conversion = hand_in();
+        conversion.outputs[0].holding = ConversionHolding::Asset;
+        conversion.outputs[0].quantity = 2.0;
+        request(&service, conversion).await;
+
+        let asset = service.list_inventory().await.unwrap().remove(0);
+        assert!((asset.quantity - 2.0).abs() < 1e-9);
+        assert!(!asset.divisible);
+        assert!(matches!(
+            service
+                .trade_equipment(&asset.id, Some(1.0), 110.0, Some("2026-06-04"))
+                .await,
+            Err(AnalyticsError::Rejected(_))
+        ));
+        assert!(matches!(
+            service
+                .add_asset_purchase(
+                    &asset.id,
+                    crate::analytics::PurchaseFigures {
+                        quantity: 1.0,
+                        tt_value: 25.0,
+                        markup_paid: 5.0,
+                        acquired_at: None,
+                    },
+                )
+                .await,
+            Err(AnalyticsError::Rejected(_))
+        ));
+
+        service
+            .trade_equipment(&asset.id, Some(2.0), 220.0, Some("2026-06-04"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ledger(&service).await[0].2, 160.0);
+        assert!((credited(&service, ARIS).await - 160.0).abs() < 1e-9);
+    }
+
     /// An asset the player typed in stays exactly as it was: its sale reaches
     /// the ledger and no activity.
     #[tokio::test]
     async fn a_hand_entered_asset_still_credits_no_activity() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Bought Armour", 50.0, 10.0, None, None)
+            .create_inventory_item("Bought Armour", None, 50.0, 10.0, None, None)
             .await
             .unwrap();
         service
-            .trade_equipment(&item.id, 220.0, Some("2026-06-04"))
+            .trade_equipment(&item.id, None, 220.0, Some("2026-06-04"))
             .await
             .unwrap()
             .unwrap();
@@ -1976,6 +2058,7 @@ mod tests {
             &service,
             ItemConversion {
                 inputs: vec![ConversionInput::Asset {
+                    quantity: None,
                     item_id: asset.id.clone(),
                     worth: None,
                 }],

@@ -16,13 +16,14 @@ use serde_json::Value;
 use crate::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use crate::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
-    AnalyticsHuntingActivity, AnalyticsOverview, AuctionConfirmInput, AuctionExpireInput,
-    AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput,
-    HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput,
-    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult,
-    ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput,
-    LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, ShrapnelConversionInput,
-    StockConversionInput, StockPosition, StockRemovalInput,
+    AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput,
+    AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput,
+    EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
+    InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
+    InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
+    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
+    RealisedTierMarkup, ShrapnelConversionInput, StockConversionInput, StockPosition,
+    StockRemovalInput,
 };
 use crate::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
@@ -1301,6 +1302,42 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(EquipmentTradeInput)),
             }],
             returns: Some(schema(schema_for!(AuctionListing))),
+        },
+        CommandSpec {
+            name: "inventory_purchase_add",
+            args: vec![
+                ArgSpec {
+                    name: "item_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "purchase",
+                    schema: schema(schema_for!(AssetPurchaseInput)),
+                },
+            ],
+            returns: Some(schema(schema_for!(InventoryItem))),
+        },
+        CommandSpec {
+            name: "inventory_purchase_update",
+            args: vec![
+                ArgSpec {
+                    name: "purchase_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "purchase",
+                    schema: schema(schema_for!(AssetPurchaseInput)),
+                },
+            ],
+            returns: Some(schema(schema_for!(InventoryItem))),
+        },
+        CommandSpec {
+            name: "inventory_purchase_delete",
+            args: vec![ArgSpec {
+                name: "purchase_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(InventoryItem))),
         },
         CommandSpec {
             name: "market_paste_preview",

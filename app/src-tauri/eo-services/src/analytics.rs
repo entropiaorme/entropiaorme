@@ -29,8 +29,11 @@ use crate::session_scope::{self, StatsScope};
 use crate::stock_allocation;
 use crate::time::{naive_to_epoch, to_iso_utc};
 
+mod asset_positions;
 mod conversion;
 mod realised;
+
+pub use asset_positions::{AssetPurchaseRow, PurchaseFigures};
 
 pub use conversion::{
     ConversionAcquisition, ConversionHolding, ConversionInput, ConversionLineRow,
@@ -92,6 +95,13 @@ pub struct InventoryRow {
     pub markup_paid: f64,
     pub notes: Option<String>,
     pub acquired_at: String,
+    /// How many units are held; `tt_value` and `markup_paid` are their totals.
+    pub quantity: f64,
+    /// Whether part of it can be sold, listed, or converted, rather than only
+    /// the whole. Not for an asset carrying activity origins.
+    pub divisible: bool,
+    /// The acquisitions that built it, oldest first.
+    pub purchases: Vec<AssetPurchaseRow>,
     /// The activities a sale of this asset would credit. Empty for an asset
     /// that did not come out of a conversion.
     pub origins: Vec<HoldingOriginRow>,
@@ -3908,6 +3918,9 @@ fn inventory_item(row: &rusqlite::Row) -> InventoryRow {
         markup_paid: row.get_unwrap::<_, f64>(3),
         notes: row.get_unwrap::<_, Option<String>>(4),
         acquired_at: row.get_unwrap::<_, String>(5),
+        quantity: row.get_unwrap::<_, f64>(6),
+        divisible: true,
+        purchases: Vec::new(),
         origins: Vec::new(),
         derived_from: Vec::new(),
     }
@@ -3937,6 +3950,16 @@ const LISTING_COLUMNS: &str = "id, item_name, quantity, attributed_qty, unattrib
 fn listing_expiry(listed_instant: Option<f64>, auction_days: Option<i64>) -> Option<String> {
     let (instant, days) = (listed_instant?, auction_days?);
     Some(to_iso_utc(instant + (days as f64) * 86_400.0))
+}
+
+/// The fields of an asset a patch changes; `None` leaves one as it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct InventoryItemPatch<'a> {
+    pub name: Option<&'a str>,
+    pub quantity: Option<f64>,
+    pub tt_value: Option<f64>,
+    pub markup_paid: Option<f64>,
+    pub notes: Option<&'a str>,
 }
 
 /// What a listing is posted on: its prices, its fee, when and for how
@@ -5632,7 +5655,7 @@ impl AnalyticsService {
             .db
             .with_reader(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at \
+                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at, quantity \
                      FROM inventory_items WHERE state = 'held' \
                      ORDER BY acquired_at DESC, id DESC",
                 )?;
@@ -5640,6 +5663,7 @@ impl AnalyticsService {
                     .query_map([], |row| Ok(inventory_item(row)))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 conversion::attach_asset_origins(conn, &mut rows)?;
+                asset_positions::attach_purchases(conn, &mut rows)?;
                 Ok(rows)
             })
             .await?)
@@ -6077,12 +6101,11 @@ impl AnalyticsService {
             .map_err(AnalyticsError::from)
     }
 
-    /// List one whole capital-equipment holding on the auction.
+    /// List every unit of an asset on the auction.
     ///
-    /// Equipment is indivisible in this first model: the stable inventory row
-    /// is the position and its TT plus paid markup is the acquisition basis.
-    /// The row moves to `listed` rather than being deleted, so expiry, sale
-    /// reversal, history, and undo all retain the original fact.
+    /// The asset's TT plus paid markup is the acquisition basis. The row moves
+    /// to `listed` rather than being deleted, so expiry, sale reversal,
+    /// history, and undo all retain the original fact.
     pub async fn create_equipment_listing(
         &self,
         item_id: &str,
@@ -6094,6 +6117,7 @@ impl AnalyticsService {
     ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
         self.create_equipment_listing_with_terms(
             item_id,
+            None,
             ListingTerms {
                 starting_bid,
                 buyout,
@@ -6109,9 +6133,13 @@ impl AnalyticsService {
     /// List one whole equipment holding on `terms`, recording where each
     /// of its figures came from when the terms say. Otherwise exactly
     /// [`create_equipment_listing`](Self::create_equipment_listing).
+    ///
+    /// `quantity` lists that many of the asset's units (all of them when
+    /// `None`); part is carved out at the asset's average cost.
     pub async fn create_equipment_listing_with_terms(
         &self,
         item_id: &str,
+        quantity: Option<f64>,
         terms: ListingTerms<'_>,
     ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
         let ListingTerms {
@@ -6122,11 +6150,11 @@ impl AnalyticsService {
             auction_days,
             sources,
         } = terms;
-        // An asset is listed whole; its name is checked once it is read.
+        // The name is checked once the asset is read.
         check_sources(
             sources,
             &RecordedFigures {
-                quantity: 1.0,
+                quantity: quantity.unwrap_or(1.0),
                 starting_bid,
                 buyout,
                 listing_fee,
@@ -6150,21 +6178,23 @@ impl AnalyticsService {
         let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let item: Option<(String, f64, f64)> = tx
-                    .query_row(
-                        "SELECT name, tt_value, markup_paid FROM inventory_items \
-                         WHERE id = ? AND state = 'held'",
-                        rusqlite::params![item_id],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    )
-                    .optional()?;
-                let Some((name, tt_value, markup_paid)) = item else {
-                    return Ok(Ok(None));
+                let taken = match asset_positions::take_units(&tx, &item_id, quantity, now)? {
+                    asset_positions::Take::Taken(taken) => taken,
+                    asset_positions::Take::Missing => return Ok(Ok(None)),
+                    asset_positions::Take::Refused(reason) => {
+                        return Ok(Err(AnalyticsError::Rejected(reason)))
+                    }
                 };
+                let asset_positions::TakenUnits {
+                    id: item_id,
+                    name,
+                    quantity,
+                    tt_value,
+                    markup_paid,
+                } = taken;
                 if let Err(refusal) = check_name_sources(&sources, &name) {
-                    return Ok(Err(refusal));
+                    return Ok(Err(AnalyticsError::InvalidInput(refusal)));
                 }
                 let cost_basis = tt_value + markup_paid;
                 let attributed = conversion::asset_attributed_share(&tx, &item_id)?;
@@ -6174,13 +6204,14 @@ impl AnalyticsService {
                          tt_value, attributed_tt, starting_bid, buyout, listing_fee, listed_at, \
                          auction_days, listed_instant, status, created_at, updated_at, \
                          subject_kind, inventory_item_id, cost_basis, channel) \
-                     VALUES (?, ?, 'inventory', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+                     VALUES (?, ?, 'inventory', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
                              'pending', ?, ?, 'equipment', ?, ?, 'auction')",
                     rusqlite::params![
                         id,
                         name,
-                        attributed,
-                        1.0 - attributed,
+                        quantity,
+                        quantity * attributed,
+                        quantity * (1.0 - attributed),
                         tt_value,
                         tt_value * attributed,
                         starting_bid,
@@ -6224,16 +6255,19 @@ impl AnalyticsService {
             })
             .await
             .map_err(AnalyticsError::from)?
-            .map_err(AnalyticsError::InvalidInput)
     }
 
     /// Record an immediate fee-free player trade for one whole equipment
     /// holding. It uses the listing record as the canonical market lifecycle,
     /// resolved in the same transaction, with `channel = trade` distinguishing
     /// it from an auction that happened to sell immediately.
+    ///
+    /// `quantity` trades that many of the asset's units (all of them when
+    /// `None`); part is carved out at the asset's average cost.
     pub async fn trade_equipment(
         &self,
         item_id: &str,
+        quantity: Option<f64>,
         final_price: f64,
         sold_at: Option<&str>,
     ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
@@ -6251,19 +6285,21 @@ impl AnalyticsService {
         let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let item: Option<(String, f64, f64)> = tx
-                    .query_row(
-                        "SELECT name, tt_value, markup_paid FROM inventory_items \
-                         WHERE id = ? AND state = 'held'",
-                        rusqlite::params![item_id],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    )
-                    .optional()?;
-                let Some((name, tt_value, markup_paid)) = item else {
-                    return Ok(None);
+                let taken = match asset_positions::take_units(&tx, &item_id, quantity, now)? {
+                    asset_positions::Take::Taken(taken) => taken,
+                    asset_positions::Take::Missing => return Ok(Ok(None)),
+                    asset_positions::Take::Refused(reason) => {
+                        return Ok(Err(AnalyticsError::Rejected(reason)))
+                    }
                 };
+                let asset_positions::TakenUnits {
+                    id: item_id,
+                    name,
+                    quantity,
+                    tt_value,
+                    markup_paid,
+                } = taken;
                 let cost_basis = tt_value + markup_paid;
                 let attributed = conversion::asset_attributed_share(&tx, &item_id)?;
                 tx.execute(
@@ -6272,13 +6308,14 @@ impl AnalyticsService {
                          tt_value, attributed_tt, starting_bid, buyout, listing_fee, listed_at, \
                          status, final_price, sale_fee, resolved_at, created_at, updated_at, \
                          subject_kind, inventory_item_id, cost_basis, channel) \
-                     VALUES (?, ?, 'inventory', 1, ?, ?, ?, ?, ?, NULL, 0, ?, \
+                     VALUES (?, ?, 'inventory', ?, ?, ?, ?, ?, ?, NULL, 0, ?, \
                              'sold', ?, 0, ?, ?, ?, 'equipment', ?, ?, 'trade')",
                     rusqlite::params![
                         id,
                         name,
-                        attributed,
-                        1.0 - attributed,
+                        quantity,
+                        quantity * attributed,
+                        quantity * (1.0 - attributed),
                         tt_value,
                         tt_value * attributed,
                         final_price,
@@ -6320,10 +6357,10 @@ impl AnalyticsService {
                 daily_rollup::refresh_days(&tx, [sold_at.as_str()])?;
                 let row = read_listing(&tx, &id)?;
                 tx.commit()?;
-                Ok(row)
+                Ok(Ok(row))
             })
             .await
-            .map_err(AnalyticsError::from)
+            .map_err(AnalyticsError::from)?
     }
 
     /// Confirm a listing sold, at the price it actually fetched.
@@ -6485,11 +6522,7 @@ impl AnalyticsService {
 
                 if listing.subject_kind == "equipment" {
                     if let Some(item_id) = &listing.inventory_item_id {
-                        tx.execute(
-                            "UPDATE inventory_items SET state = 'held', disposed_at = NULL, \
-                                 updated_at = ? WHERE id = ?",
-                            rusqlite::params![now, item_id],
-                        )?;
+                        asset_positions::restore(&tx, item_id, now)?;
                     }
                 } else {
                     // Each original movement goes back in reverse, carrying
@@ -7128,6 +7161,7 @@ impl AnalyticsService {
     pub async fn undo_auction_listing(&self, listing_id: &str) -> Result<bool, AnalyticsError> {
         let listing_id = listing_id.to_string();
         let undone_at = self.default_date();
+        let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
@@ -7156,11 +7190,7 @@ impl AnalyticsService {
                 )?;
                 if listing.subject_kind == "equipment" {
                     if let Some(item_id) = &listing.inventory_item_id {
-                        tx.execute(
-                            "UPDATE inventory_items SET state = 'held', disposed_at = NULL, \
-                                 updated_at = unixepoch('now') WHERE id = ?",
-                            rusqlite::params![item_id],
-                        )?;
+                        asset_positions::restore(&tx, item_id, now)?;
                     }
                 }
                 // The entry stands as a record; its pointers do not, so a
@@ -7187,6 +7217,7 @@ impl AnalyticsService {
     pub async fn undo_stock_conversion(&self, conversion_id: &str) -> Result<bool, AnalyticsError> {
         let conversion_id = conversion_id.to_string();
         let undone_at = self.default_date();
+        let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
                 use rusqlite::OptionalExtension as _;
@@ -7210,7 +7241,7 @@ impl AnalyticsService {
                     "DELETE FROM stock_movements WHERE ref_id = ?",
                     rusqlite::params![conversion_id],
                 )?;
-                conversion::unwind_assets_and_credits(&tx, &conversion_id)?;
+                conversion::unwind_assets_and_credits(&tx, &conversion_id, now)?;
                 if let Some(entry_id) = gain_entry_id {
                     tx.execute(
                         "DELETE FROM ledger_entries WHERE id = ?",
@@ -7316,22 +7347,27 @@ impl AnalyticsService {
         Ok(self
             .db
             .with_reader(move |conn| {
-                conn.query_row(
-                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at \
+                let mut rows = vec![conn.query_row(
+                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at, quantity \
                      FROM inventory_items WHERE id = ?",
                     rusqlite::params![item_id],
                     |row| Ok(inventory_item(row)),
-                )
-                .map_err(DbError::from)
+                )?];
+                conversion::attach_asset_origins(conn, &mut rows)?;
+                asset_positions::attach_purchases(conn, &mut rows)?;
+                Ok(rows.remove(0))
             })
             .await?)
     }
 
-    /// Create an inventory item; an empty / absent `acquired_at` defaults
-    /// to the clock's UTC date. Returns the stored row's wire shape.
+    /// Create an asset: `quantity` units (one when absent) bought for
+    /// `tt_value` plus `markup_paid` in total. An empty / absent
+    /// `acquired_at` defaults to the clock's UTC date. Returns the stored
+    /// row's wire shape.
     pub async fn create_inventory_item(
         &self,
         name: &str,
+        quantity: Option<f64>,
         tt_value: f64,
         markup_paid: f64,
         notes: Option<&str>,
@@ -7342,6 +7378,10 @@ impl AnalyticsService {
                 "Universal Ammo is liquid PED and is never held in Inventory",
             ));
         }
+        let quantity = quantity.unwrap_or(1.0);
+        if !quantity.is_finite() || quantity <= STOCK_EPSILON {
+            return Err(AnalyticsError::InvalidInput("a quantity must be positive"));
+        }
         let id = Uuid::new_v4().to_string();
         // acquired_at falls back to today's UTC date: the original's `or`
         // treats an empty string as falsy, so "" defaults to the clock date.
@@ -7349,6 +7389,7 @@ impl AnalyticsService {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| self.default_date());
+        let now = naive_to_epoch(self.clock.now());
         {
             let (id, name, notes, date) = (
                 id.clone(),
@@ -7358,12 +7399,22 @@ impl AnalyticsService {
             );
             self.db
                 .with_writer(move |conn| {
-                    conn.execute(
+                    let tx = conn.transaction()?;
+                    tx.execute(
                         "INSERT INTO inventory_items \
-                         (id, name, tt_value, markup_paid, notes, acquired_at) \
-                         VALUES (?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![id, name, tt_value, markup_paid, notes, date],
+                         (id, name, tt_value, markup_paid, notes, acquired_at, quantity) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![id, name, tt_value, markup_paid, notes, date, quantity],
                     )?;
+                    asset_positions::insert_purchase(
+                        &tx,
+                        &id,
+                        (quantity, tt_value, markup_paid),
+                        &date,
+                        None,
+                        now,
+                    )?;
+                    tx.commit()?;
                     Ok(())
                 })
                 .await?;
@@ -7374,18 +7425,30 @@ impl AnalyticsService {
     /// Update an inventory item: only provided (`Some`) fields change,
     /// bumping `updated_at`; an all-`None` patch still re-reads and returns
     /// the row. `None` (not `Some(Value::Null)`) reports a missing item.
+    ///
+    /// The figures (quantity, TT, markup paid) change here only while the
+    /// asset is still its one purchase, which they change with it; once it
+    /// has been bought more of, or units it paid for have left, they change
+    /// through its purchases (or not at all).
     pub async fn update_inventory_item(
         &self,
         item_id: &str,
-        name: Option<&str>,
-        tt_value: Option<f64>,
-        markup_paid: Option<f64>,
-        notes: Option<&str>,
+        patch: InventoryItemPatch<'_>,
     ) -> Result<Option<InventoryRow>, AnalyticsError> {
+        let InventoryItemPatch {
+            name,
+            quantity,
+            tt_value,
+            markup_paid,
+            notes,
+        } = patch;
         if name.is_some_and(is_universal_ammo) {
             return Err(AnalyticsError::InvalidInput(
                 "Universal Ammo is liquid PED and is never held in Inventory",
             ));
+        }
+        if quantity.is_some_and(|value| !value.is_finite() || value <= STOCK_EPSILON) {
+            return Err(AnalyticsError::InvalidInput("a quantity must be positive"));
         }
         // The existence check and the (possibly empty) update run together on
         // the writer connection, which reads as well as writes.
@@ -7396,7 +7459,8 @@ impl AnalyticsService {
             self.db
                 .with_writer(move |conn| {
                     use rusqlite::OptionalExtension as _;
-                    let exists = conn
+                    let tx = conn.transaction()?;
+                    let exists = tx
                         .query_row(
                             "SELECT 1 FROM inventory_items WHERE id = ? AND state = 'held'",
                             rusqlite::params![item_id],
@@ -7404,12 +7468,29 @@ impl AnalyticsService {
                         )
                         .optional()?;
                     if exists.is_none() {
-                        return Ok(false);
+                        return Ok(Ok(false));
+                    }
+
+                    let figures = quantity.is_some() || tt_value.is_some() || markup_paid.is_some();
+                    if figures {
+                        if !asset_positions::is_sole_open_purchase(&tx, &item_id)? {
+                            return Ok(Err(
+                                "This asset's figures come from its purchases; change a purchase instead",
+                            ));
+                        }
+                        if quantity.is_some() && conversion::is_converted_asset(&tx, &item_id)? {
+                            return Ok(Err(
+                                "This asset came out of a conversion, so its quantity is fixed",
+                            ));
+                        }
                     }
 
                     let mut sets: Vec<&str> = Vec::new();
                     if name.is_some() {
                         sets.push("name = ?");
+                    }
+                    if quantity.is_some() {
+                        sets.push("quantity = ?");
                     }
                     if tt_value.is_some() {
                         sets.push("tt_value = ?");
@@ -7430,6 +7511,9 @@ impl AnalyticsService {
                         if let Some(value) = &name {
                             params.push(value.clone().into());
                         }
+                        if let Some(value) = quantity {
+                            params.push(value.into());
+                        }
                         if let Some(value) = tt_value {
                             params.push(value.into());
                         }
@@ -7440,16 +7524,30 @@ impl AnalyticsService {
                             params.push(value.clone().into());
                         }
                         params.push(item_id.clone().into());
-                        conn.execute(&sql, rusqlite::params_from_iter(params))?;
+                        tx.execute(&sql, rusqlite::params_from_iter(params))?;
                     }
-                    Ok(true)
+                    if figures {
+                        // The one purchase is the asset, so it says the same.
+                        tx.execute(
+                            "UPDATE asset_purchases \
+                             SET quantity = i.quantity, tt_value = i.tt_value, \
+                                 markup_paid = i.markup_paid \
+                             FROM (SELECT quantity, tt_value, markup_paid \
+                                   FROM inventory_items WHERE id = ?1) AS i \
+                             WHERE position_id = ?1",
+                            rusqlite::params![item_id],
+                        )?;
+                    }
+                    tx.commit()?;
+                    Ok(Ok(true))
                 })
                 .await?
         };
-        if !updated {
-            return Ok(None);
+        match updated {
+            Ok(true) => Ok(Some(self.inventory_row(item_id).await?)),
+            Ok(false) => Ok(None),
+            Err(reason) => Err(AnalyticsError::Rejected(reason.to_string())),
         }
-        Ok(Some(self.inventory_row(item_id).await?))
     }
 
     /// Delete an inventory item. Returns whether a row existed.
@@ -7458,20 +7556,35 @@ impl AnalyticsService {
         let affected = self
             .db
             .with_writer(move |conn| {
+                let tx = conn.transaction()?;
                 // An asset a conversion made is the only record of where that
-                // value went, so it leaves the list without leaving the books.
-                if conversion::is_converted_asset(conn, &item_id)? {
-                    return Ok(conn.execute(
+                // value went, and units already sold out of a position are
+                // history that still names it, so either leaves the list
+                // without leaving the books.
+                let affected = if conversion::is_converted_asset(&tx, &item_id)?
+                    || asset_positions::has_other_rows(&tx, &item_id)?
+                {
+                    tx.execute(
                         "UPDATE inventory_items SET state = 'removed', \
                              disposed_at = date('now'), updated_at = unixepoch('now') \
                          WHERE id = ? AND state = 'held'",
                         rusqlite::params![item_id],
-                    )?);
-                }
-                Ok(conn.execute(
-                    "DELETE FROM inventory_items WHERE id = ? AND state = 'held'",
-                    rusqlite::params![item_id],
-                )?)
+                    )?
+                } else {
+                    let affected = tx.execute(
+                        "DELETE FROM inventory_items WHERE id = ? AND state = 'held'",
+                        rusqlite::params![item_id],
+                    )?;
+                    if affected != 0 {
+                        tx.execute(
+                            "DELETE FROM asset_purchases WHERE position_id = ?",
+                            rusqlite::params![item_id],
+                        )?;
+                    }
+                    affected
+                };
+                tx.commit()?;
+                Ok(affected)
             })
             .await?;
         Ok(affected != 0)
@@ -7497,7 +7610,7 @@ impl AnalyticsService {
                 .with_reader(move |conn| {
                     use rusqlite::OptionalExtension as _;
                     conn.query_row(
-                        "SELECT id, name, tt_value, markup_paid, notes, acquired_at \
+                        "SELECT id, name, tt_value, markup_paid, notes, acquired_at, quantity \
                          FROM inventory_items WHERE id = ? AND state = 'held'",
                         rusqlite::params![item_id],
                         |row| {
@@ -7550,7 +7663,11 @@ impl AnalyticsService {
                 let tx = conn.transaction()?;
                 let affected = tx.execute(
                     "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
-                         updated_at = unixepoch('now') WHERE id = ? AND state = 'held'",
+                         updated_at = unixepoch('now'), \
+                         drawn_through = (SELECT MAX(p.id) FROM asset_purchases p \
+                             WHERE p.position_id = COALESCE(inventory_items.position_id, \
+                                                            inventory_items.id)) \
+                     WHERE id = ? AND state = 'held'",
                     rusqlite::params![sold_at, item_id_owned],
                 )?;
                 if affected == 0 {
@@ -10200,7 +10317,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let body = to_json(
             service
-                .create_inventory_item("Imk2", 50.0, 5.0, None, None)
+                .create_inventory_item("Imk2", None, 50.0, 5.0, None, None)
                 .await
                 .unwrap(),
         );
@@ -10213,7 +10330,7 @@ mod tests {
         // An explicit acquired_at / notes are honoured.
         let body = to_json(
             service
-                .create_inventory_item("X", 1.0, 0.0, Some("spare"), Some("2026-01-02"))
+                .create_inventory_item("X", None, 1.0, 0.0, Some("spare"), Some("2026-01-02"))
                 .await
                 .unwrap(),
         );
@@ -10229,7 +10346,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let created = to_json(
             service
-                .create_inventory_item("Orig", 20.0, 3.0, Some("keep"), Some("2026-03-01"))
+                .create_inventory_item("Orig", None, 20.0, 3.0, Some("keep"), Some("2026-03-01"))
                 .await
                 .unwrap(),
         );
@@ -10238,7 +10355,16 @@ mod tests {
         // Provide name + tt_value only: markup_paid and notes stay.
         let patched = to_json(
             service
-                .update_inventory_item(&id, Some("Renamed"), Some(25.0), None, None)
+                .update_inventory_item(
+                    &id,
+                    InventoryItemPatch {
+                        name: Some("Renamed"),
+                        tt_value: Some(25.0),
+                        markup_paid: None,
+                        notes: None,
+                        ..Default::default()
+                    },
+                )
                 .await
                 .unwrap()
                 .expect("the item exists"),
@@ -10249,7 +10375,16 @@ mod tests {
         assert_eq!(patched["notes"], json!("keep"), "untouched");
 
         let error = service
-            .update_inventory_item(&id, Some("  universal AMMO "), Some(99.0), None, None)
+            .update_inventory_item(
+                &id,
+                InventoryItemPatch {
+                    name: Some("  universal AMMO "),
+                    tt_value: Some(99.0),
+                    markup_paid: None,
+                    notes: None,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(
@@ -10264,7 +10399,16 @@ mod tests {
         // An all-None patch re-reads and returns the row unchanged.
         let same = to_json(
             service
-                .update_inventory_item(&id, None, None, None, None)
+                .update_inventory_item(
+                    &id,
+                    InventoryItemPatch {
+                        name: None,
+                        tt_value: None,
+                        markup_paid: None,
+                        notes: None,
+                        ..Default::default()
+                    },
+                )
                 .await
                 .unwrap()
                 .expect("the item exists"),
@@ -10273,7 +10417,16 @@ mod tests {
 
         // Patch a missing id -> not found.
         assert!(service
-            .update_inventory_item("no-such", Some("Z"), None, None, None)
+            .update_inventory_item(
+                "no-such",
+                InventoryItemPatch {
+                    name: Some("Z"),
+                    tt_value: None,
+                    markup_paid: None,
+                    notes: None,
+                    ..Default::default()
+                }
+            )
             .await
             .unwrap()
             .is_none());
@@ -10287,7 +10440,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let item = to_json(
             service
-                .create_inventory_item("Sword", 10.0, 2.0, None, Some("2026-02-01"))
+                .create_inventory_item("Sword", None, 10.0, 2.0, None, Some("2026-02-01"))
                 .await
                 .unwrap(),
         );
@@ -10336,7 +10489,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let item = to_json(
             service
-                .create_inventory_item("Shield", 10.0, 2.0, None, Some("2026-02-01"))
+                .create_inventory_item("Shield", None, 10.0, 2.0, None, Some("2026-02-01"))
                 .await
                 .unwrap(),
         );
@@ -10359,7 +10512,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let item = to_json(
             service
-                .create_inventory_item("Even", 8.0, 2.0, None, Some("2026-02-01"))
+                .create_inventory_item("Even", None, 8.0, 2.0, None, Some("2026-02-01"))
                 .await
                 .unwrap(),
         );
@@ -10434,7 +10587,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let created = to_json(
             service
-                .create_inventory_item("Sword", 10.0, 2.0, None, None)
+                .create_inventory_item("Sword", None, 10.0, 2.0, None, None)
                 .await
                 .unwrap(),
         );
@@ -10448,11 +10601,11 @@ mod tests {
     async fn list_inventory_returns_created_rows_newest_first() {
         let (_dir, service) = write_service().await;
         service
-            .create_inventory_item("Old", 1.0, 0.0, None, Some("2026-01-01"))
+            .create_inventory_item("Old", None, 1.0, 0.0, None, Some("2026-01-01"))
             .await
             .unwrap();
         service
-            .create_inventory_item("New", 2.0, 0.0, None, Some("2026-02-01"))
+            .create_inventory_item("New", None, 2.0, 0.0, None, Some("2026-02-01"))
             .await
             .unwrap();
         let rows = service.list_inventory().await.unwrap();
@@ -10465,7 +10618,7 @@ mod tests {
     async fn equipment_auction_preserves_basis_across_expiry_and_undo() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Ares Ring, Improved", 25.0, 75.0, None, None)
+            .create_inventory_item("Ares Ring, Improved", None, 25.0, 75.0, None, None)
             .await
             .unwrap();
         let listing = service
@@ -10505,11 +10658,11 @@ mod tests {
     async fn equipment_trade_realises_whole_position_result_and_can_be_undone() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Modified Restoration Chip", 50.0, 20.0, None, None)
+            .create_inventory_item("Modified Restoration Chip", None, 50.0, 20.0, None, None)
             .await
             .unwrap();
         let sale = service
-            .trade_equipment(&item.id, 85.0, Some("2026-06-04"))
+            .trade_equipment(&item.id, None, 85.0, Some("2026-06-04"))
             .await
             .unwrap()
             .expect("held equipment");
@@ -10542,7 +10695,7 @@ mod tests {
     async fn equipment_auction_sale_reverts_but_an_immediate_trade_cannot() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Ares Ring", 25.0, 75.0, None, None)
+            .create_inventory_item("Ares Ring", None, 25.0, 75.0, None, None)
             .await
             .unwrap();
         let listing = service
@@ -10604,11 +10757,11 @@ mod tests {
         assert_eq!(ledger.entries[0].amount, 0.5);
 
         let traded = service
-            .create_inventory_item("Restoration Chip", 50.0, 20.0, None, None)
+            .create_inventory_item("Restoration Chip", None, 50.0, 20.0, None, None)
             .await
             .unwrap();
         let trade = service
-            .trade_equipment(&traded.id, 85.0, Some("2026-06-05"))
+            .trade_equipment(&traded.id, None, 85.0, Some("2026-06-05"))
             .await
             .unwrap()
             .expect("held equipment");
@@ -10630,7 +10783,7 @@ mod tests {
     async fn inventory_name_resolution_returns_stable_holding_identity() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Ares Ring, Improved", 25.0, 75.0, None, None)
+            .create_inventory_item("Ares Ring, Improved", None, 25.0, 75.0, None, None)
             .await
             .unwrap();
 

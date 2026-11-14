@@ -311,6 +311,34 @@ export interface ArmourCostResult {
 }
 
 /**
+ * One acquisition of an asset: a purchase, or the output of a conversion.
+ */
+export interface AssetPurchase {
+	id: number;
+	quantity: number;
+	/** Total TT of the units bought. */
+	ttValue: number;
+	/** Total markup paid for the units bought. */
+	markupPaid: number;
+	acquiredAt: string;
+	/** Made by a conversion rather than bought. */
+	fromConversion: boolean;
+	/** Whether it can still be changed or removed: not once units it paid for have been sold, listed, or converted. */
+	editable: boolean;
+}
+
+/**
+ * What a purchase of more of an asset recorded: how many, and the TT and
+ * markup paid for them in total. An empty / absent `acquiredAt` means today.
+ */
+export interface AssetPurchaseInput {
+	quantity: number;
+	ttValue: number;
+	markupPaid: number;
+	acquiredAt?: string | null;
+}
+
+/**
  * A sale-confirmation payload: the price the auction actually fetched and
  * the additional fee charged at the point of sale.
  */
@@ -825,6 +853,7 @@ export type ConversionInputLine = {
 		kind: 'bought';
 	} | {
 		itemId: string;
+		quantity?: number | null;
 		worth?: number | null;
 		kind: 'asset';
 	};
@@ -1187,10 +1216,11 @@ export interface EquipmentLibrary {
 }
 
 /**
- * An auction draft for one whole capital-equipment position.
+ * An auction draft for an asset: `quantity` of its units, or all of them.
  */
 export interface EquipmentListingInput {
 	itemId: string;
+	quantity?: number | null;
 	startingBid: number;
 	buyout?: number | null;
 	listingFee: number;
@@ -1281,10 +1311,12 @@ export interface EquipmentSummary {
 }
 
 /**
- * A completed fee-free player trade for one whole capital position.
+ * A completed fee-free player trade of an asset: `quantity` of its units,
+ * or all of them.
  */
 export interface EquipmentTradeInput {
 	itemId: string;
+	quantity?: number | null;
 	soldFor: number;
 	soldAt?: string | null;
 }
@@ -1722,6 +1754,12 @@ export interface InventoryItem {
 	markupPaid: number;
 	notes: string | null;
 	acquiredAt: string;
+	/** How many units are held; `ttValue` and `markupPaid` are their totals. */
+	quantity: number;
+	/** Whether part of it can be sold, listed, or converted, rather than only the whole. Not for an asset carrying activity origins. */
+	divisible: boolean;
+	/** The acquisitions that built it, oldest first. */
+	purchases: AssetPurchase[];
 	/** The activities a sale of this asset would credit. Empty for an asset that did not come out of a conversion. */
 	origins: HoldingOrigin[];
 	/** What a conversion made this asset from. */
@@ -1730,11 +1768,13 @@ export interface InventoryItem {
 
 /**
  * An inventory-item create payload (snake_case, matching the frontend
- * request shape). `notes` / `acquired_at` are optional; an empty / absent
- * `acquired_at` defaults to today's UTC date.
+ * request shape). `quantity` (one when absent), `notes` and `acquired_at`
+ * are optional; an empty / absent `acquired_at` defaults to today's UTC
+ * date. `tt_value` and `markup_paid` are totals for every unit.
  */
 export interface InventoryItemInput {
 	name: string;
+	quantity?: number | null;
 	tt_value: number;
 	markup_paid: number;
 	notes?: string | null;
@@ -1746,6 +1786,7 @@ export interface InventoryItemInput {
  */
 export interface InventoryPatch {
 	name?: string | null;
+	quantity?: number | null;
 	tt_value?: number | null;
 	markup_paid?: number | null;
 	notes?: string | null;
@@ -5853,6 +5894,18 @@ export async function inventoryEquipmentListingCreate(input: EquipmentListingInp
 
 export async function inventoryEquipmentTrade(input: EquipmentTradeInput): Promise<AuctionListing> {
 	return invokeCommand('inventory_equipment_trade', { input });
+}
+
+export async function inventoryPurchaseAdd(itemId: string, purchase: AssetPurchaseInput): Promise<InventoryItem> {
+	return invokeCommand('inventory_purchase_add', { item_id: itemId, purchase });
+}
+
+export async function inventoryPurchaseUpdate(purchaseId: number, purchase: AssetPurchaseInput): Promise<InventoryItem> {
+	return invokeCommand('inventory_purchase_update', { purchase_id: purchaseId, purchase });
+}
+
+export async function inventoryPurchaseDelete(purchaseId: number): Promise<InventoryItem> {
+	return invokeCommand('inventory_purchase_delete', { purchase_id: purchaseId });
 }
 
 export async function marketPastePreview(text: string): Promise<MarketPastePreview> {

@@ -473,6 +473,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "screen look minutes",
         sql: include_str!("../../migrations/0087_screen_look_minutes.sql"),
     },
+    Migration {
+        version: 88,
+        description: "asset positions",
+        sql: include_str!("../../migrations/0088_asset_positions.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -567,6 +572,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "42CCCDE5B527719553984F721E3D11BAC66258E449766691417364F160179C038E7F6EC463124FB1925AFCF433A568CE",
     "4D18A05CD1C1105E14C93A170A5642DF3E8641903465474BA9EB272B56ECFAEE72E9541BE9B973F612F8C61A8A5FF659",
     "728967B26B96DA29A26E9B7927D2A4B38683F17DC6F23D29204FCFABA7B3EAB1968EE0DE0516934B9A5A41BCB5809C75",    "3B961ADC1D523C39E4F0DC4570463EE3E70CEB0E22783FF5A782D9D7379DEB063B112506734EE21258F427BCFACA569D",
+    "39AD93B5D25DDE3FEB577AA85EC73C850ABC1791FB15F9D6819D7C6391F09C2A350D28C2C5674EC8B2755DC35A6B223C",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -916,6 +922,95 @@ mod tests {
             .expect("the new row");
         assert_eq!(state, "held");
         assert!(updated_at.is_some(), "the table's trigger still fires");
+    }
+
+    /// Every asset becomes a position of one unit with one purchase, assets
+    /// that have already left carry the purchase they drew on, and the state
+    /// vocabulary widens by exactly the merged state.
+    #[test]
+    fn asset_positions_upgrade_gives_every_asset_its_purchase() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..87] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO inventory_items (id, name, tt_value, markup_paid, acquired_at, state) \
+                 VALUES ('held', '7x Mk. 5D Plates', 162.4, 250.6, '2026-01-01', 'held'), \
+                        ('sold', 'Pitbull Mk. 2', 46.6, 10.4, '2026-01-02', 'sold');",
+            )
+            .expect("historic rows");
+
+        let migration = &MIGRATIONS[87];
+        assert_eq!(migration.version, 88);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let rows: Vec<(String, String, f64, Option<i64>)> = connection
+            .prepare("SELECT id, state, quantity, drawn_through FROM inventory_items ORDER BY id")
+            .expect("statement")
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("rows")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "held");
+        assert_eq!(rows[0].1, "held");
+        assert_eq!(rows[0].2, 1.0);
+        assert_eq!(rows[0].3, None, "nothing has left the held asset");
+        assert_eq!(rows[1].1, "sold");
+        assert!(rows[1].3.is_some(), "the sold asset drew on its purchase");
+
+        let purchases: Vec<(String, f64, f64, f64)> = connection
+            .prepare(
+                "SELECT position_id, quantity, tt_value, markup_paid \
+                 FROM asset_purchases ORDER BY position_id",
+            )
+            .expect("statement")
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("rows")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(
+            purchases,
+            vec![
+                ("held".to_string(), 1.0, 162.4, 250.6),
+                ("sold".to_string(), 1.0, 46.6, 10.4),
+            ]
+        );
+
+        connection
+            .execute(
+                "UPDATE inventory_items SET state = 'merged' WHERE id = 'held'",
+                [],
+            )
+            .expect("the merged state is allowed");
+        assert!(
+            connection
+                .execute(
+                    "UPDATE inventory_items SET state = 'lost' WHERE id = 'held'",
+                    []
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
+        assert!(
+            connection
+                .execute(
+                    "UPDATE inventory_items SET quantity = 0 WHERE id = 'held'",
+                    []
+                )
+                .is_err(),
+            "a position holds a positive quantity"
+        );
     }
 
     #[test]

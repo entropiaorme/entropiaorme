@@ -913,6 +913,9 @@ const OTHER_COMMANDS: &[&str] = &[
     "inventory_draft_resolve",
     "inventory_equipment_listing_create",
     "inventory_equipment_trade",
+    "inventory_purchase_add",
+    "inventory_purchase_update",
+    "inventory_purchase_delete",
     // Estimated market data: informational, never accounting.
     "market_paste_preview",
     "market_paste_commit",

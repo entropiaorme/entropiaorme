@@ -507,11 +507,36 @@ pub struct InventoryItem {
     pub markup_paid: f64,
     pub notes: Nullable<String>,
     pub acquired_at: String,
+    /// How many units are held; `ttValue` and `markupPaid` are their totals.
+    pub quantity: f64,
+    /// Whether part of it can be sold, listed, or converted, rather than only
+    /// the whole. Not for an asset carrying activity origins.
+    pub divisible: bool,
+    /// The acquisitions that built it, oldest first.
+    pub purchases: Vec<AssetPurchase>,
     /// The activities a sale of this asset would credit. Empty for an asset
     /// that did not come out of a conversion.
     pub origins: Vec<HoldingOrigin>,
     /// What a conversion made this asset from.
     pub derived_from: Vec<DerivedSource>,
+}
+
+/// One acquisition of an asset: a purchase, or the output of a conversion.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPurchase {
+    pub id: i64,
+    pub quantity: f64,
+    /// Total TT of the units bought.
+    pub tt_value: f64,
+    /// Total markup paid for the units bought.
+    pub markup_paid: f64,
+    pub acquired_at: String,
+    /// Made by a conversion rather than bought.
+    pub from_conversion: bool,
+    /// Whether it can still be changed or removed: not once units it paid for
+    /// have been sold, listed, or converted.
+    pub editable: bool,
 }
 
 /// One activity a held item traces back to.
@@ -729,9 +754,14 @@ pub enum ConversionInputLine {
         tt_value: f64,
         markup_paid: Option<f64>,
     },
-    /// A whole held asset.
+    /// A held asset: `quantity` of its units, or all of them when absent.
     #[serde(rename_all = "camelCase")]
-    Asset { item_id: String, worth: Option<f64> },
+    Asset {
+        item_id: String,
+        #[serde(default)]
+        quantity: Option<f64>,
+        worth: Option<f64>,
+    },
 }
 
 impl From<ConversionInputLine> for eo_services::analytics::ConversionInput {
@@ -757,7 +787,15 @@ impl From<ConversionInputLine> for eo_services::analytics::ConversionInput {
                 tt_value,
                 markup_paid: markup_paid.unwrap_or(0.0),
             },
-            ConversionInputLine::Asset { item_id, worth } => Self::Asset { item_id, worth },
+            ConversionInputLine::Asset {
+                item_id,
+                quantity,
+                worth,
+            } => Self::Asset {
+                item_id,
+                quantity,
+                worth,
+            },
         }
     }
 }
@@ -983,11 +1021,14 @@ pub struct LedgerPresetInput {
 }
 
 /// An inventory-item create payload (snake_case, matching the frontend
-/// request shape). `notes` / `acquired_at` are optional; an empty / absent
-/// `acquired_at` defaults to today's UTC date.
+/// request shape). `quantity` (one when absent), `notes` and `acquired_at`
+/// are optional; an empty / absent `acquired_at` defaults to today's UTC
+/// date. `tt_value` and `markup_paid` are totals for every unit.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct InventoryItemInput {
     pub name: String,
+    #[serde(default)]
+    pub quantity: Option<f64>,
     pub tt_value: f64,
     pub markup_paid: f64,
     #[serde(default)]
@@ -1002,11 +1043,36 @@ pub struct InventoryPatch {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
+    pub quantity: Option<f64>,
+    #[serde(default)]
     pub tt_value: Option<f64>,
     #[serde(default)]
     pub markup_paid: Option<f64>,
     #[serde(default)]
     pub notes: Option<String>,
+}
+
+/// What a purchase of more of an asset recorded: how many, and the TT and
+/// markup paid for them in total. An empty / absent `acquiredAt` means today.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetPurchaseInput {
+    pub quantity: f64,
+    pub tt_value: f64,
+    pub markup_paid: f64,
+    #[serde(default)]
+    pub acquired_at: Option<String>,
+}
+
+impl AssetPurchaseInput {
+    fn figures(&self) -> eo_services::analytics::PurchaseFigures<'_> {
+        eo_services::analytics::PurchaseFigures {
+            quantity: self.quantity,
+            tt_value: self.tt_value,
+            markup_paid: self.markup_paid,
+            acquired_at: self.acquired_at.as_deref(),
+        }
+    }
 }
 
 /// An inventory-sale payload.
@@ -1019,11 +1085,13 @@ pub struct InventorySellInput {
     pub sold_at: Option<String>,
 }
 
-/// An auction draft for one whole capital-equipment position.
+/// An auction draft for an asset: `quantity` of its units, or all of them.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EquipmentListingInput {
     pub item_id: String,
+    #[serde(default)]
+    pub quantity: Option<f64>,
     pub starting_bid: f64,
     pub buyout: Option<f64>,
     pub listing_fee: f64,
@@ -1035,11 +1103,14 @@ pub struct EquipmentListingInput {
     pub field_sources: Option<Vec<ListingFieldSourceInput>>,
 }
 
-/// A completed fee-free player trade for one whole capital position.
+/// A completed fee-free player trade of an asset: `quantity` of its units,
+/// or all of them.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EquipmentTradeInput {
     pub item_id: String,
+    #[serde(default)]
+    pub quantity: Option<f64>,
     pub sold_for: f64,
     pub sold_at: Option<String>,
 }
@@ -1656,6 +1727,7 @@ impl Api {
         self.analytics
             .create_equipment_listing_with_terms(
                 &input.item_id,
+                input.quantity,
                 ListingTerms {
                     starting_bid: input.starting_bid,
                     buyout: input.buyout,
@@ -1679,7 +1751,12 @@ impl Api {
         input: EquipmentTradeInput,
     ) -> Result<AuctionListing, ApiError> {
         self.analytics
-            .trade_equipment(&input.item_id, input.sold_for, input.sold_at.as_deref())
+            .trade_equipment(
+                &input.item_id,
+                input.quantity,
+                input.sold_for,
+                input.sold_at.as_deref(),
+            )
             .await
             .map_err(analytics_error("equipment trade"))?
             .map(auction_listing_dto)
@@ -1695,6 +1772,7 @@ impl Api {
             .analytics
             .create_inventory_item(
                 &item.name,
+                item.quantity,
                 item.tt_value,
                 item.markup_paid,
                 item.notes.as_deref(),
@@ -1715,10 +1793,13 @@ impl Api {
             .analytics
             .update_inventory_item(
                 &item_id,
-                patch.name.as_deref(),
-                patch.tt_value,
-                patch.markup_paid,
-                patch.notes.as_deref(),
+                eo_services::analytics::InventoryItemPatch {
+                    name: patch.name.as_deref(),
+                    quantity: patch.quantity,
+                    tt_value: patch.tt_value,
+                    markup_paid: patch.markup_paid,
+                    notes: patch.notes.as_deref(),
+                },
             )
             .await
             .map_err(analytics_error("inventory update"))?
@@ -1726,6 +1807,50 @@ impl Api {
             Some(value) => Ok(inventory_item_dto(value)),
             None => Err(ApiError::not_found("Inventory item not found")),
         }
+    }
+
+    /// Record buying more of a held asset, which moves its average cost; a
+    /// missing or no longer held asset is a not-found.
+    pub async fn inventory_purchase_add(
+        &self,
+        item_id: String,
+        purchase: AssetPurchaseInput,
+    ) -> Result<InventoryItem, ApiError> {
+        self.analytics
+            .add_asset_purchase(&item_id, purchase.figures())
+            .await
+            .map_err(analytics_error("inventory purchase add"))?
+            .map(inventory_item_dto)
+            .ok_or_else(|| ApiError::not_found("no held asset with that id"))
+    }
+
+    /// Correct one of an asset's purchases; returns the asset. A missing
+    /// purchase is a not-found.
+    pub async fn inventory_purchase_update(
+        &self,
+        purchase_id: i64,
+        purchase: AssetPurchaseInput,
+    ) -> Result<InventoryItem, ApiError> {
+        self.analytics
+            .update_asset_purchase(purchase_id, purchase.figures())
+            .await
+            .map_err(analytics_error("inventory purchase update"))?
+            .map(inventory_item_dto)
+            .ok_or_else(|| ApiError::not_found("Purchase not found"))
+    }
+
+    /// Take back one of an asset's purchases; returns the asset. A missing
+    /// purchase is a not-found.
+    pub async fn inventory_purchase_delete(
+        &self,
+        purchase_id: i64,
+    ) -> Result<InventoryItem, ApiError> {
+        self.analytics
+            .delete_asset_purchase(purchase_id)
+            .await
+            .map_err(analytics_error("inventory purchase delete"))?
+            .map(inventory_item_dto)
+            .ok_or_else(|| ApiError::not_found("Purchase not found"))
     }
 
     /// Delete an inventory item; a missing item is a not-found.
@@ -2085,6 +2210,21 @@ pub(crate) fn inventory_item_dto(row: eo_services::analytics::InventoryRow) -> I
         markup_paid: row.markup_paid,
         notes: row.notes.into(),
         acquired_at: row.acquired_at,
+        quantity: row.quantity,
+        divisible: row.divisible,
+        purchases: row
+            .purchases
+            .into_iter()
+            .map(|purchase| AssetPurchase {
+                id: purchase.id,
+                quantity: purchase.quantity,
+                tt_value: purchase.tt_value,
+                markup_paid: purchase.markup_paid,
+                acquired_at: purchase.acquired_at,
+                from_conversion: purchase.from_conversion,
+                editable: purchase.editable,
+            })
+            .collect(),
         origins: row.origins.into_iter().map(holding_origin_dto).collect(),
         derived_from: row
             .derived_from

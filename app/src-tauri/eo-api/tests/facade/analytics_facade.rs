@@ -460,6 +460,7 @@ async fn a_profit_sale_emits_a_markup_ledger_entry() {
     let item = api
         .inventory_create(eo_api::analytics::InventoryItemInput {
             name: "Sword".to_string(),
+            quantity: None,
             tt_value: 10.0,
             markup_paid: 2.0,
             notes: None,
@@ -493,6 +494,71 @@ async fn a_profit_sale_emits_a_markup_ledger_entry() {
     // The sold item leaves current holdings; the emitted ledger row is the only one.
     assert!(api.inventory_list().await.unwrap().is_empty());
     assert_eq!(api.ledger_list(None, None).await.unwrap().entries.len(), 1);
+}
+
+/// A position bought in two lots averages its markup, sells part at that
+/// average, and refuses to rewrite a purchase the sale drew on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_asset_position_averages_its_purchases_and_sells_by_quantity() {
+    use eo_api::analytics::{AssetPurchaseInput, EquipmentTradeInput};
+    let dir = tempfile::tempdir().unwrap();
+    let api = analytics_api(dir.path()).await;
+
+    let item = api
+        .inventory_create(
+            serde_json::from_value(serde_json::json!({
+                "name": "Strongbox",
+                "quantity": 100.0,
+                "tt_value": 10.0,
+                "markup_paid": 1000.0,
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(item.quantity, 100.0);
+    let purchase: AssetPurchaseInput = serde_json::from_value(serde_json::json!({
+        "quantity": 100.0,
+        "ttValue": 10.0,
+        "markupPaid": 800.0,
+        "acquiredAt": "2026-06-02",
+    }))
+    .unwrap();
+    let item = api
+        .inventory_purchase_add(item.id.clone(), purchase.clone())
+        .await
+        .unwrap();
+    assert_eq!(item.quantity, 200.0);
+    assert_eq!(item.markup_paid, 1800.0);
+    assert!(item.divisible);
+    assert_eq!(item.purchases.len(), 2);
+
+    let trade: EquipmentTradeInput = serde_json::from_value(serde_json::json!({
+        "itemId": item.id,
+        "quantity": 50.0,
+        "soldFor": 480.0,
+        "soldAt": "2026-06-03",
+    }))
+    .unwrap();
+    let listing = api.inventory_equipment_trade(trade).await.unwrap();
+    assert_eq!(listing.quantity, 50.0);
+    let held = api.inventory_list().await.unwrap().remove(0);
+    assert_eq!(held.quantity, 150.0);
+    assert!((held.markup_paid - 1350.0).abs() < 1e-9);
+    assert!(held.purchases.iter().all(|purchase| !purchase.editable));
+
+    let refused = api
+        .inventory_purchase_update(held.purchases[1].id, purchase)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(refused, ApiError::BadRequest { .. }),
+        "{refused:?}"
+    );
+    assert_eq!(
+        api.inventory_purchase_delete(i64::MAX).await.unwrap_err(),
+        ApiError::not_found("Purchase not found")
+    );
 }
 
 /// The facade over a fresh database, its sell-queue capture reading
@@ -694,6 +760,7 @@ async fn a_listing_drafted_from_a_capture_records_where_each_figure_came_from() 
     let asset = api
         .inventory_create(InventoryItemInput {
             name: "Electric Attack Nanochip 3".into(),
+            quantity: None,
             tt_value: 11.52,
             markup_paid: 0.0,
             notes: None,
@@ -743,6 +810,7 @@ async fn a_listing_drafted_from_a_capture_records_where_each_figure_came_from() 
     let other = api
         .inventory_create(InventoryItemInput {
             name: "Output Amplifier Component".into(),
+            quantity: None,
             tt_value: 20.8,
             markup_paid: 0.0,
             notes: None,

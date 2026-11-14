@@ -490,9 +490,9 @@ struct Fight {
     /// read, or the fight is in contention between kills that could not be
     /// told apart: later kills can have it only as a suggestion.
     suggestion_only: bool,
-    /// A kill was given the creature this fight's readings name through a
-    /// lock held to the death (see [`MobHistory::held_lock`]): its name
-    /// serves no later kill that way.
+    /// A kill was given this fight's creature as the latest creature read
+    /// (by either rule that gives that grade): it gives no later kill that
+    /// grade again, though it stays a rival to whatever they are given.
     held: bool,
     /// What its readings name, with how many name it.
     tally: Vec<(Vote, usize)>,
@@ -1701,8 +1701,10 @@ impl MobHistory {
     /// Commit what giving fight `i`'s creature to a kill as `stamp` means
     /// for later kills. Any answer that stamps the kill takes the fight from
     /// them: one creature dies once, so a fight given to two kills is wrong
-    /// for one of them. The latest creature read, only ever a suggestion,
-    /// keeps them to its grade.
+    /// for one of them. The latest creature read is too unsure an answer to
+    /// take its fight out of contention (a later kill would then be named
+    /// over a rival that was never ruled out): the fight stays a rival, and
+    /// gives no later kill an answer of its own.
     fn give(&mut self, i: usize, stamp: &MobStamp) {
         let fight = &mut self.fights[i];
         match stamp {
@@ -1717,6 +1719,7 @@ impl MobHistory {
             }
             MobStamp::LatestRead { .. } | MobStamp::ProvisionalLatestRead { .. } => {
                 fight.suggestion_only = true;
+                fight.held = true;
             }
             MobStamp::Continuity { .. } | MobStamp::ProvisionalContinuity { .. } => {}
         }
@@ -2048,6 +2051,10 @@ impl MobHistory {
     /// Fight `i`'s creature for a kill as `stamp`; as a guess when
     /// `doubted`; and only as a suggestion when the fight is held to one.
     fn graded(&self, i: usize, stamp: MobStamp, doubted: bool) -> Proposal {
+        // A fight that gave a kill the latest creature read gives no other.
+        if self.fights[i].suggestion_only && self.fights[i].held {
+            return Proposal::Unnamed(Unnamed::Indistinct);
+        }
         let stamp = if self.fights[i].suggestion_only {
             latest_read(stamp)
         } else if doubted {
@@ -2137,6 +2144,9 @@ impl MobHistory {
         else {
             return indistinct;
         };
+        if self.fights[chosen].held {
+            return indistinct;
+        }
         let theirs = identity(&stamp);
         if let Identity::Known(creature) = &theirs {
             let own = Some(Vote::Known(creature.clone()));
@@ -3157,12 +3167,15 @@ mod tests {
         let second = kill_arrived(&mut h, 8000, 8500);
         assert_eq!(named(&second), Some(&combibo("Mature")));
         // Without the arrivals, both creatures are in contention for both,
-        // and nothing is named or suggested: each kill is given Mature, the
-        // latest creature read, at the lowest grade (for the first, a miss).
+        // and nothing is named or suggested: the first kill is given Mature,
+        // the latest creature read, at the lowest grade (a miss). A fight
+        // gives that grade once, so the second kill is left the other
+        // creature read in its moments, Young, at the same grade: one kill
+        // each, the wrong way round, and neither more than a guess.
         let mut h = history();
         fights(&mut h);
         assert_eq!(latest(&kill(&mut h, 7000)), Some(&combibo("Mature")));
-        assert_eq!(latest(&kill(&mut h, 8000)), Some(&combibo("Mature")));
+        assert_eq!(latest(&kill(&mut h, 8000)), Some(&combibo("Young")));
         // The same creature twice: each kill a fight, nearest first.
         let mut h = history();
         young(&mut h);
@@ -3685,6 +3698,10 @@ mod tests {
         let stamp = kill(&mut h, last + 1000);
         assert_eq!(latest(&stamp), Some(&combibo("Young")));
         assert!(!h.fights[i].claimed);
+        // It stays a rival, but gives that grade once: one creature dies
+        // once, and a second kill is not given it again.
+        let second = kill(&mut h, last + 2000);
+        assert!(matches!(second, KillStamp::Unnamed(_)), "{second:?}");
     }
 
     #[test]
@@ -6711,7 +6728,7 @@ mod tests {
 
     // The floors are the kills each ordinary seed answered right, in any
     // grade (the creature being hunted and the latest creature read
-    // included), as measured: 45, 46, 45 and 44 of 50. These hunts change
+    // included), as measured: 44, 46, 44 and 43 of 50. These hunts change
     // creature on most kills, so the creature being hunted is never carried
     // in them (a hunt is of one creature only while every plate read lately
     // was it), and the ceilings on carrying it wrongly are 0. The outcomes
@@ -6734,30 +6751,30 @@ mod tests {
     }
 
     ordinary_hunts! {
-        an_ordinary_hunt_answers_its_kills_seed_11: 11, LineAlign::Left, 45, 0, 0, [
+        an_ordinary_hunt_answers_its_kills_seed_11: 11, LineAlign::Left, 44, 0, 0, [
             (NamedRight, 13), (GuessRight, 20), (ProvisionalRight, 2), (SuggestedRight, 1),
-            (LatestRight, 9), (LatestWrong, 2), (Unnamed(Indistinct), 2),
+            (LatestRight, 8), (LatestWrong, 2), (Unnamed(Indistinct), 3),
             (Unnamed(Undecided), 1),
         ],
         an_ordinary_hunt_answers_its_kills_seed_12: 12, LineAlign::Centred, 46, 0, 0, [
             (NamedRight, 9), (GuessRight, 32), (SuggestedRight, 3), (LatestRight, 2),
             (Unnamed(Indistinct), 3), (Unnamed(Undecided), 1),
         ],
-        an_ordinary_hunt_answers_its_kills_seed_13: 13, LineAlign::Left, 45, 0, 0, [
+        an_ordinary_hunt_answers_its_kills_seed_13: 13, LineAlign::Left, 44, 0, 0, [
             (NamedRight, 16), (GuessRight, 17), (ProvisionalRight, 3), (SuggestedRight, 3),
-            (LatestRight, 6), (LatestWrong, 1), (Unnamed(Indistinct), 2),
+            (LatestRight, 5), (LatestWrong, 1), (Unnamed(Indistinct), 3),
             (Unnamed(Undecided), 2),
         ],
-        an_ordinary_hunt_answers_its_kills_seed_14: 14, LineAlign::Centred, 44, 0, 0, [
+        an_ordinary_hunt_answers_its_kills_seed_14: 14, LineAlign::Centred, 43, 0, 0, [
             (NamedRight, 8), (GuessRight, 20), (ProvisionalRight, 5), (SuggestedRight, 3),
-            (LatestRight, 8), (LatestWrong, 2), (Unnamed(Indistinct), 2),
+            (LatestRight, 7), (LatestWrong, 2), (Unnamed(Indistinct), 3),
             (Unnamed(Undecided), 2),
         ],
     }
 
     // The floors are the tellable kills each seed got right (counting
     // suggestions, the creature being hunted and the latest creature read),
-    // as measured: 33 of 36, 21 of 35, 30 of 32 and 29 of 33. These hunts
+    // as measured: 33 of 36, 21 of 35, 29 of 32 and 29 of 33. These hunts
     // change creature on most kills, so the creature being hunted is never
     // carried in them, and the ceilings on carrying it wrongly are 0. The
     // outcomes without it are pinned as measured. In seed 12 the session's
@@ -6788,8 +6805,8 @@ mod tests {
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_11: 11, LineAlign::Left,
         33, 0, 0, [
             (NamedRight, 7), (GuessRight, 15), (GuessWrong, 1), (ProvisionalRight, 10),
-            (SuggestedRight, 1), (LatestRight, 4), (LatestWrong, 3), (Unnamed(NoFight), 1),
-            (Unnamed(StillRead), 3), (Unnamed(Indistinct), 3), (Unnamed(Undecided), 7),
+            (SuggestedRight, 1), (LatestRight, 3), (LatestWrong, 3), (Unnamed(NoFight), 1),
+            (Unnamed(StillRead), 3), (Unnamed(Indistinct), 4), (Unnamed(Undecided), 7),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_12: 12, LineAlign::Centred,
         21, 0, 0, [
@@ -6800,15 +6817,15 @@ mod tests {
             (Unnamed(Undecided), 8),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_13: 13, LineAlign::Left,
-        30, 0, 0, [
+        29, 0, 0, [
             (NamedRight, 7), (GuessRight, 14), (GuessWrong, 2), (ProvisionalRight, 8),
-            (SuggestedRight, 3), (LatestRight, 9), (LatestWrong, 2), (LatestMisspelt, 1),
-            (Unnamed(NoFight), 2), (Unnamed(Indistinct), 1), (Unnamed(Undecided), 5),
+            (SuggestedRight, 3), (LatestRight, 6), (LatestWrong, 3), (LatestMisspelt, 1),
+            (Unnamed(NoFight), 2), (Unnamed(Indistinct), 3), (Unnamed(Undecided), 5),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_14: 14, LineAlign::Centred,
         29, 0, 0, [
             (NamedRight, 8), (GuessRight, 19), (GuessWrong, 1), (ProvisionalRight, 3),
-            (SuggestedRight, 3), (SuggestedMisspelt, 1), (LatestRight, 2), (LatestWrong, 5),
+            (SuggestedRight, 3), (SuggestedMisspelt, 1), (LatestRight, 3), (LatestWrong, 4),
             (Unnamed(NoFight), 2), (Unnamed(StillRead), 3), (Unnamed(Indistinct), 4),
             (Unnamed(Undecided), 7),
         ],

@@ -74,15 +74,23 @@ fn each_mob_is_one_line_however_sure_the_screen_was_of_each_kill() {
     let rig = rig();
     hunt_with_continuity(&rig);
     // Gloomrat: two kills read and one carried on. Atrox Old: one read
-    // clearly, two carried on. Daikiba Mature: a suggestion its kill did not
-    // take. The mob on no list asks first; the pinned kill is not listed.
+    // clearly, two carried on. Daikiba Mature: the latest creature read, which
+    // its kill took as a guess. The mob on no list asks first; the pinned kill
+    // is not listed.
     let mobs = rig.mobs("s1");
     assert_eq!(
         lines(&mobs),
         [
             (some("Gloomrat"), 3, 1, some("Gloomrat"), true, false),
             (some("Atrox Old"), 3, 2, some("Atrox Old"), false, false),
-            (some("Daikiba Mature"), 1, 1, some("Unknown"), false, false),
+            (
+                some("Daikiba Mature"),
+                1,
+                1,
+                some("Daikiba Mature"),
+                false,
+                false
+            ),
         ]
     );
     assert_eq!(mobs[0].mob, mob("Gloomrat", "", Some("GLOOMRAT L4 #0")));

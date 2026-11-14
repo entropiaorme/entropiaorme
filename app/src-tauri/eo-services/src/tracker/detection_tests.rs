@@ -733,7 +733,7 @@ fn a_kill_that_reaches_the_tracker_late_waits_for_the_looks_behind_it() {
 }
 
 #[test]
-fn the_lowest_grade_is_a_suggestion_the_kill_does_not_take() {
+fn the_latest_creature_read_stamps_the_kill_as_a_guess_and_is_kept_as_what_it_was() {
     let mut hunt = hunt(true);
     hunt.start();
     // A Daikiba fought and left, then, a look with nothing locked later,
@@ -741,7 +741,8 @@ fn the_lowest_grade_is_a_suggestion_the_kill_does_not_take() {
     // were read in the kill's moments, the Atrox was read on one look only
     // and not on the last look before the report, and the player had not
     // been on it long enough to have left the Daikiba clearly. The screen
-    // leans nowhere: the creature read last is only suggested.
+    // leans nowhere: the creature read last is the kill's, as a guess, and
+    // the answer kept beside it says it was the latest read.
     hunt.look(3_500, Some(("Daikiba Mature", 9, 0.9)));
     hunt.look(3_750, Some(("Daikiba Mature", 9, 0.6)));
     hunt.look(4_000, Some(("Daikiba Mature", 9, 0.3)));
@@ -753,8 +754,13 @@ fn the_lowest_grade_is_a_suggestion_the_kill_does_not_take() {
     hunt.idle(next, 4);
     assert_eq!(
         hunt.stamps(),
-        [(s("Atrox Young").unwrap(), s("declared"), None, None)],
-        "the kill keeps its declared mob"
+        [(
+            s("Atrox Old").unwrap(),
+            s("detected"),
+            s("guess"),
+            s("Atrox Old")
+        )],
+        "the kill takes the creature read last, recorded as a guess"
     );
     assert_eq!(
         hunt.kept(),
@@ -763,7 +769,7 @@ fn the_lowest_grade_is_a_suggestion_the_kill_does_not_take() {
             "Atrox Old".to_string(),
             "Atrox Young".to_string()
         )],
-        "exactly one suggestion, at the lowest grade"
+        "exactly one answer kept, at the lowest grade"
     );
 }
 

@@ -19,8 +19,11 @@
 //!   too, by its route alone: its evidence is an earlier kill's, so no text
 //!   or time read is kept as this kill's. The stamp it was recorded with is
 //!   kept beside it for the review;
-//! - the lowest grade leaves the kill as it is and keeps the answer as a
-//!   suggestion for the review;
+//! - the listed creature read last before the kill, the lowest grade,
+//!   re-stamps the kill as a guess, the answer kept beside it saying it was
+//!   the latest read; for a creature on no list that grade leaves the kill
+//!   as it is and keeps the answer as a suggestion for the review (its name
+//!   is only what the screen spelled, which may be no name at all);
 //! - no creature leaves the kill as it is, and keeps nothing.
 //!
 //! Only a kill read live off the log, carrying when its line arrived, is
@@ -765,7 +768,8 @@ impl TrackerActor {
     /// The one place a kill takes detection's answer: a grade that stamps
     /// re-stamps it, in the database (in the same transaction that keeps
     /// the answer) and then in memory, and the live readout is told to
-    /// re-read; the lowest grade is kept as a suggestion only. A failed
+    /// re-read; the lowest grade for a creature on no list is kept as a
+    /// suggestion only. A failed
     /// write changes nothing: the kill keeps its recorded stamp everywhere.
     async fn apply_detection(&mut self, answer: KillDetection) {
         let written = answer.clone();
@@ -911,7 +915,10 @@ pub(crate) fn write_detection(
     // A continuity stamp carries no grade or text read: those columns say
     // what the screen read for the kill itself.
     let (grade, read_text) = match &answer.read {
-        Some(read) => (Some(answer.grade.as_str()), Some(read.text.as_str())),
+        Some(read) => (
+            Some(answer.grade.on_the_kill().as_str()),
+            Some(read.text.as_str()),
+        ),
         None => (None, None),
     };
     tx.execute(

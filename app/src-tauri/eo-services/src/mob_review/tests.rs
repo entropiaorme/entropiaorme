@@ -229,8 +229,8 @@ fn some(text: &str) -> Option<String> {
     Some(text.to_string())
 }
 
-/// A hunt with a provisional creature (two kills), a named one, and a
-/// suggestion the kill did not take.
+/// A hunt with a provisional creature (two kills), a named one, and one
+/// given the latest creature read, which its kill takes as a guess.
 fn hunt(rig: &Rig) {
     rig.session("s1", false);
     let foo = detected("Gloomrat", "Gloomrat", "");
@@ -305,7 +305,7 @@ fn the_review_groups_by_creature_and_grade_the_least_certain_first() {
                 "Daikiba Mature",
                 1,
                 "Daikiba Mature",
-                Some("Unknown")
+                Some("Daikiba Mature")
             ),
             (
                 MobDetectionGrade::Provisional,
@@ -322,7 +322,7 @@ fn the_review_groups_by_creature_and_grade_the_least_certain_first() {
                 Some("Atrox Old")
             ),
         ],
-        "a suggestion keeps the kill's own stamp; a stamped group shows what it stamped"
+        "every group shows what it stamped, the latest creature read included"
     );
     assert!(groups.iter().all(|g| !g.reviewed));
     assert_eq!(
@@ -667,6 +667,10 @@ fn a_settlement_is_kept_with_its_answer_and_repairs_the_session_figures() {
     let rig = rig();
     hunt(&rig);
     rig.execute("UPDATE kills SET original_mob_name = 'Gloomy' WHERE id = 'k1'");
+    // The kill given the latest creature read goes back to its declaration
+    // (none), leaving three kills with a creature.
+    let latest = rig.groups("s1")[0].group.clone();
+    rig.settle("s1", &latest, ReviewTarget::Declared).unwrap();
     // The cached figures start from the detected stamps.
     rig.runtime
         .block_on(rig.db.with_writer(|conn| {
@@ -964,7 +968,7 @@ fn continuity_kills_are_listed_last_without_a_reading_and_pinned_kills_not_at_al
                 "Daikiba Mature",
                 1,
                 Some("Daikiba Mature"),
-                Some("Unknown")
+                Some("Daikiba Mature")
             ),
             (
                 MobDetectionGrade::Provisional,
@@ -1169,9 +1173,9 @@ fn an_unlisted_creature_carried_on_reads_as_unlisted_and_merges_with_its_detecti
         breakdown(&rig),
         [
             ("Atrox Old".to_string(), 3, "recorded".to_string()),
+            ("Daikiba Mature".to_string(), 1, "probable".to_string()),
             ("Daikiba Mature".to_string(), 1, "recorded".to_string()),
             ("Gloomrat".to_string(), 3, "unlisted".to_string()),
-            ("Unknown".to_string(), 1, "recorded".to_string()),
         ]
     );
     // Settled, the continuity kill is the player's word: recorded.

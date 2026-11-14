@@ -141,8 +141,8 @@ struct Outcome {
     /// Each kill given the creature being hunted: when, what it was, and why.
     carried: Vec<String>,
     unnamed: usize,
-    /// The lowest grade, a suggestion for the review that stamps nothing:
-    /// right, and wrong.
+    /// The lowest grade, the latest creature read, counted apart from the
+    /// kills the screen settled: right, and wrong.
     suggested_right: usize,
     suggested_wrong: Vec<String>,
     /// Kills of each creature named right (by name), and the kills of it.

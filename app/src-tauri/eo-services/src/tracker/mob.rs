@@ -47,9 +47,13 @@ impl MobStampSource {
 }
 
 /// How detection named the creature it gave a kill. The upper four are
-/// the screen's own evidence for the kill and stamp it; the two lowest are
-/// kept only as suggestions, since the creature read last before a kill is
-/// wrong too often to record as the kill's own; the two continuity grades
+/// the screen's own evidence for the kill and stamp it. The listed creature
+/// read last before the kill stamps it too, as a guess: in play it is
+/// nearly always the creature killed, and a guess is shown as one and
+/// corrected in the review. The creature on no list read last is kept only
+/// as a suggestion: its name is whatever the screen spelled, which where
+/// the game draws one piece of lettering over another is no name at all,
+/// and must never be recorded as a mob. The two continuity grades
 /// are the creature being hunted, given where the screen could not settle
 /// the kill, and stamp it too. The pinned grade is a creature on no list the
 /// player pinned from what the screen read: kept so its spelling can be
@@ -113,10 +117,18 @@ impl MobDetectionGrade {
     /// Whether a kill takes the creature at this grade as its stamp;
     /// otherwise it is a suggestion only.
     pub fn stamps(self) -> bool {
-        !matches!(
-            self,
-            MobDetectionGrade::LatestRead | MobDetectionGrade::ProvisionalLatestRead
-        )
+        self != MobDetectionGrade::ProvisionalLatestRead
+    }
+
+    /// The grade as the kill itself records it (`kills.mob_detection_grade`
+    /// holds the four upper grades): the listed creature read last is
+    /// recorded as a guess, the answer kept beside the kill saying which
+    /// kind of guess it was.
+    pub fn on_the_kill(self) -> Self {
+        match self {
+            MobDetectionGrade::LatestRead => MobDetectionGrade::Guess,
+            grade => grade,
+        }
     }
 
     /// Whether the creature is one on no list, by the session's own name.
@@ -204,8 +216,9 @@ impl MobRoute {
         Self::ALL.into_iter().find(|route| route.as_str() == value)
     }
 
-    /// The route a detection answer at `grade` names a kill by; `None` for
-    /// a suggestion, which names no kill.
+    /// The route a detection answer at `grade` names a kill by (the listed
+    /// creature read last names it as a guess); `None` for a suggestion,
+    /// which names no kill.
     pub fn of_grade(grade: MobDetectionGrade) -> Option<Self> {
         Some(match grade {
             MobDetectionGrade::Named => MobRoute::Named,
@@ -215,9 +228,8 @@ impl MobRoute {
             MobDetectionGrade::Continuity => MobRoute::Continuity,
             MobDetectionGrade::ProvisionalContinuity => MobRoute::ProvisionalContinuity,
             MobDetectionGrade::ProvisionalPinned => MobRoute::PinnedRead,
-            MobDetectionGrade::LatestRead | MobDetectionGrade::ProvisionalLatestRead => {
-                return None
-            }
+            MobDetectionGrade::LatestRead => MobRoute::Guess,
+            MobDetectionGrade::ProvisionalLatestRead => return None,
         })
     }
 
@@ -558,10 +570,19 @@ mod tests {
                 MobDetectionGrade::Guess,
                 MobDetectionGrade::Provisional,
                 MobDetectionGrade::ProvisionalGuess,
+                MobDetectionGrade::LatestRead,
                 MobDetectionGrade::Continuity,
                 MobDetectionGrade::ProvisionalContinuity,
                 MobDetectionGrade::ProvisionalPinned,
             ]
+        );
+        assert_eq!(
+            MobDetectionGrade::LatestRead.on_the_kill(),
+            MobDetectionGrade::Guess
+        );
+        assert_eq!(
+            MobDetectionGrade::Named.on_the_kill(),
+            MobDetectionGrade::Named
         );
         assert!(MobDetectionGrade::ProvisionalPinned.provisional());
         let carried: Vec<_> = MobDetectionGrade::ALL
@@ -601,8 +622,8 @@ mod tests {
         assert_eq!(MobRoute::parse("Backstop"), None);
         assert_eq!(MobRoute::parse("latest_read"), None);
         // Every grade detection stamps a kill at names it by the route of
-        // the same name; a suggestion names none; an unlisted pin is a
-        // pin from a reading.
+        // the grade the kill records; a suggestion names none; an unlisted
+        // pin is a pin from a reading.
         for grade in MobDetectionGrade::ALL {
             match MobRoute::of_grade(grade) {
                 Some(route) if grade == MobDetectionGrade::ProvisionalPinned => {
@@ -610,7 +631,7 @@ mod tests {
                 }
                 Some(route) => {
                     assert!(grade.stamps());
-                    assert_eq!(route.as_str(), grade.as_str());
+                    assert_eq!(route.as_str(), grade.on_the_kill().as_str());
                 }
                 None => assert!(!grade.stamps()),
             }

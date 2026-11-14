@@ -2,8 +2,8 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
-	import { formatPed } from '$lib/utils/format';
-	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
+	import { formatPed, formatQuantity } from '$lib/utils/format';
+	import { stockHasNoTt, type TreeCuttingStock } from './treeCuttingModel.svelte';
 
 	let {
 		item,
@@ -17,20 +17,30 @@
 		oncancel: () => void;
 	} = $props();
 
-	let ped = $state(0);
+	// Stock is entered as PED of TT, which is how it is held and thought of;
+	// an item with no TT has none to enter, so it is entered by count.
+	let amount = $state(0);
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let modalOpen = $state(false);
 	let initialisedFor = $state<string | null>(null);
+	const byCount = $derived(!!item && stockHasNoTt(item));
+	const held = $derived(item ? (byCount ? item.heldQty : item.heldTt) : 0);
 	const unitTt = $derived(item && item.heldQty > 0 ? item.heldTt / item.heldQty : 0);
-	const atMax = $derived(!!item && Math.abs(ped - item.heldTt) < 0.005);
+	const atMax = $derived(!!item && Math.abs(amount - held) < 0.005);
+	/** The units the entered amount comes to. */
+	const units = $derived.by(() => {
+		if (!item || !(amount > 0)) return 0;
+		if (byCount) return Math.min(item.heldQty, Math.round(amount));
+		return unitTt > 0 ? Math.min(item.heldQty, Math.round(amount / unitTt)) : 0;
+	});
 
 	$effect(() => {
-		if (item && ped > item.heldTt) ped = item.heldTt;
+		if (item && amount > held) amount = held;
 	});
 	$effect(() => {
 		if (item && initialisedFor !== item.itemName) {
-			ped = item.heldTt;
+			amount = byCount ? item.heldQty : item.heldTt;
 			error = null;
 			initialisedFor = item.itemName;
 			modalOpen = true;
@@ -45,13 +55,11 @@
 	});
 
 	async function submit() {
-		if (!item || saving || ped <= 0 || unitTt <= 0 || ped > item.heldTt) return;
-		const quantity = Math.min(item.heldQty, Math.round(ped / unitTt));
-		if (quantity <= 0) return;
+		if (!item || saving || units <= 0 || amount > held) return;
 		saving = true;
 		error = null;
 		try {
-			await onconfirm(item.itemName, quantity);
+			await onconfirm(item.itemName, units);
 			modalOpen = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : `Failed to ${mode === 'remove' ? 'remove' : 'convert'} the stock`;
@@ -72,24 +80,34 @@
 				<Input
 					type="number"
 					min="0"
-					max={item.heldTt}
-					step="0.01"
+					max={held}
+					step={byCount ? '1' : '0.01'}
 					align="right"
-					aria-label={mode === 'remove' ? 'PED to remove' : 'PED to convert'}
-					bind:value={ped}
+					aria-label={byCount
+						? 'How many to remove'
+						: mode === 'remove'
+							? 'PED to remove'
+							: 'PED to convert'}
+					bind:value={amount}
 				>
-					{#snippet suffix()}<span class="text-xs font-medium uppercase tracking-wider">PED</span>{/snippet}
+					{#snippet suffix()}
+						<span class="text-xs font-medium uppercase tracking-wider">
+							{byCount ? 'units' : 'PED'}
+						</span>
+					{/snippet}
 				</Input>
 				<div class="flex items-baseline justify-between gap-2 text-xs">
 					<span class="text-text-tertiary tabular-nums">
 						{mode === 'shrapnel'
-							? `${formatPed(ped * 1.01)} PED ammo after conversion`
-							: `${formatPed(item.heldTt)} PED in stock`}
+							? `${formatPed(amount * 1.01)} PED ammo after conversion`
+							: byCount
+								? `${formatQuantity(item.heldQty)} held, no TT`
+								: `${formatPed(item.heldTt)} PED in stock`}
 					</span>
 					<button
 						type="button"
 						disabled={atMax}
-						onclick={() => (ped = item.heldTt)}
+						onclick={() => (amount = held)}
 						class="cursor-pointer font-medium text-accent transition-colors
 							duration-[var(--duration-fast)] hover:text-text disabled:cursor-default
 							disabled:text-text-tertiary/50 disabled:hover:text-text-tertiary/50"
@@ -107,7 +125,7 @@
 			{#if error}<p class="text-xs text-error">{error}</p>{/if}
 			<div class="flex items-center justify-end gap-2">
 				<Button variant="ghost" onclick={oncancel} disabled={saving}>Cancel</Button>
-				<Button onclick={submit} loading={saving} disabled={ped <= 0 || unitTt <= 0}>
+				<Button onclick={submit} loading={saving} disabled={units <= 0}>
 					{mode === 'remove' ? 'Remove' : 'Convert'}
 				</Button>
 			</div>

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { InventoryItem } from '$lib/types/analytics';
 	import { addEquipmentHolding, updateEquipmentHolding } from '$lib/api/inventory';
-	import { formatPed } from '$lib/utils/format';
+	import { formatPed, isZeroTt } from '$lib/utils/format';
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -52,7 +52,17 @@
 	const quantityFixed = $derived(item !== null && !item.divisible);
 	const costBasis = $derived(ttValue + markupPed);
 	const stack = $derived(quantity > 0 && Math.abs(quantity - 1) > 1e-9);
-	const canSave = $derived(name.trim().length > 0 && ttValue > 0 && quantity > 0);
+	/** An item with no TT is worth its markup alone, and is held all the same. */
+	const noTt = $derived(isZeroTt(ttValue ?? 0));
+	// Locked figures are not sent, so only the name has to be sound then.
+	const figuresValid = $derived(
+		Number.isFinite(quantity) &&
+			quantity > 0 &&
+			Number.isFinite(ttValue) &&
+			ttValue >= 0 &&
+			Number.isFinite(markupPed),
+	);
+	const canSave = $derived(name.trim().length > 0 && (locked !== null || figuresValid));
 
 	async function save() {
 		if (!canSave || saving) return;
@@ -96,7 +106,7 @@
 				id="inventory-name"
 				type="text"
 				bind:value={name}
-				placeholder="e.g. Mod FAP, Treasure Island deed"
+				placeholder="e.g. Mod FAP, Strongbox, Treasure Island deed"
 			/>
 		</div>
 
@@ -135,6 +145,7 @@
 
 			<MarkupPaidField
 				{ttValue}
+				{quantity}
 				bind:markupPed
 				resetKey={opened}
 				label={stack ? 'MU paid, all units' : 'MU paid'}
@@ -164,8 +175,9 @@
 				</span>
 				{#if stack}
 					<span class="block text-xs tabular-nums text-text-tertiary">
-						{formatPed(perUnit(costBasis, quantity) ?? 0)} each,
-						{formatPed(perUnit(markupPed, quantity) ?? 0)} of it markup
+						{formatPed(perUnit(costBasis, quantity) ?? 0)} each{noTt
+							? ''
+							: `, ${formatPed(perUnit(markupPed, quantity) ?? 0)} of it markup`}
 					</span>
 				{/if}
 			</span>

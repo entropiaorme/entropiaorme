@@ -50,7 +50,7 @@
 		type SaleQueueCapture,
 	} from '$lib/api';
 	import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-	import { formatPed } from '$lib/utils/format';
+	import { formatPed, formatQuantity, isZeroTt } from '$lib/utils/format';
 	import { createTypeahead } from '$lib/view/typeahead.svelte';
 	import CheckMark from './CheckMark.svelte';
 	import {
@@ -206,6 +206,24 @@
 	});
 	const impliedSb = $derived(impliedMarkupPct(fields.startingBid, fields.ttValue));
 	const impliedBo = $derived(impliedMarkupPct(fields.buyout, fields.ttValue));
+	/** What a bid comes to, read against the TT as the game shows it; an item
+	 * with no TT is all markup, so a bid reads as what each unit asks. A
+	 * non-breaking space holds the line's height while there is nothing to say. */
+	function bidReading(bid: number | null, implied: number | null): string {
+		if (implied !== null) return `${implied.toFixed(2)}% of TT`;
+		const quantity = fields.quantity;
+		if (
+			bid !== null &&
+			bid > 0 &&
+			fields.ttValue !== null &&
+			isZeroTt(fields.ttValue) &&
+			quantity !== null &&
+			quantity > 0
+		) {
+			return `${formatPed(bid / quantity)} PED each, no TT`;
+		}
+		return '\u00a0';
+	}
 	const marks = $derived(
 		drafts.selected ? checkMarks(drafts.selected.draft, fields, nameOrigin) : null,
 	);
@@ -616,7 +634,7 @@
 				/>
 				{#if chosen?.heldQty !== null && chosen?.heldQty !== undefined}
 					<span class="block text-right text-[10px] tabular-nums text-text-tertiary">
-						{chosen.heldQty} held
+						{formatQuantity(chosen.heldQty)} held
 					</span>
 				{/if}
 			</label>
@@ -647,7 +665,7 @@
 					</span>
 					<Input type="number" min="0" step="0.01" align="right" disabled={!itemSettled || busy} bind:value={fields.startingBid} />
 					<span class="block text-right text-[10px] tabular-nums text-text-tertiary">
-						{impliedSb !== null ? `${impliedSb.toFixed(2)}% of TT` : ' '}
+						{bidReading(fields.startingBid, impliedSb)}
 					</span>
 				</label>
 				<label class="block space-y-1">
@@ -657,7 +675,7 @@
 					</span>
 					<Input type="number" min="0" step="0.01" align="right" disabled={!itemSettled || busy} bind:value={fields.buyout} />
 					<span class="block text-right text-[10px] tabular-nums text-text-tertiary">
-						{impliedBo !== null ? `${impliedBo.toFixed(2)}% of TT` : ' '}
+						{bidReading(fields.buyout, impliedBo)}
 					</span>
 				</label>
 			</div>

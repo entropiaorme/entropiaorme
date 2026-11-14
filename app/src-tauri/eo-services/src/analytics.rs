@@ -7379,9 +7379,7 @@ impl AnalyticsService {
             ));
         }
         let quantity = quantity.unwrap_or(1.0);
-        if !quantity.is_finite() || quantity <= STOCK_EPSILON {
-            return Err(AnalyticsError::InvalidInput("a quantity must be positive"));
-        }
+        asset_positions::check_amounts(Some(quantity), Some(tt_value), Some(markup_paid))?;
         let id = Uuid::new_v4().to_string();
         // acquired_at falls back to today's UTC date: the original's `or`
         // treats an empty string as falsy, so "" defaults to the clock date.
@@ -7447,9 +7445,7 @@ impl AnalyticsService {
                 "Universal Ammo is liquid PED and is never held in Inventory",
             ));
         }
-        if quantity.is_some_and(|value| !value.is_finite() || value <= STOCK_EPSILON) {
-            return Err(AnalyticsError::InvalidInput("a quantity must be positive"));
-        }
+        asset_positions::check_amounts(quantity, tt_value, markup_paid)?;
         // The existence check and the (possibly empty) update run together on
         // the writer connection, which reads as well as writes.
         let updated = {

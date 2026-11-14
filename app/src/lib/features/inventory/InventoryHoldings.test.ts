@@ -360,4 +360,87 @@ describe('assets held by quantity', () => {
 		await fireEvent.click(screen.getAllByRole('button', { name: 'Remove purchase' })[1]);
 		expect(handlers.ondeletepurchase).toHaveBeenCalledWith(strongboxes, strongboxes.purchases[1]);
 	});
+
+	it('counts an asset with no TT instead of claiming a TT of 0.00', () => {
+		render(InventoryHoldings, {
+			props: props([
+				{
+					...strongboxes,
+					ttValue: 0,
+					markupPaid: 44,
+					quantity: 20,
+					purchases: [
+						{ ...strongboxes.purchases[0], quantity: 12, ttValue: 0, markupPaid: 24 },
+						{ ...strongboxes.purchases[1], quantity: 8, ttValue: 0, markupPaid: 20 },
+					],
+				},
+			]),
+		});
+		const row = screen.getByText('Strongbox').closest('li');
+		if (!(row instanceof HTMLElement)) throw new Error('the asset row is rendered');
+		expect(within(row).getByText('20')).not.toBeNull();
+		expect(within(row).getByText('No TT').getAttribute('title')).toMatch(/markup alone/);
+		expect(within(row).queryByText('0.00')).toBeNull();
+		expect(within(row).getAllByText('2.20 each')).toHaveLength(2);
+	});
+});
+
+describe('loot held with no TT', () => {
+	const boxes = {
+		itemName: 'Halloween Strongbox',
+		unitTt: 0,
+		heldQty: 145,
+		heldTt: 0,
+		listedQty: 0,
+		readings: [],
+		opportunity: marketOpportunity(undefined, 100.6),
+		markupPct: null,
+		markupHorizon: null,
+		tier: 'illiquid' as const,
+		effectiveMarkupPct: null,
+		markupBasis: null,
+		floored: false,
+		salesPed: null,
+		weeklySalesPed: null,
+		recommendedPacketTt: null,
+		marketItem: null,
+	};
+
+	it('shows how many are held where its TT would stand, and cannot recycle it', () => {
+		render(InventoryHoldings, {
+			props: {
+				kind: 'loot',
+				onkindchange: vi.fn(),
+				confidenceMode: 'liquid',
+				onconfidencechange: vi.fn(),
+				packetFeeSharePct: 10,
+				onpacketfeesharechange: vi.fn(),
+				loot: [boxes],
+				equipment: [],
+				onsellloot: vi.fn(),
+				onconvert: vi.fn(),
+				onremove: vi.fn(),
+				onshrapnel: vi.fn(),
+				onconvertitems: vi.fn(),
+				onaddequipment: vi.fn(),
+				oncreatelisting: vi.fn(),
+				oneditequipment: vi.fn(),
+				onsellequipment: vi.fn(),
+				ondeleteequipment: vi.fn(),
+				onaddpurchase: vi.fn(),
+				oneditpurchase: vi.fn(),
+				ondeletepurchase: vi.fn(),
+			},
+		});
+		const row = screen.getByText('Halloween Strongbox').closest('li');
+		if (!(row instanceof HTMLElement)) throw new Error('the stock row is rendered');
+		expect(within(row).getByText('\u00d7145')).not.toBeNull();
+		expect(within(row).queryByText('0.00')).toBeNull();
+		const recycle = within(row).getByRole('button', { name: 'Nanocubes' }) as HTMLButtonElement;
+		expect(recycle.disabled).toBe(true);
+		expect(recycle.getAttribute('title')).toMatch(/no TT/);
+		expect((within(row).getByRole('button', { name: 'Sell' }) as HTMLButtonElement).disabled).toBe(
+			false,
+		);
+	});
 });

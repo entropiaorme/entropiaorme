@@ -93,6 +93,10 @@ describe('what a line asks for', () => {
 		expect(suggestedTt('Unknown Thing', 100, items)).toBeNull();
 	});
 
+	it('fills a known item with no TT as none, rather than leaving it to be typed', () => {
+		expect(suggestedTt(boxes.name, 12, items)).toBe(0);
+	});
+
 	it('flags how far a quantity runs past what is held', () => {
 		expect(excessOverHeld(emptyInput({ itemName: vouchers.name, quantity: 250 }), items)).toBe(40);
 		expect(excessOverHeld(emptyInput({ itemName: vouchers.name, quantity: 80 }), items)).toBe(0);

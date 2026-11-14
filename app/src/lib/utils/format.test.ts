@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	formatCount,
 	formatDate,
 	formatDateFull,
 	formatDuration,
@@ -11,6 +12,9 @@ import {
 	formatPed,
 	formatPedHalfEven,
 	formatPercent,
+	formatQuantity,
+	formatTtOrCount,
+	isZeroTt,
 	listNames,
 	todayDate,
 } from '$lib/utils/format';
@@ -261,5 +265,25 @@ describe('formatPec', () => {
 		expect(formatPec(0.011)).toBe('0.0110');
 		expect(formatPec(0.0002)).toBe('0.0002');
 		expect(formatPec(0)).toBe('0.00');
+	});
+});
+
+describe('items with no TT', () => {
+	it('writes a quantity without needless decimals', () => {
+		expect(formatQuantity(200)).toBe('200');
+		expect(formatQuantity(2.5)).toBe('2.50');
+	});
+
+	it('treats a TT that reads as 0.00 as none at all', () => {
+		expect(isZeroTt(0)).toBe(true);
+		expect(isZeroTt(0.004)).toBe(true);
+		expect(isZeroTt(0.005)).toBe(false);
+		expect(isZeroTt(0.01)).toBe(false);
+	});
+
+	it('shows how many stand where no TT would', () => {
+		expect(formatCount(12)).toBe('\u00d712');
+		expect(formatTtOrCount(0, 12)).toBe('\u00d712');
+		expect(formatTtOrCount(1.5, 12)).toBe('1.50');
 	});
 });

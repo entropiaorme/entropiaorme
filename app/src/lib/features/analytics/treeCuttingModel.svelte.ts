@@ -33,6 +33,7 @@ import type {
 	HarvestTierComparison,
 	HarvestYieldTier,
 } from '$lib/types/analytics';
+import { isZeroTt } from '$lib/utils/format';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyticsRange';
@@ -413,6 +414,16 @@ export type TreeCuttingStock = {
 	 * (applied or not); null when the feed has no row for it. */
 	marketItem: MarketHarvestItem | null;
 };
+
+/** Whether held stock is of an item with no TT (a strongbox, a token): one
+ * worth its markup alone, so counted rather than read by its TT. The unit TT
+ * decides when it is known, since an emptied line holds no TT to read. */
+export function stockHasNoTt(
+	item: Pick<TreeCuttingStock, 'unitTt' | 'heldQty' | 'heldTt'>,
+): boolean {
+	if (item.unitTt !== undefined) return isZeroTt(item.unitTt);
+	return item.heldQty > 0 && isZeroTt(item.heldTt);
+}
 
 /** Project one activity's loot composition at current market markup. Shared
  * with the Hunting model: the projection is identical maths whichever

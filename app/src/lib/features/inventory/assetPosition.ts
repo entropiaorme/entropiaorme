@@ -10,12 +10,6 @@
 
 import type { AssetPurchase, InventoryItem } from '$lib/api/commands.gen';
 
-/** A quantity as a person would write it: whole numbers without decimals. */
-export function formatQuantity(quantity: number): string {
-	const rounded = Math.round(quantity * 100) / 100;
-	return Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2);
-}
-
 /** A total shared across units, or null when there are none to share it. */
 export function perUnit(total: number, quantity: number): number | null {
 	return quantity > 0 ? total / quantity : null;

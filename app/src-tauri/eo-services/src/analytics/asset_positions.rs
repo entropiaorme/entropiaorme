@@ -409,15 +409,31 @@ fn format_quantity(quantity: f64) -> String {
 }
 
 fn check_figures(figures: &PurchaseFigures<'_>) -> Result<(), AnalyticsError> {
-    if !figures.quantity.is_finite() || figures.quantity <= STOCK_EPSILON {
+    check_amounts(
+        Some(figures.quantity),
+        Some(figures.tt_value),
+        Some(figures.markup_paid),
+    )
+}
+
+/// The figures every asset and every purchase of one must carry, each checked
+/// only when given: units to hold, a TT that may be zero (an item valued by
+/// its markup alone, such as a strongbox) but never negative, and a markup
+/// that is a number.
+pub(super) fn check_amounts(
+    quantity: Option<f64>,
+    tt_value: Option<f64>,
+    markup_paid: Option<f64>,
+) -> Result<(), AnalyticsError> {
+    if quantity.is_some_and(|value| !value.is_finite() || value <= STOCK_EPSILON) {
         return Err(AnalyticsError::InvalidInput("a quantity must be positive"));
     }
-    if !figures.tt_value.is_finite() || figures.tt_value < 0.0 {
+    if tt_value.is_some_and(|value| !value.is_finite() || value < 0.0) {
         return Err(AnalyticsError::InvalidInput(
             "a TT value cannot be negative",
         ));
     }
-    if !figures.markup_paid.is_finite() {
+    if markup_paid.is_some_and(|value| !value.is_finite()) {
         return Err(AnalyticsError::InvalidInput("a markup must be a number"));
     }
     Ok(())
@@ -1247,6 +1263,94 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(renamed.name, "Strongboxes");
+        assert_conserved(&service, &position.id).await;
+    }
+
+    /// An item with no TT (a strongbox, a token) is worth its markup alone:
+    /// it is held, bought into, and sold by count, and everything it cost is
+    /// markup the sale recovers.
+    #[tokio::test]
+    async fn a_markup_only_stack_is_held_bought_into_and_sold_by_count() {
+        let (_dir, service) = write_service().await;
+        let position = service
+            .create_inventory_item("Strongbox", Some(12.0), 0.0, 24.0, None, Some("2026-05-01"))
+            .await
+            .unwrap();
+        assert!(close(position.tt_value, 0.0));
+        assert!(close(position.quantity, 12.0));
+
+        let position = service
+            .add_asset_purchase(&position.id, buy(8.0, 0.0, 20.0))
+            .await
+            .unwrap()
+            .expect("the asset is held");
+        assert!(close(position.quantity, 20.0));
+        assert!(close(position.markup_paid / position.quantity, 2.2));
+
+        // Five sold at 3 PED each, against an average of 2.20 each.
+        let sold = service
+            .trade_equipment(&position.id, Some(5.0), 15.0, Some("2026-06-02"))
+            .await
+            .unwrap()
+            .expect("the asset is held");
+        assert!(close(sold.quantity, 5.0));
+        assert!(close(sold.tt_value, 0.0));
+        let ledger = markup_ledger(&service).await;
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].0, "markup");
+        assert!(close(ledger[0].1, 4.0));
+
+        let after = held(&service, "Strongbox").await;
+        assert!(close(after.quantity, 15.0));
+        assert!(close(after.tt_value, 0.0));
+        assert!(close(after.markup_paid / after.quantity, 2.2));
+        assert_conserved(&service, &position.id).await;
+    }
+
+    #[tokio::test]
+    async fn an_asset_with_impossible_figures_is_refused_on_create_and_edit() {
+        let (_dir, service) = write_service().await;
+        for (tt_value, markup_paid) in [(-1.0, 1.0), (f64::NAN, 1.0), (1.0, f64::INFINITY)] {
+            assert!(matches!(
+                service
+                    .create_inventory_item(
+                        "Strongbox",
+                        Some(1.0),
+                        tt_value,
+                        markup_paid,
+                        None,
+                        None
+                    )
+                    .await,
+                Err(AnalyticsError::InvalidInput(_))
+            ));
+        }
+        let position = strongboxes(&service).await;
+        assert!(matches!(
+            service
+                .update_inventory_item(
+                    &position.id,
+                    InventoryItemPatch {
+                        tt_value: Some(-1.0),
+                        ..InventoryItemPatch::default()
+                    },
+                )
+                .await,
+            Err(AnalyticsError::InvalidInput(_))
+        ));
+        // TT may fall to nothing: the item is then worth its markup alone.
+        let edited = service
+            .update_inventory_item(
+                &position.id,
+                InventoryItemPatch {
+                    tt_value: Some(0.0),
+                    ..InventoryItemPatch::default()
+                },
+            )
+            .await
+            .unwrap()
+            .expect("the asset is held");
+        assert!(close(edited.tt_value, 0.0));
         assert_conserved(&service, &position.id).await;
     }
 

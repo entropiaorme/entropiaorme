@@ -4,8 +4,8 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
 	import type { EquipmentListingInput, EquipmentTradeInput, InventoryItem } from '$lib/api';
-	import { formatPed, todayDate } from '$lib/utils/format';
-	import { formatQuantity, isStack, shareOf } from './assetPosition';
+	import { formatPed, formatQuantity, isZeroTt, todayDate } from '$lib/utils/format';
+	import { isStack, perUnit, shareOf } from './assetPosition';
 
 	let {
 		item,
@@ -39,6 +39,9 @@
 	const tooMany = $derived(item !== null && quantity !== null && quantity > item.quantity + 1e-9);
 	const quantityValid = $derived(quantity === null || (quantity > 0 && !tooMany));
 	const costBasis = $derived(share.ttValue + share.markupPaid);
+	/** An item with no TT is worth its markup alone: its cost is all markup,
+	 * so it is read by how many go and what each cost. */
+	const noTt = $derived(item !== null && isZeroTt(item.ttValue));
 	const expectedPrice = $derived(method === 'trade' ? soldFor : (buyout ?? startingBid));
 	const expectedResult = $derived(
 		expectedPrice - costBasis - (method === 'auction' ? listingFee : 0),
@@ -136,18 +139,32 @@
 			{/if}
 
 			<div class="space-y-1.5 rounded-md border border-border/50 bg-surface/50 px-3 py-2 text-sm">
-				<div class="flex items-center justify-between">
-					<span class="text-text-secondary">TT value</span>
-					<span class="tabular-nums text-text">{formatPed(share.ttValue)} PED</span>
-				</div>
-				<div class="flex items-center justify-between">
-					<span class="text-text-secondary">MU paid</span>
-					<span class="tabular-nums text-text">{formatPed(share.markupPaid)} PED</span>
-				</div>
-				<div class="flex items-center justify-between border-t border-border/50 pt-1.5">
-					<span class="font-medium text-text">Total cost</span>
-					<span class="tabular-nums font-semibold text-text">{formatPed(costBasis)} PED</span>
-				</div>
+				{#if noTt}
+					<div class="flex items-baseline justify-between">
+						<span class="font-medium text-text">Total cost</span>
+						<span class="text-right tabular-nums">
+							<span class="block font-semibold text-text">{formatPed(costBasis)} PED</span>
+							{#if selling > 1 + 1e-9}
+								<span class="block text-xs text-text-tertiary">
+									{formatQuantity(selling)} at {formatPed(perUnit(costBasis, selling) ?? 0)} each
+								</span>
+							{/if}
+						</span>
+					</div>
+				{:else}
+					<div class="flex items-center justify-between">
+						<span class="text-text-secondary">TT value</span>
+						<span class="tabular-nums text-text">{formatPed(share.ttValue)} PED</span>
+					</div>
+					<div class="flex items-center justify-between">
+						<span class="text-text-secondary">MU paid</span>
+						<span class="tabular-nums text-text">{formatPed(share.markupPaid)} PED</span>
+					</div>
+					<div class="flex items-center justify-between border-t border-border/50 pt-1.5">
+						<span class="font-medium text-text">Total cost</span>
+						<span class="tabular-nums font-semibold text-text">{formatPed(costBasis)} PED</span>
+					</div>
+				{/if}
 				{#if expectedPrice > 0}
 					<div class="flex items-center justify-between border-t border-border/50 pt-1.5">
 						<span class="font-medium text-text">

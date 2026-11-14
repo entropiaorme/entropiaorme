@@ -6,13 +6,16 @@
 	 * saved: how many are held and what each has cost on average. Buying more
 	 * is the only thing that moves that average, so this is where the player
 	 * sees it move.
+	 *
+	 * A position of an item with no TT (strongboxes, tokens) is bought by count
+	 * and price alone: there is no TT to enter, and every PED of it is markup.
 	 */
 	import type { AssetPurchase, AssetPurchaseInput, InventoryItem } from '$lib/api';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import Modal from '$lib/components/Modal.svelte';
-	import { formatPed, todayDate } from '$lib/utils/format';
-	import { averageAfter, currentAverage, formatQuantity, perUnit } from './assetPosition';
+	import { formatPed, formatQuantity, isZeroTt, todayDate } from '$lib/utils/format';
+	import { averageAfter, currentAverage, perUnit } from './assetPosition';
 	import MarkupPaidField from './MarkupPaidField.svelte';
 
 	let {
@@ -77,7 +80,17 @@
 		if (item && !modalOpen) oncancel();
 	});
 
-	const valid = $derived(quantity !== null && quantity > 0 && ttValue >= 0);
+	/** A position with no TT stays one: its purchases carry none to enter. */
+	const noTt = $derived(
+		item !== null && isZeroTt(item.ttValue) && isZeroTt(purchase?.ttValue ?? 0),
+	);
+	const valid = $derived(
+		quantity !== null &&
+			quantity > 0 &&
+			Number.isFinite(ttValue) &&
+			ttValue >= 0 &&
+			Number.isFinite(markupPed),
+	);
 	const before = $derived(item ? currentAverage(item) : null);
 	const after = $derived(
 		item && valid && quantity !== null
@@ -106,7 +119,11 @@
 >
 	{#if item}
 		<div class="space-y-4">
-			<div class="grid grid-cols-[6rem_minmax(0,1fr)_minmax(0,1fr)] gap-3">
+			<div
+				class="grid gap-3 {noTt
+					? 'grid-cols-[6rem_minmax(0,1fr)]'
+					: 'grid-cols-[6rem_minmax(0,1fr)_minmax(0,1fr)]'}"
+			>
 				<div>
 					<label for="purchase-quantity" class="mb-1 block text-xs text-text-secondary">
 						Quantity
@@ -121,25 +138,27 @@
 						placeholder="0"
 					/>
 				</div>
-				<div>
-					<label for="purchase-tt" class="mb-1 block text-xs text-text-secondary">
-						TT value (PED)
-					</label>
-					<Input
-						id="purchase-tt"
-						type="number"
-						bind:value={
-							() => ttValue,
-							(next) => {
-								ttValue = Number(next ?? 0);
-								ttTyped = true;
+				{#if !noTt}
+					<div>
+						<label for="purchase-tt" class="mb-1 block text-xs text-text-secondary">
+							TT value (PED)
+						</label>
+						<Input
+							id="purchase-tt"
+							type="number"
+							bind:value={
+								() => ttValue,
+								(next) => {
+									ttValue = Number(next ?? 0);
+									ttTyped = true;
+								}
 							}
-						}
-						step="0.01"
-						min="0"
-						placeholder="0.00"
-					/>
-				</div>
+							step="0.01"
+							min="0"
+							placeholder="0.00"
+						/>
+					</div>
+				{/if}
 				<div>
 					<label for="purchase-date" class="mb-1 block text-xs text-text-secondary">Bought</label>
 					<Input id="purchase-date" type="date" bind:value={acquiredAt} />
@@ -148,10 +167,11 @@
 
 			<MarkupPaidField
 				{ttValue}
+				{quantity}
 				bind:markupPed
 				initialMode="ped"
 				resetKey={opened}
-				label="MU paid, all units"
+				label={noTt ? 'Paid, all units' : 'MU paid, all units'}
 			/>
 
 			{#if before}
@@ -167,14 +187,16 @@
 						{after ? formatQuantity(after.quantity) : formatQuantity(before.quantity)}
 					</dd>
 
-					<dt class="text-xs text-text-secondary">MU per unit</dt>
-					<dd class="text-right text-text-secondary">
-						{formatPed(before.markupPerUnit ?? 0)}
-					</dd>
-					<dd class="text-text-tertiary" aria-hidden="true">&rarr;</dd>
-					<dd class="text-right font-medium text-text">
-						{formatPed((after ?? before).markupPerUnit ?? 0)}
-					</dd>
+					{#if !noTt}
+						<dt class="text-xs text-text-secondary">MU per unit</dt>
+						<dd class="text-right text-text-secondary">
+							{formatPed(before.markupPerUnit ?? 0)}
+						</dd>
+						<dd class="text-text-tertiary" aria-hidden="true">&rarr;</dd>
+						<dd class="text-right font-medium text-text">
+							{formatPed((after ?? before).markupPerUnit ?? 0)}
+						</dd>
+					{/if}
 
 					<dt class="text-xs text-text-secondary">Cost per unit</dt>
 					<dd class="text-right text-text-secondary">{formatPed(before.costPerUnit ?? 0)}</dd>

@@ -30,6 +30,38 @@ export function formatPec(pec: number): string {
 	return pec.toFixed(pec !== 0 && Math.abs(pec) < 0.1 ? 4 : 2);
 }
 
+/** A quantity as a person would write it: whole numbers without decimals. */
+export function formatQuantity(quantity: number): string {
+	const rounded = Math.round(quantity * 100) / 100;
+	return Number.isInteger(rounded) ? rounded.toString() : rounded.toFixed(2);
+}
+
+/**
+ * Whether a TT figure is nothing at all: below half a PEC it reads as 0.00.
+ *
+ * Some items have no TT (a strongbox, a token, a voucher) and are worth their
+ * markup alone. They are first-class holdings, not a degenerate case: wherever
+ * their TT would stand, the app shows how many there are instead
+ * (`formatTtOrCount`), and their markup is written in PED, since a percentage
+ * of no TT says nothing.
+ */
+export function isZeroTt(ttValue: number): boolean {
+	return Math.abs(ttValue) < 0.005;
+}
+
+/** A count standing where a TT figure would: "\u00d712". */
+export function formatCount(quantity: number): string {
+	return `\u00d7${formatQuantity(quantity)}`;
+}
+
+/** What a TT slot shows: the TT, or for an item with no TT, how many. */
+export function formatTtOrCount(ttValue: number, quantity: number): string {
+	return isZeroTt(ttValue) ? formatCount(quantity) : formatPed(ttValue);
+}
+
+/** The hover text on a count shown in a TT slot. */
+export const NO_TT_TITLE = 'No TT value: counted by quantity and worth its markup alone';
+
 /** Format a ratio as a percentage (0.917 → "91.7%") */
 export function formatPercent(ratio: number): string {
 	return `${(ratio * 100).toFixed(1)}%`;

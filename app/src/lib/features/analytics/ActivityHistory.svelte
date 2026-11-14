@@ -29,7 +29,14 @@
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { ActivityHistoryEntry } from '$lib/types/analytics';
 	import { derivedFromLabel } from '$lib/features/inventory/conversionDraft';
-	import { formatLedgerDate, formatPed } from '$lib/utils/format';
+	import {
+		NO_TT_TITLE,
+		formatCount,
+		formatLedgerDate,
+		formatPed,
+		formatQuantity,
+		isZeroTt,
+	} from '$lib/utils/format';
 
 	let {
 		entries,
@@ -69,7 +76,11 @@
 	/** What happened, in a line. The figures a row leads with are on the
 	 * right, so this says what was done to how much. */
 	function summary(entry: ActivityHistoryEntry): string {
+		// An item with no TT is told by its count alone; a TT of 0.00 says nothing.
+		const noTt = isZeroTt(entry.ttValue);
 		const tt = `${formatPed(entry.ttValue)} PED TT`;
+		const withTt = noTt ? '' : `, ${tt}`;
+		const count = formatQuantity(entry.quantity);
 		if (entry.kind === 'conversion') {
 			if (entry.itemised) {
 				const used = entry.conversionLines
@@ -78,15 +89,15 @@
 					.join(', ');
 				return `From ${used}`;
 			}
-			return `${tt} into ${entry.targetItem ?? 'another item'}`;
+			return `${noTt ? count : tt} into ${entry.targetItem ?? 'another item'}`;
 		}
 		const origin = derivedFromLabel(entry.derivedFrom);
 		const suffix = origin ? `, ${origin.charAt(0).toLowerCase()}${origin.slice(1)}` : '';
-		if (entry.kind === 'removal') return `${entry.quantity} removed, ${tt}`;
-		if (entry.kind === 'trade') return `${entry.quantity} sold by trade, ${tt}${suffix}`;
-		if (entry.status === 'sold') return `${entry.quantity} sold, ${tt}${suffix}`;
-		if (entry.status === 'expired') return `${entry.quantity} returned, ${tt}`;
-		return `${entry.quantity} on auction, ${tt}`;
+		if (entry.kind === 'removal') return `${count} removed${withTt}`;
+		if (entry.kind === 'trade') return `${count} sold by trade${withTt}${suffix}`;
+		if (entry.status === 'sold') return `${count} sold${withTt}${suffix}`;
+		if (entry.status === 'expired') return `${count} returned${withTt}`;
+		return `${count} on auction${withTt}`;
 	}
 
 	/** An itemised conversion leads with what it produced. */
@@ -162,6 +173,13 @@
 								</p>
 								<p class="mt-0.5 text-[0.625rem] uppercase tracking-wider text-text-tertiary">
 									Net markup
+								</p>
+							{:else if isZeroTt(entry.ttValue)}
+								<p class="text-sm tabular-nums text-text-tertiary" title={NO_TT_TITLE}>
+									{formatCount(entry.quantity)}
+								</p>
+								<p class="mt-0.5 text-[0.625rem] uppercase tracking-wider text-text-tertiary">
+									No TT
 								</p>
 							{:else}
 								<p class="text-sm tabular-nums text-text-tertiary">

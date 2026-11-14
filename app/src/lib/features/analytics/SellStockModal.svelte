@@ -15,8 +15,12 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
-	import { formatPed, todayDate } from '$lib/utils/format';
-	import type { ActivityListingDraft, ActivityTradeDraft } from './treeCuttingModel.svelte';
+	import { formatPed, formatQuantity, todayDate } from '$lib/utils/format';
+	import {
+		stockHasNoTt,
+		type ActivityListingDraft,
+		type ActivityTradeDraft,
+	} from './treeCuttingModel.svelte';
 	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
 
 	let {
@@ -50,6 +54,8 @@
 
 	const unitTt = $derived(item && item.heldQty > 0 ? item.heldTt / item.heldQty : 0);
 	const listedTt = $derived(quantity * unitTt);
+	/** An item with no TT is sold by count: every PED of its price is markup. */
+	const noTt = $derived(!!item && stockHasNoTt(item));
 	// Anything beyond the tracked position is real value with no activity
 	// claim on it, so the split is stated up front rather than discovered
 	// afterwards in the figures.
@@ -139,12 +145,16 @@
 			<div class="bg-surface/50 rounded-md border border-border/50 px-3 py-2 space-y-1.5 text-sm">
 				<div class="flex items-center justify-between">
 					<span class="text-text-secondary">Held</span>
-					<span class="tabular-nums text-text">{item.heldQty} ({formatPed(item.heldTt)} PED)</span>
+					<span class="tabular-nums text-text">
+						{formatQuantity(item.heldQty)}{noTt ? ', no TT' : ` (${formatPed(item.heldTt)} PED)`}
+					</span>
 				</div>
-				<div class="flex items-center justify-between">
-					<span class="text-text-secondary">{saleMethod === 'auction' ? 'Listing TT' : 'Sale TT'}</span>
-					<span class="tabular-nums text-text">{formatPed(listedTt)} PED</span>
-				</div>
+				{#if !noTt}
+					<div class="flex items-center justify-between">
+						<span class="text-text-secondary">{saleMethod === 'auction' ? 'Listing TT' : 'Sale TT'}</span>
+						<span class="tabular-nums text-text">{formatPed(listedTt)} PED</span>
+					</div>
+				{/if}
 				{#if paidShare > 0}
 					<div class="flex items-center justify-between">
 						<span class="text-text-secondary">Markup paid</span>

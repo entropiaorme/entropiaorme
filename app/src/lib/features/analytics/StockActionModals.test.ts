@@ -87,4 +87,34 @@ describe('stock action modals', () => {
 		});
 		expect(screen.getByText(/historical TT stay recorded/)).not.toBeNull();
 	});
+
+	it('removes stock with no TT by count, since it has no PED to enter', async () => {
+		const onconfirm = vi.fn().mockResolvedValue(undefined);
+		render(AdjustStockModal, {
+			props: {
+				item: { ...stock, itemName: 'Halloween Strongbox', heldQty: 12, heldTt: 0, unitTt: 0 },
+				mode: 'remove',
+				onconfirm,
+				oncancel: vi.fn(),
+			},
+		});
+
+		expect(screen.getByText('12 held, no TT')).not.toBeNull();
+		await fireEvent.input(screen.getByLabelText('How many to remove'), { target: { value: '5' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+		await waitFor(() => expect(onconfirm).toHaveBeenCalledWith('Halloween Strongbox', 5));
+	});
+
+	it('sells stock with no TT by count, without a TT of nothing to read', () => {
+		render(SellStockModal, {
+			props: {
+				item: { ...stock, itemName: 'Halloween Strongbox', heldQty: 12, heldTt: 0, unitTt: 0 },
+				onlist: vi.fn(),
+				ontrade: vi.fn(),
+				oncancel: vi.fn(),
+			},
+		});
+		expect(screen.getByText('12, no TT')).not.toBeNull();
+		expect(screen.queryByText('Listing TT')).toBeNull();
+	});
 });

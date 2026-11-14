@@ -6,7 +6,7 @@
 	import { derivedFromLabel } from '$lib/features/inventory/conversionDraft';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { tick } from 'svelte';
-	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
+	import { stockHasNoTt, type TreeCuttingStock } from './treeCuttingModel.svelte';
 	import {
 		appliedMarkupText,
 		manualMarkupLabel,
@@ -15,7 +15,7 @@
 		shrapnelMarkupLabel,
 	} from './marketConfidence';
 	import ManualMarkupEditor from '$lib/features/market/ManualMarkupEditor.svelte';
-	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
+	import { NO_DATA, NO_TT_TITLE, formatCount, formatPed, formatPercent } from '$lib/utils/format';
 
 	let {
 		stock,
@@ -320,6 +320,7 @@
 				legible for the next time there is stock to sell. -->
 			{@const empty = item.heldQty <= 0}
 			{@const derivedLabel = derivedFromLabel(item.derivedFrom)}
+			{@const noTt = stockHasNoTt(item)}
 			<li class="flex items-center gap-3 rounded-md px-2.5 py-2">
 				<span
 					class="flex-1 min-w-0 text-sm font-medium truncate tracking-tight
@@ -337,7 +338,13 @@
 					class="w-24 text-right shrink-0 text-sm tabular-nums font-medium
 						{empty ? 'text-text-tertiary' : 'text-text'}"
 				>
-					{formatPed(item.heldTt)}
+					<!-- An item with no TT is counted: how many are held is what a
+						TT of 0.00 would otherwise hide. -->
+					{#if noTt}
+						<span title={NO_TT_TITLE}>{formatCount(item.heldQty)}</span>
+					{:else}
+						{formatPed(item.heldTt)}
+					{/if}
 					{#if item.listedQty > 0}
 						<span
 							class="block text-[0.625rem] font-normal text-text-tertiary tabular-nums"
@@ -479,8 +486,12 @@
 								letter="N"
 								label="Nanocubes"
 								onclick={() => onconvert(item)}
-								disabled={item.heldQty <= 0}
-								title={item.heldQty <= 0 ? 'Nothing held to convert' : ''}
+								disabled={item.heldQty <= 0 || noTt}
+								title={noTt
+									? 'It has no TT, so it recycles into nothing'
+									: item.heldQty <= 0
+										? 'Nothing held to convert'
+										: ''}
 							/>
 						{:else}
 							<span class="h-6 w-6 shrink-0" aria-hidden="true"></span>
@@ -526,8 +537,12 @@
 							letter="N"
 							label="Nanocube"
 							onclick={() => onconvert(item)}
-							disabled={item.heldQty <= 0}
-							title={item.heldQty <= 0 ? 'Nothing held to convert' : ''}
+							disabled={item.heldQty <= 0 || noTt}
+							title={noTt
+								? 'It has no TT, so it recycles into nothing'
+								: item.heldQty <= 0
+									? 'Nothing held to convert'
+									: ''}
 						/>
 						<ExpandingActionButton
 							letter="S"

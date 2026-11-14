@@ -21,7 +21,15 @@
 	import Input from '$lib/components/Input.svelte';
 	import StatDisplay from '$lib/components/StatDisplay.svelte';
 	import type { AuctionListing } from '$lib/types/analytics';
-	import { NO_DATA, formatLedgerDate, formatPed, formatPercent } from '$lib/utils/format';
+	import {
+		NO_DATA,
+		NO_TT_TITLE,
+		formatLedgerDate,
+		formatPed,
+		formatPercent,
+		formatQuantity,
+		isZeroTt,
+	} from '$lib/utils/format';
 	import { hasRunOut } from './listingLifecycle';
 
 	let {
@@ -103,10 +111,23 @@
 	// can be held against the market figure that motivated it. Gross of fees,
 	// because it describes the price, not what was kept from it.
 	const saleMarkupRate = $derived(
-		selected && selected.status === 'sold' && selected.ttValue > 0
+		selected && selected.status === 'sold' && !isZeroTt(selected.ttValue)
 			? (selected.finalPrice ?? 0) / selected.ttValue
 			: null,
 	);
+	/** A listing of an item with no TT is read by count: a rate on TT says
+	 * nothing about it, and what each unit fetched says everything. */
+	const selectedNoTt = $derived(selected !== null && isZeroTt(selected.ttValue));
+	const pricePerUnit = $derived(
+		selected && selected.status === 'sold' && selected.quantity > 0
+			? (selected.finalPrice ?? 0) / selected.quantity
+			: null,
+	);
+	/** What was listed: how many, wherever that is not simply one. */
+	const listingTitle = (listing: AuctionListing) =>
+		listing.subjectKind === 'equipment' && Math.abs(listing.quantity - 1) < 1e-9
+			? listing.itemName
+			: `${formatQuantity(listing.quantity)} \u00d7 ${listing.itemName}`;
 
 	let confirming = $state(false);
 	let finalPrice = $state(0);
@@ -177,11 +198,17 @@
 				{listing.itemName}
 			</span>
 			<span class="{COL_QTY} truncate text-right text-xs tabular-nums text-text-secondary">
-				{listing.quantity}
+				{formatQuantity(listing.quantity)}
 			</span>
-			<span class="{COL_TT} truncate text-right text-xs tabular-nums text-text">
-				{formatPed(listing.ttValue)}
-			</span>
+			{#if isZeroTt(listing.ttValue)}
+				<span class="{COL_TT} truncate text-right text-xs text-text-tertiary" title={NO_TT_TITLE}>
+					No TT
+				</span>
+			{:else}
+				<span class="{COL_TT} truncate text-right text-xs tabular-nums text-text">
+					{formatPed(listing.ttValue)}
+				</span>
+			{/if}
 			<span class="{COL_LISTED} truncate text-right text-xs tabular-nums font-medium">
 				{#if listing.status === 'sold'}
 					<span class={netTone(central ? listingNet(listing) : (listing.activityNetMarkup ?? 0))}>
@@ -258,7 +285,7 @@
 					<div class="mb-4 flex items-baseline justify-between gap-3">
 						<div class="min-w-0">
 							<p class="truncate text-sm font-medium tracking-tight text-text">
-								{selected.subjectKind === 'equipment' ? selected.itemName : `${selected.quantity} x ${selected.itemName}`}
+								{listingTitle(selected)}
 							</p>
 							<p class="mt-0.5 text-xs text-text-tertiary">
 								Listed {formatLedgerDate(selected.listedAt)}{selected.resolvedAt
@@ -284,11 +311,15 @@
 						re-reads once the price is known. -->
 					{#if selected.status === 'sold'}
 						<div class="grid grid-cols-3 gap-x-5 gap-y-4">
-							<StatDisplay
-								label={selected.subjectKind === 'equipment' ? 'Total cost' : 'Listing TT'}
-								value={formatPed(selected.costBasis ?? selected.ttValue)}
-								unit="PED"
-							/>
+							{#if selected.subjectKind !== 'equipment' && selectedNoTt}
+								<StatDisplay label="Quantity" value={formatQuantity(selected.quantity)} />
+							{:else}
+								<StatDisplay
+									label={selected.subjectKind === 'equipment' ? 'Total cost' : 'Listing TT'}
+									value={formatPed(selected.costBasis ?? selected.ttValue)}
+									unit="PED"
+								/>
+							{/if}
 							<StatDisplay label="Sold for" value={formatPed(selected.finalPrice ?? 0)} unit="PED" />
 							<StatDisplay
 								label="Fees"
@@ -301,10 +332,18 @@
 								describe how the sale divides, not whether it went well, and
 								colouring all three makes the one figure that carries a
 								verdict indistinguishable from its neighbours. -->
-							<StatDisplay
-								label="MU rate"
-								value={saleMarkupRate !== null ? formatPercent(saleMarkupRate) : NO_DATA}
-							/>
+							{#if selectedNoTt}
+								<StatDisplay
+									label="Each"
+									value={pricePerUnit !== null ? formatPed(pricePerUnit) : NO_DATA}
+									unit="PED"
+								/>
+							{:else}
+								<StatDisplay
+									label="MU rate"
+									value={saleMarkupRate !== null ? formatPercent(saleMarkupRate) : NO_DATA}
+								/>
+							{/if}
 							<StatDisplay
 								label="Net markup"
 								value={signedPed(netMarkup)}
@@ -329,9 +368,11 @@
 										</p>
 										{#if selected.unattributedQty > 0}
 											<p class="mt-2 text-xs leading-relaxed text-text-secondary">
-												{formatPed(selected.unattributedQty)} of the {formatPed(selected.quantity)}
+												{formatQuantity(selected.unattributedQty)} of the {formatQuantity(
+													selected.quantity,
+												)}
 												listed was beyond tracked stock, so {formatPed(
-													(1 - selected.attributedTt / selected.ttValue) * 100,
+													(selected.unattributedQty / selected.quantity) * 100,
 												)}% of this sale, {signedPed(unattributedMarkup)} PED, cannot be credited
 												to {sourceNounIndefinite}. Its value is still yours and still in your ledger.
 											</p>
@@ -353,7 +394,11 @@
 							figures lead, the two asked ones follow, and all four carry
 							the same weight because none of them is yet an outcome. -->
 						<div class="grid grid-cols-2 gap-x-5 gap-y-4">
-							<StatDisplay label="Listing TT" value={formatPed(selected.ttValue)} unit="PED" />
+							{#if selectedNoTt}
+								<StatDisplay label="Quantity" value={formatQuantity(selected.quantity)} />
+							{:else}
+								<StatDisplay label="Listing TT" value={formatPed(selected.ttValue)} unit="PED" />
+							{/if}
 							<StatDisplay label="Fee paid" value={formatPed(selected.listingFee)} unit="PED">
 								{#snippet labelSuffix()}
 									{#if selected.status === 'expired'}

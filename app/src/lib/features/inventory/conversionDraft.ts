@@ -144,9 +144,11 @@ function isBlankOutput(line: OutputDraft): boolean {
 	return line.itemName.trim() === '' && line.ttValue === null;
 }
 
+/** The TT each unit of a held item carries, when the item is known. An item
+ * with no TT is known too: its units carry nothing, which fills in as 0. */
 function knownUnitTt(name: string, items: ConvertibleItem[]): number | null {
 	const unit = items.find((item) => item.assetId === null && item.name === name.trim())?.unitTt;
-	return unit && unit > 0 ? unit : null;
+	return unit !== undefined && Number.isFinite(unit) && unit >= 0 ? unit : null;
 }
 
 /** The TT a known item fills in with for this quantity, when there is one. */

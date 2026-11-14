@@ -12,8 +12,14 @@
 		ConfidenceMode,
 		TreeCuttingStock,
 	} from '$lib/features/analytics/treeCuttingModel.svelte';
-	import { formatLedgerDate, formatPed } from '$lib/utils/format';
-	import { formatQuantity, isStack, perUnit } from './assetPosition';
+	import {
+		NO_TT_TITLE,
+		formatLedgerDate,
+		formatPed,
+		formatQuantity,
+		isZeroTt,
+	} from '$lib/utils/format';
+	import { isStack, perUnit } from './assetPosition';
 	import { derivedFromLabel } from './conversionDraft';
 	import type { InventoryKind } from './inventoryModel.svelte';
 	import PacketFeeInfo from './PacketFeeInfo.svelte';
@@ -207,9 +213,21 @@
 					<span class="w-16 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
 						{formatQuantity(item.quantity)}
 					</span>
-					<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
-						{formatPed(item.ttValue)}
-					</span>
+					<!-- The Qty column already says how many: an item with no TT says
+						so here rather than claim a TT of 0.00. -->
+					{#if isZeroTt(item.ttValue)}
+						<span
+							class="w-24 shrink-0 text-right text-xs text-text-tertiary"
+							role="cell"
+							title={NO_TT_TITLE}
+						>
+							No TT
+						</span>
+					{:else}
+						<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
+							{formatPed(item.ttValue)}
+						</span>
+					{/if}
 					<span class="w-24 shrink-0 text-right tabular-nums" role="cell">
 						<span class="block text-sm text-text-secondary">{formatPed(item.markupPaid)}</span>
 						{#if stack}
@@ -275,8 +293,14 @@
 							<span class="w-16 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
 								{formatQuantity(purchase.quantity)}
 							</span>
-							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
-								{formatPed(purchase.ttValue)}
+							<span
+								class="w-24 shrink-0 text-right text-xs tabular-nums {isZeroTt(purchase.ttValue)
+									? 'text-text-tertiary'
+									: 'text-text-secondary'}"
+								role="cell"
+								title={isZeroTt(purchase.ttValue) ? NO_TT_TITLE : undefined}
+							>
+								{isZeroTt(purchase.ttValue) ? 'No TT' : formatPed(purchase.ttValue)}
 							</span>
 							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
 								{formatPed(purchase.markupPaid)}

@@ -5,7 +5,6 @@ import {
 	currentAverage,
 	figuresEditable,
 	figuresLockedReason,
-	formatQuantity,
 	isStack,
 	markupPct,
 	shareOf,
@@ -76,8 +75,6 @@ describe('an asset position', () => {
 	});
 
 	it('reads quantities and markups the way the game writes them', () => {
-		expect(formatQuantity(200)).toBe('200');
-		expect(formatQuantity(2.5)).toBe('2.50');
 		expect(isStack(strongboxes)).toBe(true);
 		expect(isStack({ quantity: 1 })).toBe(false);
 		expect(markupPct(10, 1000)).toBe(10100);

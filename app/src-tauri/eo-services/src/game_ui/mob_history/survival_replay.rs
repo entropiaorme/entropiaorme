@@ -408,10 +408,12 @@ fn a_swarm_whose_plates_often_do_not_read_still_names_its_kills() {
         let out = replay_reading(seed, Vec::new(), false, UNREAD_IN_PLAY);
         let kills = kills_of(&out);
         eprintln!(
-            "seed {seed}: {} right, {} carried, {} unnamed, {} wrong of {kills}",
+            "seed {seed}: {} right, {} carried, {} unnamed ({} of them suggested right, {} wrong), {} wrong of {kills}",
             out.right,
             out.carried_right,
             out.unnamed,
+            out.suggested_right,
+            out.suggested_wrong.len(),
             out.wrong.len()
         );
         assert_eq!(out.named_wrong, 0, "seed {seed}: {:#?}", out.wrong);
@@ -428,6 +430,18 @@ fn a_swarm_whose_plates_often_do_not_read_still_names_its_kills() {
         assert_eq!(
             out.carried_swarm, 0,
             "seed {seed}: carried once the hunt was mixed"
+        );
+        // A lock held from a name read to the death gives the unnamed
+        // kills a suggestion, and the suggestions stay right.
+        assert!(
+            out.suggested_right * 100 >= kills * 9,
+            "seed {seed}: {} of {kills} suggested right",
+            out.suggested_right
+        );
+        assert!(
+            out.suggested_wrong.len() * 100 <= kills * 2,
+            "seed {seed}: {:#?}",
+            out.suggested_wrong
         );
     }
 }

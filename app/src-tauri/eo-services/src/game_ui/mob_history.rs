@@ -54,7 +54,15 @@
 //! [`MobStamp::ProvisionalLatestRead`], the lowest grade: where the creatures
 //! read in the death's moments leave the screen without a lean, the creature
 //! read last (in a fight read at least twice, its own readings deciding it);
-//! to be recorded as such and corrected where it was not the one.
+//! and where they decide nothing only for plates whose name did not read,
+//! the one creature named in those moments, when its lock was held to the
+//! death: from the last name read, a plate at every look, its name unread,
+//! its health never climbing. A plate whose name did not read cannot say it
+//! is another creature; a look with nothing locked, health that climbs, a
+//! second name, or a name that names nothing can, and then nothing is
+//! given. Only looks from before the latest moment of death count, and a
+//! name given so serves no later kill the same way. To be recorded as such
+//! and corrected where it was not the one.
 //! [`MobStamp::Continuity`] and [`MobStamp::ProvisionalContinuity`]: the
 //! creature being hunted, for a kill the screen could not settle, or gave
 //! only the latest creature read, in a hunt of one creature. That hunt is
@@ -459,6 +467,10 @@ struct Fight {
     /// read, or the fight is in contention between kills that could not be
     /// told apart: later kills can have it only as a suggestion.
     suggestion_only: bool,
+    /// A kill was given the creature this fight's readings name through a
+    /// lock held to the death (see [`MobHistory::held_lock`]): its name
+    /// serves no later kill that way.
+    held: bool,
     /// What its readings name, with how many name it.
     tally: Vec<(Vote, usize)>,
 }
@@ -889,6 +901,7 @@ impl MobHistory {
                     readings: VecDeque::new(),
                     claimed: false,
                     suggestion_only: false,
+                    held: false,
                     tally: Vec::new(),
                 };
                 fight.push(reading, p.max_reads);
@@ -1119,7 +1132,10 @@ impl MobHistory {
     /// creature's fight that stopped being read nearest the death. Where
     /// they disagree only because of fights that stopped before the last
     /// two readings of the fight read on the last pulse before the report
-    /// arrived, that fight's creature is suggested.
+    /// arrived, that fight's creature is suggested. Where they decide
+    /// nothing only for plates whose name did not read, on a lock held from
+    /// a name read to the death, that name is given as the latest creature
+    /// read (see [`MobHistory::held_lock`]).
     ///
     /// Only a named or provisional answer takes its fight from later kills.
     /// The answer is at most a [`MobStamp::Guess`] or
@@ -1158,7 +1174,31 @@ impl MobHistory {
     /// kills, and a fight the screen would have given as the latest
     /// creature read is kept to that grade for later kills as before.
     pub fn stamp_for_kill(&mut self, report: KillReport, now_ms: i64) -> KillStamp {
-        let proposal = self.screen_answer(report, now_ms);
+        let mut proposal = self.screen_answer(report, now_ms);
+        if matches!(proposal, Proposal::NotYet) {
+            return KillStamp::NotYet;
+        }
+        // Fights a kill could not tell apart are spoken for between them:
+        // one of them was this kill's creature. A later kill can have one
+        // only as a suggestion, never a stamp.
+        if matches!(
+            proposal,
+            Proposal::Unnamed(Unnamed::Indistinct | Unnamed::Undecided)
+        ) {
+            for i in self.contending(report) {
+                self.fights[i].suggestion_only = true;
+            }
+            // Where they could not be told apart only for plates whose name
+            // did not read, on a lock held from a name read to the death,
+            // that name is the latest creature read.
+            if let Some((named, stamp)) = self.held_lock(report) {
+                for i in &named {
+                    self.fights[*i].held = true;
+                }
+                let fight = *named.last().expect("a held lock names a fight");
+                proposal = Proposal::Give { fight, stamp };
+            }
+        }
         let screen = match &proposal {
             Proposal::NotYet => return KillStamp::NotYet,
             Proposal::Unnamed(why) => why.label(),
@@ -1193,17 +1233,6 @@ impl MobHistory {
         });
         if let Proposal::Give { fight, stamp } = &proposal {
             self.give(*fight, stamp);
-        }
-        // Fights a kill could not tell apart are spoken for between them:
-        // one of them was this kill's creature. A later kill can have one
-        // only as a suggestion, never a stamp.
-        if matches!(
-            proposal,
-            Proposal::Unnamed(Unnamed::Indistinct | Unnamed::Undecided)
-        ) {
-            for i in self.contending(report) {
-                self.fights[i].suggestion_only = true;
-            }
         }
         if let Some(Ok(stamp)) = carried {
             self.carried_at.push_back(report.logged_ms);
@@ -1737,6 +1766,129 @@ impl MobHistory {
         }
     }
 
+    /// The creature of a lock held to the death, for a kill whose fights
+    /// decide nothing between them: the fights that named it, the last
+    /// read of them last, and the creature at the lowest grade.
+    ///
+    /// A plate whose name did not read says nothing of which creature it
+    /// is, and so cannot say it is another. Of the readings taken in the
+    /// kill's moments, up to the latest moment the death can lie in (never
+    /// one from after the report arrived), every one that read a name must
+    /// name the same creature, each fight they stand in deciding on it by
+    /// its own vote, and the looks from the last of them to the last
+    /// reading must show one lock held: a plate locked at every look, its
+    /// name unread, its health never climbing. Then the unread plates are
+    /// that creature still, and the kill is given it.
+    ///
+    /// Nothing is given when: two names were read (a creature the player
+    /// left counts, a fight an earlier kill took does not: that creature is
+    /// accounted for); a name was read that
+    /// names no creature; a fight with a name read decides nothing (a split
+    /// vote, an unfamiliar name read too seldom, a number the list lacks not
+    /// yet read often enough); a look in between found nothing locked, or a
+    /// plate some other kill or creature accounts for; a creature read on
+    /// after the report arrived was already on screen in the kill's
+    /// moments; the name was only ever read loosely; or an earlier kill was
+    /// given the creature on the same readings.
+    fn held_lock(&self, report: KillReport) -> Option<(Vec<usize>, MobStamp)> {
+        let p = &self.profile;
+        let from = report.logged_ms - p.kill_lookback_ms;
+        let latest_death = (report.logged_ms + p.log_resolution_ms).min(report.arrived_ms);
+        let earliest_death = report.logged_ms - p.report_delay_ms;
+        let alive_after = report.arrived_ms + p.capture_slack_ms;
+        let within = |r: &Reading| r.at_ms >= from && r.at_ms <= latest_death;
+        // What a reading names: `Err` for a name read that names nothing,
+        // a creature the reader cannot vouch for.
+        let name_of = |reading: &Reading| match (&reading.vote, &reading.loose) {
+            (Some(vote), _) => Ok(Some(self.vote_identity(vote))),
+            (None, Some(creature)) => Ok(Some(Identity::Known(creature.clone()))),
+            (None, None) if reading.raw.is_some() => Err(()),
+            (None, None) => Ok(None),
+        };
+        let mut who: Option<Identity> = None;
+        let mut readings: Vec<(usize, &Reading)> = Vec::new();
+        for i in self.gathered(from, latest_death) {
+            let fight = &self.fights[i];
+            if fight.last().at_ms > alive_after {
+                return None;
+            }
+            if fight.held {
+                continue;
+            }
+            // A creature the player left may have bled out: its name is a
+            // second name as much as any, though its plate is not the lock.
+            if self.left(i, earliest_death) {
+                for reading in fight.readings.iter().filter(|r| within(r)) {
+                    if let Some(name) = name_of(reading).ok()? {
+                        if who.as_ref().is_some_and(|held| *held != name) {
+                            return None;
+                        }
+                        who = Some(name);
+                    }
+                }
+                continue;
+            }
+            readings.extend(fight.readings.iter().filter(|r| within(r)).map(|r| (i, r)));
+        }
+        readings.sort_by_key(|(_, r)| r.at_ms);
+        let mut named: Vec<usize> = Vec::new();
+        let mut last_named = None;
+        for (at, (i, reading)) in readings.iter().enumerate() {
+            let Some(name) = name_of(reading).ok()? else {
+                continue;
+            };
+            if who.as_ref().is_some_and(|held| *held != name) {
+                return None;
+            }
+            who = Some(name);
+            if !named.contains(i) {
+                named.push(*i);
+            }
+            last_named = Some(at);
+        }
+        let (who, last_named) = (who?, last_named?);
+        let latest = readings[last_named].0;
+        named.retain(|i| *i != latest);
+        named.push(latest);
+        // One lock from the last name read to the last reading: a plate at
+        // every look between, none a watch gap apart, health never rising.
+        let tail = &readings[last_named..];
+        let (first, last) = (tail[0].1.at_ms, tail[tail.len() - 1].1.at_ms);
+        let looks = self
+            .pulses
+            .iter()
+            .filter(|t| **t > first && **t <= last)
+            .count();
+        let one_lock = looks == tail.len() - 1
+            && tail.windows(2).all(|pair| {
+                let (earlier, later) = (pair[0].1, pair[1].1);
+                later.at_ms - earlier.at_ms <= p.continue_ms
+                    && later.fill <= earlier.fill + p.rise_tolerance
+            });
+        if !one_lock {
+            return None;
+        }
+        // Each fight a name was read in decides on that creature by its
+        // own vote, over all its readings: a fight that holds a second
+        // creature names nothing here either.
+        let mut stamp = None;
+        for i in &named {
+            let decided = self.decide(&self.fights[*i])?;
+            if identity(&decided) != who {
+                return None;
+            }
+            stamp = Some(decided);
+        }
+        let stamp = stamp?;
+        if let Identity::Known(creature) = &who {
+            let own = Some(Vote::Known(creature.clone()));
+            if !self.fights[latest].readings.iter().any(|r| r.vote == own) {
+                return None;
+            }
+        }
+        Some((named, latest_read(stamp)))
+    }
+
     /// Whether the readings taken from `from` to `to` that name anything,
     /// strictly or loosely, all name one creature (and at least one does).
     fn one_creature_read(&self, from: i64, to: i64) -> bool {
@@ -2265,6 +2417,9 @@ fn count_kept<T: PartialEq>(entries: &mut Vec<(T, Kept)>, item: T, cap: usize) {
         );
     }
 }
+
+#[cfg(test)]
+mod recorded_hunt;
 
 #[cfg(test)]
 mod survival_replay;
@@ -3146,6 +3301,120 @@ mod tests {
             ],
         );
         unsettled(kill_arrived(&mut h, 10_000, 10_500));
+    }
+
+    /// A plate whose name did not read.
+    fn unread(fill: f64) -> Sighting {
+        Sighting {
+            fill,
+            raw_name: None,
+            resolved: Resolved::Unclear,
+            inferred_number: false,
+        }
+    }
+
+    /// Mature named once at full health at 6 s, then `after` a second
+    /// apart; the kill logged at 9 s whose report arrived at 9.5 s; and an
+    /// Atrox locked at 10 s, after the report, so the names read round the
+    /// kill are of two creatures.
+    fn named_then(c: &MobCatalogue, after: Vec<Option<Sighting>>) -> MobHistory {
+        let mut h = history();
+        read_at(&mut h, 6000, seen(c, "Combibo Mature", Some(4), 1.0));
+        for (k, sighting) in after.into_iter().enumerate() {
+            let at = 7000 + k as i64 * 1000;
+            match sighting {
+                Some(sighting) => read_at(&mut h, at, sighting),
+                None => {
+                    pad(&mut h, at);
+                    h.observe(at, None);
+                }
+            }
+        }
+        read_at(&mut h, 10_000, seen(c, "Atrox Young", Some(4), 1.0));
+        h
+    }
+
+    #[test]
+    fn a_lock_held_from_a_name_read_to_the_death_is_that_creature_as_the_latest_read() {
+        // One creature dying and the next being locked: named at full
+        // health, then three looks at a plate whose name did not read, its
+        // health going down to the death. The unread plates are no rival:
+        // the kill is the creature named, at the lowest grade and no more.
+        let c = catalogue(Vec::new());
+        let mut h = named_then(
+            &c,
+            vec![Some(unread(0.69)), Some(unread(0.34)), Some(unread(0.05))],
+        );
+        let answer = kill_arrived(&mut h, 9000, 9500);
+        assert_eq!(latest(&answer), Some(&creature_of("Combibo", "Mature")));
+        assert_eq!(h.take_trace().map(|t| t.screen), Some("latest_read"));
+    }
+
+    #[test]
+    fn a_lock_not_held_to_the_death_names_nothing() {
+        let c = catalogue(Vec::new());
+        let unnamed = |after: Vec<Option<Sighting>>| {
+            let mut h = named_then(&c, after);
+            let answer = kill_arrived(&mut h, 9000, 9500);
+            assert!(matches!(answer, KillStamp::Unnamed(_)), "{answer:?}");
+        };
+        // A look that found nothing locked: what was locked next is a lock
+        // begun afresh, and may be any creature.
+        unnamed(vec![Some(unread(0.69)), None, Some(unread(0.05))]);
+        // Health that climbs back is another creature's plate.
+        unnamed(vec![
+            Some(unread(0.4)),
+            Some(unread(0.9)),
+            Some(unread(0.5)),
+        ]);
+        // A second name read in the kill's moments: either may have died.
+        unnamed(vec![
+            Some(unread(0.69)),
+            Some(seen(&c, "Combibo Young", Some(3), 0.34)),
+            Some(unread(0.05)),
+        ]);
+        // A name read that names nothing is a creature the reader cannot
+        // vouch for.
+        unnamed(vec![
+            Some(unread(0.69)),
+            Some(Sighting {
+                fill: 0.34,
+                raw_name: Some("Xq".into()),
+                resolved: Resolved::Unclear,
+                inferred_number: false,
+            }),
+            Some(unread(0.05)),
+        ]);
+    }
+
+    #[test]
+    fn a_name_read_only_after_the_report_is_not_the_kills() {
+        // A plate unread to its death, and a name read on the next look
+        // after the report arrived: that creature was alive after the
+        // death, so its name is no name for the kill.
+        let c = catalogue(Vec::new());
+        let mut h = history();
+        feed(&mut h, 7000, vec![unread(0.6), unread(0.3)]);
+        read_at(&mut h, 9000, seen(&c, "Combibo Mature", Some(4), 1.0));
+        let answer = kill_arrived(&mut h, 8000, 8200);
+        assert!(matches!(answer, KillStamp::Unnamed(_)), "{answer:?}");
+    }
+
+    #[test]
+    fn a_name_given_through_a_held_lock_serves_no_second_kill() {
+        // Mature named, its plate then unread to the death: the first kill
+        // is given it. Another plate locked on the very next look, lower
+        // still and never read, dies two seconds on: the name read before
+        // the first death is not its name.
+        let c = catalogue(Vec::new());
+        let mut h = history();
+        read_at(&mut h, 6000, seen(&c, "Combibo Mature", Some(4), 1.0));
+        feed(&mut h, 7000, vec![unread(0.69), unread(0.3), unread(0.1)]);
+        read_at(&mut h, 10_000, seen(&c, "Atrox Young", Some(4), 1.0));
+        let first = kill_arrived(&mut h, 7000, 7400);
+        assert_eq!(latest(&first), Some(&creature_of("Combibo", "Mature")));
+        let second = kill_arrived(&mut h, 9000, 9300);
+        assert!(matches!(second, KillStamp::Unnamed(_)), "{second:?}");
     }
 
     #[test]

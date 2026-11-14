@@ -48,7 +48,7 @@ use crate::game_ui::geometry::BgrImage;
 use super::field::{read_run, Recogniser};
 use super::geometry::{chroma, hue, near, Pixels, Rect};
 use super::profile::UiProfile;
-use super::text::{scenery_runs, StrokeProfile, TextProfile};
+use super::text::{scenery_runs_in_rows, StrokeProfile, TextProfile};
 use super::validate::labelled_integer;
 use super::window::{find_windows, ChromeProfile};
 
@@ -161,16 +161,15 @@ pub struct LineProfile {
     /// widths from the bar's top-left corner: wide enough for a long name
     /// set from the bar's left or centred on it.
     pub area: [f64; 4],
+    /// The rows the client sets the line in, `[top, bottom]`, in bar
+    /// widths from the bar's top: its capitals' tops to its descenders'
+    /// feet, and a pixel or two. Ink that reaches out of them is not the
+    /// line's lettering.
+    pub band: [f64; 2],
     /// Lettering further than this many bar widths from the line's last
     /// piece is not part of it: the client draws a status icon some way
     /// after the name.
     pub gap: f64,
-    /// The name's top stands within this many of the level's heights of
-    /// the level's top (both are capitals and digits at the top),
-    pub alignment: f64,
-    /// and its foot at most this many of the level's heights below the
-    /// level's (letters such as `p` hang below the line).
-    pub descent: f64,
     /// A row of window panel this many bar widths long, where the line or
     /// the stretch past its end lies, is a window in front of it.
     pub panel_run: f64,
@@ -805,8 +804,6 @@ pub enum PlateTextError {
     WrongWidth { raw: String },
     #[error("the level did not read, so where the name starts is not certain")]
     LevelUnread,
-    #[error("the lettering after the level is not on the level's line")]
-    Misaligned,
 }
 
 impl PlateTextError {
@@ -822,7 +819,6 @@ impl PlateTextError {
             Self::Invalid { .. } => "invalid",
             Self::WrongWidth { .. } => "wrong-width",
             Self::LevelUnread => "level-unread",
-            Self::Misaligned => "misaligned",
         }
     }
 }
@@ -879,10 +875,22 @@ fn line_over(
     let area = wanted
         .intersect(&Rect::new(0, 0, image.width() - 1, image.height() - 1))
         .ok_or(PlateTextError::NotFound)?;
-    let mut runs: Vec<Rect> = scenery_runs(image, area, &scale.lettering, &scale.stroke, windows)
-        .into_iter()
-        .map(|run| run.rect)
-        .collect();
+    // The client sets the line in one band of rows over the bar. Ink that
+    // reaches out of the band is not lettering but something drawn across
+    // the line (a weapon's beam, a spark, the edge of another plate): it
+    // is left out before the line is put together, so the line is what
+    // lettering stands clear of it, and the band's own height is all the
+    // read then looks at.
+    let w = bar.width() as f64;
+    let band = (
+        bar.y0 + (p.line.band[0] * w).floor() as i32,
+        bar.y0 + (p.line.band[1] * w).ceil() as i32,
+    );
+    let mut runs: Vec<Rect> =
+        scenery_runs_in_rows(image, area, band, &scale.lettering, &scale.stroke, windows)
+            .into_iter()
+            .map(|run| run.rect)
+            .collect();
     runs.sort_by_key(|r| r.x0);
     let gap = line_gap(bar.width(), &p.line);
     let mut chains: Vec<Line> = Vec::new();
@@ -990,6 +998,21 @@ fn reads_as_level(raw: &str, label: &str) -> bool {
             .is_some_and(|rest| !rest.starts_with(char::is_lowercase))
 }
 
+/// The name in `raw`, a piece read whole that opens with a level (the
+/// label and its digits) and goes on into the name: what follows the
+/// level, from its first letter. `None` when `raw` does not open with a
+/// level, or nothing that could be a name follows it.
+fn name_after_level(raw: &str, label: &str, digits: [usize; 2]) -> Option<String> {
+    let rest = raw.trim().strip_prefix(label)?;
+    let count = rest.chars().take_while(char::is_ascii_digit).count();
+    if count < digits[0] || count > digits[1] {
+        return None;
+    }
+    let name = rest[count..].trim_start_matches(|c: char| !c.is_alphabetic());
+    let letters = name.chars().filter(|c| c.is_alphabetic()).count();
+    (letters >= 3).then(|| name.trim().to_string())
+}
+
 /// The level read from the line's first piece.
 fn read_level(
     image: &BgrImage,
@@ -1078,18 +1101,30 @@ fn read_line(
         Ok(_) => {}
         Err(PlateTextError::Invalid { raw } | PlateTextError::WrongWidth { raw })
             if level_sized && reads_as_level(raw, &p.level.label) => {}
+        // Something drawn in the space after the level joins it to the
+        // name as one piece. Read whole, the piece still says where the
+        // name starts when it opens with a level: the name is what
+        // follows, with whatever pieces stand after it.
+        Err(PlateTextError::Invalid { raw }) if !level_sized => {
+            let Some(mut name) = name_after_level(raw, &p.level.label, p.level.digits) else {
+                return (level, Err(PlateTextError::LevelUnread));
+            };
+            if let Some(rest) = line.pieces[1..].iter().copied().reduce(union) {
+                match read_run(image, rest, &profile.read, recogniser) {
+                    Some((more, _)) if !more.trim().is_empty() => {
+                        name.push(' ');
+                        name.push_str(more.trim());
+                    }
+                    _ => {}
+                }
+            }
+            return (level, Ok(name));
+        }
         Err(_) => return (level, Err(PlateTextError::LevelUnread)),
     }
     let Some(name) = line.pieces[1..].iter().copied().reduce(union) else {
         return (level, Err(PlateTextError::NotFound));
     };
-    let height = level_piece.height() as f64;
-    let aligned = ((name.y0 - level_piece.y0) as f64).abs() <= p.line.alignment * height
-        && name.y1 >= level_piece.y1
-        && ((name.y1 - level_piece.y1) as f64) <= p.line.descent * height;
-    if !aligned {
-        return (level, Err(PlateTextError::Misaligned));
-    }
     let name = match read_run(image, name, &profile.read, recogniser) {
         None => Err(PlateTextError::NoRecogniser),
         Some((raw, _)) if raw.trim().is_empty() => Err(PlateTextError::NotFound),
@@ -1795,13 +1830,82 @@ mod tests {
         );
     }
 
+    /// A beam drawn down the scene through column `x`, two pixels wide,
+    /// from well above the line over `bar` down to the bar, which the
+    /// client draws over it: pale on the dark scene, as a weapon's bolt is.
+    fn beam(scene: &mut RadarScene, bar: &Rect, x: i32) {
+        for y in bar.y0 - 80..=bar.y0 - 4 {
+            for dx in 0..2 {
+                crate::game_ui::test_support::put(&mut scene.image, x + dx, y, [250, 250, 250]);
+            }
+        }
+    }
+
+    #[test]
+    fn something_drawn_across_the_line_does_not_stop_the_name_reading() {
+        let profile = bundled_profile();
+        let plain = || {
+            let mut scene = RadarScene::sized(1200, 700, 24);
+            let bar = scene.plate(
+                &PlateDrawing::locked((560, 320), 0.35),
+                "L25",
+                "Zombie Fleshripper",
+            );
+            (scene, bar)
+        };
+        let (scene, bar) = plain();
+        let plate = find_locked_plate(&scene.image, &profile, &mut PlateScratch::default())
+            .expect("a plate is locked");
+        let line = plate_line(&scene.image, &plate, &[], &profile).expect("a line");
+        let name = line.name.expect("a name");
+        // Through the middle of the name: the glyph it touches is left out
+        // of the line with it, the name's other glyphs still span the name,
+        // and it reads; the level is untouched.
+        let (mut scene, _) = plain();
+        beam(&mut scene, &bar, (name.x0 + name.x1) / 2);
+        let read = read_locked_plate(&scene.image, &profile, &scene.recogniser())
+            .expect("a plate is locked");
+        assert_eq!(read.level, Ok(25));
+        assert_eq!(read.name.as_deref(), Ok("Zombie Fleshripper"));
+        // In the space after the level: the beam reaches out of the line's
+        // rows, so it is no part of the line, and both read as they stand.
+        let (mut scene, _) = plain();
+        beam(&mut scene, &bar, (line.level.x1 + name.x0) / 2);
+        let read = read_locked_plate(&scene.image, &profile, &scene.recogniser())
+            .expect("a plate is locked");
+        assert_eq!(read.level, Ok(25));
+        assert_eq!(read.name.as_deref(), Ok("Zombie Fleshripper"));
+    }
+
+    #[test]
+    fn a_name_is_taken_from_a_joined_piece_only_after_a_level() {
+        let digits = [1, 3];
+        let name = |raw: &str| name_after_level(raw, "L", digits);
+        assert_eq!(
+            name("L8{Survival Zombie Dog 04").as_deref(),
+            Some("Survival Zombie Dog 04")
+        );
+        assert_eq!(
+            name("L25Zombie Fleshripper").as_deref(),
+            Some("Zombie Fleshripper")
+        );
+        // No label, no digits after it, too many digits, or nothing that
+        // could be a name after the level: where the name starts is not
+        // known.
+        assert_eq!(name("8Survival Zombie Dog 04"), None);
+        assert_eq!(name("Lava Worm Young"), None);
+        assert_eq!(name("L1234Survival"), None);
+        assert_eq!(name("L8"), None);
+        assert_eq!(name("L8 04"), None);
+    }
+
     #[test]
     fn another_plate_meeting_the_line_refuses_it() {
         let profile = bundled_profile();
         // Another plate's bar across the end of the name (its last word
         // hidden), another plate's line running on from the locked one's,
         // and another plate above with its status icon over the start of
-        // the name, its own line cut by the top of the area searched.
+        // the name, its bar inside the stretch the line is guarded over.
         let cases: [(&str, (i32, i32), bool, PlateTextError); 3] = [
             (
                 "its bar over the name's end",
@@ -1819,7 +1923,7 @@ mod tests {
                 "its icon over the name",
                 (387, 304),
                 true,
-                PlateTextError::Clipped,
+                PlateTextError::Covered,
             ),
         ];
         for (what, at, with_text, why) in cases {

@@ -284,6 +284,26 @@ pub fn scenery_runs<P: Pixels>(
     finish_runs(merge_lines(join_runs(blobs, profile), profile), profile)
 }
 
+/// The same, keeping only ink that stands wholly within the rows `rows`
+/// (`(top, bottom)`, in the frame's coordinates): a group of ink that
+/// reaches above or below them is something drawn across the line the
+/// rows hold, and is left out before the line's runs are put together.
+pub fn scenery_runs_in_rows<P: Pixels>(
+    image: &P,
+    roi: Rect,
+    rows: (i32, i32),
+    profile: &TextProfile,
+    stroke: &StrokeProfile,
+    in_front: &[Rect],
+) -> Vec<TextRun> {
+    let mut blobs = glyph_blobs(image, roi, profile, &|x, y| {
+        !in_front.iter().any(|front| front.contains(x, y))
+            && stroke_ink(image, x, y, profile.min_ink, stroke)
+    });
+    blobs.retain(|blob| blob.rect.y0 >= rows.0 && blob.rect.y1 <= rows.1);
+    finish_runs(merge_lines(join_runs(blobs, profile), profile), profile)
+}
+
 /// Whether two runs share a line: the middle of the shorter lies within
 /// the taller's span, widened by the profile's line slack.
 fn same_line(a: &Rect, b: &Rect, profile: &TextProfile) -> bool {

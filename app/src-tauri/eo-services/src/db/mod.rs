@@ -1964,10 +1964,11 @@ mod tests {
         // + kill mob traces' table and session index
         // + mob labels' table, and the kills named in review with their
         //   session index
+        // + the screen look minutes' table
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 251);
+        assert_eq!(master.len(), 252);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

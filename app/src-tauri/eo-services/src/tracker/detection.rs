@@ -494,6 +494,32 @@ impl TrackerActor {
         }
     }
 
+    /// Store the minutes the watchers have finished counting (see
+    /// [`crate::look_record`]). Called as their looks arrive and once they
+    /// have stopped; with nothing finished it costs two short locks. A
+    /// minute that cannot be stored is dropped: the record is a diagnostic,
+    /// and nothing the session shows depends on it.
+    pub(super) async fn keep_look_minutes(&mut self) {
+        let mut minutes = self.providers.detector.take_look_minutes();
+        minutes.extend(self.providers.tool_detector.take_look_minutes());
+        if minutes.is_empty() {
+            return;
+        }
+        let cpu_pressure = (self.providers.cpu_pressure)();
+        let result = self
+            .db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                crate::look_record::write(&tx, &minutes, cpu_pressure)?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await;
+        if let Err(error) = result {
+            tracing::warn!(target: "eo::tracker", %error, "the watchers' look record could not be saved");
+        }
+    }
+
     /// The history failed on what it was handed: detection ends for this
     /// session, which carries on with every kill keeping its declared stamp.
     fn detection_failed(&mut self) {

@@ -373,10 +373,14 @@ impl TrackerActor {
                 let _ = reply.send(result);
             }
             TrackerMsg::DoseWake => {}
-            TrackerMsg::MobPulse(pulse) => self.on_mob_pulse(pulse).await,
+            TrackerMsg::MobPulse(pulse) => {
+                self.on_mob_pulse(pulse).await;
+                self.keep_look_minutes().await;
+            }
             TrackerMsg::WatchEnded(session_id) => self.on_watch_ended(&session_id).await,
             TrackerMsg::ToolPulse(pulse, generation) => {
                 self.on_tool_pulse(pulse, generation).await;
+                self.keep_look_minutes().await;
             }
             TrackerMsg::ToolWatchEnded(session_id, generation) => {
                 self.on_tool_watch_ended(&session_id, generation).await;

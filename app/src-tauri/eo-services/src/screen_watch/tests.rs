@@ -66,6 +66,7 @@ fn capture_through(
         session_id: "s1",
         hinted_at: None,
         running: &running,
+        notes: std::cell::Cell::default(),
     };
     (eyes.capture(FrameArea::Whole).unwrap(), at_ms, began)
 }

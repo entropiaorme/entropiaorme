@@ -202,6 +202,11 @@ pub trait ToolDetector: Send + Sync {
     /// The player turned the reading on: a capture the desktop refused
     /// before may be asked for again.
     fn permit_capture(&self);
+    /// The finished minutes of how the looks went, handed over once (see
+    /// [`crate::screen_watch::LookMinute`]).
+    fn take_look_minutes(&self) -> Vec<crate::screen_watch::LookMinute> {
+        Vec::new()
+    }
     /// Something the player did may have changed the tool in hand (a key
     /// pressed in the game): look, and read the name, as soon as the
     /// watcher allows. Returns at once, from any thread.
@@ -255,6 +260,12 @@ impl ToolDetector for ToolDetectorSlot {
         if let Some(detector) = self.bound() {
             detector.permit_capture();
         }
+    }
+
+    fn take_look_minutes(&self) -> Vec<crate::screen_watch::LookMinute> {
+        self.bound()
+            .map(|detector| detector.take_look_minutes())
+            .unwrap_or_default()
     }
 
     fn hint(&self) {
@@ -492,6 +503,7 @@ impl Watcher for BarLook {
     type Memory = BarMemory;
     const THREAD: &'static str = "tool-watch";
     const WHAT: &'static str = "the held-tool watcher";
+    const RECORD: &'static str = "tool";
 
     fn reader(&self) -> Option<Reader> {
         Some(Reader {
@@ -552,6 +564,7 @@ impl Watcher for BarLook {
                 if capture.age > Duration::from_millis(watch.capture_slack_ms.max(0) as u64) {
                     // The grab took too long to be placed in time: the
                     // bar was not seen then.
+                    eyes.mark_late();
                     return tell(eyes, memory.settle(unreadable, at_ms, began, settle));
                 }
                 frame
@@ -589,6 +602,7 @@ impl Watcher for BarLook {
         }
         if matches!(state, BarState::Lettered(_) | BarState::Empty(_)) {
             memory.doubted = false;
+            eyes.mark_found();
         }
         memory.place = found.and_then(|bar| bar.pair(profile)).map(|pair| {
             let (dx, dy) = frame.offset;
@@ -635,6 +649,7 @@ impl Watcher for BarLook {
                             // A refused read locks nothing: the next look
                             // reads again.
                             Err(_) => {
+                                eyes.mark_unread();
                                 memory.locked = None;
                                 unreadable
                             }
@@ -688,6 +703,10 @@ impl ToolDetector for Arc<ToolWatch> {
 
     fn permit_capture(&self) {
         ToolWatch::permit_capture(self);
+    }
+
+    fn take_look_minutes(&self) -> Vec<crate::screen_watch::LookMinute> {
+        ToolWatch::take_look_minutes(self)
     }
 
     fn hint(&self) {

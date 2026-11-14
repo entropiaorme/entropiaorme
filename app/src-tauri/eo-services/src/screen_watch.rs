@@ -30,6 +30,13 @@
 //! be: only the grab of the pixels does. A watch stopped while it waited
 //! captures nothing.
 //!
+//! What the looks came to is kept minute by minute (see [`LookMinute`]):
+//! how many were taken, skipped, missed or given up as late, how many
+//! found what they look for and could not read it, and the longest of
+//! each of a look's stages. Whoever started the watch collects the
+//! finished minutes and stores them, so a session can be judged afterwards
+//! for how well the screen was read during it.
+//!
 //! Starting capture for the player's gesture is done under that lock too,
 //! on purpose: on a desktop that asks the player's consent, the question
 //! can stay open for as long as the player leaves it, and another watcher
@@ -234,6 +241,97 @@ pub struct Capture {
     pub frame: Result<GameFrame, FrameUnavailable>,
 }
 
+/// How one watcher's looks went over about a minute of one watch: counts
+/// of looks by what became of them, and the longest of each stage. A
+/// diagnostic record: nothing reads it to decide anything.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LookMinute {
+    pub session_id: String,
+    /// Which watcher: its [`Watcher::RECORD`].
+    pub watcher: &'static str,
+    /// When the minute's first look began, epoch milliseconds on the
+    /// injected clock.
+    pub started_ms: i64,
+    /// Looks that came due and were begun.
+    pub looks: u32,
+    /// Of those, skipped because the game was in the background.
+    pub unfocused: u32,
+    /// Looks the cadence dropped because the look before overran them.
+    pub missed: u32,
+    /// Looks whose capture got a frame.
+    pub frames: u32,
+    /// Looks given up because the pixels took too long to grab.
+    pub late: u32,
+    /// Looks that found what the watcher looks for (a locked plate, the
+    /// tool bar).
+    pub found: u32,
+    /// Of those, looks whose name was tried and did not read.
+    pub unread: u32,
+    /// The longest look, start to finish, in milliseconds on the injected
+    /// clock.
+    pub max_look_ms: u32,
+    /// The longest capture, finding the game window included, in
+    /// milliseconds of real time.
+    pub max_capture_ms: u32,
+    /// The longest grab of the pixels alone, in milliseconds.
+    pub max_grab_ms: u32,
+}
+
+/// How long a [`LookMinute`] runs before the next look opens another.
+const MINUTE_MS: i64 = 60_000;
+
+/// The most finished minutes kept for collection; past it the oldest go.
+const MINUTES_KEPT: usize = 240;
+
+/// What one look noted of itself, for its [`LookMinute`].
+#[derive(Debug, Clone, Copy, Default)]
+struct Notes {
+    unfocused: bool,
+    frame: bool,
+    late: bool,
+    found: bool,
+    unread: bool,
+    capture_ms: u32,
+    grab_ms: u32,
+}
+
+fn millis(duration: Duration) -> u32 {
+    u32::try_from(duration.as_millis()).unwrap_or(u32::MAX)
+}
+
+impl LookMinute {
+    fn opened(session_id: &str, watcher: &'static str, started_ms: i64) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            watcher,
+            started_ms,
+            looks: 0,
+            unfocused: 0,
+            missed: 0,
+            frames: 0,
+            late: 0,
+            found: 0,
+            unread: 0,
+            max_look_ms: 0,
+            max_capture_ms: 0,
+            max_grab_ms: 0,
+        }
+    }
+
+    fn add(&mut self, notes: Notes, look_ms: u32, missed: u32) {
+        self.looks += 1;
+        self.unfocused += u32::from(notes.unfocused);
+        self.missed += missed;
+        self.frames += u32::from(notes.frame);
+        self.late += u32::from(notes.late);
+        self.found += u32::from(notes.found);
+        self.unread += u32::from(notes.unread);
+        self.max_look_ms = self.max_look_ms.max(look_ms);
+        self.max_capture_ms = self.max_capture_ms.max(notes.capture_ms);
+        self.max_grab_ms = self.max_grab_ms.max(notes.grab_ms);
+    }
+}
+
 /// What one look sees with: the capture, the clock, and what the look is
 /// for.
 pub struct Eyes<'a> {
@@ -244,6 +342,8 @@ pub struct Eyes<'a> {
     hinted_at: Option<f64>,
     /// Whether the watch is still the running one.
     running: &'a dyn Fn() -> bool,
+    /// What the look notes of itself as it goes.
+    notes: std::cell::Cell<Notes>,
 }
 
 impl Eyes<'_> {
@@ -260,6 +360,11 @@ impl Eyes<'_> {
         let frame = (self.frame)(area);
         let took = started.elapsed();
         let age = frame.as_ref().map_or(Duration::ZERO, |frame| frame.age);
+        self.note(|notes| {
+            notes.frame = frame.is_ok();
+            notes.capture_ms = millis(took);
+            notes.grab_ms = millis(age);
+        });
         Some(Capture {
             at_ms: clock_epoch_ms(self.clock) - age.as_millis() as i64,
             began: self.clock.monotonic() - age.as_secs_f64(),
@@ -267,6 +372,27 @@ impl Eyes<'_> {
             age,
             frame,
         })
+    }
+
+    fn note(&self, change: impl FnOnce(&mut Notes)) {
+        let mut notes = self.notes.get();
+        change(&mut notes);
+        self.notes.set(notes);
+    }
+
+    /// The look gives its capture up: the pixels took too long to grab.
+    pub fn mark_late(&self) {
+        self.note(|notes| notes.late = true);
+    }
+
+    /// The look found what the watcher looks for.
+    pub fn mark_found(&self) {
+        self.note(|notes| notes.found = true);
+    }
+
+    /// The look tried the name of what it found and could not read it.
+    pub fn mark_unread(&self) {
+        self.note(|notes| notes.unread = true);
     }
 
     pub fn clock(&self) -> &dyn Clock {
@@ -300,6 +426,8 @@ pub trait Watcher: Send + Sync + 'static {
     const THREAD: &'static str;
     /// The watcher, as the log names it.
     const WHAT: &'static str;
+    /// The watcher, as its [`LookMinute`]s name it.
+    const RECORD: &'static str;
 
     /// What the watcher reads with, when it can run here (the interface
     /// profile and the recogniser are loaded).
@@ -345,6 +473,29 @@ struct State {
     capture_refused: bool,
     /// The player turned the setting on: the next look may start capture.
     may_start: bool,
+    /// The running watch's minute still being counted.
+    minute: Option<LookMinute>,
+    /// Finished minutes waiting to be collected, oldest first.
+    minutes: std::collections::VecDeque<LookMinute>,
+}
+
+impl State {
+    /// Finish the minute being counted: it waits to be collected.
+    fn close_minute(&mut self) {
+        if let Some(minute) = self.minute.take() {
+            if self.minutes.len() == MINUTES_KEPT {
+                self.minutes.pop_front();
+            }
+            self.minutes.push_back(minute);
+        }
+    }
+
+    /// Stop watching, whoever asks: the watch's last minute is finished
+    /// with it.
+    fn end_watch(&mut self) -> Option<Watching> {
+        self.close_minute();
+        self.watching.take()
+    }
 }
 
 /// Counts the live workers, so shutting down can wait for them.
@@ -392,6 +543,8 @@ impl<W: Watcher> ScreenWatch<W> {
                 last_watch: 0,
                 capture_refused: false,
                 may_start: false,
+                minute: None,
+                minutes: std::collections::VecDeque::new(),
             }),
             looking: Mutex::new(()),
             workers: Workers::default(),
@@ -468,7 +621,7 @@ impl<W: Watcher> ScreenWatch<W> {
         }
         // Replacing the running watch drops its sender: that worker
         // wakes and ends.
-        state.watching = None;
+        state.end_watch();
         let watch = state.last_watch + 1;
         let (wake, woken) = mpsc::channel();
         *self
@@ -502,7 +655,40 @@ impl<W: Watcher> ScreenWatch<W> {
 
     /// Stop watching. Returns at once: the worker ends within its look.
     pub fn stop(&self) {
-        self.lock_state().watching = None;
+        self.lock_state().end_watch();
+    }
+
+    /// The finished minutes of how the looks went, oldest first, handed
+    /// over once: of the running watch up to its last full minute, and of
+    /// every watch that ended since they were last taken.
+    pub fn take_look_minutes(&self) -> Vec<LookMinute> {
+        self.lock_state().minutes.drain(..).collect()
+    }
+
+    /// Count one look of `watch` into its minute, opening the next minute
+    /// when this one has run its length. A look of a watch no longer
+    /// running is not counted.
+    fn tally(&self, watch: u64, began_ms: i64, notes: Notes, look_ms: u32, missed: u32) {
+        let mut state = self.lock_state();
+        let Some(session_id) = state
+            .watching
+            .as_ref()
+            .filter(|w| w.watch == watch)
+            .map(|w| w.session_id.clone())
+        else {
+            return;
+        };
+        if state
+            .minute
+            .as_ref()
+            .is_some_and(|minute| began_ms - minute.started_ms >= MINUTE_MS)
+        {
+            state.close_minute();
+        }
+        state
+            .minute
+            .get_or_insert_with(|| LookMinute::opened(&session_id, W::RECORD, began_ms))
+            .add(notes, look_ms, missed);
     }
 
     /// Ask for a look as soon as the watcher allows, instead of at the
@@ -606,7 +792,7 @@ impl<W: Watcher> ScreenWatch<W> {
         if state.watching.as_ref().is_none_or(|w| w.watch != watch) {
             return None;
         }
-        let ended = state.watching.take()?;
+        let ended = state.end_watch()?;
         ended.ended.map(|tell| (tell, ended.session_id))
     }
 
@@ -660,7 +846,8 @@ impl<W: Watcher> ScreenWatch<W> {
             }
             let hinted = hinted_at.is_some();
             let began = self.clock.monotonic();
-            let look = {
+            let began_ms = clock_epoch_ms(self.clock.as_ref());
+            let (look, notes) = {
                 let _looking = self.looking.lock().unwrap_or_else(PoisonError::into_inner);
                 // Checked again after waiting for another worker's look.
                 if !self.is_watching(watch) {
@@ -687,9 +874,24 @@ impl<W: Watcher> ScreenWatch<W> {
                     session_id,
                     hinted_at,
                     running: &running,
+                    notes: std::cell::Cell::default(),
                 };
-                catch_unwind(AssertUnwindSafe(|| self.look(reader, &mut memory, &eyes)))
+                let look = catch_unwind(AssertUnwindSafe(|| self.look(reader, &mut memory, &eyes)));
+                (look, eyes.notes.get())
             };
+            let look_ms = millis(Duration::from_secs_f64(
+                (self.clock.monotonic() - began).max(0.0),
+            ));
+            last = Some(began);
+            // A hinted look starts the cadence again from itself.
+            let from = if hinted { began } else { due };
+            due = next_due(from, interval, self.clock.monotonic());
+            // Every interval between this look's place on the cadence and
+            // the next, past the first, is a look the cadence dropped.
+            let missed = (((due - from) / interval).round() as u32).saturating_sub(1);
+            // Counted before the look is handed on, so a watch its own
+            // consumer stops on this look has counted it.
+            self.tally(watch, began_ms, notes, look_ms, missed);
             match look {
                 Ok(Look::Tell(pulse)) => {
                     // A look finishing after its watch ended is dropped.
@@ -720,13 +922,6 @@ impl<W: Watcher> ScreenWatch<W> {
                     return;
                 }
             }
-            last = Some(began);
-            // A hinted look starts the cadence again from itself.
-            due = next_due(
-                if hinted { began } else { due },
-                interval,
-                self.clock.monotonic(),
-            );
         }
     }
 
@@ -754,6 +949,7 @@ impl<W: Watcher> ScreenWatch<W> {
             .as_ref()
             .is_some_and(|focus| !GameFocus::game_in_view(focus()))
         {
+            eyes.note(|notes| notes.unfocused = true);
             return Look::Quiet;
         }
         self.watcher.look(reader, memory, eyes)

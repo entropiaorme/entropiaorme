@@ -84,6 +84,8 @@ struct ScriptedWatcher {
     starts: Mutex<Vec<String>>,
     stops: Mutex<usize>,
     permits: Mutex<usize>,
+    /// Finished minutes of looks, waiting for the tracker to collect.
+    minutes: Mutex<Vec<crate::screen_watch::LookMinute>>,
 }
 
 impl MobDetector for ScriptedWatcher {
@@ -113,6 +115,10 @@ impl MobDetector for ScriptedWatcher {
 
     fn permit_capture(&self) {
         *self.permits.lock().unwrap() += 1;
+    }
+
+    fn take_look_minutes(&self) -> Vec<crate::screen_watch::LookMinute> {
+        std::mem::take(&mut self.minutes.lock().unwrap())
     }
 }
 
@@ -1583,5 +1589,82 @@ fn the_players_label_for_a_mob_names_its_kills_and_no_reading_replaces_it() {
             "Dog IV".into(),
             "player".into()
         )]
+    );
+}
+
+/// A finished minute of the creature watcher's looks for `session`.
+fn look_minute(session: &str, started_ms: i64, looks: u32) -> crate::screen_watch::LookMinute {
+    crate::screen_watch::LookMinute {
+        session_id: session.to_string(),
+        watcher: "mob",
+        started_ms,
+        looks,
+        unfocused: 1,
+        missed: 2,
+        frames: looks - 1,
+        late: 3,
+        found: 4,
+        unread: 1,
+        max_look_ms: 420,
+        max_capture_ms: 400,
+        max_grab_ms: 12,
+    }
+}
+
+#[test]
+fn the_watchers_finished_minutes_are_stored_as_looks_arrive_and_when_the_session_stops() {
+    let mut hunt = hunt(true);
+    let session = hunt.start();
+    let stored = |hunt: &Hunt| -> Vec<(String, String, f64, i64, i64, Option<f64>)> {
+        hunt.settle();
+        hunt.rig
+            .wait(hunt.rig.db.with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT session_id, watcher, started_at, looks, late, cpu_pressure \
+                     FROM screen_look_minutes ORDER BY started_at",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            }))
+            .unwrap()
+    };
+    assert!(stored(&hunt).is_empty());
+
+    // A minute finished: the next look to arrive has it stored.
+    hunt.watcher
+        .minutes
+        .lock()
+        .unwrap()
+        .push(look_minute(&session, 60_000, 60));
+    hunt.look(1_000, None);
+    assert_eq!(
+        stored(&hunt),
+        [(session.clone(), "mob".to_string(), 60.0, 60, 3, None)]
+    );
+
+    // The watch's last minute is finished by its stop, and stored with it.
+    hunt.watcher
+        .minutes
+        .lock()
+        .unwrap()
+        .push(look_minute(&session, 120_000, 7));
+    hunt.rig.wait(hunt.tracker.stop_session()).unwrap();
+    assert_eq!(
+        stored(&hunt)
+            .iter()
+            .map(|row| (row.2, row.3))
+            .collect::<Vec<_>>(),
+        [(60.0, 60), (120.0, 7)]
     );
 }

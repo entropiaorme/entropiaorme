@@ -1216,6 +1216,8 @@ impl TrackerActor {
         self.unsubscribe_handlers();
         self.drop_detection();
         self.drop_tool_reading();
+        // The watchers have stopped: their last minutes are finished.
+        self.keep_look_minutes().await;
 
         // Session end is a quiescent boundary: checkpoint and truncate the WAL
         // so its growth over a tracked session is bounded. Best-effort: the

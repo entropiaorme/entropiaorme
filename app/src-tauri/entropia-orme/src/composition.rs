@@ -1562,6 +1562,7 @@ fn compose_producers(
             Providers {
                 detector: mob_detection.clone(),
                 tool_detector: tool_detection.clone(),
+                cpu_pressure: Arc::new(eo_services::look_record::system_cpu_pressure),
                 // A library entry read off the screen resolves as a press
                 // or a declaration of it does; a tool the library does not
                 // hold prices bare from the game data.
@@ -2175,6 +2176,8 @@ fn build_providers(
         mob_names: Arc::default(),
         // Bound by `compose_producers`, which owns the held-tool slot.
         tool_detector: Arc::new(eo_services::tool_watch::NoToolDetector),
+        // Wired where the tracker is built.
+        cpu_pressure: Arc::new(|| None),
         items: None,
         bundled_tools: None,
     }

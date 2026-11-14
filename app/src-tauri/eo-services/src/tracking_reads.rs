@@ -1705,6 +1705,10 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 rusqlite::params![sid],
             )?;
             tx.execute(
+                "DELETE FROM screen_look_minutes WHERE session_id = ?",
+                rusqlite::params![sid],
+            )?;
+            tx.execute(
                 "DELETE FROM kills WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;

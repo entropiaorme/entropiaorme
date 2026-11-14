@@ -208,6 +208,10 @@ pub struct Providers {
     /// The held-tool watcher that reads the tool in hand off the screen.
     /// Inert where nothing looks at a screen.
     pub tool_detector: Arc<dyn crate::tool_watch::ToolDetector>,
+    /// How contended the machine's processors are, kept beside the record
+    /// of how the watchers' looks went. Says nothing where it is not
+    /// wired.
+    pub cpu_pressure: crate::look_record::CpuPressure,
     /// An equipment-library entry to its current snapshot, as a hotbar
     /// press or an overlay declaration resolves it: how a library entry
     /// read off the screen is resolved. None resolves nothing. It may read
@@ -229,6 +233,7 @@ impl Default for Providers {
             detector: Arc::new(crate::mob_watch::NoDetector),
             mob_names: Arc::default(),
             tool_detector: Arc::new(crate::tool_watch::NoToolDetector),
+            cpu_pressure: Arc::new(|| None),
             items: None,
             bundled_tools: None,
         }

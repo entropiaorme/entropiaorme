@@ -225,6 +225,26 @@ fn looks_keep_the_cadence_and_a_slow_look_drops_the_ones_it_overran() {
         6,
         "one capture per look"
     );
+    // The watch's one minute says the same: six looks, each with a frame,
+    // one given up as late, two dropped by the cadence behind it.
+    let minutes = rig.watch.take_look_minutes();
+    assert_eq!(minutes.len(), 1, "{minutes:?}");
+    let minute = &minutes[0];
+    assert_eq!(
+        (
+            minute.session_id.as_str(),
+            minute.watcher,
+            minute.started_ms
+        ),
+        ("s1", "mob", start)
+    );
+    assert_eq!(
+        (minute.looks, minute.frames, minute.late, minute.missed),
+        (6, 6, 1, 2)
+    );
+    assert_eq!((minute.unfocused, minute.found, minute.unread), (0, 0, 0));
+    assert_eq!((minute.max_look_ms, minute.max_grab_ms), (2_500, 2_500));
+    assert!(rig.watch.take_look_minutes().is_empty(), "handed over once");
     let seen = rig.seen.lock().unwrap();
     assert!(
         seen.iter()
@@ -299,6 +319,12 @@ fn nothing_is_captured_while_another_window_holds_focus() {
         rig.captures.load(Ordering::SeqCst),
         2,
         "no capture in the background"
+    );
+    let minutes = rig.watch.take_look_minutes();
+    assert_eq!(
+        (minutes[0].looks, minutes[0].unfocused, minutes[0].frames),
+        (5, 3, 2),
+        "the looks skipped in the background are counted as such"
     );
 }
 
@@ -466,6 +492,50 @@ fn a_look_reads_the_locked_plate_and_matches_its_name() {
     assert!(after.plate_capture_latency.count > before.plate_capture_latency.count);
     assert!(after.plate_search_latency.count > before.plate_search_latency.count);
     assert!(after.plate_read_latency.count > before.plate_read_latency.count);
+    let minutes = rig.watch.take_look_minutes();
+    assert_eq!((minutes[0].found, minutes[0].unread), (1, 0));
+}
+
+#[test]
+fn a_locked_plate_whose_name_does_not_read_is_counted_unread() {
+    let mut scene = RadarScene::sized(1100, 600, 7);
+    scene.plate(&PlateDrawing::locked((420, 300), 0.6), "L5", "Atrox Young");
+    let image = scene.image.clone();
+    // The rig's own recogniser reads nothing.
+    let rig = rig_with(
+        Arc::new(move |_, _| Ok(GameFrame::whole(image.clone(), (0, 0)))),
+        driven(),
+        None,
+        MobCatalogue::default(),
+    );
+    rig.start("s1", 2);
+    rig.finish();
+    let minutes = rig.watch.take_look_minutes();
+    assert_eq!(
+        (minutes[0].looks, minutes[0].found, minutes[0].unread),
+        (2, 2, 2)
+    );
+}
+
+#[test]
+fn a_minute_of_looks_is_finished_when_the_next_begins() {
+    let rig = rig_with(
+        Arc::new(|_, _| blank_frame()),
+        Box::new(|clock, _| driven_wait(clock, 200)),
+        None,
+        MobCatalogue::default(),
+    );
+    let start = clock_epoch_ms(rig.clock.as_ref());
+    rig.start("s1", 62);
+    rig.finish();
+    let minutes = rig.watch.take_look_minutes();
+    assert_eq!(
+        minutes
+            .iter()
+            .map(|minute| (minute.started_ms - start, minute.looks))
+            .collect::<Vec<_>>(),
+        [(0, 60), (60_000, 2)]
+    );
 }
 
 #[test]

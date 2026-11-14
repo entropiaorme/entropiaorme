@@ -98,6 +98,11 @@ pub trait MobDetector: Send + Sync {
     /// The player turned detection on: a capture the desktop refused
     /// before may be asked for again.
     fn permit_capture(&self);
+    /// The finished minutes of how the looks went, handed over once (see
+    /// [`crate::screen_watch::LookMinute`]).
+    fn take_look_minutes(&self) -> Vec<crate::screen_watch::LookMinute> {
+        Vec::new()
+    }
     /// Stop at app exit, waiting briefly for a look in progress.
     fn shutdown(&self) {
         self.stop();
@@ -155,6 +160,12 @@ impl MobDetector for DetectorSlot {
         if let Some(detector) = self.bound() {
             detector.permit_capture();
         }
+    }
+
+    fn take_look_minutes(&self) -> Vec<crate::screen_watch::LookMinute> {
+        self.bound()
+            .map(|detector| detector.take_look_minutes())
+            .unwrap_or_default()
     }
 
     fn shutdown(&self) {
@@ -225,6 +236,7 @@ impl Watcher for PlateLook {
     type Memory = PlateMemory;
     const THREAD: &'static str = "mob-watch";
     const WHAT: &'static str = "the creature watcher";
+    const RECORD: &'static str = "mob";
 
     fn reader(&self) -> Option<Reader> {
         Some(Reader {
@@ -258,6 +270,7 @@ impl Watcher for PlateLook {
                 // capturing costs.
                 metrics.record_plate_capture(capture.took);
                 if capture.age.as_secs_f64() > memory.slack {
+                    eyes.mark_late();
                     return Look::Quiet;
                 }
                 frame.image
@@ -281,6 +294,7 @@ impl Watcher for PlateLook {
         let Some(locked) = locked else {
             return Look::Tell(pulse(None));
         };
+        eyes.mark_found();
         let started = Instant::now();
         // A crop the recogniser fails on reads as nothing, which no
         // grammar or name accepts.
@@ -290,6 +304,9 @@ impl Watcher for PlateLook {
         let sighting = read_found_plate(&image, &locked, profile, &recogniser)
             .map(|read| Sighting::of(&read, &self.catalogue.current(), &profile.mob_names));
         metrics.record_plate_read(started.elapsed());
+        if sighting.as_ref().is_none_or(|s| s.raw_name.is_none()) {
+            eyes.mark_unread();
+        }
         Look::Tell(pulse(sighting))
     }
 }
@@ -341,6 +358,10 @@ impl MobDetector for Arc<MobWatch> {
 
     fn permit_capture(&self) {
         MobWatch::permit_capture(self);
+    }
+
+    fn take_look_minutes(&self) -> Vec<crate::screen_watch::LookMinute> {
+        MobWatch::take_look_minutes(self)
     }
 
     fn shutdown(&self) {

@@ -4,7 +4,7 @@
 	import ExpandingActionButton from '$lib/components/ExpandingActionButton.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
-	import type { InventoryItem } from '$lib/api';
+	import type { AssetPurchase, InventoryItem } from '$lib/api';
 	import MarkupConfidenceInfo from '$lib/features/analytics/MarkupConfidenceInfo.svelte';
 	import MarkupConfidenceSelector from '$lib/features/analytics/MarkupConfidenceSelector.svelte';
 	import TreeCuttingStockView from '$lib/features/analytics/TreeCuttingStock.svelte';
@@ -13,6 +13,7 @@
 		TreeCuttingStock,
 	} from '$lib/features/analytics/treeCuttingModel.svelte';
 	import { formatLedgerDate, formatPed } from '$lib/utils/format';
+	import { formatQuantity, isStack, perUnit } from './assetPosition';
 	import { derivedFromLabel } from './conversionDraft';
 	import type { InventoryKind } from './inventoryModel.svelte';
 	import PacketFeeInfo from './PacketFeeInfo.svelte';
@@ -37,6 +38,9 @@
 		oneditequipment,
 		onsellequipment,
 		ondeleteequipment,
+		onaddpurchase,
+		oneditpurchase,
+		ondeletepurchase,
 	}: {
 		kind: InventoryKind;
 		onkindchange: (id: string) => void;
@@ -57,7 +61,22 @@
 		oneditequipment: (item: InventoryItem) => void;
 		onsellequipment: (item: InventoryItem) => void;
 		ondeleteequipment: (item: InventoryItem) => void;
+		/** Record buying more of an asset. */
+		onaddpurchase: (item: InventoryItem) => void;
+		oneditpurchase: (item: InventoryItem, purchase: AssetPurchase) => void;
+		ondeletepurchase: (item: InventoryItem, purchase: AssetPurchase) => void;
 	} = $props();
+
+	/** The assets whose purchases are showing. */
+	let expanded = $state<Set<string>>(new Set());
+	function toggle(id: string) {
+		const next = new Set(expanded);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		expanded = next;
+	}
+	const FIXED_PURCHASE =
+		'Units it paid for were sold, listed, or converted, so what it cost is fixed.';
 
 	let query = $state('');
 	const visibleEquipment = $derived(filterByQuery(equipment, query, (item) => item.name));
@@ -146,11 +165,12 @@
 				role="row"
 			>
 				<span class="eyebrow min-w-0 flex-1" role="columnheader">Asset</span>
+				<span class="eyebrow w-16 shrink-0 text-right" role="columnheader">Qty</span>
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">TT</span>
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">MU paid</span>
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">Total cost</span>
 				<span class="eyebrow w-28 shrink-0 text-right" role="columnheader">Acquired</span>
-				<span class="eyebrow w-[7rem] shrink-0 text-right" role="columnheader">Actions</span>
+				<span class="eyebrow w-[9rem] shrink-0 text-right" role="columnheader">Actions</span>
 			</div>
 
 		<ul
@@ -159,6 +179,8 @@
 			data-testid="equipment-scroll-list"
 		>
 			{#each visibleEquipment as item (item.id)}
+				{@const stack = isStack(item)}
+				{@const open = expanded.has(item.id)}
 				<li class="flex items-center gap-3 rounded-md px-2.5 py-2" role="row">
 					<div class="min-w-0 flex-1" role="cell">
 						<p class="truncate text-sm font-medium tracking-tight text-text">{item.name}</p>
@@ -170,20 +192,53 @@
 						{#if item.notes}
 							<p class="mt-0.5 truncate text-xs text-text-tertiary">{item.notes}</p>
 						{/if}
+						{#if item.purchases.length > 1}
+							<button
+								type="button"
+								class="mt-0.5 text-xs text-text-tertiary hover:text-text"
+								aria-expanded={open}
+								aria-controls={`purchases-${item.id}`}
+								onclick={() => toggle(item.id)}
+							>
+								{open ? 'Hide' : 'Show'} {item.purchases.length} purchases
+							</button>
+						{/if}
 					</div>
+					<span class="w-16 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
+						{formatQuantity(item.quantity)}
+					</span>
 					<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
 						{formatPed(item.ttValue)}
 					</span>
-					<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
-						{formatPed(item.markupPaid)}
+					<span class="w-24 shrink-0 text-right tabular-nums" role="cell">
+						<span class="block text-sm text-text-secondary">{formatPed(item.markupPaid)}</span>
+						{#if stack}
+							<span class="block text-xs text-text-tertiary">
+								{formatPed(perUnit(item.markupPaid, item.quantity) ?? 0)} each
+							</span>
+						{/if}
 					</span>
-					<span class="w-24 shrink-0 text-right text-sm font-medium tabular-nums text-text" role="cell">
-						{formatPed(item.ttValue + item.markupPaid)}
+					<span class="w-24 shrink-0 text-right tabular-nums" role="cell">
+						<span class="block text-sm font-medium text-text">
+							{formatPed(item.ttValue + item.markupPaid)}
+						</span>
+						{#if stack}
+							<span class="block text-xs text-text-tertiary">
+								{formatPed(perUnit(item.ttValue + item.markupPaid, item.quantity) ?? 0)} each
+							</span>
+						{/if}
 					</span>
 					<span class="w-28 shrink-0 text-right text-xs tabular-nums text-text-tertiary" role="cell">
 						{formatLedgerDate(item.acquiredAt)}
 					</span>
-					<div class="flex min-w-[7rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+					<div class="flex min-w-[9rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+						{#if item.divisible}
+							<ExpandingActionButton
+								letter="B"
+								label="Buy more"
+								onclick={() => onaddpurchase(item)}
+							/>
+						{/if}
 						<ExpandingActionButton
 							letter="C"
 							label="Convert"
@@ -206,6 +261,56 @@
 						/>
 					</div>
 				</li>
+				{#if open}
+					{#each item.purchases as purchase (purchase.id)}
+						<li
+							id={purchase === item.purchases[0] ? `purchases-${item.id}` : undefined}
+							class="flex items-center gap-3 px-2.5 py-1"
+							role="row"
+							aria-label={`Purchase of ${item.name} on ${formatLedgerDate(purchase.acquiredAt)}`}
+						>
+							<span class="min-w-0 flex-1 truncate pl-4 text-xs text-text-tertiary" role="cell">
+								{purchase.fromConversion ? 'Made by a conversion' : 'Bought'}
+							</span>
+							<span class="w-16 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
+								{formatQuantity(purchase.quantity)}
+							</span>
+							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
+								{formatPed(purchase.ttValue)}
+							</span>
+							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
+								{formatPed(purchase.markupPaid)}
+								<span class="block text-text-tertiary">
+									{formatPed(perUnit(purchase.markupPaid, purchase.quantity) ?? 0)} each
+								</span>
+							</span>
+							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
+								{formatPed(purchase.ttValue + purchase.markupPaid)}
+							</span>
+							<span class="w-28 shrink-0 text-right text-xs tabular-nums text-text-tertiary" role="cell">
+								{formatLedgerDate(purchase.acquiredAt)}
+							</span>
+							<div class="flex min-w-[9rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+								{#if !purchase.fromConversion}
+									<ExpandingActionButton
+										letter="E"
+										label="Edit purchase"
+										disabled={!purchase.editable}
+										title={purchase.editable ? '' : FIXED_PURCHASE}
+										onclick={() => oneditpurchase(item, purchase)}
+									/>
+									<ExpandingActionButton
+										letter="X"
+										label="Remove purchase"
+										disabled={!purchase.editable}
+										title={purchase.editable ? '' : FIXED_PURCHASE}
+										onclick={() => ondeletepurchase(item, purchase)}
+									/>
+								{/if}
+							</div>
+						</li>
+					{/each}
+				{/if}
 			{/each}
 			{#if visibleEquipment.length === 0 && isSearchQuery(query)}
 				<li class="px-2.5 py-3 text-center text-xs text-text-tertiary" role="row">

@@ -199,8 +199,8 @@
 	const netPreview = $derived.by(() => {
 		const net = previewNetMarkup(fields, channel);
 		if (net === null) return null;
-		// Converted stock can carry markup paid to produce it. An asset's own
-		// basis is handled where it is sold.
+		// Converted stock and assets carry markup already paid for them, which
+		// the sale recovers before anything is gained.
 		const held = holdings.find((row) => row.holdingId === chosen?.holdingId);
 		return net - (held?.paidPerUnit ?? 0) * (fields.quantity ?? 0);
 	});

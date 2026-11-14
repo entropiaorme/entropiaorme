@@ -1,6 +1,7 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
 	ActivityHistoryEntry,
+	AssetPurchaseInput,
 	AuctionListing,
 	EquipmentListingInput,
 	EquipmentTradeInput,
@@ -13,12 +14,14 @@ import type {
 	StockPosition,
 } from '$lib/api/commands.gen';
 import {
+	addAssetPurchase,
 	captureSaleWindow,
 	commitInventorySaleDraft,
 	confirmInventoryListing,
 	convertItems,
 	convertLoot,
 	convertLootShrapnel,
+	deleteAssetPurchase,
 	deleteEquipmentHolding,
 	expireInventoryListing,
 	getEquipmentInventory,
@@ -33,6 +36,7 @@ import {
 	undoInventoryListing,
 	undoInventoryRemoval,
 	undoInventoryTrade,
+	updateAssetPurchase,
 } from '$lib/api/inventory';
 import {
 	getMarketAuctionPacketThreshold,
@@ -281,7 +285,7 @@ export function createInventoryModel() {
 	async function listEquipment(input: EquipmentListingInput) {
 		const item = equipment.find((row) => row.id === input.itemId);
 		if (!item) throw new Error('That asset is no longer available');
-		const draft = manualDraft('auction', item.name, 1, input);
+		const draft = manualDraft('auction', item.name, input.quantity ?? item.quantity, input);
 		await withRefresh(
 			() =>
 				commitInventorySaleDraft({
@@ -296,7 +300,9 @@ export function createInventoryModel() {
 	async function sellEquipmentByTrade(input: EquipmentTradeInput) {
 		const item = equipment.find((row) => row.id === input.itemId);
 		if (!item) throw new Error('That asset is no longer available');
-		const draft = manualDraft('trade', item.name, 1, { finalPrice: input.soldFor });
+		const draft = manualDraft('trade', item.name, input.quantity ?? item.quantity, {
+			finalPrice: input.soldFor,
+		});
 		await withRefresh(
 			() =>
 				commitInventorySaleDraft({
@@ -430,6 +436,27 @@ export function createInventoryModel() {
 		);
 	}
 
+	/** Record buying more of an asset. */
+	async function addPurchase(item: InventoryItem, purchase: AssetPurchaseInput) {
+		await withRefresh(
+			() => addAssetPurchase(item.id, purchase),
+			`Failed to add the purchase of ${item.name}`,
+		);
+	}
+
+	/** Correct one of an asset's purchases. */
+	async function updatePurchase(purchaseId: number, purchase: AssetPurchaseInput) {
+		await withRefresh(
+			() => updateAssetPurchase(purchaseId, purchase),
+			'Failed to change the purchase',
+		);
+	}
+
+	/** Take back one of an asset's purchases. */
+	async function deletePurchase(purchaseId: number) {
+		await withRefresh(() => deleteAssetPurchase(purchaseId), 'Failed to remove the purchase');
+	}
+
 	async function deleteEquipment(item: InventoryItem) {
 		await withRefresh(() => deleteEquipmentHolding(item.id), `Failed to remove ${item.name}`);
 	}
@@ -463,9 +490,10 @@ export function createInventoryModel() {
 		...equipment.map((row) => ({
 			name: row.name,
 			assetId: row.id,
-			heldQty: 1,
-			unitTt: row.ttValue,
-			paidPerUnit: row.markupPaid,
+			heldQty: row.quantity,
+			unitTt: row.ttValue / row.quantity,
+			paidPerUnit: row.markupPaid / row.quantity,
+			divisible: row.divisible,
 			origins: row.origins,
 		})),
 	]);
@@ -490,8 +518,8 @@ export function createInventoryModel() {
 			holdingId: row.id,
 			name: row.name,
 			score: 100,
-			// A capital position is indivisible, so its whole TT is its unit.
-			heldQty: 1,
+			heldQty: row.quantity,
+			paidPerUnit: row.markupPaid / row.quantity,
 		})),
 	]);
 
@@ -586,6 +614,9 @@ export function createInventoryModel() {
 		remove,
 		shrapnel,
 		deleteEquipment,
+		addPurchase,
+		updatePurchase,
+		deletePurchase,
 	};
 }
 

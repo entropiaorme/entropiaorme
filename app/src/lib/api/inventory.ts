@@ -75,6 +75,12 @@ export const undoInventoryTrade = commands.privateSaleUndo;
 export const undoInventoryRemoval = commands.stockRemovalUndo;
 
 export const addEquipmentHolding = commands.inventoryCreate;
+/** Record buying more of an asset, which moves its average cost. */
+export const addAssetPurchase = commands.inventoryPurchaseAdd;
+/** Correct a purchase that no sale or listing has drawn on yet. */
+export const updateAssetPurchase = commands.inventoryPurchaseUpdate;
+/** Take back a purchase that no sale or listing has drawn on yet. */
+export const deleteAssetPurchase = commands.inventoryPurchaseDelete;
 export const updateEquipmentHolding = commands.inventoryUpdate;
 export const deleteEquipmentHolding = commands.inventoryDelete;
 export const resolveInventoryDraft = (draft: InventorySaleDraft) =>
@@ -111,6 +117,7 @@ export async function commitInventorySaleDraft({
 		return draft.channel === 'auction'
 			? createEquipmentListing({
 					itemId: holding.holdingId,
+					quantity: draft.quantity,
 					startingBid: draft.startingBid ?? 0,
 					buyout: draft.buyout,
 					listingFee: draft.listingFee ?? 0,
@@ -120,6 +127,7 @@ export async function commitInventorySaleDraft({
 				})
 			: tradeEquipment({
 					itemId: holding.holdingId,
+					quantity: draft.quantity,
 					soldFor: draft.finalPrice ?? 0,
 					soldAt: occurredAt,
 				});

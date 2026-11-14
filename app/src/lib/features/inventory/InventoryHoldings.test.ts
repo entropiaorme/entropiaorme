@@ -28,6 +28,9 @@ describe('inventory assets', () => {
 		oneditequipment: vi.fn(),
 		onsellequipment: vi.fn(),
 		ondeleteequipment: vi.fn(),
+		onaddpurchase: vi.fn(),
+		oneditpurchase: vi.fn(),
+		ondeletepurchase: vi.fn(),
 	});
 
 	it('uses the shared inventory layout and compact actions for assets', async () => {
@@ -41,6 +44,9 @@ describe('inventory assets', () => {
 			markupPaid: 75,
 			notes: 'Tier 4',
 			acquiredAt: '2026-08-01',
+			quantity: 1,
+			divisible: true,
+			purchases: [],
 			origins: [],
 			derivedFrom: [],
 		};
@@ -65,6 +71,9 @@ describe('inventory assets', () => {
 				oneditequipment: onedit,
 				onsellequipment: onsell,
 				ondeleteequipment: onremove,
+				onaddpurchase: vi.fn(),
+				oneditpurchase: vi.fn(),
+				ondeletepurchase: vi.fn(),
 			},
 		});
 
@@ -77,13 +86,13 @@ describe('inventory assets', () => {
 			within(table)
 				.getAllByRole('columnheader')
 				.map((header) => header.textContent),
-		).toEqual(['Asset', 'TT', 'MU paid', 'Total cost', 'Acquired', 'Actions']);
+		).toEqual(['Asset', 'Qty', 'TT', 'MU paid', 'Total cost', 'Acquired', 'Actions']);
 		expect(screen.getByText('Ares Ring, Improved')).not.toBeNull();
 		const assetCell = screen.getByText('Ares Ring, Improved').parentElement;
 		const actionCell = screen.getByRole('button', { name: 'Edit' }).parentElement;
 		expect(assetCell?.classList.contains('flex-1')).toBe(true);
-		expect(actionCell?.classList.contains('min-w-[7rem]')).toBe(true);
-		expect(actionCell?.classList.contains('w-[7rem]')).toBe(false);
+		expect(actionCell?.classList.contains('min-w-[9rem]')).toBe(true);
+		expect(actionCell?.classList.contains('w-[9rem]')).toBe(false);
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 		await fireEvent.click(screen.getByRole('button', { name: 'Sell' }));
@@ -134,6 +143,9 @@ describe('inventory assets', () => {
 				oneditequipment: vi.fn(),
 				onsellequipment: vi.fn(),
 				ondeleteequipment: vi.fn(),
+				onaddpurchase: vi.fn(),
+				oneditpurchase: vi.fn(),
+				ondeletepurchase: vi.fn(),
 			},
 		});
 
@@ -248,5 +260,104 @@ describe('inventory assets', () => {
 		await fireEvent.input(input, { target: { value: '8.5' } });
 		await fireEvent.blur(input);
 		expect(onchange).toHaveBeenLastCalledWith(8.5);
+	});
+});
+
+describe('assets held by quantity', () => {
+	const purchase = (id: number, quantity: number, markupPaid: number, editable: boolean) => ({
+		id,
+		quantity,
+		ttValue: quantity * 0.1,
+		markupPaid,
+		acquiredAt: `2026-08-0${id}`,
+		fromConversion: false,
+		editable,
+	});
+	const strongboxes = {
+		id: 'strongboxes',
+		name: 'Strongbox',
+		ttValue: 20,
+		markupPaid: 1800,
+		notes: null,
+		acquiredAt: '2026-08-01',
+		quantity: 200,
+		divisible: true,
+		purchases: [purchase(1, 100, 1000, false), purchase(2, 100, 800, true)],
+		origins: [],
+		derivedFrom: [],
+	};
+	const props = (equipment: (typeof strongboxes)[]) => ({
+		kind: 'equipment' as const,
+		onkindchange: vi.fn(),
+		confidenceMode: 'liquid' as const,
+		onconfidencechange: vi.fn(),
+		packetFeeSharePct: 10,
+		onpacketfeesharechange: vi.fn(),
+		loot: [],
+		equipment,
+		onsellloot: vi.fn(),
+		onconvert: vi.fn(),
+		onremove: vi.fn(),
+		onshrapnel: vi.fn(),
+		onconvertitems: vi.fn(),
+		onaddequipment: vi.fn(),
+		oncreatelisting: vi.fn(),
+		oneditequipment: vi.fn(),
+		onsellequipment: vi.fn(),
+		ondeleteequipment: vi.fn(),
+		onaddpurchase: vi.fn(),
+		oneditpurchase: vi.fn(),
+		ondeletepurchase: vi.fn(),
+	});
+
+	it('shows how many are held and what each cost on average', () => {
+		render(InventoryHoldings, { props: props([strongboxes]) });
+		const row = screen.getByText('Strongbox').closest('li');
+		expect(row).toBeInstanceOf(HTMLElement);
+		if (!(row instanceof HTMLElement)) return;
+		expect(within(row).getByText('200')).not.toBeNull();
+		expect(within(row).getByText('9.00 each')).not.toBeNull();
+		expect(within(row).getByText('9.10 each')).not.toBeNull();
+	});
+
+	it('keeps a single unit to its totals', () => {
+		render(InventoryHoldings, {
+			props: props([{ ...strongboxes, quantity: 1, purchases: [strongboxes.purchases[0]] }]),
+		});
+		expect(screen.queryByText(/each$/)).toBeNull();
+		expect(screen.queryByRole('button', { name: /purchases/ })).toBeNull();
+	});
+
+	it('records buying more from the row, but not of an asset that moves whole', async () => {
+		const handlers = props([
+			strongboxes,
+			{ ...strongboxes, id: 'made', name: 'Made Ring', divisible: false },
+		]);
+		render(InventoryHoldings, { props: handlers });
+		const buttons = screen.getAllByRole('button', { name: 'Buy more' });
+		expect(buttons).toHaveLength(1);
+		await fireEvent.click(buttons[0]);
+		expect(handlers.onaddpurchase).toHaveBeenCalledWith(strongboxes);
+	});
+
+	it('opens the purchases and lets only an open one change', async () => {
+		const handlers = props([strongboxes]);
+		render(InventoryHoldings, { props: handlers });
+		expect(screen.queryByRole('button', { name: 'Edit purchase' })).toBeNull();
+
+		const toggle = screen.getByRole('button', { name: 'Show 2 purchases' });
+		await fireEvent.click(toggle);
+		expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+		const edits = screen.getAllByRole('button', { name: 'Edit purchase' });
+		expect(edits).toHaveLength(2);
+		expect((edits[0] as HTMLButtonElement).disabled).toBe(true);
+		expect(edits[0].getAttribute('title')).toMatch(/fixed/);
+		expect((edits[1] as HTMLButtonElement).disabled).toBe(false);
+		await fireEvent.click(edits[1]);
+		expect(handlers.oneditpurchase).toHaveBeenCalledWith(strongboxes, strongboxes.purchases[1]);
+
+		await fireEvent.click(screen.getAllByRole('button', { name: 'Remove purchase' })[1]);
+		expect(handlers.ondeletepurchase).toHaveBeenCalledWith(strongboxes, strongboxes.purchases[1]);
 	});
 });

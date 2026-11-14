@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import type { InventoryItem } from '$lib/api';
+	import type { AssetPurchase, AssetPurchaseInput, InventoryItem } from '$lib/api';
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
@@ -9,6 +9,7 @@
 	import AuctionListings from '$lib/features/analytics/AuctionListings.svelte';
 	import ConvertStockModal from '$lib/features/analytics/ConvertStockModal.svelte';
 	import SellStockModal from '$lib/features/analytics/SellStockModal.svelte';
+	import AssetPurchaseModal from '$lib/features/inventory/AssetPurchaseModal.svelte';
 	import ConvertItemsModal from '$lib/features/inventory/ConvertItemsModal.svelte';
 	import CreateListingModal from '$lib/features/inventory/CreateListingModal.svelte';
 	import EquipmentSaleModal from '$lib/features/inventory/EquipmentSaleModal.svelte';
@@ -29,6 +30,8 @@
 	let equipmentFormOpen = $state(false);
 	let equipmentToEdit = $state<InventoryItem | null>(null);
 	let equipmentToSell = $state<InventoryItem | null>(null);
+	/** The asset being bought into, and the purchase being corrected if any. */
+	let purchaseFor = $state<{ item: InventoryItem; purchase: AssetPurchase | null } | null>(null);
 	let lootToSell = $state<TreeCuttingStock | null>(null);
 	let lootToConvert = $state<TreeCuttingStock | null>(null);
 	let lootToRemove = $state<TreeCuttingStock | null>(null);
@@ -92,6 +95,17 @@
 		if (!window.confirm(`Remove ${item.name} from your assets?`)) return;
 		await model.deleteEquipment(item).catch(() => undefined);
 	}
+
+	async function savePurchase(input: AssetPurchaseInput) {
+		if (!purchaseFor) return;
+		const { item, purchase } = purchaseFor;
+		await (purchase ? model.updatePurchase(purchase.id, input) : model.addPurchase(item, input));
+	}
+
+	async function deletePurchase(item: InventoryItem, purchase: AssetPurchase) {
+		if (!window.confirm(`Remove this purchase of ${item.name}?`)) return;
+		await model.deletePurchase(purchase.id).catch(() => undefined);
+	}
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-6 px-6 pb-6">
@@ -132,6 +146,9 @@
 			oneditequipment={editEquipment}
 			onsellequipment={(item) => (equipmentToSell = item)}
 			ondeleteequipment={deleteEquipment}
+			onaddpurchase={(item) => (purchaseFor = { item, purchase: null })}
+			oneditpurchase={(item, purchase) => (purchaseFor = { item, purchase })}
+			ondeletepurchase={deletePurchase}
 			/>
 		{:else if model.view === 'listings'}
 			<div class="py-3">
@@ -217,4 +234,10 @@
 	onlist={model.listEquipment}
 	ontrade={model.sellEquipmentByTrade}
 	oncancel={() => (equipmentToSell = null)}
+/>
+<AssetPurchaseModal
+	item={purchaseFor?.item ?? null}
+	purchase={purchaseFor?.purchase ?? null}
+	onsubmit={savePurchase}
+	oncancel={() => (purchaseFor = null)}
 />

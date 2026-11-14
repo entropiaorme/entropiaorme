@@ -19,12 +19,14 @@ import { formatPed } from '$lib/utils/format';
 /** Something the player holds, or has held, that a line can name. */
 export interface ConvertibleItem {
 	name: string;
-	/** Set for a whole asset. Loot is identified by its name. */
+	/** Set for an asset. Loot is identified by its name. */
 	assetId: string | null;
 	heldQty: number;
 	unitTt: number;
 	/** Markup already paid per unit, which rides along with the item. */
 	paidPerUnit: number;
+	/** False for an asset that goes in only whole. */
+	divisible?: boolean;
 	origins: HoldingOrigin[];
 }
 
@@ -117,6 +119,17 @@ export function heldQuantity(line: InputDraft, items: ConvertibleItem[]): number
 	return findItem(line, items)?.heldQty ?? 0;
 }
 
+/** How many of an asset a line puts in: what it names, or every unit held. */
+export function assetQuantity(line: InputDraft, items: ConvertibleItem[]): number {
+	return line.quantity ?? heldQuantity(line, items);
+}
+
+/** Whether a line's asset can go in by part rather than only whole. */
+export function takesPartOfAsset(line: InputDraft, items: ConvertibleItem[]): boolean {
+	const item = findItem(line, items);
+	return item !== undefined && item.divisible !== false && item.heldQty > 1;
+}
+
 /** Where a line comes from, which decides what it asks for. */
 export function inputKind(line: InputDraft, items: ConvertibleItem[]): InputKind {
 	if (line.assetId && findItem(line, items)) return 'asset';
@@ -188,7 +201,7 @@ function inputTt(line: InputDraft, items: ConvertibleItem[]): number | null {
 	if (kind === 'bought') return lineTt(line, items);
 	const item = findItem(line, items);
 	if (!item) return 0;
-	return kind === 'asset' ? item.unitTt : (line.quantity ?? 0) * item.unitTt;
+	return (kind === 'asset' ? assetQuantity(line, items) : (line.quantity ?? 0)) * item.unitTt;
 }
 
 function inputPaid(line: InputDraft, items: ConvertibleItem[]): number {
@@ -196,12 +209,15 @@ function inputPaid(line: InputDraft, items: ConvertibleItem[]): number {
 	if (kind === 'bought') return line.markup ?? 0;
 	const item = findItem(line, items);
 	if (!item) return 0;
-	return kind === 'asset' ? item.paidPerUnit : (line.quantity ?? 0) * item.paidPerUnit;
+	return (kind === 'asset' ? assetQuantity(line, items) : (line.quantity ?? 0)) * item.paidPerUnit;
 }
 
 function isInputComplete(line: InputDraft, items: ConvertibleItem[]): boolean {
 	if (line.itemName.trim() === '') return false;
-	if (inputKind(line, items) === 'asset') return true;
+	if (inputKind(line, items) === 'asset') {
+		if (line.quantity === null) return true;
+		return line.quantity > 0 && line.quantity <= heldQuantity(line, items) + 1e-9;
+	}
 	if (!line.quantity || line.quantity <= 0) return false;
 	return inputKind(line, items) === 'held' || lineTt(line, items) !== null;
 }
@@ -304,7 +320,7 @@ export function previewConversion(
 	if (outputs.length > 0) {
 		const single = outputs.length === 1;
 		const only = outputs[0];
-		const count = only.holding === 'asset' ? 1 : (only.quantity ?? 1);
+		const count = only.quantity ?? 1;
 		parts.push(
 			single
 				? `You'll hold ${count} ${only.itemName.trim()}.`
@@ -358,7 +374,12 @@ export function toConversionRequest(
 			const kind = inputKind(line, items);
 			const itemName = line.itemName.trim();
 			if (kind === 'asset') {
-				return { kind: 'asset', itemId: line.assetId ?? '', worth: worthOf(line) };
+				return {
+					kind: 'asset',
+					itemId: line.assetId ?? '',
+					quantity: line.quantity,
+					worth: worthOf(line),
+				};
 			}
 			if (kind === 'held') {
 				return { kind: 'held', itemName, quantity: line.quantity ?? 0, worth: worthOf(line) };
@@ -375,7 +396,7 @@ export function toConversionRequest(
 		.filter((line) => !isBlankOutput(line))
 		.map((line) => ({
 			itemName: line.itemName.trim(),
-			quantity: line.holding === 'asset' ? 1 : (line.quantity ?? 0),
+			quantity: line.holding === 'asset' ? (line.quantity ?? 1) : (line.quantity ?? 0),
 			ttValue: lineTt(line, items) ?? 0,
 			holding: line.holding,
 		}));

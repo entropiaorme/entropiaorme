@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createInventoryModel } from './inventoryModel.svelte';
 
 vi.mock('$lib/api/inventory', () => ({
+	addAssetPurchase: vi.fn(),
+	deleteAssetPurchase: vi.fn(),
+	updateAssetPurchase: vi.fn(),
 	captureSaleWindow: vi.fn(),
 	takeSaleWindowCapture: vi.fn(),
 	confirmInventoryListing: vi.fn(),
@@ -57,6 +60,22 @@ beforeEach(() => {
 			markupPaid: 75,
 			notes: null,
 			acquiredAt: '2026-08-01',
+			quantity: 1,
+			divisible: true,
+			purchases: [],
+			origins: [],
+			derivedFrom: [],
+		},
+		{
+			id: 'strongboxes',
+			name: 'Strongbox',
+			ttValue: 20,
+			markupPaid: 1800,
+			notes: null,
+			acquiredAt: '2026-08-02',
+			quantity: 200,
+			divisible: true,
+			purchases: [],
 			origins: [],
 			derivedFrom: [],
 		},
@@ -150,8 +169,9 @@ describe('central inventory model', () => {
 		await model.load();
 
 		expect(model.lootTt).toBe(1);
-		expect(model.equipmentTt).toBe(25);
-		expect(model.equipmentBasis).toBe(100);
+		// The ring, and two hundred strongboxes at their totals.
+		expect(model.equipmentTt).toBe(45);
+		expect(model.equipmentBasis).toBe(1920);
 		expect(model.loot[0]).toMatchObject({
 			markupPct: 125,
 			effectiveMarkupPct: 125,
@@ -189,6 +209,60 @@ describe('central inventory model', () => {
 		await model.setPacketFeeSharePct(15);
 		expect(model.error).toBeNull();
 		expect(model.packetFeeSharePct).toBe(15);
+	});
+
+	it('sells part of an asset by naming how many, and all of it otherwise', async () => {
+		const model = createInventoryModel();
+		await model.load();
+
+		await model.sellEquipmentByTrade({ itemId: 'strongboxes', quantity: 50, soldFor: 480 });
+		expect(mocked.commitInventorySaleDraft).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				draft: expect.objectContaining({ channel: 'trade', quantity: 50, finalPrice: 480 }),
+				holding: expect.objectContaining({ kind: 'equipment', holdingId: 'strongboxes' }),
+			}),
+		);
+
+		await model.listEquipment({
+			itemId: 'strongboxes',
+			startingBid: 2000,
+			buyout: null,
+			listingFee: 1,
+			listedAt: null,
+		});
+		expect(mocked.commitInventorySaleDraft).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				draft: expect.objectContaining({ channel: 'auction', quantity: 200 }),
+			}),
+		);
+	});
+
+	it('offers an asset by its units at its average cost', async () => {
+		const model = createInventoryModel();
+		await model.load();
+
+		expect(model.convertibleItems.find((item) => item.assetId === 'strongboxes')).toMatchObject({
+			heldQty: 200,
+			unitTt: 0.1,
+			paidPerUnit: 9,
+			divisible: true,
+		});
+		expect(model.holdingOptions.find((option) => option.holdingId === 'strongboxes')).toMatchObject(
+			{ heldQty: 200, paidPerUnit: 9 },
+		);
+	});
+
+	it('records buying more of an asset and reads the inventory again', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		mocked.addAssetPurchase.mockResolvedValue(model.equipment[1]);
+		const reads = mocked.getEquipmentInventory.mock.calls.length;
+
+		const purchase = { quantity: 100, ttValue: 10, markupPaid: 800, acquiredAt: '2026-08-10' };
+		await model.addPurchase(model.equipment[1], purchase);
+
+		expect(mocked.addAssetPurchase).toHaveBeenCalledWith('strongboxes', purchase);
+		expect(mocked.getEquipmentInventory.mock.calls.length).toBeGreaterThan(reads);
 	});
 
 	it('turns a manual loot listing into the same reviewed draft an OCR intake will use', async () => {

@@ -13,6 +13,7 @@ import {
 	lastConversionFor,
 	previewConversion,
 	suggestedTt,
+	takesPartOfAsset,
 	toConversionRequest,
 	worthIsShown,
 } from './conversionDraft';
@@ -176,10 +177,18 @@ describe('the recorded request', () => {
 		});
 	});
 
-	it('records an asset result as one whole holding', () => {
+	it('records an asset result as the units it was made as', () => {
 		const draft = handIn();
 		draft.outputs[0].holding = 'asset';
 		draft.outputs[0].quantity = 7;
+
+		expect(toConversionRequest(draft, items, null).outputs[0].quantity).toBe(7);
+	});
+
+	it('records an asset result with no count as one unit', () => {
+		const draft = handIn();
+		draft.outputs[0].holding = 'asset';
+		draft.outputs[0].quantity = null;
 
 		expect(toConversionRequest(draft, items, null).outputs[0].quantity).toBe(1);
 	});
@@ -249,5 +258,55 @@ describe('the origin line under a holding', () => {
 		expect(derivedFromLabel([{ itemName: 'Voucher', quantity: 80 }])).toBe('From 80 Voucher');
 		expect(derivedFromLabel([{ itemName: 'Strongbox', quantity: 33.4 }])).toBe('From Strongbox');
 		expect(derivedFromLabel([])).toBeNull();
+	});
+});
+
+describe('an asset going into a conversion', () => {
+	const position: ConvertibleItem = {
+		name: 'Strongbox',
+		assetId: 'asset-1',
+		heldQty: 200,
+		unitTt: 0.1,
+		paidPerUnit: 9,
+		divisible: true,
+		origins: [],
+	};
+	const whole: ConvertibleItem = { ...position, assetId: 'asset-2', divisible: false };
+	const opening = (quantity: number | null, item = position): ConversionDraft => ({
+		inputs: [{ ...emptyInput({ itemName: item.name, quantity }), assetId: item.assetId }],
+		outputs: [
+			{ ...emptyOutput(), itemName: 'Weapon Cells', quantity: 12, ttValue: 3, ttEdited: true },
+		],
+		pedAmount: null,
+		showPed: false,
+	});
+
+	it('puts in the count named, or every unit when none is', () => {
+		expect(toConversionRequest(opening(40), [position], null).inputs[0]).toMatchObject({
+			kind: 'asset',
+			itemId: 'asset-1',
+			quantity: 40,
+		});
+		expect(toConversionRequest(opening(null), [position], null).inputs[0]).toMatchObject({
+			kind: 'asset',
+			quantity: null,
+		});
+	});
+
+	it('carries the average cost of the units it names', () => {
+		// 40 boxes carry 4 TT into 3 TT out; all 200 would carry 20.
+		expect(previewConversion(opening(40), [position]).sentence).toContain('1.00 PED is lost here');
+		expect(previewConversion(opening(null), [position]).sentence).toContain(
+			'17.00 PED is lost here',
+		);
+	});
+
+	it('cannot name more units than are held', () => {
+		expect(previewConversion(opening(201), [position]).ready).toBe(false);
+	});
+
+	it('asks for a count only of an asset that divides', () => {
+		expect(takesPartOfAsset(opening(null).inputs[0], [position])).toBe(true);
+		expect(takesPartOfAsset(opening(null, whole).inputs[0], [whole])).toBe(false);
 	});
 });

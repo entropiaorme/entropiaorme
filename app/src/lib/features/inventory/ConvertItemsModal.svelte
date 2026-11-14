@@ -17,6 +17,7 @@
 	import ConversionItemField from './ConversionItemField.svelte';
 	import {
 		type ConversionDraft,
+		assetQuantity,
 		type ConvertibleItem,
 		draftFromEntry,
 		emptyDraft,
@@ -32,6 +33,7 @@
 		previewConversion,
 		shownInputTt,
 		shownOutputTt,
+		takesPartOfAsset,
 		toConversionRequest,
 		worthIsShown,
 	} from './conversionDraft';
@@ -85,6 +87,8 @@
 		line.itemName = name;
 		line.assetId = assetId;
 		line.bought = false;
+		// An asset goes in whole unless the player says how many.
+		if (assetId) line.quantity = null;
 	}
 
 	function setOutputItem(line: OutputDraft, name: string) {
@@ -144,14 +148,16 @@
 							class="min-w-0 flex-1"
 							onchange={(name, assetId) => setInputItem(line, name, assetId)}
 						/>
-						{#if kind !== 'asset'}
+						{#if kind !== 'asset' || takesPartOfAsset(line, items)}
 							<Input
 								type="number"
 								min="0"
 								step="1"
 								align="right"
 								class="w-20 shrink-0"
-								placeholder="Qty"
+								placeholder={kind === 'asset'
+									? roundedQuantity(heldQuantity(line, items)).toString()
+									: 'Qty'}
 								aria-label={`Quantity of ${line.itemName || 'item'}`}
 								bind:value={line.quantity}
 							/>
@@ -211,7 +217,20 @@
 					</div>
 
 					<div class="flex items-baseline gap-3 pl-0.5 text-xs text-text-tertiary">
-						{#if kind === 'held'}
+						{#if kind === 'asset' && takesPartOfAsset(line, items)}
+							{@const over = assetQuantity(line, items) > heldQuantity(line, items) + 1e-9}
+							<button
+								type="button"
+								class="tabular-nums hover:text-text {over ? 'text-warning' : ''}"
+								onclick={() => (line.quantity = null)}
+							>
+								of {roundedQuantity(heldQuantity(line, items))} held
+							</button>
+						{:else if kind === 'asset' && heldQuantity(line, items) > 1}
+							<span class="tabular-nums">
+								All {roundedQuantity(heldQuantity(line, items))} go in together
+							</span>
+						{:else if kind === 'held'}
 							<button
 								type="button"
 								class="tabular-nums hover:text-text"
@@ -263,18 +282,16 @@
 						class="min-w-0 flex-1"
 						onchange={(name) => setOutputItem(line, name)}
 					/>
-					{#if line.holding === 'loot'}
-						<Input
-							type="number"
-							min="0"
-							step="1"
-							align="right"
-							class="w-20 shrink-0"
-							placeholder="Qty"
-							aria-label={`Quantity of ${line.itemName || 'result'}`}
-							bind:value={line.quantity}
-						/>
-					{/if}
+					<Input
+						type="number"
+						min="0"
+						step="1"
+						align="right"
+						class="w-20 shrink-0"
+						placeholder="Qty"
+						aria-label={`Quantity of ${line.itemName || 'result'}`}
+						bind:value={line.quantity}
+					/>
 					<Input
 						type="number"
 						min="0"

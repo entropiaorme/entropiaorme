@@ -28,6 +28,8 @@ export type {
 	AnalyticsHunting as HuntingData,
 	AnalyticsHuntingActivity as HuntingActivityData,
 	ApiErrorKind,
+	AssetPurchase,
+	AssetPurchaseInput,
 	AuctionConfirmInput,
 	AuctionExpireInput,
 	AuctionListing,

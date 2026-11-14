@@ -87,7 +87,6 @@ pub struct AppConfig {
     /// hand read off the game's own bar instead of the hotbar keys); `None`
     /// until they choose, which is off (see [`AppConfig::tool_reading_on`]).
     pub tool_reading: Option<bool>,
-    pub developer_mode_enabled: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
     /// across sessions so a declaration outlives the session that set it.
     pub manual_mob_species: String,
@@ -148,7 +147,6 @@ impl Default for AppConfig {
             repair_ocr_enabled: false,
             mob_detection: None,
             tool_reading: None,
-            developer_mode_enabled: false,
             manual_mob_species: String::new(),
             manual_mob_maturity: String::new(),
             session_name: String::new(),
@@ -498,7 +496,6 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         // Anything but a stored boolean reads as no choice made.
         mob_detection: data.get("mob_detection").and_then(Value::as_bool),
         tool_reading: data.get("tool_reading").and_then(Value::as_bool),
-        developer_mode_enabled: toggle("developer_mode_enabled"),
         manual_mob_species: string_or("manual_mob_species", ""),
         manual_mob_maturity: string_or("manual_mob_maturity", ""),
         // One-time legacy inheritance: a store written before the facet
@@ -579,7 +576,11 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // hotbar and every carried weapon's damage band. They stay unknown and
 // carry through untouched, and a store written before `carried_weapon_ids`
 // seeds it once from them (see `carried_weapons_from_stored`).
-const KNOWN_KEYS: [&str; 23] = [
+//
+// `developer_mode_enabled` retired with the mode it stored: the diagnostic
+// and maintenance tools it hid are open, the app being its maintainer's own.
+// A stored value carries through untouched like the others.
+const KNOWN_KEYS: [&str; 22] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
@@ -587,7 +588,6 @@ const KNOWN_KEYS: [&str; 23] = [
     "repair_ocr_enabled",
     "mob_detection",
     "tool_reading",
-    "developer_mode_enabled",
     "manual_mob_species",
     "manual_mob_maturity",
     "session_name",
@@ -805,7 +805,6 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
                     config.tool_reading = Some(on);
                 }
             }
-            "developer_mode_enabled" => assign_bool(&mut config.developer_mode_enabled, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
             "manual_mob_maturity" => assign_string(&mut config.manual_mob_maturity, value),
             "session_name" => assign_string(&mut config.session_name, value),
@@ -1515,7 +1514,6 @@ mod tests {
             serde_json::json!({
                 "hotbar_hooks_enabled": 1,
                 "repair_ocr_enabled": "yes",
-                "developer_mode_enabled": null,
             })
             .to_string(),
         )
@@ -1523,7 +1521,6 @@ mod tests {
         let svc = service(dir.path());
         assert!(svc.get().hotbar_hooks_enabled);
         assert!(svc.get().repair_ocr_enabled);
-        assert!(!svc.get().developer_mode_enabled);
     }
 
     #[test]
@@ -1597,7 +1594,6 @@ mod tests {
         assert_eq!(config.player_name, "Each");
         assert!(config.hotbar_hooks_enabled);
         assert!(config.repair_ocr_enabled);
-        assert!(config.developer_mode_enabled);
         assert_eq!(config.manual_mob_species, "Atrox");
         assert_eq!(config.manual_mob_maturity, "Old");
         assert_eq!(config.hotbar["1"], 5);
@@ -1666,7 +1662,6 @@ mod tests {
             serde_json::json!({
                 "hotbar_hooks_enabled": "",
                 "repair_ocr_enabled": [],
-                "developer_mode_enabled": {},
             })
             .to_string(),
         )
@@ -1674,7 +1669,6 @@ mod tests {
         let svc = service(dir.path());
         assert!(!svc.get().hotbar_hooks_enabled);
         assert!(!svc.get().repair_ocr_enabled);
-        assert!(!svc.get().developer_mode_enabled);
     }
 
     #[test]

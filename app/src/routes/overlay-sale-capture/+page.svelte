@@ -11,7 +11,6 @@
 -->
 <script lang="ts">
 	import {
-		ApiError,
 		captureAuctionFeeResearchSample,
 		captureSaleFromOverlay,
 		getAuctionFeeResearchOverlayStatus,
@@ -43,11 +42,9 @@
 				failed = research.failed;
 				message = research.message ?? 'Ready. Change the values, then press Space.';
 			}
-		} catch (cause) {
-			// Developer mode being off means this is the normal Inventory
-			// capture surface. Transient IPC failures retain the last-good
-			// authority so a research capture cannot be misrouted as a sale.
-			if (cause instanceof ApiError && cause.kind === 'notFound') research = null;
+		} catch {
+			// Transient IPC failures retain the last-good authority so a
+			// research capture cannot be misrouted as a sale.
 		}
 	}
 

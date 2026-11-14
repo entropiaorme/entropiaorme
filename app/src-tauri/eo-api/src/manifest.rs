@@ -1888,9 +1888,8 @@ pub fn manifest() -> Vec<CommandSpec> {
             }],
             returns: None,
         },
-        // The hidden developer-tools family: native-only, each gated on
-        // developer mode (a gate-off command answers the not-found the HTTP
-        // route's 404 stood for).
+        // The developer-tools family (metrics, crash reporting, database
+        // maintenance, the auction-fee research session): native-only.
         CommandSpec {
             name: "dev_metrics",
             args: Vec::new(),

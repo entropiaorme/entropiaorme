@@ -30,7 +30,7 @@ use eo_services::auction_fee_research::AuctionFeeResearchService;
 use eo_services::chatlog_watcher::ChatlogWatcher;
 use eo_services::clock::Clock;
 use eo_services::codex::CodexService;
-use eo_services::config_service::{load_config_readonly, ConfigService};
+use eo_services::config_service::ConfigService;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
 use eo_services::healing_review::HealingReviewService;
@@ -278,19 +278,7 @@ impl Api {
         let auction_fee_research =
             AuctionFeeResearchService::new(sale_capture.clone(), clock.clone(), &data_dir);
         let research = auction_fee_research.clone();
-        let research_data_dir = data_dir.clone();
-        let research_spacebar = Arc::downgrade(&spacebar);
         spacebar.set_research_capture(Arc::new(move || {
-            let developer_mode = load_config_readonly(&research_data_dir)
-                .map(|config| config.developer_mode_enabled)
-                .unwrap_or(false);
-            if !developer_mode {
-                if let Some(spacebar) = research_spacebar.upgrade() {
-                    spacebar.set_research_enabled(false);
-                }
-                research.stop();
-                return;
-            }
             let _ = research.capture();
         }));
         Self {

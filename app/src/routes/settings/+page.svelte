@@ -7,12 +7,7 @@
 	import { hotbarListenerCopy, keyboardNote } from '$lib/features/settings/keyboardAccess';
 	import { autoUpdateEnabled, setAutoUpdateEnabled } from '$lib/updater.svelte';
 	import { goto } from '$app/navigation';
-	import {
-		getSettings,
-		hideSaleCaptureOverlay,
-		stopAuctionFeeResearch,
-		updateSettings,
-	} from '$lib/api';
+	import { getSettings, updateSettings } from '$lib/api';
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
 	import ScreenReadingSetting from '$lib/features/settings/ScreenReadingSetting.svelte';
@@ -33,7 +28,7 @@
 	const keyNote = $derived(settings ? keyboardNote(settings.keyboard) : null);
 	let capabilityError: string | null = $state(null);
 
-	// Developer-only tooling renders only in dev builds (vite build strips it in production).
+	// The auction-fee research session runs only in dev builds (vite build strips it in production).
 	const isDev = import.meta.env.DEV;
 
 	// Loot filter
@@ -184,23 +179,6 @@
 		}
 	}
 
-	async function handleDeveloperMode(checked: boolean) {
-		if (!settings) return;
-		savingField = 'developerMode';
-		capabilityError = null;
-		try {
-			if (!checked) {
-				await stopAuctionFeeResearch();
-				await hideSaleCaptureOverlay();
-			}
-			settings = await updateSettings({ developer_mode_enabled: checked });
-			flashSaved('developerMode');
-		} catch (e) {
-			capabilityError = e instanceof Error ? e.message : 'Failed to update developer mode';
-		} finally {
-			savingField = null;
-		}
-	}
 
 	async function addFilterItem() {
 		if (!settings || !newFilterItem.trim()) return;
@@ -463,39 +441,30 @@
 		</div>
 	</section>
 
-	{#if isDev}
-		<!-- Cluster: Developer (dev builds only) -->
-		<section>
-			<h2 class="text-[11px] font-medium uppercase tracking-[0.12em] text-text-tertiary">
-				Developer
-			</h2>
+	<!-- Cluster: Diagnostics -->
+	<section>
+		<h2 class="text-[11px] font-medium uppercase tracking-[0.12em] text-text-tertiary">
+			Diagnostics
+		</h2>
 
-			<div class="mt-3">
-				<!-- Developer mode -->
-				<div class="py-5 flex items-start justify-between gap-6">
-					<div>
-						<p class="text-sm text-text">Developer mode</p>
-						<p class="text-xs text-text-tertiary mt-0.5">
-							Surfaces developer-only diagnostics. Off by default.
-						</p>
-						{#if savedIndicator === 'developerMode'}
-							<p class="text-xs text-success mt-1">Saved</p>
-						{/if}
-					</div>
-					<Toggle
-						checked={settings.developerModeEnabled}
-						disabled={savingField !== null}
-						onchange={handleDeveloperMode}
-						label="Enable developer mode"
-					/>
+		<div class="mt-3">
+			<div class="py-5 flex items-start justify-between gap-6">
+				<div>
+					<p class="text-sm text-text">Metrics</p>
+					<p class="text-xs text-text-tertiary mt-0.5">
+						What the app's own work costs, and its maintenance tools.
+					</p>
 				</div>
-
-				{#if settings.developerModeEnabled}
-					<AuctionFeeResearchSettings />
-				{/if}
+				<a class="linklet text-sm" href="/metrics">Open</a>
 			</div>
-		</section>
-	{/if}
+
+			{#if isDev}
+				<!-- The research session runs in development builds only. -->
+				<Divider />
+				<AuctionFeeResearchSettings />
+			{/if}
+		</div>
+	</section>
 
 	<!-- Cluster: Preferences -->
 	<section>

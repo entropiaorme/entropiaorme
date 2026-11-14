@@ -1,19 +1,18 @@
 //! Behavioural pins for the developer-tools family over the typed facade:
-//! the developer-mode gate (off => not-found for every command), the
-//! metrics snapshot, the crash-reporting round-trip, and the two
-//! maintenance actions (compaction, projection rebuild-and-verify).
+//! that nothing gates it, the metrics snapshot, the crash-reporting
+//! round-trip, and the two maintenance actions (compaction, projection
+//! rebuild-and-verify).
 //!
 //! The family is native-only (no Python arm, no corpus golden, no OpenAPI
 //! path), so there is no frozen contract to re-pin; the DTO byte-shapes
 //! are pinned as unit tests in `eo_api::dev`. These tests cover the
-//! facade's own contract: the fresh-read gate and each command's success
-//! leg over a real composed database.
+//! facade's own contract: each command's success leg over a real composed
+//! database, with no setting needed to reach it.
 
 use std::path::Path;
 use std::sync::Arc;
 
-use eo_api::settings::SettingsPatch;
-use eo_api::{Api, ApiError};
+use eo_api::Api;
 use eo_services::clock::RealClock;
 use eo_services::db::Db;
 use eo_services::game_data_store::GameDataStore;
@@ -55,69 +54,34 @@ async fn dev_api(dir: &Path) -> (Api, std::path::PathBuf) {
     (api, data_dir)
 }
 
-/// Write `settings.json` so the fresh-read developer-mode gate reads the
-/// given state (the file the gate consults on each call).
-fn set_developer_mode(data_dir: &Path, enabled: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_family_answers_with_no_setting_turned_on() {
+    // No settings file at all, and one still carrying the retired
+    // developer-mode key turned off: the tools answer either way.
+    let dir = tempfile::tempdir().unwrap();
+    let (api, data_dir) = dev_api(dir.path()).await;
+    api.dev_metrics().expect("metrics with no settings file");
     std::fs::write(
         data_dir.join("settings.json"),
-        format!(r#"{{"developer_mode_enabled":{enabled}}}"#),
+        r#"{"developer_mode_enabled":false}"#,
     )
     .unwrap();
+    api.dev_metrics().expect("metrics");
+    api.dev_crash_reporting().expect("crash reporting");
+    let research = api
+        .dev_auction_fee_research_status()
+        .expect("research status");
+    assert!(!research.active);
+    let overlay = api
+        .dev_auction_fee_research_overlay_status()
+        .expect("overlay status");
+    assert!(!overlay.active, "no session: the overlay captures listings");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_dev_command_is_not_found_when_developer_mode_is_off() {
+async fn auction_fee_research_is_a_session_with_a_least_privilege_overlay_view() {
     let dir = tempfile::tempdir().unwrap();
-    let (api, data_dir) = dev_api(dir.path()).await;
-    set_developer_mode(&data_dir, false);
-
-    assert!(matches!(api.dev_metrics(), Err(ApiError::NotFound { .. })));
-    assert!(matches!(
-        api.dev_crash_reporting(),
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_set_crash_reporting(true),
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_compact_database().await,
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_rebuild_projections().await,
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_auction_fee_research_start(),
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_auction_fee_research_status(),
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_auction_fee_research_overlay_status(),
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_auction_fee_research_capture(),
-        Err(ApiError::NotFound { .. })
-    ));
-    assert!(matches!(
-        api.dev_auction_fee_research_stop(),
-        Err(ApiError::NotFound { .. })
-    ));
-    // The gate-off contract holds even with no settings file at all.
-    std::fs::remove_file(data_dir.join("settings.json")).unwrap();
-    assert!(matches!(api.dev_metrics(), Err(ApiError::NotFound { .. })));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auction_fee_research_is_a_dev_gated_session_with_a_least_privilege_overlay_view() {
-    let dir = tempfile::tempdir().unwrap();
-    let (api, data_dir) = dev_api(dir.path()).await;
-    set_developer_mode(&data_dir, true);
+    let (api, _) = dev_api(dir.path()).await;
 
     let started = api
         .dev_auction_fee_research_start()
@@ -140,33 +104,9 @@ async fn auction_fee_research_is_a_dev_gated_session_with_a_least_privilege_over
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn disabling_developer_mode_authoritatively_stops_an_active_research_session() {
+async fn the_metrics_snapshot_reads() {
     let dir = tempfile::tempdir().unwrap();
-    let (api, data_dir) = dev_api(dir.path()).await;
-    set_developer_mode(&data_dir, true);
-    api.dev_auction_fee_research_start()
-        .expect("research starts");
-    assert!(api.auction_fee_research_active_for_shell());
-
-    api.settings_update(SettingsPatch {
-        developer_mode_enabled: Some(false),
-        ..SettingsPatch::default()
-    })
-    .await
-    .expect("developer mode disables");
-
-    assert!(!api.auction_fee_research_active_for_shell());
-    assert!(matches!(
-        api.dev_auction_fee_research_status(),
-        Err(ApiError::NotFound { .. })
-    ));
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_metrics_snapshot_reads_under_developer_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let (api, data_dir) = dev_api(dir.path()).await;
-    set_developer_mode(&data_dir, true);
+    let (api, _) = dev_api(dir.path()).await;
 
     // Record onto the process registry so the snapshot is non-trivial.
     eo_wire::metrics::metrics().record_event_published();
@@ -178,10 +118,9 @@ async fn the_metrics_snapshot_reads_under_developer_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_crash_reporting_toggle_round_trips_under_developer_mode() {
+async fn the_crash_reporting_toggle_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let (api, data_dir) = dev_api(dir.path()).await;
-    set_developer_mode(&data_dir, true);
 
     // Off by default.
     assert!(!api.dev_crash_reporting().unwrap().crash_reporting_enabled);
@@ -205,10 +144,9 @@ async fn the_crash_reporting_toggle_round_trips_under_developer_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn compaction_writes_a_copy_under_developer_mode() {
+async fn compaction_writes_a_copy() {
     let dir = tempfile::tempdir().unwrap();
     let (api, data_dir) = dev_api(dir.path()).await;
-    set_developer_mode(&data_dir, true);
 
     let result = api.dev_compact_database().await.expect("compaction");
     assert!(
@@ -220,10 +158,9 @@ async fn compaction_writes_a_copy_under_developer_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rebuild_projections_reports_every_model_matching_under_developer_mode() {
+async fn rebuild_projections_reports_every_model_matching() {
     let dir = tempfile::tempdir().unwrap();
-    let (api, data_dir) = dev_api(dir.path()).await;
-    set_developer_mode(&data_dir, true);
+    let (api, _) = dev_api(dir.path()).await;
 
     let report = api.dev_rebuild_projections().await.expect("rebuild");
     assert!(report.all_matched, "{report:?}");

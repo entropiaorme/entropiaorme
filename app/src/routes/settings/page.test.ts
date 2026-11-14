@@ -41,7 +41,6 @@ function settings(): AppSettings {
 		mobDetectionCapture: 'ready',
 		toolReadingEnabled: false,
 		toolReadingCapture: 'ready',
-		developerModeEnabled: false,
 		sessionName: '',
 		declaredSkillBoostPercent: null,
 		hotbar: {},

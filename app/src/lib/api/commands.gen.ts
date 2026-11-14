@@ -280,7 +280,6 @@ export interface AppSettings {
 	toolReadingEnabled: boolean;
 	/** Whether reading the held tool can capture the game window when a session wants it. */
 	toolReadingCapture: ScreenCapture;
-	developerModeEnabled: boolean;
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
 	sessionName: string;
 	declaredSkillBoostPercent?: number | null;
@@ -3899,7 +3898,6 @@ export interface SettingsPatch {
 	mob_detection_enabled?: boolean | null;
 	/** Turn reading the held tool off the screen on or off. */
 	tool_reading_enabled?: boolean | null;
-	developer_mode_enabled?: boolean | null;
 	session_name?: string | null;
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */
 	declared_skill_boost_percent?: number | null;

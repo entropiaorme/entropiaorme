@@ -92,7 +92,6 @@ async fn the_settings_assembly_shapes_the_default_config() {
             "mobDetectionCapture",
             "toolReadingEnabled",
             "toolReadingCapture",
-            "developerModeEnabled",
             "sessionName",
             "declaredSkillBoostPercent",
             "hotbar",

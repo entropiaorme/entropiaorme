@@ -252,7 +252,6 @@ pub struct AppSettings {
     /// Whether reading the held tool can capture the game window when a
     /// session wants it.
     pub tool_reading_capture: ScreenCapture,
-    pub developer_mode_enabled: bool,
     /// The session facets the next session snapshots: the designated
     /// name (empty: not declared) and the skill boost (null: not
     /// declared; 0: declared deliberately unboosted).
@@ -343,8 +342,6 @@ pub struct SettingsPatch {
     #[serde(default)]
     pub tool_reading_enabled: Option<bool>,
     #[serde(default)]
-    pub developer_mode_enabled: Option<bool>,
-    #[serde(default)]
     pub session_name: Option<String>,
     /// Double-optioned so the patch can express all three states: absent
     /// leaves the declaration alone, an explicit null withdraws it, and a
@@ -403,9 +400,6 @@ impl SettingsPatch {
         }
         if let Some(value) = self.tool_reading_enabled {
             updates.insert("tool_reading".into(), Value::Bool(value));
-        }
-        if let Some(value) = self.developer_mode_enabled {
-            updates.insert("developer_mode_enabled".into(), Value::Bool(value));
         }
         if let Some(value) = self.session_name {
             updates.insert("session_name".into(), Value::String(value));
@@ -469,7 +463,6 @@ impl Api {
             mob_detection_capture: screen_capture(self.mob_capture.as_ref()),
             tool_reading_enabled: config.tool_reading_on(),
             tool_reading_capture: screen_capture(self.tool_capture.as_ref()),
-            developer_mode_enabled: config.developer_mode_enabled,
             session_name: config.session_name.clone(),
             declared_skill_boost_percent: config
                 .declared_skill_boost_percent
@@ -580,7 +573,6 @@ impl Api {
     /// its setting changes, and lets a watcher turned on ask for capture
     /// (the player's gesture).
     pub async fn settings_update(&self, patch: SettingsPatch) -> Result<AppSettings, ApiError> {
-        let disables_developer_mode = patch.developer_mode_enabled == Some(false);
         if let Some(sources) = patch.passive_effect_sources.as_deref() {
             validate_passive_effect_sources(sources)?;
         }
@@ -660,9 +652,6 @@ impl Api {
             self.hotbar.set_hotbar_hooks_enabled(
                 config_after.hotbar_keys_observed(self.input.machine_id()),
             );
-        }
-        if disables_developer_mode {
-            self.stop_auction_fee_research_for_shell();
         }
         // The held-tool catalogue is built only while the reading is on.
         // Built here, before the tracker re-reads its config, because that

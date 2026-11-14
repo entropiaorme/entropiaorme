@@ -1,6 +1,5 @@
 <script lang="ts">
 	import {
-		ApiError,
 		getCrashReporting,
 		getDevMetrics,
 		setCrashReporting,
@@ -12,22 +11,15 @@
 	const POLL_INTERVAL_MS = 2000;
 
 	let snapshot = $state<MetricsSnapshot | null>(null);
-	let developerModeOff = $state(false);
 	let errorMessage = $state<string | null>(null);
 	let crashReporting = $state<boolean | null>(null);
 
 	async function refreshMetrics(): Promise<void> {
 		try {
 			snapshot = await getDevMetrics();
-			developerModeOff = false;
 			errorMessage = null;
 		} catch (err) {
-			if (err instanceof ApiError && err.kind === 'notFound') {
-				developerModeOff = true;
-				snapshot = null;
-			} else {
-				errorMessage = err instanceof Error ? err.message : String(err);
-			}
+			errorMessage = err instanceof Error ? err.message : String(err);
 		}
 	}
 
@@ -37,7 +29,7 @@
 		} catch {
 			// Leave the last-good value in place: this is a one-shot read (no
 			// self-healing poll), so a transient failure must not permanently
-			// hide the toggle. Developer-mode-off keeps it null (never set).
+			// hide the toggle.
 		}
 	}
 
@@ -83,7 +75,7 @@
 	});
 </script>
 
-<svelte:head><title>Developer metrics</title></svelte:head>
+<svelte:head><title>Metrics</title></svelte:head>
 
 {#snippet histogramCard(title: string, histogram: HistogramSnapshot)}
 	<div class="rounded-lg border border-slate-700 bg-slate-800/50 p-4">
@@ -112,18 +104,14 @@
 
 <main class="mx-auto max-w-4xl p-6 text-slate-100">
 	<header class="mb-6">
-		<h1 class="text-xl font-semibold">Developer metrics</h1>
+		<h1 class="text-xl font-semibold">Metrics</h1>
 		<p class="text-sm text-slate-400">
 			Live in-process telemetry: event throughput, OCR / database latencies, and
 			resource-drift gauges. Refreshes every {POLL_INTERVAL_MS / 1000}s while this tab is visible.
 		</p>
 	</header>
 
-	{#if developerModeOff}
-		<div class="rounded-lg border border-amber-700/60 bg-amber-900/20 p-4 text-sm text-amber-200">
-			Enable <span class="font-medium">Developer mode</span> in Settings to view in-process metrics.
-		</div>
-	{:else if errorMessage}
+	{#if errorMessage}
 		<div class="rounded-lg border border-rose-700/60 bg-rose-900/20 p-4 text-sm text-rose-200">
 			Could not read metrics: {errorMessage}
 		</div>
@@ -157,7 +145,7 @@
 		<p class="text-sm text-slate-400">Loading…</p>
 	{/if}
 
-	{#if !developerModeOff && crashReporting !== null}
+	{#if crashReporting !== null}
 		<section class="mt-6 rounded-lg border border-slate-700 bg-slate-800/50 p-4">
 			<label class="flex items-center justify-between gap-4">
 				<span>

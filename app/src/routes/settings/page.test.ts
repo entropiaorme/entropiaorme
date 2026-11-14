@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings } from '$lib/types';
 
@@ -21,14 +21,13 @@ vi.mock('$lib/api', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/api')>()),
 	getSettings: vi.fn(async () => seams.settings),
 	updateSettings: vi.fn(),
-	hideSaleCaptureOverlay: vi.fn(),
-	stopAuctionFeeResearch: vi.fn(),
 }));
 vi.mock('@tauri-apps/api/event', () => ({
 	listen: vi.fn(async () => () => {}),
 	emit: vi.fn(async () => {}),
 }));
 
+import { updateSettings } from '$lib/api';
 import SettingsPage from './+page.svelte';
 
 function settings(): AppSettings {
@@ -41,6 +40,7 @@ function settings(): AppSettings {
 		mobDetectionCapture: 'ready',
 		toolReadingEnabled: false,
 		toolReadingCapture: 'ready',
+		keepUnreadPlates: false,
 		sessionName: '',
 		declaredSkillBoostPercent: null,
 		hotbar: {},
@@ -94,5 +94,25 @@ describe('the screen-reading settings', () => {
 		const order = toggles();
 		expect(order.indexOf(HELD_TOOL)).toBe(order.indexOf('Enable hotbar key listener') + 1);
 		expect(order.indexOf(CREATURES)).toBe(order.indexOf(HELD_TOOL) + 1);
+	});
+});
+
+describe('the diagnostics settings', () => {
+	it('links to the metrics in every build, with no mode to turn on first', async () => {
+		channel.visible = false;
+		render(SettingsPage);
+		const link = (await screen.findByText('Open')) as HTMLAnchorElement;
+		expect(link.getAttribute('href')).toBe('/metrics');
+		expect(screen.queryByText('Developer mode')).toBeNull();
+	});
+
+	it('keeps unread plates only once the player turns it on', async () => {
+		vi.mocked(updateSettings).mockResolvedValue({ ...settings(), keepUnreadPlates: true });
+		render(SettingsPage);
+		const toggle = await screen.findByRole('switch', { name: 'Keep plates that did not read' });
+		expect(toggle.getAttribute('aria-checked')).toBe('false');
+		await fireEvent.click(toggle);
+		expect(updateSettings).toHaveBeenCalledWith({ keep_unread_plates: true });
+		await waitFor(() => expect(toggle.getAttribute('aria-checked')).toBe('true'));
 	});
 });

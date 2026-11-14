@@ -842,6 +842,18 @@ async fn compose_with(
             profile: game_ui.profile.clone(),
             read_text: frame_reader(ocr_engine.clone()),
             catalogue: mob_catalogue.clone(),
+            keep_unread: {
+                let reader = producers
+                    .config_service_handle()
+                    .lock()
+                    .expect("config service")
+                    .reader();
+                let plates = eo_services::unread_plates::UnreadPlates::new(
+                    data_dir.join("unread-plates"),
+                    Arc::new(move || reader.current().keep_unread_plates),
+                );
+                Arc::new(move |at_ms, why, picture| plates.keep(at_ms, why, picture))
+            },
             wait: None,
         },
         clock.clone(),

@@ -92,6 +92,7 @@ pub mod tracker;
 pub mod tracking_models;
 pub mod tracking_reads;
 pub mod tt_value_curve;
+pub mod unread_plates;
 pub mod weapon_effect;
 pub mod weapon_review;
 

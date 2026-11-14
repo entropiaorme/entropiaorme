@@ -87,6 +87,10 @@ pub struct AppConfig {
     /// hand read off the game's own bar instead of the hotbar keys); `None`
     /// until they choose, which is off (see [`AppConfig::tool_reading_on`]).
     pub tool_reading: Option<bool>,
+    /// Whether a locked plate whose name did not read is kept as a small
+    /// picture, for finding out why (see [`crate::unread_plates`]). Off
+    /// until the player turns it on.
+    pub keep_unread_plates: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
     /// across sessions so a declaration outlives the session that set it.
     pub manual_mob_species: String,
@@ -145,6 +149,7 @@ impl Default for AppConfig {
             hotbar_hooks_enabled: false,
             keyless_input_host: None,
             repair_ocr_enabled: false,
+            keep_unread_plates: false,
             mob_detection: None,
             tool_reading: None,
             manual_mob_species: String::new(),
@@ -496,6 +501,7 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         // Anything but a stored boolean reads as no choice made.
         mob_detection: data.get("mob_detection").and_then(Value::as_bool),
         tool_reading: data.get("tool_reading").and_then(Value::as_bool),
+        keep_unread_plates: toggle("keep_unread_plates"),
         manual_mob_species: string_or("manual_mob_species", ""),
         manual_mob_maturity: string_or("manual_mob_maturity", ""),
         // One-time legacy inheritance: a store written before the facet
@@ -580,7 +586,7 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // `developer_mode_enabled` retired with the mode it stored: the diagnostic
 // and maintenance tools it hid are open, the app being its maintainer's own.
 // A stored value carries through untouched like the others.
-const KNOWN_KEYS: [&str; 22] = [
+const KNOWN_KEYS: [&str; 23] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
@@ -588,6 +594,7 @@ const KNOWN_KEYS: [&str; 22] = [
     "repair_ocr_enabled",
     "mob_detection",
     "tool_reading",
+    "keep_unread_plates",
     "manual_mob_species",
     "manual_mob_maturity",
     "session_name",
@@ -805,6 +812,7 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
                     config.tool_reading = Some(on);
                 }
             }
+            "keep_unread_plates" => assign_bool(&mut config.keep_unread_plates, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
             "manual_mob_maturity" => assign_string(&mut config.manual_mob_maturity, value),
             "session_name" => assign_string(&mut config.session_name, value),
@@ -1504,6 +1512,18 @@ mod tests {
         updates.insert("keyless_input_host".into(), serde_json::json!("  "));
         svc.update(&updates).unwrap();
         assert_eq!(svc.get().keyless_input_host, None);
+    }
+
+    #[test]
+    fn keeping_unread_plates_is_off_until_turned_on_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        assert!(!svc.get().keep_unread_plates);
+        let mut updates = Map::new();
+        updates.insert("keep_unread_plates".into(), Value::Bool(true));
+        svc.update(&updates).unwrap();
+        assert!(svc.get().keep_unread_plates);
+        assert!(service(dir.path()).get().keep_unread_plates);
     }
 
     #[test]

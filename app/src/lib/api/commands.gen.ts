@@ -280,6 +280,8 @@ export interface AppSettings {
 	toolReadingEnabled: boolean;
 	/** Whether reading the held tool can capture the game window when a session wants it. */
 	toolReadingCapture: ScreenCapture;
+	/** Whether a locked plate whose name did not read is kept as a small picture on this computer, for finding out why. */
+	keepUnreadPlates: boolean;
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
 	sessionName: string;
 	declaredSkillBoostPercent?: number | null;
@@ -3898,6 +3900,8 @@ export interface SettingsPatch {
 	mob_detection_enabled?: boolean | null;
 	/** Turn reading the held tool off the screen on or off. */
 	tool_reading_enabled?: boolean | null;
+	/** Turn keeping the plates whose name did not read on or off. */
+	keep_unread_plates?: boolean | null;
 	session_name?: string | null;
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */
 	declared_skill_boost_percent?: number | null;

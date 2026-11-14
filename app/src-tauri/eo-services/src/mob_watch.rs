@@ -47,10 +47,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::clock::Clock;
-use crate::game_ui::geometry::BgrImage;
+use crate::game_ui::geometry::{crop, BgrImage, Rect};
 use crate::game_ui::mob_history::{MobHistory, Sighting};
 use crate::game_ui::mob_names::MobCatalogue;
-use crate::game_ui::plates::{find_locked_plate, read_found_plate, PlateScratch};
+use crate::game_ui::plates::{find_locked_plate, read_found_plate, PlateScratch, PlateTextError};
 use crate::game_ui::profile::UiProfile;
 use crate::game_ui::seams::{FrameArea, FrameReader, FrameUnavailable, GameWindowFrame};
 use crate::hotbar_listener::GameFocusProbe;
@@ -195,8 +195,36 @@ pub struct MobWatchProviders {
     /// The recogniser; `None` when none was loaded.
     pub read_text: Option<FrameReader>,
     pub catalogue: Arc<CatalogueCell>,
+    /// Where a locked plate whose name did not read is handed, with when
+    /// it was seen, why the name was refused, and how to make its picture
+    /// (see [`crate::unread_plates`]). Keeps nothing unless wired.
+    pub keep_unread: UnreadPlateKeeper,
     /// How to wait for the next look; `None` waits in real time.
     pub wait: Option<PulseWait>,
+}
+
+/// Takes a locked plate whose name did not read: the moment it was seen
+/// (epoch milliseconds), why the name was refused, and a way to make the
+/// picture of the plate and what stands round it, called only if the
+/// picture is wanted.
+pub type UnreadPlateKeeper = Arc<dyn Fn(i64, &str, &dyn Fn() -> BgrImage) + Send + Sync>;
+
+/// The plate and what stands round it, cut from `image`: the bar, its own
+/// width to either side and above (where the lettering stands), and a
+/// third of it below. Measured in the bar's width, which is fixed on the
+/// screen at each interface scale, so the picture holds the same things at
+/// every scale.
+fn plate_surroundings(image: &BgrImage, bar: Rect) -> BgrImage {
+    let reach = bar.width();
+    crop(
+        image,
+        Rect::new(
+            bar.x0 - reach,
+            bar.y0 - reach,
+            bar.x1 + reach,
+            bar.y1 + reach / 3,
+        ),
+    )
 }
 
 impl Default for MobWatchProviders {
@@ -210,6 +238,7 @@ impl Default for MobWatchProviders {
             profile: None,
             read_text: None,
             catalogue: Arc::new(CatalogueCell::default()),
+            keep_unread: Arc::new(|_, _, _| {}),
             wait: None,
         }
     }
@@ -221,6 +250,7 @@ pub struct PlateLook {
     profile: Option<Arc<UiProfile>>,
     read_text: Option<FrameReader>,
     catalogue: Arc<CatalogueCell>,
+    keep_unread: UnreadPlateKeeper,
 }
 
 /// What the creature watcher keeps from one look to the next.
@@ -301,11 +331,20 @@ impl Watcher for PlateLook {
         let read_text = &reader.read_text;
         let recogniser =
             |crop: &BgrImage| Some(read_text(crop).unwrap_or_else(|| (String::new(), 0.0)));
-        let sighting = read_found_plate(&image, &locked, profile, &recogniser)
-            .map(|read| Sighting::of(&read, &self.catalogue.current(), &profile.mob_names));
+        let read = read_found_plate(&image, &locked, profile, &recogniser);
+        let sighting = read
+            .as_ref()
+            .map(|read| Sighting::of(read, &self.catalogue.current(), &profile.mob_names));
         metrics.record_plate_read(started.elapsed());
-        if sighting.as_ref().is_none_or(|s| s.raw_name.is_none()) {
+        // A plate found whose name did not read: counted, and handed on
+        // with why, for whoever keeps such plates to look at.
+        let refused = match &read {
+            None => Some("no-read"),
+            Some(read) => read.name.as_ref().err().map(PlateTextError::kind),
+        };
+        if let Some(why) = refused {
             eyes.mark_unread();
+            (self.keep_unread)(at_ms, why, &|| plate_surroundings(&image, locked.bar));
         }
         Look::Tell(pulse(sighting))
     }
@@ -321,6 +360,7 @@ impl ScreenWatch<PlateLook> {
                 profile: providers.profile,
                 read_text: providers.read_text,
                 catalogue: providers.catalogue,
+                keep_unread: providers.keep_unread,
             },
             Seams {
                 frame: providers.frame,

@@ -12,6 +12,10 @@ use crate::game_ui::test_support::{blank, bundled_profile, PlateDrawing, RadarSc
 use crate::screen_watch::next_due;
 use crate::time::clock_epoch_ms;
 
+/// A plate handed on as unread: when, why, and its picture's width and
+/// height.
+type UnreadPlate = (i64, String, usize, usize);
+
 /// The watcher over stand-in seams: a frame seam counting its captures
 /// and running `on_capture` first (a slow capture advances the clock), a
 /// wait that moves the mock clock straight to the moment a look is due
@@ -32,6 +36,8 @@ struct Rig {
     starts: Arc<AtomicUsize>,
     /// The live detection setting.
     enabled: Arc<AtomicBool>,
+    /// Each plate handed on as unread: when, why, and its picture's size.
+    unread: Arc<Mutex<Vec<UnreadPlate>>>,
 }
 
 type OnCapture =
@@ -89,9 +95,18 @@ fn rig_with(
     };
     let wait = wait(clock.clone(), focus.clone());
     let probe = focus.clone();
+    let unread = Arc::new(Mutex::new(Vec::new()));
+    let handed = unread.clone();
     let watch = MobWatch::new(
         MobWatchProviders {
             frame,
+            keep_unread: Arc::new(move |at_ms, why, picture| {
+                let picture = picture();
+                handed
+                    .lock()
+                    .unwrap()
+                    .push((at_ms, why.to_string(), picture.w, picture.h));
+            }),
             focus: Some(Arc::new(move || *probe.lock().unwrap())),
             profile: Some(Arc::new(bundled_profile())),
             read_text: Some(read_text.unwrap_or_else(|| Arc::new(|_: &BgrImage| None))),
@@ -130,6 +145,7 @@ fn rig_with(
         start_ok,
         starts,
         enabled,
+        unread,
     }
 }
 
@@ -494,6 +510,10 @@ fn a_look_reads_the_locked_plate_and_matches_its_name() {
     assert!(after.plate_read_latency.count > before.plate_read_latency.count);
     let minutes = rig.watch.take_look_minutes();
     assert_eq!((minutes[0].found, minutes[0].unread), (1, 0));
+    assert!(
+        rig.unread.lock().unwrap().is_empty(),
+        "a plate that read is handed to nobody"
+    );
 }
 
 #[test]
@@ -515,6 +535,21 @@ fn a_locked_plate_whose_name_does_not_read_is_counted_unread() {
         (minutes[0].looks, minutes[0].found, minutes[0].unread),
         (2, 2, 2)
     );
+    // Each is handed on with when it was seen, why its name was refused,
+    // and a picture of the plate and what stands round it: three bar
+    // widths across, the lettering above the bar included.
+    let unread = rig.unread.lock().unwrap();
+    let start = unread[0].0;
+    assert_eq!(
+        unread
+            .iter()
+            .map(|plate| plate.0 - start)
+            .collect::<Vec<_>>(),
+        [0, 1_000]
+    );
+    let (_, why, w, h) = &unread[0];
+    assert!(!why.is_empty() && !why.contains(' '), "{why}");
+    assert!(*w > 3 * *h / 2 && *h > 20, "{w}x{h}");
 }
 
 #[test]

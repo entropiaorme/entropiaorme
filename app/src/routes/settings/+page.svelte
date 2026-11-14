@@ -165,6 +165,20 @@
 		}
 	}
 
+	async function handleKeepUnreadPlates(checked: boolean) {
+		if (!settings) return;
+		savingField = 'keepUnreadPlates';
+		capabilityError = null;
+		try {
+			settings = await updateSettings({ keep_unread_plates: checked });
+			flashSaved('keepUnreadPlates');
+		} catch (e) {
+			capabilityError = e instanceof Error ? e.message : 'Failed to update unread plates';
+		} finally {
+			savingField = null;
+		}
+	}
+
 	async function handleScreenReading(reading: ScreenReading, checked: boolean) {
 		if (!settings) return;
 		savingField = reading.key;
@@ -456,6 +470,27 @@
 					</p>
 				</div>
 				<a class="linklet text-sm" href="/metrics">Open</a>
+			</div>
+
+			<Divider />
+
+			<div class="py-5 flex items-start justify-between gap-6">
+				<div>
+					<p class="text-sm text-text">Keep plates that did not read</p>
+					<p class="text-xs text-text-tertiary mt-0.5 max-w-xl">
+						When a mob's name cannot be read, saves a small picture of its nameplate to find out
+						why. Kept on this computer only, the newest 200.
+					</p>
+					{#if savedIndicator === 'keepUnreadPlates'}
+						<p class="text-xs text-success mt-1">Saved</p>
+					{/if}
+				</div>
+				<Toggle
+					checked={settings.keepUnreadPlates}
+					disabled={savingField !== null}
+					onchange={handleKeepUnreadPlates}
+					label="Keep plates that did not read"
+				/>
 			</div>
 
 			{#if isDev}

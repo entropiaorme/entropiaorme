@@ -809,6 +809,24 @@ pub enum PlateTextError {
     Misaligned,
 }
 
+impl PlateTextError {
+    /// The refusal in a word or two, for a record of why a plate did not
+    /// read: stable, and safe in a file name.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::NoRecogniser => "no-recogniser",
+            Self::NotFound => "not-found",
+            Self::Ambiguous => "ambiguous",
+            Self::Clipped => "clipped",
+            Self::Covered => "covered",
+            Self::Invalid { .. } => "invalid",
+            Self::WrongWidth { .. } => "wrong-width",
+            Self::LevelUnread => "level-unread",
+            Self::Misaligned => "misaligned",
+        }
+    }
+}
+
 /// The locked plate, read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlateRead {

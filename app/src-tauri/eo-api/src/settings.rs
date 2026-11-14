@@ -252,6 +252,9 @@ pub struct AppSettings {
     /// Whether reading the held tool can capture the game window when a
     /// session wants it.
     pub tool_reading_capture: ScreenCapture,
+    /// Whether a locked plate whose name did not read is kept as a small
+    /// picture on this computer, for finding out why.
+    pub keep_unread_plates: bool,
     /// The session facets the next session snapshots: the designated
     /// name (empty: not declared) and the skill boost (null: not
     /// declared; 0: declared deliberately unboosted).
@@ -341,6 +344,9 @@ pub struct SettingsPatch {
     /// Turn reading the held tool off the screen on or off.
     #[serde(default)]
     pub tool_reading_enabled: Option<bool>,
+    /// Turn keeping the plates whose name did not read on or off.
+    #[serde(default)]
+    pub keep_unread_plates: Option<bool>,
     #[serde(default)]
     pub session_name: Option<String>,
     /// Double-optioned so the patch can express all three states: absent
@@ -400,6 +406,9 @@ impl SettingsPatch {
         }
         if let Some(value) = self.tool_reading_enabled {
             updates.insert("tool_reading".into(), Value::Bool(value));
+        }
+        if let Some(value) = self.keep_unread_plates {
+            updates.insert("keep_unread_plates".into(), Value::Bool(value));
         }
         if let Some(value) = self.session_name {
             updates.insert("session_name".into(), Value::String(value));
@@ -463,6 +472,7 @@ impl Api {
             mob_detection_capture: screen_capture(self.mob_capture.as_ref()),
             tool_reading_enabled: config.tool_reading_on(),
             tool_reading_capture: screen_capture(self.tool_capture.as_ref()),
+            keep_unread_plates: config.keep_unread_plates,
             session_name: config.session_name.clone(),
             declared_skill_boost_percent: config
                 .declared_skill_boost_percent

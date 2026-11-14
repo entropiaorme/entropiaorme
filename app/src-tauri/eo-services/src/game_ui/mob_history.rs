@@ -1,6 +1,6 @@
 //! Which creature each kill was, from the locked plate read over time.
 //!
-//! A watcher reads the locked plate about once a second while the player
+//! A watcher reads the locked plate a few times a second while the player
 //! hunts, and hands each reading here with the time it was read; nothing
 //! here reads a clock. Readings group into fights: readings close in time
 //! whose health does not climb back up, of one creature. A creature's
@@ -28,16 +28,22 @@
 //! they name more than one creature the answer is no creature, or at most
 //! a suggestion; the only fight left out is one the player had clearly
 //! left, another plate having been read for a while before the kill can
-//! have happened (and one left damaged may have bled out, so it keeps the
+//! have happened (and one last read damaged that no kill has taken, left or
+//! read shortly before the kill's fights began, may have bled out, so it keeps the
 //! answer to a guess). A creature still read after the kill is alive, so a
 //! kill whose only creature is still being read was something else's (area
 //! damage). Health never chooses: a creature killed in one or two shots
 //! stops being read at full health.
 //!
 //! The fight's creature is decided by vote over its readings, since single
-//! readings of a name are often a character or two off. A creature is
-//! named only on two strict readings of its own, the fight's last among
-//! them. An unfamiliar name joins the session's other spellings of the same
+//! readings of a name are often a character or two off. What misleads one
+//! look can stand on the screen for the next, so readings count as more
+//! than one look only when they span `apart_ms`. A creature is named only
+//! on strict readings of its own spanning that, the fight's last among
+//! them, and an unfamiliar name is given only on readings spanning it. A
+//! plate whose name did not read on the looks between two strict readings
+//! of one fight, its health going on from the one to the other, is that
+//! fight's plate and joins it. An unfamiliar name joins the session's other spellings of the same
 //! creature: a spelling read for the first time is taken as an earlier one
 //! close to it read at the same level, never across levels or with a level
 //! unread, and a name whose level never read is only ever suggested. A
@@ -45,8 +51,8 @@
 //! nothing.
 //!
 //! A kill is given one of five grades. [`MobStamp::Named`]: a creature on
-//! the list, read strictly at least twice in its own fight, its reading the
-//! last one before the death; safe to record. [`MobStamp::Guess`]: a
+//! the list, read strictly at more than one look in its own fight, its
+//! reading the last one before the death; safe to record. [`MobStamp::Guess`]: a
 //! creature on the list the screen leans to without proving it; to be shown
 //! as a suggestion. [`MobStamp::Provisional`] and
 //! [`MobStamp::ProvisionalGuess`]: the same two grades for a creature on no
@@ -97,8 +103,11 @@ use super::plates::PlateRead;
 const MS_PER_SECOND: f64 = 1000.0; // not layout: the milliseconds in a second
 
 /// How readings are grouped into fights, kills given fights, and fights
-/// voted on, as the profile describes it. The values assume the watcher
-/// reads the locked plate about once a second.
+/// voted on, as the profile describes it. Spans of time (how late a report
+/// can be, how long a brief lock elsewhere lasts) stand whatever the
+/// cadence; the values counted in looks (`continue_ms`, and with it the
+/// look-back and look-ahead; `max_reads`; the drop allowed between two
+/// looks) are stated for the cadence `pulse_ms` gives and move with it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MobHistoryProfile {
@@ -121,7 +130,9 @@ pub struct MobHistoryProfile {
     /// more than this above the earlier
     pub same_plate_rise: f64,
     /// and at most this much lower per second, show the same creature,
-    /// whatever its name read as.
+    /// whatever its name read as. One hit takes its share of the bar
+    /// between two looks however close they are, so the rate is set for the
+    /// drop allowed between two looks at the cadence.
     pub same_plate_drop_per_s: f64,
     /// A kill is given a fight last read from this long before its logged
     /// second: the earliest death the report can follow, less a reading
@@ -152,12 +163,24 @@ pub struct MobHistoryProfile {
     /// another plate was read over at least this span, ending before the
     /// earliest moment the kill can have happened.
     pub left_span_ms: i64,
+    /// A fight last read damaged that no kill has taken is looked for back
+    /// to this long before the first reading of the fights read in a
+    /// kill's moments, further back than those moments themselves: a
+    /// creature left bleeding for another can die long after its plate was
+    /// last read, and its death cannot be told from the death of the one
+    /// fought since. One found keeps the answer to a guess.
+    pub left_lookback_ms: i64,
     /// A kill not yet watched far enough past is given up on, as not
     /// watched, once the latest pulse or the caller's clock is this far
     /// past the time it needs.
     pub give_up_ms: i64,
     /// At most this many pulses are kept (the last `retain_ms` of them).
     pub max_pulses: usize,
+    /// Readings count as more than one look at a creature only when the
+    /// first and last of them were taken at least this far apart: what
+    /// misleads one look (another plate drawn across the name, a frame
+    /// caught mid-change) can stand on the screen for the next look too.
+    pub apart_ms: i64,
     /// Fewest readings that must vote for a creature to be named.
     pub min_votes: usize,
     /// An unfamiliar name is given to a kill only when at least this many
@@ -604,6 +627,9 @@ pub struct MobHistory {
     /// them, with how often each was read this session: one reading of a
     /// number nobody listed is not yet a creature.
     inferred: Vec<(Creature, Kept)>,
+    /// When each of them was last counted: readings closer together than
+    /// `apart_ms` count once.
+    inferred_at: Vec<(Creature, i64)>,
     /// How the plate prints the number of each creature graded by number
     /// read this session (`04` where the list has `4`).
     printed: Vec<(Creature, String)>,
@@ -712,6 +738,7 @@ impl MobHistory {
             current_unrecognised: false,
             trace: None,
             inferred: Vec::new(),
+            inferred_at: Vec::new(),
             printed: Vec::new(),
             printed_news: Vec::new(),
         }
@@ -799,7 +826,19 @@ impl MobHistory {
         };
         if let Some(creature) = read_as {
             if sighting.inferred_number {
-                count_kept(&mut self.inferred, creature.clone(), self.profile.spellings);
+                let apart = self.profile.apart_ms;
+                let lately = self
+                    .inferred_at
+                    .iter()
+                    .any(|(c, t)| *c == creature && at_ms - t < apart);
+                if !lately {
+                    self.inferred_at.retain(|(c, _)| *c != creature);
+                    if self.inferred_at.len() >= self.profile.spellings.max(1) {
+                        self.inferred_at.remove(0);
+                    }
+                    self.inferred_at.push((creature.clone(), at_ms));
+                    count_kept(&mut self.inferred, creature.clone(), self.profile.spellings);
+                }
             }
             if matches!(vote, Some(Vote::Known(_))) {
                 self.note_printed(creature, sighting.raw_name.as_deref());
@@ -814,7 +853,7 @@ impl MobHistory {
             self.current_unrecognised = named.is_none();
             self.seen.push_back((at_ms, named));
         }
-        let p = &self.profile;
+        let p = &self.profile.clone();
         let fill = sighting.fill;
         // Only one plate is locked at a time: a damaged plate read on the
         // pulse right after a damaged plate, its health going on from it, is
@@ -895,7 +934,12 @@ impl MobHistory {
             spelled,
         };
         match same_plate.or(best.map(|b| b.0)) {
-            Some(i) => self.fights[i].push(reading, p.max_reads),
+            Some(i) => {
+                self.fights[i].push(reading, p.max_reads);
+                if same_plate.is_none() {
+                    self.take_unread_between(i);
+                }
+            }
             None => {
                 let mut fight = Fight {
                     readings: VecDeque::new(),
@@ -925,6 +969,65 @@ impl MobHistory {
                 self.lost.push_back((gone.first_ms(), gone.last().at_ms));
             }
         }
+    }
+
+    /// Fight `i` has just taken a reading that names its creature
+    /// strictly. Plates whose name did not read on every look between that
+    /// reading and the fight's one before it, their health going on from
+    /// the one to the other without climbing, were the same plate: one
+    /// lock, read before and after. They join the fight (naming nothing,
+    /// they change no vote) instead of standing as a creature of their own.
+    fn take_unread_between(&mut self, i: usize) {
+        let p = &self.profile;
+        let fight = &self.fights[i];
+        let mut latest = fight.readings.iter().rev();
+        let (Some(after), Some(before)) = (latest.next(), latest.next()) else {
+            return;
+        };
+        let (from, to) = (before.at_ms, after.at_ms);
+        let looks = self
+            .pulses
+            .iter()
+            .filter(|t| **t > from && **t < to)
+            .count();
+        if looks == 0 {
+            return;
+        }
+        let between = (0..self.fights.len()).find(|u| {
+            let other = &self.fights[*u];
+            *u != i
+                && !other.claimed
+                && !other.held
+                && other.readings.len() == looks
+                && other
+                    .readings
+                    .iter()
+                    .all(|r| r.raw.is_none() && r.at_ms > from && r.at_ms < to)
+        });
+        let Some(u) = between else {
+            return;
+        };
+        let mut fills = vec![(from, before.fill)];
+        fills.extend(self.fights[u].readings.iter().map(|r| (r.at_ms, r.fill)));
+        fills.push((to, after.fill));
+        let one_lock = fills.windows(2).all(|pair| {
+            pair[1].0 - pair[0].0 <= p.continue_ms && pair[1].1 <= pair[0].1 + p.rise_tolerance
+        });
+        if !one_lock {
+            return;
+        }
+        let max = p.max_reads;
+        let unread = self.fights.remove(u);
+        let i = if u < i { i - 1 } else { i };
+        let fight = &mut self.fights[i];
+        let last = fight.readings.pop_back().expect("the reading just taken");
+        if let Some(vote) = &last.vote {
+            fight.count(&vote.clone(), false);
+        }
+        for reading in unread.readings {
+            fight.push(reading, max);
+        }
+        fight.push(last, max);
     }
 
     /// The session's number for an unfamiliar name read as `text` at
@@ -1633,6 +1736,19 @@ impl MobHistory {
             .collect()
     }
 
+    /// From when a fight the player left is looked for, for a kill whose
+    /// fights are gathered from `from` to `window_end`: `left_lookback_ms`
+    /// before the first reading of any of them.
+    fn left_from(&self, from: i64, window_end: i64) -> i64 {
+        let began = self
+            .gathered(from, window_end)
+            .into_iter()
+            .map(|i| self.fights[i].first_ms())
+            .min()
+            .unwrap_or(from);
+        began.min(from) - self.profile.left_lookback_ms
+    }
+
     /// Whether the player had clearly left fight `i`: after its last
     /// reading, another plate was read over the left span before
     /// `earliest_death`.
@@ -1703,11 +1819,17 @@ impl MobHistory {
         // another plate was read over the left span before the earliest
         // moment of death.
         let left = |i: usize| self.left(i, earliest_death);
-        // A creature the player left damaged may have bled out, or been
-        // killed by another: left, it keeps any answer to a guess.
-        let left_damaged = gathered
+        // A creature last read damaged that no kill has taken may have bled
+        // out, or been killed by another: clearly left, or last read before
+        // the kill's moments but not long before its fights began, it keeps
+        // any answer to a guess.
+        let left_damaged = self
+            .gathered(self.left_from(from, window_end), window_end)
             .iter()
-            .any(|i| !alive(i) && left(*i) && self.fights[*i].last().fill < p.damaged_fill);
+            .any(|i| {
+                let last = self.fights[*i].last();
+                !alive(i) && last.fill < p.damaged_fill && (left(*i) || last.at_ms < from)
+            });
         let doubted = alive_rival || left_damaged;
         let mut considered: Vec<(usize, Option<MobStamp>)> = gathered
             .iter()
@@ -1807,18 +1929,25 @@ impl MobHistory {
         };
         let mut who: Option<Identity> = None;
         let mut readings: Vec<(usize, &Reading)> = Vec::new();
-        for i in self.gathered(from, latest_death) {
+        let left_from = self.left_from(from, latest_death);
+        for i in self.gathered(left_from, latest_death) {
             let fight = &self.fights[i];
+            // A creature the player left may have bled out: its name is a
+            // second name as much as any, though its plate is not the lock.
+            // It is looked for further back than the kill's own moments.
+            let left = self.left(i, earliest_death);
+            if !left && !fight.readings.iter().any(within) {
+                continue;
+            }
             if fight.last().at_ms > alive_after {
                 return None;
             }
             if fight.held {
                 continue;
             }
-            // A creature the player left may have bled out: its name is a
-            // second name as much as any, though its plate is not the lock.
-            if self.left(i, earliest_death) {
-                for reading in fight.readings.iter().filter(|r| within(r)) {
+            if left {
+                let since = |r: &&Reading| r.at_ms >= left_from && r.at_ms <= latest_death;
+                for reading in fight.readings.iter().filter(since) {
                     if let Some(name) = name_of(reading).ok()? {
                         if who.as_ref().is_some_and(|held| *held != name) {
                             return None;
@@ -1932,8 +2061,9 @@ impl MobHistory {
     /// When the fights read in a kill's moments name more than one
     /// creature, a suggestion where the screen leans: the fight that
     /// stopped last, read on the last pulse before the report arrived and
-    /// read at least twice, every fight naming another creature having
-    /// stopped before its last two readings. A known creature is given as a
+    /// at more than one look, every fight naming another creature having
+    /// stopped before its latest reading that is another look than its last
+    /// (`apart_ms` before it at least). A known creature is given as a
     /// guess, an unfamiliar one as a provisional guess, never more.
     /// Otherwise the latest creature read, if any (see
     /// [`MobHistory::latest_read`]).
@@ -1955,7 +2085,15 @@ impl MobHistory {
             return self.latest_read(considered, latest_death);
         };
         let fight = &self.fights[*chosen];
-        let Some(second_last) = fight.readings.iter().rev().nth(1).map(|r| r.at_ms) else {
+        // Its latest reading that is another look than its last.
+        let apart = fight.last().at_ms - self.profile.apart_ms;
+        let Some(second_last) = fight
+            .readings
+            .iter()
+            .rev()
+            .map(|r| r.at_ms)
+            .find(|t| *t <= apart)
+        else {
             return self.latest_read(considered, latest_death);
         };
         let theirs = identity(stamp);
@@ -2132,11 +2270,20 @@ impl MobHistory {
                 let spelled = behind
                     .iter()
                     .any(|(r, folded)| !folded && r.spelled && r.vote == own);
-                // Named only on two strict readings of its own at least, the
-                // fight's last among them: a plate last seen as anything else
+                // Named only on strict readings of its own at more than one
+                // look, the fight's last among them: a plate last seen as anything else
                 // was not clearly this creature when it died.
                 let last_its_own = fight.last().vote == own;
-                if carries(strict) && strict >= 2 && spelled && last_its_own {
+                // Two looks at least: its strict readings span `apart_ms`.
+                let own_at = || {
+                    behind
+                        .iter()
+                        .filter(|(r, folded)| r.loose.is_none() && !folded)
+                        .map(|(r, _)| r.at_ms)
+                };
+                let twice = strict >= 2
+                    && own_at().max().unwrap_or(0) - own_at().min().unwrap_or(0) >= p.apart_ms;
+                if carries(strict) && twice && spelled && last_its_own {
                     MobStamp::Named { creature, evidence }
                 } else if carries(strict) {
                     MobStamp::Guess { creature, evidence }
@@ -2152,7 +2299,12 @@ impl MobHistory {
                 }
             }
             Vote::New(id) => {
-                if votes < p.provisional_reads.max(1) {
+                // Read often enough, and at more than one look.
+                let at = || behind.iter().map(|(r, _)| r.at_ms);
+                let span = at().max().unwrap_or(0) - at().min().unwrap_or(0);
+                if votes < p.provisional_reads.max(1)
+                    || (p.provisional_reads > 1 && span < p.apart_ms)
+                {
                     return None;
                 }
                 // A name whose level never read may be another maturity's
@@ -2432,26 +2584,31 @@ mod tests {
     use crate::game_ui::plates::PlateTextError;
     use crate::game_ui::test_support::{bundled_mobs, bundled_profile};
 
-    /// A history whose watcher has been pulsing once a second for a while.
+    /// The time between looks, as the bundled profile has it.
+    fn pulse() -> i64 {
+        bundled_profile().mob_history.pulse_ms
+    }
+
+    /// A history whose watcher has been looking at its cadence for a while.
     fn history() -> MobHistory {
         let profile = bundled_profile();
         let mut h = MobHistory::new(profile.mob_history, profile.mob_names);
-        for t in (-20_000..0).step_by(1000) {
+        for t in (-20_000..0).step_by(pulse() as usize) {
             h.observe(t, None);
         }
         h
     }
 
-    /// Pulses with nothing locked, a second apart, up to (not at) `until`.
+    /// Looks with nothing locked, at the cadence, up to (not at) `until`.
     fn pad(h: &mut MobHistory, until: i64) {
-        let mut t = h.pulses.back().copied().unwrap_or(until) + 1000;
+        let mut t = h.pulses.back().copied().unwrap_or(until) + pulse();
         while t < until {
             h.observe(t, None);
-            t += 1000;
+            t += pulse();
         }
     }
 
-    /// One reading at `at_ms`, the pulses before it kept up.
+    /// One reading at `at_ms`, the looks before it kept up.
     fn read_at(h: &mut MobHistory, at_ms: i64, sighting: Sighting) {
         pad(h, at_ms);
         h.observe(at_ms, Some(sighting));
@@ -2468,7 +2625,7 @@ mod tests {
     fn answer(h: &mut MobHistory, report: KillReport) -> KillStamp {
         let end = watched_until(report);
         while h.pulses.back().is_none_or(|t| *t < end) {
-            let t = h.pulses.back().map_or(end, |t| t + 1000);
+            let t = h.pulses.back().map_or(end, |t| t + pulse());
             h.observe(t, None);
         }
         let now = *h.pulses.back().expect("pulses");
@@ -2530,14 +2687,52 @@ mod tests {
         )
     }
 
-    /// Feed `sightings` one a second from `start_ms`; the last's time.
+    /// Feed `sightings` on successive looks from `start_ms`; the last's
+    /// time.
     fn feed(h: &mut MobHistory, start_ms: i64, sightings: Vec<Sighting>) -> i64 {
         let mut at = start_ms;
         for sighting in sightings {
             read_at(h, at, sighting);
-            at += 1000;
+            at += pulse();
         }
-        at - 1000
+        at - pulse()
+    }
+
+    /// How many looks there are from `from_ms` to `to_ms`, both included.
+    fn looks(from_ms: i64, to_ms: i64) -> usize {
+        ((to_ms - from_ms) / pulse() + 1) as usize
+    }
+
+    /// `n` readings of `text` at `level`, its health falling evenly from
+    /// `high` to `low`.
+    fn falling(
+        c: &MobCatalogue,
+        text: &str,
+        level: Option<u32>,
+        n: usize,
+        high: f64,
+        low: f64,
+    ) -> Vec<Sighting> {
+        let step = if n > 1 {
+            (high - low) / (n - 1) as f64
+        } else {
+            0.0
+        };
+        (0..n)
+            .map(|k| seen(c, text, level, high - step * k as f64))
+            .collect()
+    }
+
+    /// Feed `sightings` from `start_ms`, each on every look for a second
+    /// (the plate as it stands between hits a second apart); the last
+    /// look's time.
+    fn feed_seconds(h: &mut MobHistory, start_ms: i64, sightings: Vec<Sighting>) -> i64 {
+        let each = (1000 / pulse()) as usize;
+        let looks = sightings
+            .into_iter()
+            .flat_map(|sighting| vec![sighting; each])
+            .collect();
+        feed(h, start_ms, looks)
     }
 
     fn creature(name: &str, maturity: &str) -> Creature {
@@ -2658,7 +2853,10 @@ mod tests {
         let profile = bundled_profile();
         let mut h = MobHistory::new(profile.mob_history, profile.mob_names);
         h.observe(5500, Some(seen(&c, "Combibo Young", Some(3), 0.6)));
-        h.observe(6500, Some(seen(&c, "Combibo Young", Some(3), 0.2)));
+        h.observe(
+            5500 + pulse(),
+            Some(seen(&c, "Combibo Young", Some(3), 0.2)),
+        );
         assert_eq!(kill(&mut h, 7000), KillStamp::Unnamed(Unnamed::Unwatched));
     }
 
@@ -2666,29 +2864,19 @@ mod tests {
     fn an_add_killed_after_the_player_clearly_left_an_earlier_fight_is_guessed_as_the_add() {
         let c = catalogue(Vec::new());
         let mut h = history();
-        // Mature fought down to a sliver and left at 3 s, inside the kill's
-        // look-back; Young read from 4 s, over the left span before the
-        // earliest moment of the kill reported at 7 s, then killed. Without
-        // the player having clearly left Mature, two creatures are read in
-        // the kill's moments and nothing could be given. Mature was left
-        // damaged and may have bled out, so Young is only guessed.
+        // Mature fought down to a sliver on every look and left at 3 s;
+        // Young read on every look from 4 s, over the left span before the
+        // earliest moment of the kill reported at 7 s, then killed. Mature
+        // was left damaged and may have bled out, so Young is only guessed.
         feed(
             &mut h,
             1000,
-            vec![
-                seen(&c, "Combibo Mature", Some(4), 0.6),
-                seen(&c, "Combibo Mature", Some(4), 0.3),
-                seen(&c, "Combibo Mature", Some(4), 0.05),
-            ],
+            falling(&c, "Combibo Mature", Some(4), looks(1000, 3000), 0.6, 0.05),
         );
         let last = feed(
             &mut h,
             4000,
-            vec![
-                seen(&c, "Combibo Young", Some(3), 1.0),
-                seen(&c, "Combibo Young", Some(3), 0.6),
-                seen(&c, "Combibo Young", Some(3), 0.3),
-            ],
+            falling(&c, "Combibo Young", Some(3), looks(4000, 6000), 1.0, 0.3),
         );
         assert_eq!(last, 6000);
         let stamp = kill(&mut h, 7000);
@@ -2698,16 +2886,16 @@ mod tests {
 
     #[test]
     fn a_fight_left_only_inside_the_kills_moments_is_still_a_rival() {
-        // Timeline 3 widened: Young read to 7 s, Mature read at 8 s and 9 s
-        // (over the left span, but not before the earliest moment of the
-        // kill reported at 10 s). Young may have died at 9.4 s, so nothing
-        // is named or suggested; Mature, read twice and last, is the latest
-        // creature read.
+        // Timeline 3 widened: Young read to 7.5 s, Mature read on every look
+        // from 7.75 s to 9 s (over the left span, but not before the
+        // earliest moment of the kill reported at 10 s). Young may have died
+        // at 9.4 s, so nothing is named or suggested; Mature, read on more
+        // than one look and last, is the latest creature read.
         let c = catalogue(Vec::new());
         let mut h = history();
         feed(
             &mut h,
-            5000,
+            7000,
             vec![
                 seen(&c, "Combibo Young", Some(3), 0.4),
                 seen(&c, "Combibo Young", Some(3), 0.3),
@@ -2716,11 +2904,8 @@ mod tests {
         );
         feed(
             &mut h,
-            8000,
-            vec![
-                seen(&c, "Combibo Mature", Some(4), 1.0),
-                seen(&c, "Combibo Mature", Some(4), 1.0),
-            ],
+            7750,
+            vec![seen(&c, "Combibo Mature", Some(4), 1.0); looks(7750, 9000)],
         );
         assert_eq!(latest(&kill(&mut h, 10_000)), Some(&combibo("Mature")));
     }
@@ -2731,7 +2916,9 @@ mod tests {
         let mut h = history();
         read_at(&mut h, 5000, seen(&c, "Combibo Young", Some(3), 1.0));
         assert_eq!(guessed(&kill(&mut h, 6000)), Some(&combibo("Young")));
-        feed(
+        // Two shots a second apart: full health on every look for a second,
+        // then 0.45 until the second shot kills it.
+        feed_seconds(
             &mut h,
             20_000,
             vec![
@@ -2746,9 +2933,8 @@ mod tests {
     fn a_kill_by_area_damage_while_the_locked_creature_lives_on_is_not_stamped() {
         let c = catalogue(Vec::new());
         let mut h = history();
-        let readings = (0..12)
-            .map(|k| seen(&c, "Combibo Mature", Some(4), 1.0 - k as f64 * 0.05))
-            .collect();
+        // Mature read on every look for twelve seconds, living on.
+        let readings = falling(&c, "Combibo Mature", Some(4), looks(0, 11_750), 1.0, 0.45);
         let last = feed(&mut h, 0, readings);
         assert_eq!(kill(&mut h, 6000), KillStamp::Unnamed(Unnamed::StillRead));
         // The fight is still there for its own kill.
@@ -2757,18 +2943,19 @@ mod tests {
 
     #[test]
     fn an_area_damage_kill_after_the_lock_moved_on_twice_is_not_given_the_first_creature() {
-        // Timeline 4: Young stops at 6 s, Mature read 7 s to 9 s, the lock
-        // moves to an Atrox read at 10 s and 11 s; a kill logged at 10 s,
-        // arriving at 11.5 s, is something never locked. Young was clearly
-        // left; Mature and Atrox are both read in the death's moments. The
-        // screen leans to the Atrox, read last and on the pulse before the
-        // report, so it is suggested, never named: what the screen shows is
-        // also what a kill of the Atrox shows.
+        // Timeline 4: Young stops at 6 s, before the kill's moments; Mature
+        // read on every look from 8 s to 10 s; the lock moves to an Atrox
+        // read on the looks from 10.25 s to 11 s; a kill logged at 10 s,
+        // arriving at 11.1 s, is something never locked. Mature and Atrox
+        // are both read in the death's moments. The screen leans to the
+        // Atrox, read last and on the look before the report, so it is
+        // suggested, never named: what the screen shows is also what a kill
+        // of the Atrox shows.
         let c = catalogue(Vec::new());
         let lead = |h: &mut MobHistory| {
             feed(
                 h,
-                4000,
+                5500,
                 vec![
                     seen(&c, "Combibo Young", Some(3), 0.5),
                     seen(&c, "Combibo Young", Some(3), 0.3),
@@ -2777,25 +2964,18 @@ mod tests {
             );
             feed(
                 h,
-                7000,
-                vec![
-                    seen(&c, "Combibo Mature", Some(4), 1.0),
-                    seen(&c, "Combibo Mature", Some(4), 0.9),
-                    seen(&c, "Combibo Mature", Some(4), 0.8),
-                ],
+                8000,
+                falling(&c, "Combibo Mature", Some(4), looks(8000, 10_000), 1.0, 0.8),
             );
         };
         let mut h = history();
         lead(&mut h);
         feed(
             &mut h,
-            10_000,
-            vec![
-                seen(&c, "Atrox Old", Some(6), 1.0),
-                seen(&c, "Atrox Old", Some(6), 0.9),
-            ],
+            10_250,
+            falling(&c, "Atrox Old", Some(6), looks(10_250, 11_000), 1.0, 0.9),
         );
-        let stamp = kill_arrived(&mut h, 10_000, 11_500);
+        let stamp = kill_arrived(&mut h, 10_000, 11_100);
         assert_eq!(named(&stamp), None);
         assert_eq!(guessed(&stamp), Some(&creature("Atrox", "Old")));
         // Were the Atrox read on past the report's arrival, it is alive
@@ -2804,20 +2984,24 @@ mod tests {
         // guessed.
         let mut h = history();
         lead(&mut h);
-        let readings = (0..5)
-            .map(|k| seen(&c, "Atrox Old", Some(6), 1.0 - k as f64 * 0.1))
-            .collect();
-        feed(&mut h, 10_000, readings);
-        let stamp = kill_arrived(&mut h, 10_000, 11_500);
+        feed(
+            &mut h,
+            10_250,
+            falling(&c, "Atrox Old", Some(6), looks(10_250, 11_750), 1.0, 0.4),
+        );
+        let stamp = kill_arrived(&mut h, 10_000, 11_100);
         assert_eq!(named(&stamp), None);
         assert_eq!(guessed(&stamp), Some(&combibo("Mature")));
     }
 
     #[test]
     fn a_brief_lock_on_another_creature_mid_fight_takes_neither_the_kill_nor_the_fight() {
+        // Young fought a second a hit, a lock on Mature for two seconds, back
+        // to Young to its death: the Mature is read before the kill's
+        // moments, and takes neither its vote nor the kill.
         let c = catalogue(Vec::new());
         let mut h = history();
-        let last = feed(
+        let last = feed_seconds(
             &mut h,
             0,
             vec![
@@ -2835,7 +3019,7 @@ mod tests {
         match kill(&mut h, last + 1000) {
             KillStamp::Stamped(MobStamp::Named { creature, evidence }) => {
                 assert_eq!(creature, combibo("Young"));
-                assert_eq!((evidence.votes, evidence.of), (7, 7));
+                assert_eq!((evidence.votes, evidence.of), (28, 28));
             }
             other => panic!("{other:?}"),
         }
@@ -2847,17 +3031,17 @@ mod tests {
 
     #[test]
     fn a_misreading_on_the_last_reading_of_another_listed_creature_names_nothing() {
-        // Timeline 1: Gen 01 read to 8 s; at 9 s the name reads as Gen 07,
-        // its level not read; the kill is reported at 10 s. A name read
-        // strictly never joins a fight by health alone: it may be a second
-        // creature already damaged.
+        // Timeline 1: Gen 01 read on every look to 8.75 s; on the next look,
+        // at 9 s, the name reads as Gen 07, its level not read; the kill is
+        // reported at 10 s. A name read strictly never joins a fight by
+        // health alone: it may be a second creature already damaged.
         let c = catalogue(Vec::new());
         for fill in [0.15, 1.0] {
             let mut h = history();
             let readings = (0..9)
                 .map(|k| seen(&c, "Drone Gen 01", Some(10), 1.0 - k as f64 * 0.1))
                 .collect();
-            feed(&mut h, 0, readings);
+            feed(&mut h, 9000 - 9 * pulse(), readings);
             read_at(&mut h, 9000, seen(&c, "Drone Gen 07", None, fill));
             assert_eq!(h.fights.len(), 2);
             assert_eq!(
@@ -2870,14 +3054,15 @@ mod tests {
 
     #[test]
     fn a_second_creature_already_damaged_is_never_outvoted_by_the_first() {
-        // Young read eight times down to half health; the player switches to
-        // a creature already at 0.45, reads it twice, and it dies.
+        // Young read on eight looks down to half health; on the next look
+        // the player has switched to a creature already at 0.45, reads it on
+        // two looks, and it dies.
         let c = catalogue(Vec::new());
         let young = |h: &mut MobHistory| {
             let readings = (0..8)
                 .map(|k| seen(&c, "Combibo Young", Some(3), 1.0 - k as f64 * 0.07))
                 .collect();
-            feed(h, 0, readings);
+            feed(h, 8000 - 8 * pulse(), readings);
         };
         // A listed creature: its own fight, and both are read in the death's
         // moments; it was read twice and last, so it is the latest creature
@@ -2893,7 +3078,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            latest(&kill_arrived(&mut h, 10_000, 10_200)),
+            latest(&kill_arrived(&mut h, 9000, 9200)),
             Some(&combibo("Mature"))
         );
         // An unlisted creature under a consistent spelling: its first reading
@@ -2910,21 +3095,22 @@ mod tests {
             ],
         );
         assert_eq!(
-            kill_arrived(&mut h, 10_000, 10_200),
+            kill_arrived(&mut h, 9000, 9200),
             KillStamp::Unnamed(Unnamed::Undecided)
         );
     }
 
     #[test]
     fn a_brief_lock_priming_a_neighbours_fight_names_nothing() {
-        // Timeline 1, second form: an unlisted Elder, a brief lock on a
-        // fresh Atrox Old, back to the Elder, whose next reading comes out
-        // near Atrox Old and joins the Old fight; kill reported at 6 s.
+        // Timeline 1, second form, a look each: an unlisted Elder, a brief
+        // lock on a fresh Atrox Old, back to the Elder, whose next reading
+        // comes out near Atrox Old and joins the Old fight; kill reported at
+        // 6 s.
         let c = catalogue(Vec::new());
         let mut h = history();
         feed(
             &mut h,
-            0,
+            4500,
             vec![
                 seen(&c, "Atrox Elder", Some(9), 0.9),
                 seen(&c, "Atrox Elder", Some(9), 0.8),
@@ -2939,33 +3125,30 @@ mod tests {
 
     #[test]
     fn two_kills_of_different_creatures_seconds_apart_are_told_apart_by_the_reports_arrival() {
-        // Timeline 2: Young read to 6 s, dies at 6.5 s; Mature read at 7 s
-        // and 8 s, dies at 8.3 s; logged at 7 s and 8 s.
+        // Timeline 2: Young read on every look to 6 s, dies at 6.5 s; Mature
+        // read on every look from 7 s to 8 s, dies at 8.3 s; logged at 7 s
+        // and 8 s.
         let c = catalogue(Vec::new());
-        let fights = |h: &mut MobHistory| {
+        let young = |h: &mut MobHistory| {
             feed(
                 h,
-                3000,
-                vec![
-                    seen(&c, "Combibo Young", Some(3), 0.5),
-                    seen(&c, "Combibo Young", Some(3), 0.3),
-                    seen(&c, "Combibo Young", Some(3), 0.1),
-                ],
+                5250,
+                falling(&c, "Combibo Young", Some(3), looks(5250, 6000), 0.5, 0.1),
             );
+        };
+        let fights = |h: &mut MobHistory| {
+            young(h);
             feed(
                 h,
                 7000,
-                vec![
-                    seen(&c, "Combibo Mature", Some(4), 1.0),
-                    seen(&c, "Combibo Mature", Some(4), 0.5),
-                ],
+                falling(&c, "Combibo Mature", Some(4), looks(7000, 8000), 1.0, 0.5),
             );
         };
         // Arriving at 7.2 s and 8.5 s: Mature was read after the first
         // report arrived, so the first kill is Young's; but Mature was read
         // at 7 s, within the first death's moments, so Young is only
         // guessed. The guess uses up Young's fight, so the second kill has
-        // only Mature's, read whole twice to its death: named.
+        // only Mature's, read whole on every look to its death: named.
         let mut h = history();
         fights(&mut h);
         let first = kill_arrived(&mut h, 7000, 7200);
@@ -2982,22 +3165,11 @@ mod tests {
         assert_eq!(latest(&kill(&mut h, 8000)), Some(&combibo("Mature")));
         // The same creature twice: each kill a fight, nearest first.
         let mut h = history();
-        feed(
-            &mut h,
-            3000,
-            vec![
-                seen(&c, "Combibo Young", Some(3), 0.5),
-                seen(&c, "Combibo Young", Some(3), 0.3),
-                seen(&c, "Combibo Young", Some(3), 0.1),
-            ],
-        );
+        young(&mut h);
         feed(
             &mut h,
             7000,
-            vec![
-                seen(&c, "Combibo Young", Some(3), 1.0),
-                seen(&c, "Combibo Young", Some(3), 0.5),
-            ],
+            falling(&c, "Combibo Young", Some(3), looks(7000, 8000), 1.0, 0.5),
         );
         assert_eq!(named(&kill(&mut h, 7000)), Some(&combibo("Young")));
         assert_eq!(named(&kill(&mut h, 8000)), Some(&combibo("Young")));
@@ -3006,14 +3178,14 @@ mod tests {
     #[test]
     fn a_kill_followed_at_once_by_a_lock_on_another_kind_is_named_only_when_the_lock_came_after_the_death(
     ) {
-        // Young read to 6 s and killed at 6.4 s; Mature locked next and read
-        // on through the report.
+        // Young read on every look from 5 s to 6 s and killed at 6.4 s;
+        // Mature locked next and read on through the report.
         let c = catalogue(Vec::new());
         let run = |mature_from: i64, logged: i64, arrived: i64| {
             let mut h = history();
             feed(
                 &mut h,
-                2000,
+                5000,
                 (0..5)
                     .map(|k| seen(&c, "Combibo Young", Some(3), 0.9 - k as f64 * 0.2))
                     .collect(),
@@ -3041,14 +3213,15 @@ mod tests {
 
     #[test]
     fn an_undecided_report_takes_no_fight_from_later_kills() {
-        // A fight whose readings split, read up to 5 s; an area-damage kill
-        // logged at 4 s arrives at 4.9 s. An undecided answer takes no fight
-        // from later kills: it stays in contention, as a creature of its own.
+        // A fight whose readings split, read on every look from 4 s to 5 s;
+        // an area-damage kill logged at 4 s arrives at 4.9 s. An undecided
+        // answer takes no fight from later kills: it stays in contention, as
+        // a creature of its own.
         let c = catalogue(Vec::new());
         let mut h = history();
         feed(
             &mut h,
-            1000,
+            4000,
             vec![
                 seen(&c, "Combibo Young", Some(3), 0.9),
                 seen(&c, "Zombie Fleshripper", Some(3), 0.7),
@@ -3114,6 +3287,8 @@ mod tests {
 
     #[test]
     fn an_unfamiliar_name_read_again_and_again_is_not_outvoted_by_one_off_garble() {
+        // The name read on two looks far enough apart to be two looks at it,
+        // garbled one way and another on the looks between.
         let c = catalogue(Vec::new());
         let mut h = history();
         let last = feed(
@@ -3122,8 +3297,8 @@ mod tests {
             vec![
                 seen(&c, "Zombie Fleshripper", Some(25), 0.9),
                 seen(&c, "Qwxv Plorn", Some(25), 0.7),
-                seen(&c, "Zombie Fleshripper", Some(25), 0.5),
-                seen(&c, "Trel Mibbo", Some(25), 0.3),
+                seen(&c, "Trel Mibbo", Some(25), 0.5),
+                seen(&c, "Zombie Fleshripper", Some(25), 0.3),
                 seen(&c, "Glonk Wesk", Some(25), 0.1),
             ],
         );
@@ -3144,8 +3319,8 @@ mod tests {
             vec![
                 seen(&c, "Zombie Fleshripper", Some(25), 0.9),
                 seen(&c, "Qwxv Plorn", Some(25), 0.7),
-                seen(&c, "Zombie Fleshripper", Some(25), 0.5),
-                seen(&c, "Qwxv Plorn", Some(25), 0.3),
+                seen(&c, "Qwxv Plorn", Some(25), 0.5),
+                seen(&c, "Zombie Fleshripper", Some(25), 0.3),
                 seen(&c, "Glonk Wesk", Some(25), 0.1),
             ],
         );
@@ -3182,7 +3357,7 @@ mod tests {
         let last = feed(
             &mut h,
             start,
-            (0..3)
+            (0..4)
                 .map(|k| seen(&c, "Zornbic Fleshripper", Some(25), 0.9 - k as f64 * 0.2))
                 .collect(),
         );
@@ -3196,11 +3371,12 @@ mod tests {
 
     #[test]
     fn a_plate_whose_name_never_reads_is_only_a_doubt_in_a_hunt_of_one_creature() {
-        // Mature read 5 s to 8 s down to 0.3; the next plate locked never
-        // reads its name, read at 9 s (full) and 10 s (0.7), and dies at
-        // 10.4 s: logged 10 s, arrived 10.5 s. Every name read round the
-        // kill is Mature's, so the unread plate is not a creature of its
-        // own: the kill is Mature's, as a guess and never more.
+        // Mature read on every look to 9 s down to 0.3; the next plate
+        // locked never reads its name, read on the next two looks (full or
+        // nearly, then 0.7), and dies at 9.55 s: logged 9 s, arrived 9.6 s.
+        // Every name read round the kill is Mature's, so the unread plate is
+        // not a creature of its own: the kill is Mature's, as a guess and
+        // never more.
         let c = catalogue(Vec::new());
         let unread = |fill: f64| Sighting {
             fill,
@@ -3211,7 +3387,7 @@ mod tests {
         let mature = |h: &mut MobHistory| {
             feed(
                 h,
-                5000,
+                8250,
                 (0..4)
                     .map(|k| seen(&c, "Combibo Mature", Some(4), 0.9 - k as f64 * 0.2))
                     .collect(),
@@ -3220,8 +3396,8 @@ mod tests {
         for fills in [[1.0, 0.7], [0.9, 0.7]] {
             let mut h = history();
             mature(&mut h);
-            feed(&mut h, 9000, vec![unread(fills[0]), unread(fills[1])]);
-            match kill_arrived(&mut h, 10_000, 10_500) {
+            feed(&mut h, 9250, vec![unread(fills[0]), unread(fills[1])]);
+            match kill_arrived(&mut h, 9000, 9600) {
                 KillStamp::Stamped(MobStamp::Guess { creature, .. }) => {
                     assert_eq!(creature, creature_of("Combibo", "Mature"));
                 }
@@ -3254,7 +3430,7 @@ mod tests {
         let mut h = history();
         feed(
             &mut h,
-            5000,
+            8250,
             vec![
                 seen(&c, "Combibo Mature", Some(4), 0.9),
                 seen(&c, "Combibo Mature", Some(4), 0.7),
@@ -3262,34 +3438,34 @@ mod tests {
                 seen(&c, "Combibo Mature", Some(4), 0.5),
             ],
         );
-        feed(&mut h, 9000, vec![unread(1.0), unread(0.7)]);
-        unsettled(kill_arrived(&mut h, 10_000, 10_500));
+        feed(&mut h, 9250, vec![unread(1.0), unread(0.7)]);
+        unsettled(kill_arrived(&mut h, 9000, 9600));
         // A name read after the kill that is another creature's says the
         // same: the hunt there is of more than one.
         let mut h = history();
         feed(
             &mut h,
-            5000,
+            8250,
             (0..4)
                 .map(|k| seen(&c, "Combibo Mature", Some(4), 0.9 - k as f64 * 0.2))
                 .collect(),
         );
-        feed(&mut h, 9000, vec![unread(1.0), unread(0.7)]);
-        read_at(&mut h, 11_000, seen(&c, "Atrox Young", Some(4), 1.0));
-        unsettled(kill_arrived(&mut h, 10_000, 10_500));
+        feed(&mut h, 9250, vec![unread(1.0), unread(0.7)]);
+        read_at(&mut h, 10_250, seen(&c, "Atrox Young", Some(4), 1.0));
+        unsettled(kill_arrived(&mut h, 9000, 9600));
         // And a name read that names nothing is a creature the reader
         // cannot vouch for.
         let mut h = history();
         feed(
             &mut h,
-            5000,
+            8250,
             (0..4)
                 .map(|k| seen(&c, "Combibo Mature", Some(4), 0.9 - k as f64 * 0.2))
                 .collect(),
         );
         feed(
             &mut h,
-            9000,
+            9250,
             vec![
                 unread(1.0),
                 Sighting {
@@ -3300,7 +3476,7 @@ mod tests {
                 },
             ],
         );
-        unsettled(kill_arrived(&mut h, 10_000, 10_500));
+        unsettled(kill_arrived(&mut h, 9000, 9600));
     }
 
     /// A plate whose name did not read.
@@ -3313,24 +3489,17 @@ mod tests {
         }
     }
 
-    /// Mature named once at full health at 6 s, then `after` a second
-    /// apart; the kill logged at 9 s whose report arrived at 9.5 s; and an
-    /// Atrox locked at 10 s, after the report, so the names read round the
-    /// kill are of two creatures.
+    /// Mature named once at full health at 6 s, then `after` on the looks
+    /// after it (`None`: a look with nothing locked); the kill logged at 7 s
+    /// whose report arrived at 7.5 s; and an Atrox locked at 8 s, after the
+    /// report, so the names read round the kill are of two creatures.
     fn named_then(c: &MobCatalogue, after: Vec<Option<Sighting>>) -> MobHistory {
         let mut h = history();
         read_at(&mut h, 6000, seen(c, "Combibo Mature", Some(4), 1.0));
         for (k, sighting) in after.into_iter().enumerate() {
-            let at = 7000 + k as i64 * 1000;
-            match sighting {
-                Some(sighting) => read_at(&mut h, at, sighting),
-                None => {
-                    pad(&mut h, at);
-                    h.observe(at, None);
-                }
-            }
+            h.observe(6000 + (k as i64 + 1) * pulse(), sighting);
         }
-        read_at(&mut h, 10_000, seen(c, "Atrox Young", Some(4), 1.0));
+        read_at(&mut h, 8000, seen(c, "Atrox Young", Some(4), 1.0));
         h
     }
 
@@ -3345,7 +3514,7 @@ mod tests {
             &c,
             vec![Some(unread(0.69)), Some(unread(0.34)), Some(unread(0.05))],
         );
-        let answer = kill_arrived(&mut h, 9000, 9500);
+        let answer = kill_arrived(&mut h, 7000, 7500);
         assert_eq!(latest(&answer), Some(&creature_of("Combibo", "Mature")));
         assert_eq!(h.take_trace().map(|t| t.screen), Some("latest_read"));
     }
@@ -3355,7 +3524,7 @@ mod tests {
         let c = catalogue(Vec::new());
         let unnamed = |after: Vec<Option<Sighting>>| {
             let mut h = named_then(&c, after);
-            let answer = kill_arrived(&mut h, 9000, 9500);
+            let answer = kill_arrived(&mut h, 7000, 7500);
             assert!(matches!(answer, KillStamp::Unnamed(_)), "{answer:?}");
         };
         // A look that found nothing locked: what was locked next is a lock
@@ -3404,38 +3573,38 @@ mod tests {
     fn a_name_given_through_a_held_lock_serves_no_second_kill() {
         // Mature named, its plate then unread to the death: the first kill
         // is given it. Another plate locked on the very next look, lower
-        // still and never read, dies two seconds on: the name read before
-        // the first death is not its name.
+        // still and never read, dies a moment on, its kill logged in the
+        // same second: the name read before the first death is not its name.
+        // An Atrox is locked after both reports.
         let c = catalogue(Vec::new());
         let mut h = history();
         read_at(&mut h, 6000, seen(&c, "Combibo Mature", Some(4), 1.0));
-        feed(&mut h, 7000, vec![unread(0.69), unread(0.3), unread(0.1)]);
-        read_at(&mut h, 10_000, seen(&c, "Atrox Young", Some(4), 1.0));
-        let first = kill_arrived(&mut h, 7000, 7400);
+        feed(&mut h, 6250, vec![unread(0.69), unread(0.3), unread(0.1)]);
+        read_at(&mut h, 7250, seen(&c, "Atrox Young", Some(4), 1.0));
+        let first = kill_arrived(&mut h, 6000, 6400);
         assert_eq!(latest(&first), Some(&creature_of("Combibo", "Mature")));
-        let second = kill_arrived(&mut h, 9000, 9300);
+        let second = kill_arrived(&mut h, 6000, 6800);
         assert!(matches!(second, KillStamp::Unnamed(_)), "{second:?}");
     }
 
     #[test]
     fn a_number_the_list_does_not_have_is_a_creature_only_once_read_twice() {
-        // The list has the drone at Gen 01 and Gen 07. One reading of Gen 04
-        // may be either misread: its fight decides nothing.
+        // The list has the drone at Gen 01 and Gen 07. Gen 04 read on two
+        // looks in a row, closer together than two looks at it can be, is
+        // read once, and may be either misread: its fight decides nothing.
         let c = catalogue(Vec::new());
         let mut h = history();
         let first = seen(&c, "Drone Gen 04", None, 0.6);
         assert!(first.inferred_number);
         assert!(!seen(&c, "Drone Gen 07", None, 0.6).inferred_number);
         read_at(&mut h, 5000, first);
+        read_at(&mut h, 5000 + pulse(), seen(&c, "Drone Gen 04", None, 0.5));
         assert!(!matches!(kill(&mut h, 6000), KillStamp::Stamped(_)));
         // Read again, in another fight, the number is believed.
         feed(
             &mut h,
             30_000,
-            vec![
-                seen(&c, "Drone Gen 04", None, 0.9),
-                seen(&c, "Drone Gen 04", None, 0.5),
-            ],
+            falling(&c, "Drone Gen 04", None, looks(30_000, 30_750), 0.9, 0.5),
         );
         match kill(&mut h, 32_000) {
             KillStamp::Stamped(MobStamp::Named { creature, .. }) => {
@@ -3479,11 +3648,11 @@ mod tests {
 
     #[test]
     fn no_latest_creature_read_when_another_stopped_within_a_pulse_of_it() {
-        // Young and Mature read in turn, a pulse each, twice each: the two
-        // last readings are a pulse apart.
+        // Young and Mature read in turn, a look each, twice each: the two
+        // last readings are a look apart.
         let c = catalogue(Vec::new());
         let mut h = history();
-        feed(
+        let last = feed(
             &mut h,
             4000,
             vec![
@@ -3494,14 +3663,17 @@ mod tests {
             ],
         );
         assert_eq!(h.fights.len(), 2);
-        assert_eq!(kill(&mut h, 8000), KillStamp::Unnamed(Unnamed::Indistinct));
+        assert_eq!(
+            kill(&mut h, last + 1000),
+            KillStamp::Unnamed(Unnamed::Indistinct)
+        );
     }
 
     #[test]
     fn a_fight_given_as_the_latest_creature_read_gives_later_kills_no_more() {
         let c = catalogue(Vec::new());
         let mut h = history();
-        feed(
+        let last = feed(
             &mut h,
             0,
             (0..4)
@@ -3510,7 +3682,7 @@ mod tests {
         );
         let i = h.fights.len() - 1;
         h.fights[i].suggestion_only = true;
-        let stamp = kill(&mut h, 4000);
+        let stamp = kill(&mut h, last + 1000);
         assert_eq!(latest(&stamp), Some(&combibo("Young")));
         assert!(!h.fights[i].claimed);
     }
@@ -3556,10 +3728,28 @@ mod tests {
     }
 
     #[test]
-    fn a_named_kill_needs_two_strict_readings_of_its_own() {
-        // A read once at 9 s; a creature at full health whose name does not
-        // read, at 10 s, is a fresh lock, not A's fight going on.
+    fn a_named_kill_needs_strict_readings_of_its_own_spanning_more_than_one_look() {
         let c = catalogue(Vec::new());
+        // Strict readings on looks in a row, the first and last closer
+        // together than `apart_ms`: what misled one look can stand on the
+        // screen for the next, so they are one look at the creature, and
+        // give only a guess. Spanning `apart_ms`, they name it.
+        let apart = bundled_profile().mob_history.apart_ms;
+        for (span, is_named) in [(apart - pulse(), false), (apart, true)] {
+            let mut h = history();
+            let readings = falling(&c, "Atrox Old", Some(6), looks(0, span), 0.9, 0.5);
+            let last = feed(&mut h, 5000, readings);
+            assert_eq!(last, 5000 + span);
+            let stamp = kill(&mut h, last + 1000);
+            if is_named {
+                assert_eq!(named(&stamp), Some(&creature("Atrox", "Old")), "{span}");
+            } else {
+                assert_eq!(named(&stamp), None, "{span}");
+                assert_eq!(guessed(&stamp), Some(&creature("Atrox", "Old")), "{span}");
+            }
+        }
+        // A read once at 9 s; a creature at full health whose name does not
+        // read, on the next look, is a fresh lock, not A's fight going on.
         let unread = |fill: f64| Sighting {
             fill,
             raw_name: Some("Xq".into()),
@@ -3568,17 +3758,17 @@ mod tests {
         };
         let mut h = history();
         read_at(&mut h, 9000, seen(&c, "Atrox Old", Some(6), 1.0));
-        read_at(&mut h, 10_000, unread(1.0));
+        read_at(&mut h, 9000 + pulse(), unread(1.0));
         assert_eq!(h.fights.len(), 2);
         assert_eq!(
             kill_arrived(&mut h, 10_000, 10_500),
             KillStamp::Unnamed(Unnamed::Indistinct)
         );
-        // An unclear reading and one strict one: two readings, one vote. A
-        // guess.
+        // An unclear reading and one strict one on the next look: two
+        // readings, one vote. A guess.
         let mut h = history();
         read_at(&mut h, 0, unread(0.9));
-        read_at(&mut h, 1000, seen(&c, "Atrox Old", Some(6), 0.7));
+        read_at(&mut h, pulse(), seen(&c, "Atrox Old", Some(6), 0.7));
         assert_eq!(h.fights.len(), 1);
         let stamp = kill(&mut h, 2000);
         assert_eq!(named(&stamp), None);
@@ -3586,14 +3776,93 @@ mod tests {
     }
 
     #[test]
+    fn unread_plates_on_every_look_between_two_strict_readings_of_a_fight_join_it() {
+        // Young read strictly, a hit too big for one plate's look to the
+        // next, the name unread on the two looks after, then Young read
+        // strictly again: one lock, read before and after. The unread plates
+        // join Young's fight, so nothing else was read in the kill's moments
+        // and the kill is named.
+        let c = catalogue(Vec::new());
+        let mut h = history();
+        read_at(&mut h, 5000, seen(&c, "Combibo Young", Some(3), 0.9));
+        feed(&mut h, 5000 + pulse(), vec![unread(0.6), unread(0.5)]);
+        read_at(&mut h, 5750, seen(&c, "Combibo Young", Some(3), 0.4));
+        assert_eq!(h.fights.len(), 1);
+        match kill(&mut h, 6000) {
+            KillStamp::Stamped(MobStamp::Named { creature, evidence }) => {
+                assert_eq!(creature, combibo("Young"));
+                assert_eq!((evidence.votes, evidence.of), (2, 2));
+                assert_eq!(
+                    (evidence.first_read_ms, evidence.last_read_ms),
+                    (5000, 5750)
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // The unread plate's health climbing above the first reading's: a
+        // plate of another creature between, which stays apart. It is only a
+        // doubt in a hunt of one creature, but a doubt: not named.
+        let mut h = history();
+        read_at(&mut h, 5000, seen(&c, "Combibo Young", Some(3), 0.6));
+        feed(&mut h, 5000 + pulse(), vec![unread(0.9), unread(0.8)]);
+        read_at(&mut h, 5750, seen(&c, "Combibo Young", Some(3), 0.5));
+        assert_eq!(h.fights.len(), 2);
+        let stamp = kill(&mut h, 6000);
+        assert_eq!(named(&stamp), None, "{stamp:?}");
+        assert_eq!(guessed(&stamp), Some(&combibo("Young")));
+    }
+
+    #[test]
+    fn an_unfamiliar_name_read_on_looks_in_a_row_only_is_no_provisional_name() {
+        let c = catalogue(Vec::new());
+        // Read on two looks in a row: closer together than `apart_ms`, one
+        // look at it. Its fight decides nothing.
+        let mut h = history();
+        let last = feed(
+            &mut h,
+            5000,
+            vec![
+                seen(&c, "Zombie Fleshripper", Some(25), 0.9),
+                seen(&c, "Zombie Fleshripper", Some(25), 0.8),
+            ],
+        );
+        assert_eq!(
+            kill(&mut h, last + 1000),
+            KillStamp::Unnamed(Unnamed::Undecided)
+        );
+        // The same two readings spanning `apart_ms`, the plate unread on the
+        // looks between: a provisional name.
+        let apart = bundled_profile().mob_history.apart_ms;
+        let mut h = history();
+        read_at(&mut h, 5000, seen(&c, "Zombie Fleshripper", Some(25), 0.9));
+        feed(&mut h, 5000 + pulse(), vec![unread(0.88), unread(0.85)]);
+        read_at(
+            &mut h,
+            5000 + apart,
+            seen(&c, "Zombie Fleshripper", Some(25), 0.8),
+        );
+        assert_eq!(h.fights.len(), 1);
+        match kill(&mut h, 5000 + apart + 1000) {
+            KillStamp::Stamped(MobStamp::Provisional {
+                spelling, evidence, ..
+            }) => {
+                assert_eq!(spelling, "Zombie Fleshripper");
+                assert_eq!((evidence.votes, evidence.of), (2, 2));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn a_plate_last_seen_as_anything_else_gives_no_more_than_a_guess() {
-        // Young read eight times down to 0.51; an unlisted creature already
-        // at 0.45 is read once at 8 s, joining the fight by health, and dies.
+        // Young read on eight looks down to 0.51; an unlisted creature
+        // already at 0.45 is read once, on the next look at 8 s, joining the
+        // fight by health, and dies.
         let c = catalogue(Vec::new());
         let mut h = history();
         feed(
             &mut h,
-            0,
+            8000 - 8 * pulse(),
             (0..8)
                 .map(|k| seen(&c, "Combibo Young", Some(3), 1.0 - k as f64 * 0.07))
                 .collect(),
@@ -3607,32 +3876,34 @@ mod tests {
         let mut h = history();
         feed(
             &mut h,
-            0,
+            4000 - 4 * pulse(),
             (0..4)
                 .map(|k| seen(&c, "Combibo Young", Some(3), 0.9 - k as f64 * 0.2))
                 .collect(),
         );
         read_at(&mut h, 4000, seen(&c, "Xq", Some(3), 0.05));
+        assert_eq!(h.fights.len(), 1);
         let stamp = kill(&mut h, 5000);
         assert_eq!(named(&stamp), None);
         assert_eq!(guessed(&stamp), Some(&combibo("Young")));
         // Ending on its own reading, it is named.
         let mut h = history();
-        feed(
+        let last = feed(
             &mut h,
-            0,
+            4000 - 4 * pulse(),
             (0..4)
                 .map(|k| seen(&c, "Combibo Young", Some(3), 0.9 - k as f64 * 0.2))
                 .collect(),
         );
-        assert_eq!(named(&kill(&mut h, 4000)), Some(&combibo("Young")));
+        assert_eq!(named(&kill(&mut h, last + 1000)), Some(&combibo("Young")));
     }
 
     #[test]
     fn a_creature_read_in_the_deaths_moments_and_alive_after_the_report_keeps_a_rival_to_a_guess() {
-        // Mature clicked at 8 s and 9 s at full health; at 10 s the player
-        // locks a Young, kills it in one shot at 10.3 s and locks another
-        // Young before 11 s, read on (joining the first Young's fight).
+        // Mature clicked on two looks at 8 s at full health; at 10 s the
+        // player locks a Young, kills it in one shot at 10.3 s and locks
+        // another Young before 11 s, read on (joining the first Young's
+        // fight).
         // Logged 10 s, arrived 10.4 s. The Young fight is alive after the
         // report, but it was read at 10 s, within the death's moments.
         let c = catalogue(Vec::new());
@@ -3659,25 +3930,27 @@ mod tests {
 
     #[test]
     fn a_creature_left_damaged_keeps_the_next_kill_to_a_guess() {
-        // Young left at 0.4 at 3 s; Mature read from 4 s to 7 s and killed at
-        // 7.4 s; Young bleeds out at 7.1 s (logged 7 s, arrived 7.2 s). The
-        // player had clearly left Young, but it was left damaged.
+        // Young left at 0.4 at 3 s; Mature read on every look from 4 s to
+        // 7 s and killed at 7.4 s; Young bleeds out at 7.1 s (logged 7 s,
+        // arrived 7.2 s). The player had clearly left Young, but it was left
+        // damaged.
         let c = catalogue(Vec::new());
+        let mature = |h: &mut MobHistory| {
+            feed(
+                h,
+                4000,
+                falling(&c, "Combibo Mature", Some(4), looks(4000, 7000), 1.0, 0.4),
+            );
+        };
         let mut h = history();
         feed(
             &mut h,
-            1000,
+            2500,
             (0..3)
                 .map(|k| seen(&c, "Combibo Young", Some(3), 0.8 - k as f64 * 0.2))
                 .collect(),
         );
-        feed(
-            &mut h,
-            4000,
-            (0..4)
-                .map(|k| seen(&c, "Combibo Mature", Some(4), 1.0 - k as f64 * 0.2))
-                .collect(),
-        );
+        mature(&mut h);
         let stamp = kill_arrived(&mut h, 7000, 7200);
         assert_eq!(named(&stamp), None);
         assert_eq!(guessed(&stamp), Some(&combibo("Mature")));
@@ -3685,18 +3958,12 @@ mod tests {
         let mut h = history();
         feed(
             &mut h,
-            1000,
+            2500,
             (0..3)
                 .map(|_| seen(&c, "Combibo Young", Some(3), 1.0))
                 .collect(),
         );
-        feed(
-            &mut h,
-            4000,
-            (0..4)
-                .map(|k| seen(&c, "Combibo Mature", Some(4), 1.0 - k as f64 * 0.2))
-                .collect(),
-        );
+        mature(&mut h);
         assert_eq!(
             named(&kill_arrived(&mut h, 7000, 7200)),
             Some(&combibo("Mature"))
@@ -3720,7 +3987,7 @@ mod tests {
         // or in contention between kills not told apart) gives a later kill
         // only the latest creature read, though it is the only one left.
         let mut h = history();
-        feed(
+        let last = feed(
             &mut h,
             0,
             (0..4)
@@ -3729,7 +3996,7 @@ mod tests {
         );
         let i = h.fights.len() - 1;
         h.fights[i].suggestion_only = true;
-        let stamp = kill(&mut h, 4000);
+        let stamp = kill(&mut h, last + 1000);
         assert!(
             matches!(stamp, KillStamp::Stamped(MobStamp::LatestRead { .. })),
             "{stamp:?}"
@@ -3743,7 +4010,7 @@ mod tests {
             let last = feed(
                 h,
                 at,
-                (0..3)
+                (0..4)
                     .map(|k| seen(&c, text, level, 0.9 - k as f64 * 0.2))
                     .collect(),
             );
@@ -3793,7 +4060,7 @@ mod tests {
             let last = feed(
                 &mut h,
                 at,
-                (0..3)
+                (0..4)
                     .map(|k| seen(&c, "Zombie Fleshripper", Some(level), 0.9 - k as f64 * 0.2))
                     .collect(),
             );
@@ -3847,7 +4114,7 @@ mod tests {
             let mut profile = bundled_profile();
             profile.mob_history.max_fights = 2;
             let mut h = MobHistory::new(profile.mob_history, profile.mob_names);
-            for t in (-20_000..0).step_by(1000) {
+            for t in (-20_000..0).step_by(pulse() as usize) {
                 h.observe(t, None);
             }
             h
@@ -3882,15 +4149,16 @@ mod tests {
 
     #[test]
     fn no_suggestion_while_another_creature_was_read_after_the_last_but_one_reading() {
-        // Mature read at 4 s and 5 s, a Young glimpsed at 6 s, Mature again
-        // at 7 s, read on the last pulse before the report arrived (logged 7
-        // s, arrived 7.2 s): the Young stopped after Mature's last reading
-        // but one, so nothing is suggested.
+        // Mature read at 6.25 s and 6.5 s, a Young glimpsed at 6.75 s, Mature
+        // again at 7 s, read on the last look before the report arrived
+        // (logged 7 s, arrived 7.2 s): the Young stopped after Mature's
+        // latest reading another look than its last, so nothing is
+        // suggested.
         let c = catalogue(Vec::new());
         let mut h = history();
         feed(
             &mut h,
-            4000,
+            6250,
             vec![
                 seen(&c, "Combibo Mature", Some(4), 0.9),
                 seen(&c, "Combibo Mature", Some(4), 0.7),
@@ -3909,12 +4177,12 @@ mod tests {
     fn a_creature_read_within_the_capture_slack_of_the_arrival_is_not_alive_after_it() {
         let p = bundled_profile().mob_history;
         let c = catalogue(Vec::new());
-        // Young's last reading at 6 s; logged 5 s.
+        // Young read on every look from 5.25 s, its last at 6 s; logged 5 s.
         let young = || {
             let mut h = history();
             feed(
                 &mut h,
-                3000,
+                6000 - 3 * pulse(),
                 (0..4)
                     .map(|k| seen(&c, "Combibo Young", Some(3), 0.9 - k as f64 * 0.2))
                     .collect(),
@@ -3934,16 +4202,18 @@ mod tests {
 
     #[test]
     fn a_creature_the_screen_leans_to_is_suggested_and_a_last_glimpse_is_not() {
-        // A Zombie read at 164.6 s to 166.6 s, Combibo Mature locked and read
-        // once at 167.6 s, nothing locked at 168.6 s, the Zombie read again at
-        // 169.6 s and 170.6 s; logged 171 s, arrived 171.42 s. The Mature
-        // stopped before the Zombie's last two readings, the last of which is
-        // the last pulse before the report arrived: the Zombie is suggested.
+        // A Zombie read on the looks from 169.4 s to 169.9 s, Combibo Mature
+        // locked and read once at 170.15 s, nothing locked on the next look,
+        // the Zombie read again on the four looks from 170.65 s to 171.4 s;
+        // logged 171 s, arrived 171.42 s. The Mature stopped before the
+        // Zombie's latest reading another look than its last, and that last
+        // is the last look before the report arrived: the Zombie is
+        // suggested.
         let c = catalogue(Vec::new());
         let mut h = history();
-        feed(
+        let mature = feed(
             &mut h,
-            164_600,
+            169_400,
             vec![
                 seen(&c, "Zombie Fleshripper", Some(25), 0.95),
                 seen(&c, "Zombie Fleshripper", Some(25), 0.75),
@@ -3951,15 +4221,18 @@ mod tests {
                 seen(&c, "Combibo Mature", Some(4), 1.0),
             ],
         );
-        h.observe(168_600, None);
-        feed(
+        h.observe(mature + pulse(), None);
+        let last = feed(
             &mut h,
-            169_600,
+            mature + 2 * pulse(),
             vec![
                 seen(&c, "Zombie Fleshripper", Some(25), 0.3),
+                seen(&c, "Zombie Fleshripper", Some(25), 0.2),
+                seen(&c, "Zombie Fleshripper", Some(25), 0.1),
                 seen(&c, "Zombie Fleshriper", Some(25), 0.05),
             ],
         );
+        assert_eq!(last, 171_400);
         match kill_arrived(&mut h, 171_000, 171_420) {
             KillStamp::Stamped(MobStamp::ProvisionalGuess { spelling, .. }) => {
                 assert_eq!(spelling, "Zombie Fleshripper")
@@ -3987,24 +4260,29 @@ mod tests {
 
     #[test]
     fn a_one_reading_glimpse_of_another_creature_is_passed_over_for_the_latest_creature_read() {
-        // Timeline 3: Young read to 7 s, missed at 8 s, Mature glimpsed at
-        // 9 s at full health, Young dies at 9.4 s, reported at 10 s. Nothing
-        // is named or suggested; the glimpse is read once, so Young, read
-        // last before it, is the latest creature read.
+        // Timeline 3: Young read to 7.5 s, nothing locked on the next look,
+        // Mature glimpsed on the one after at full health, Young dies at
+        // 8.4 s, reported at 9 s. Nothing is named or suggested; the glimpse
+        // is read once, so Young, read last before it, is the latest creature
+        // read.
         let c = catalogue(Vec::new());
         let mut h = history();
-        feed(
+        let last = feed(
             &mut h,
-            5000,
+            7000,
             vec![
                 seen(&c, "Combibo Young", Some(3), 0.4),
                 seen(&c, "Combibo Young", Some(3), 0.3),
                 seen(&c, "Combibo Young", Some(3), 0.15),
             ],
         );
-        h.observe(8000, None);
-        read_at(&mut h, 9000, seen(&c, "Combibo Mature", Some(4), 1.0));
-        assert_eq!(latest(&kill(&mut h, 10_000)), Some(&combibo("Young")));
+        h.observe(last + pulse(), None);
+        read_at(
+            &mut h,
+            last + 2 * pulse(),
+            seen(&c, "Combibo Mature", Some(4), 1.0),
+        );
+        assert_eq!(latest(&kill(&mut h, 9000)), Some(&combibo("Young")));
     }
 
     #[test]
@@ -4013,10 +4291,11 @@ mod tests {
         // fresh `Atrox Old` is locked briefly mid-fight; the Elder's next
         // reading comes out near `Atrox Old` and joins the Old's fight, and
         // the Elder's later readings join that by health. The fight then
-        // holds two creatures: nothing is named.
+        // holds two creatures: nothing is named. Each reading stands on
+        // every look for a second.
         let c = catalogue(Vec::new());
         let mut h = history();
-        let last = feed(
+        let last = feed_seconds(
             &mut h,
             0,
             vec![
@@ -4054,7 +4333,7 @@ mod tests {
         // application does not know, under that spelling.
         let mut h = history();
         let readings = (0..5)
-            .map(|k| seen(&c, "Cornblbo Yuong", Some(3), 1.0 - k as f64 * 0.2))
+            .map(|k| seen(&c, "Cornblbo Yuong", Some(3), 0.9 - k as f64 * 0.2))
             .collect();
         let last = feed(&mut h, 0, readings);
         match kill(&mut h, last + 1000) {
@@ -4072,7 +4351,7 @@ mod tests {
         let c = catalogue(Vec::new());
         let mut h = history();
         let readings = (0..5)
-            .map(|k| seen(&c, "Combibo Young", Some(4), 1.0 - k as f64 * 0.2))
+            .map(|k| seen(&c, "Combibo Young", Some(4), 0.9 - k as f64 * 0.2))
             .collect();
         let last = feed(&mut h, 0, readings);
         assert_eq!(
@@ -4082,7 +4361,7 @@ mod tests {
         // `Old` read off an `Old Alpha` plate likewise.
         let mut h = history();
         let readings = (0..4)
-            .map(|k| seen(&c, "Snarg Old", Some(19), 1.0 - k as f64 * 0.25))
+            .map(|k| seen(&c, "Snarg Old", Some(19), 0.9 - k as f64 * 0.2))
             .collect();
         let last = feed(&mut h, 0, readings);
         assert_eq!(
@@ -4119,7 +4398,8 @@ mod tests {
             last + 10_000,
             vec![
                 seen(&c, "Snarg Old", Some(14), 0.8),
-                seen(&c, "Snarg 0ld", Some(14), 0.4),
+                seen(&c, "Snarg 0ld", Some(14), 0.5),
+                seen(&c, "Snarg Old", Some(14), 0.3),
                 seen(&c, "Snarg Old", Some(14), 0.1),
             ],
         );
@@ -4215,7 +4495,7 @@ mod tests {
     fn a_confirmed_name_read_with_its_level_is_named() {
         let c = catalogue(vec!["Zombie Fleshripper".into()]);
         let mut h = history();
-        let last = feed(
+        let last = feed_seconds(
             &mut h,
             0,
             vec![
@@ -4312,7 +4592,7 @@ mod tests {
                 .enumerate()
                 .map(|(k, t)| seen(&c, t, Some(level), 0.9 - 0.2 * k as f64))
                 .collect();
-            let last = feed(&mut h, at, readings);
+            let last = feed_seconds(&mut h, at, readings);
             match kill(&mut h, last + 1000) {
                 KillStamp::Stamped(MobStamp::Provisional { key, .. }) => keys.push(key),
                 other => panic!("{texts:?}: {other:?}"),
@@ -4338,15 +4618,19 @@ mod tests {
         let c = catalogue(Vec::new());
         let mut h = history();
         h.observe(0, Some(seen(&c, "Combibo Young", Some(3), 0.6)));
-        h.observe(1000, None);
-        h.observe(2000, Some(seen(&c, "Combibo Young", Some(3), 0.55)));
-        h.observe(3000, Some(seen(&c, "Combibo Young", Some(3), 0.05)));
+        h.observe(pulse(), None);
+        let start = 2 * pulse();
+        feed(
+            &mut h,
+            start,
+            falling(&c, "Combibo Young", Some(3), looks(0, 750), 0.55, 0.05),
+        );
         assert_eq!(h.fights.len(), 2);
         // Both name one creature: the kill takes the one nearest the death.
-        match kill(&mut h, 4000) {
+        match kill(&mut h, 2000) {
             KillStamp::Stamped(MobStamp::Named { creature, evidence }) => {
                 assert_eq!(creature, combibo("Young"));
-                assert_eq!(evidence.first_read_ms, 2000);
+                assert_eq!(evidence.first_read_ms, start);
             }
             other => panic!("{other:?}"),
         }
@@ -4411,17 +4695,14 @@ mod tests {
         let mut profile = bundled_profile();
         profile.mob_history.spellings = 3;
         let mut h = MobHistory::new(profile.mob_history, profile.mob_names);
-        for t in (-20_000..0).step_by(1000) {
+        for t in (-20_000..0).step_by(pulse() as usize) {
             h.observe(t, None);
         }
         let c = catalogue(Vec::new());
         let last = feed(
             &mut h,
             0,
-            vec![
-                seen(&c, "Zombie Fleshripper", Some(25), 0.6),
-                seen(&c, "Zombie Fleshripper", Some(25), 0.4),
-            ],
+            falling(&c, "Zombie Fleshripper", Some(25), looks(0, 750), 0.6, 0.3),
         );
         let key = match kill(&mut h, last + 1000) {
             KillStamp::Stamped(MobStamp::Provisional { key, .. }) => key,
@@ -4479,7 +4760,7 @@ mod tests {
         }
     }
 
-    /// `n` kills of `text` read at `level`, each a fight read four times
+    /// `n` kills of `text` read at `level`, each a fight read on four looks
     /// down to its death and reported a second after its last reading, ten
     /// seconds apart from `start_ms`; each must be named or given a
     /// provisional name. The last kill's report and its stamp.
@@ -4621,9 +4902,7 @@ mod tests {
             let mut h = history();
             kills_of(&mut h, &c, 0, "Combibo Young", 3, 3);
             let at = clear_of(&h);
-            let readings = (0..12)
-                .map(|k| seen(&c, text, Some(level), 1.0 - k as f64 * 0.05))
-                .collect();
+            let readings = falling(&c, text, Some(level), looks(0, 11_750), 1.0, 0.45);
             feed(&mut h, at, readings);
             let stamp = kill(&mut h, at + 6000);
             match answer {
@@ -4631,9 +4910,9 @@ mod tests {
                 Some(young) => assert_eq!(hunted(&stamp), Some(&young)),
             }
         }
-        // Mature read to its death, missed a pulse, an Atrox Old glimpsed:
-        // nothing read names Young, so the screen's latest creature read
-        // stands, as before.
+        // Mature read to its death, nothing locked on the next look, an Atrox
+        // Old glimpsed on the one after: nothing read names Young, so the
+        // screen's latest creature read stands, as before.
         let mut h = history();
         kills_of(&mut h, &c, 0, "Combibo Young", 3, 3);
         let at = clear_of(&h);
@@ -4646,20 +4925,28 @@ mod tests {
                 seen(&c, "Combibo Mature", Some(4), 0.15),
             ],
         );
-        h.observe(last + 1000, None);
-        read_at(&mut h, last + 2000, seen(&c, "Atrox Old", Some(6), 1.0));
-        assert_eq!(latest(&kill(&mut h, last + 3000)), Some(&combibo("Mature")));
+        h.observe(last + pulse(), None);
+        read_at(
+            &mut h,
+            last + 2 * pulse(),
+            seen(&c, "Atrox Old", Some(6), 1.0),
+        );
+        assert_eq!(
+            latest(&kill(&mut h, last + 2 * pulse() + 1000)),
+            Some(&combibo("Mature"))
+        );
     }
 
     #[test]
     fn a_latest_creature_read_of_another_creature_stands_and_keeps_its_fight_to_that_grade() {
-        // Young read to 7 s, Mature read at 8 s and 9 s, kill reported at
-        // 10 s: on the screen alone, Mature is the latest creature read.
+        // Young read to 7.5 s, Mature read on every look from 7.75 s to
+        // 9 s, kill reported at 10 s: on the screen alone, Mature is the
+        // latest creature read.
         let c = catalogue(Vec::new());
         let lead = |h: &mut MobHistory, at: i64| {
             feed(
                 h,
-                at,
+                at + 2000,
                 vec![
                     seen(&c, "Combibo Young", Some(3), 0.4),
                     seen(&c, "Combibo Young", Some(3), 0.3),
@@ -4668,11 +4955,8 @@ mod tests {
             );
             feed(
                 h,
-                at + 3000,
-                vec![
-                    seen(&c, "Combibo Mature", Some(4), 1.0),
-                    seen(&c, "Combibo Mature", Some(4), 1.0),
-                ],
+                at + 2750,
+                vec![seen(&c, "Combibo Mature", Some(4), 1.0); looks(2750, 4000)],
             )
         };
         let mut h = history();
@@ -4792,7 +5076,7 @@ mod tests {
             // name read that names nothing.
             read_at(&mut h, at, seen(&c, glimpse, Some(6), 1.0));
             let later = at + 30_000;
-            for t in (at + 1000..=later).step_by(1000) {
+            for t in (at + pulse()..=later).step_by(pulse() as usize) {
                 h.observe(t, None);
             }
             assert_eq!(h.continuity(later), None, "{glimpse}");
@@ -4828,10 +5112,7 @@ mod tests {
         let last = feed(
             &mut h,
             at,
-            vec![
-                seen(&c, "Combibo Mature", Some(4), 1.0),
-                seen(&c, "Combibo Mature", Some(4), 0.45),
-            ],
+            falling(&c, "Combibo Mature", Some(4), looks(0, 750), 1.0, 0.45),
         );
         assert_eq!(named(&kill(&mut h, last + 1000)), Some(&combibo("Mature")));
         // And a Mature read once is guessed.
@@ -4917,11 +5198,12 @@ mod tests {
         );
     }
 
-    /// Young read three times down to a sliver from `at`, then Mature read
-    /// twice at full health: a kill reported a second later is given
-    /// Mature as the latest creature read. The kill's logged time.
+    /// Young read on three looks down to a sliver from `at`, then Mature
+    /// read at full health on every look for over a second: a kill reported
+    /// a second later is given Mature as the latest creature read. The
+    /// kill's logged time.
     fn latest_mature(h: &mut MobHistory, c: &MobCatalogue, at: i64) -> i64 {
-        feed(
+        let young = feed(
             h,
             at,
             vec![
@@ -4932,19 +5214,16 @@ mod tests {
         );
         let last = feed(
             h,
-            at + 3000,
-            vec![
-                seen(c, "Combibo Mature", Some(4), 1.0),
-                seen(c, "Combibo Mature", Some(4), 1.0),
-            ],
+            young + pulse(),
+            vec![seen(c, "Combibo Mature", Some(4), 1.0); looks(0, 1250)],
         );
         last + 1000
     }
 
-    /// `name` read three times down to a sliver from `at`, a pulse with
-    /// nothing locked, and `glimpse` read once at full health: a kill
-    /// reported a second later is given `name` as the latest creature
-    /// read. The kill's logged time.
+    /// `name` read on three looks down to a sliver from `at`, a look with
+    /// nothing locked, and `glimpse` read once at full health on the look
+    /// after: a kill reported a second later is given `name` as the latest
+    /// creature read. The kill's logged time.
     fn latest_then_glimpse(
         h: &mut MobHistory,
         c: &MobCatalogue,
@@ -4960,9 +5239,10 @@ mod tests {
                 .map(|fill| seen(c, name.0, Some(name.1), fill))
                 .collect(),
         );
-        h.observe(last + 1000, None);
-        read_at(h, last + 2000, seen(c, glimpse.0, Some(glimpse.1), 1.0));
-        last + 3000
+        h.observe(last + pulse(), None);
+        let glimpsed = last + 2 * pulse();
+        read_at(h, glimpsed, seen(c, glimpse.0, Some(glimpse.1), 1.0));
+        glimpsed + 1000
     }
 
     #[test]
@@ -5822,9 +6102,13 @@ mod tests {
         let mut observed = 0i64;
         let mut scratch = PlateScratch::default();
         let phase = rng.unit();
+        // The looks come at the profile's cadence, each a little early or
+        // late.
+        let step = profile.mob_history.pulse_ms as f64 / 1000.0;
+        let per_second = (1.0 / step).round().max(1.0) as usize;
         let mut i = 0usize;
         loop {
-            let t = phase + i as f64 + rng.uniform(-0.04, 0.04);
+            let t = (phase + i as f64 + rng.uniform(-0.04, 0.04)) * step;
             if t > plan.end {
                 break;
             }
@@ -5839,8 +6123,9 @@ mod tests {
                 stamps.push((k, verdict, earlier));
                 next += 1;
             }
-            let mut scene = RadarScene::over(grounds[(i / 200) % grounds.len()].clone());
-            let shown = (i / 37) % 3;
+            let mut scene =
+                RadarScene::over(grounds[(i / (200 * per_second)) % grounds.len()].clone());
+            let shown = (i / (37 * per_second)) % 3;
             for (kind, at) in bystanders.iter().take(shown) {
                 let kind = &KINDS[*kind];
                 scene.plate(
@@ -6011,11 +6296,11 @@ mod tests {
                 .filter(|l| l.to >= kill.fight.0 - 5.0 && l.from <= kill.reported)
                 .map(|l| l.kind)
                 .collect();
-            let (outcome, off_screen) = judge(kill, &seen, &stamp, &spellings, harsh);
+            let (outcome, off_screen) = judge(kill, &seen, &stamp, &spellings);
             if off_screen {
                 tally.off_screen.push(format!("{what}: {stamp:?}"));
             }
-            let (outcome_before, _) = judge(kill, &seen, &earlier, &spellings_before, harsh);
+            let (outcome_before, _) = judge(kill, &seen, &earlier, &spellings_before);
             // Where the creature being hunted is not given, the answer is
             // the one the history gave before it could be.
             if !outcome.continuity() {
@@ -6044,12 +6329,12 @@ mod tests {
         seen: &[usize],
         stamp: &KillStamp,
         spellings: &std::collections::HashMap<String, String>,
-        harsh: bool,
     ) -> (Outcome, bool) {
-        // Judged by the session's spelling for the key at the hunt's end. An
-        // ordinary hunt tells a misspelling of the creature killed (the
-        // spelling nearer its plate than any other kind's) apart from
-        // another creature.
+        // Judged by the session's spelling for the key at the hunt's end. A
+        // misspelling of the creature killed (the spelling nearer its plate
+        // than any other kind's) is told apart from another creature: the
+        // session's spelling is the text read most, which a misreading the
+        // recogniser repeats can be, and the review corrects it.
         let unfamiliar = |key: &str| {
             let spelling = spellings.get(key).cloned().unwrap_or_default();
             let unlisted = kill.kind.filter(|k| !KINDS[*k].listed);
@@ -6059,7 +6344,7 @@ mod tests {
             });
             match unlisted {
                 Some(k) if spelling == KINDS[k].plate() => Some(true),
-                Some(k) if !harsh && nearest == Some(k) => None,
+                Some(k) if nearest == Some(k) => None,
                 _ => Some(false),
             }
         };
@@ -6267,7 +6552,7 @@ mod tests {
         );
     }
 
-    /// One seeded hunt of fifty fights, read once a second. Each seed is a
+    /// One seeded hunt of fifty fights, read at the profile's cadence. Each seed is a
     /// test of its own, so that every one finishes well inside the test
     /// runner's limit in an unoptimised build. No kill of any kind may be
     /// named, or given a provisional name, wrongly. Of the kills whose
@@ -6296,11 +6581,12 @@ mod tests {
         let latest_right = |o: Outcome| o == Outcome::LatestRight;
         let latest_wrong = |o: Outcome| o == Outcome::LatestWrong;
         println!(
-            "simulated hunt, seed {seed}, line {line:?}, at 1 Hz: {} brief locks on another \
+            "simulated hunt, seed {seed}, line {line:?}, a look every {} ms: {} brief locks on another \
              creature, {} locks within 0.6 s of a kill. Stamped right (named or provisional): \
              {} of {} tellable, {} of {} all; right counting suggestions: {} of {} tellable, {} \
              of {} all; wrong guesses: {} tellable, {} all; latest read: {} right, {} wrong \
              tellable, {} right, {} wrong all. Tellable: {:?}",
+            bundled_profile().mob_history.pulse_ms,
             tally.brief_locks,
             tally.quick_relocks,
             count(&tellable, &stamped),
@@ -6402,7 +6688,8 @@ mod tests {
         let right = count(&|o| o.right());
         print_grades(
             &format!(
-                "ordinary hunt, seed {seed}, line {line:?}, at 1 Hz, {} kills",
+                "ordinary hunt, seed {seed}, line {line:?}, a look every {} ms, {} kills",
+                bundled_profile().mob_history.pulse_ms,
                 tally.outcomes.len()
             ),
             &tally,
@@ -6424,14 +6711,11 @@ mod tests {
 
     // The floors are the kills each ordinary seed answered right, in any
     // grade (the creature being hunted and the latest creature read
-    // included), as measured: 42, 45, 38 and 36 of 50. These hunts change
+    // included), as measured: 45, 46, 45 and 44 of 50. These hunts change
     // creature on most kills, so the creature being hunted is never carried
     // in them (a hunt is of one creature only while every plate read lately
     // was it), and the ceilings on carrying it wrongly are 0. The outcomes
-    // without it are pinned as measured. In seed 13 the session's spelling
-    // of the unfamiliar Zombie Fleshripper is a misreading the recogniser
-    // repeats (28 readings against 27 spelled right): its kills are that
-    // creature under the misspelling, for the review to correct.
+    // without it are pinned as measured.
     macro_rules! ordinary_hunts {
         ($($name:ident: $seed:expr, $line:expr, $floor:expr, $wrong:expr, $after:expr,
             [$(($outcome:expr, $n:expr)),* $(,)?],)*) => {$(
@@ -6450,34 +6734,39 @@ mod tests {
     }
 
     ordinary_hunts! {
-        an_ordinary_hunt_answers_its_kills_seed_11: 11, LineAlign::Left, 42, 0, 0, [
-            (NamedRight, 21), (GuessRight, 14), (ProvisionalRight, 3), (SuggestedRight, 1),
-            (LatestRight, 3), (LatestWrong, 1), (Unnamed(NoFight), 2), (Unnamed(StillRead), 1),
-            (Unnamed(Indistinct), 4),
-        ],
-        an_ordinary_hunt_answers_its_kills_seed_12: 12, LineAlign::Centred, 45, 0, 0, [
-            (NamedRight, 11), (GuessRight, 29), (ProvisionalRight, 2), (SuggestedRight, 2),
-            (LatestRight, 1), (Unnamed(NoFight), 1), (Unnamed(StillRead), 1),
-            (Unnamed(Indistinct), 3),
-        ],
-        an_ordinary_hunt_answers_its_kills_seed_13: 13, LineAlign::Left, 38, 0, 0, [
-            (NamedRight, 18), (GuessRight, 18), (ProvisionalMisspelt, 6), (LatestRight, 2),
-            (LatestWrong, 1), (LatestMisspelt, 2), (Unnamed(Indistinct), 2),
+        an_ordinary_hunt_answers_its_kills_seed_11: 11, LineAlign::Left, 45, 0, 0, [
+            (NamedRight, 13), (GuessRight, 20), (ProvisionalRight, 2), (SuggestedRight, 1),
+            (LatestRight, 9), (LatestWrong, 2), (Unnamed(Indistinct), 2),
             (Unnamed(Undecided), 1),
         ],
-        an_ordinary_hunt_answers_its_kills_seed_14: 14, LineAlign::Centred, 36, 0, 0, [
-            (NamedRight, 11), (GuessRight, 7), (ProvisionalRight, 11), (LatestRight, 7),
-            (LatestWrong, 2), (Unnamed(NoFight), 2), (Unnamed(StillRead), 1),
-            (Unnamed(Indistinct), 7), (Unnamed(Undecided), 2),
+        an_ordinary_hunt_answers_its_kills_seed_12: 12, LineAlign::Centred, 46, 0, 0, [
+            (NamedRight, 9), (GuessRight, 32), (SuggestedRight, 3), (LatestRight, 2),
+            (Unnamed(Indistinct), 3), (Unnamed(Undecided), 1),
+        ],
+        an_ordinary_hunt_answers_its_kills_seed_13: 13, LineAlign::Left, 45, 0, 0, [
+            (NamedRight, 16), (GuessRight, 17), (ProvisionalRight, 3), (SuggestedRight, 3),
+            (LatestRight, 6), (LatestWrong, 1), (Unnamed(Indistinct), 2),
+            (Unnamed(Undecided), 2),
+        ],
+        an_ordinary_hunt_answers_its_kills_seed_14: 14, LineAlign::Centred, 44, 0, 0, [
+            (NamedRight, 8), (GuessRight, 20), (ProvisionalRight, 5), (SuggestedRight, 3),
+            (LatestRight, 8), (LatestWrong, 2), (Unnamed(Indistinct), 2),
+            (Unnamed(Undecided), 2),
         ],
     }
 
     // The floors are the tellable kills each seed got right (counting
     // suggestions, the creature being hunted and the latest creature read),
-    // as measured: 33 of 36, 32 of 35, 28 of 32 and 28 of 33. These hunts
+    // as measured: 33 of 36, 21 of 35, 30 of 32 and 29 of 33. These hunts
     // change creature on most kills, so the creature being hunted is never
     // carried in them, and the ceilings on carrying it wrongly are 0. The
-    // outcomes without it are pinned as measured.
+    // outcomes without it are pinned as measured. In seed 12 the session's
+    // spelling of the unfamiliar Zombie Fleshripper is a misreading the
+    // recogniser repeats (112 readings against 94 spelled right): its
+    // kills are that creature under the misspelling, for the review to
+    // correct, and are not counted right; and the same name read with its
+    // level unread, a name of its own, leaves several of its fights
+    // undecided.
     macro_rules! simulated_hunts {
         ($($name:ident: $seed:expr, $line:expr, $floor:expr, $wrong:expr, $after:expr,
             [$(($outcome:expr, $n:expr)),* $(,)?],)*) => {$(
@@ -6498,26 +6787,30 @@ mod tests {
     simulated_hunts! {
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_11: 11, LineAlign::Left,
         33, 0, 0, [
-            (NamedRight, 5), (GuessRight, 20), (GuessWrong, 3), (ProvisionalRight, 14),
-            (Unnamed(StillRead), 1), (Unnamed(Indistinct), 9), (Unnamed(Undecided), 3),
+            (NamedRight, 7), (GuessRight, 15), (GuessWrong, 1), (ProvisionalRight, 10),
+            (SuggestedRight, 1), (LatestRight, 4), (LatestWrong, 3), (Unnamed(NoFight), 1),
+            (Unnamed(StillRead), 3), (Unnamed(Indistinct), 3), (Unnamed(Undecided), 7),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_12: 12, LineAlign::Centred,
-        32, 0, 0, [
-            (NamedRight, 9), (GuessRight, 10), (ProvisionalRight, 13), (SuggestedRight, 2),
-            (SuggestedWrong, 4), (LatestRight, 4), (Unnamed(NoFight), 2),
-            (Unnamed(StillRead), 3), (Unnamed(Indistinct), 8), (Unnamed(Undecided), 1),
+        21, 0, 0, [
+            (NamedRight, 8), (GuessRight, 9), (GuessWrong, 2), (ProvisionalRight, 1),
+            (SuggestedRight, 3), (SuggestedWrong, 2), (ProvisionalMisspelt, 2),
+            (SuggestedMisspelt, 2), (LatestRight, 5), (LatestWrong, 2), (LatestMisspelt, 1),
+            (Unnamed(NoFight), 3), (Unnamed(StillRead), 2), (Unnamed(Indistinct), 6),
+            (Unnamed(Undecided), 8),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_13: 13, LineAlign::Left,
-        28, 0, 0, [
-            (NamedRight, 8), (GuessRight, 13), (GuessWrong, 3), (ProvisionalRight, 13),
-            (SuggestedRight, 1), (LatestRight, 6), (LatestWrong, 2), (Unnamed(StillRead), 1),
-            (Unnamed(Indistinct), 6), (Unnamed(Undecided), 1),
+        30, 0, 0, [
+            (NamedRight, 7), (GuessRight, 14), (GuessWrong, 2), (ProvisionalRight, 8),
+            (SuggestedRight, 3), (LatestRight, 9), (LatestWrong, 2), (LatestMisspelt, 1),
+            (Unnamed(NoFight), 2), (Unnamed(Indistinct), 1), (Unnamed(Undecided), 5),
         ],
         a_simulated_hunt_stamps_its_kills_with_the_creature_fought_seed_14: 14, LineAlign::Centred,
-        28, 0, 0, [
-            (NamedRight, 10), (GuessRight, 15), (GuessWrong, 2), (ProvisionalRight, 7),
-            (SuggestedWrong, 2), (LatestRight, 1), (Unnamed(NoFight), 2),
-            (Unnamed(StillRead), 3), (Unnamed(Indistinct), 9), (Unnamed(Undecided), 7),
+        29, 0, 0, [
+            (NamedRight, 8), (GuessRight, 19), (GuessWrong, 1), (ProvisionalRight, 3),
+            (SuggestedRight, 3), (SuggestedMisspelt, 1), (LatestRight, 2), (LatestWrong, 5),
+            (Unnamed(NoFight), 2), (Unnamed(StillRead), 3), (Unnamed(Indistinct), 4),
+            (Unnamed(Undecided), 7),
         ],
     }
 }

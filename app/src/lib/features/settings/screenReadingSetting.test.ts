@@ -62,7 +62,7 @@ describe('the screen-reading settings', () => {
 	it("names mob detection in the player's terms, as it always has", () => {
 		expect(creatures.title).toBe('Detect the mob I am fighting');
 		expect(creatures.description).toBe(
-			'While you hunt with the game in front, reads the name over the mob you are locked on to about once a second and records which mob each kill was. A kill it misses between looks takes the mob you have been hunting while you hunt only one, else the mob you typed; pin a mob on the overlay to stop reading.',
+			'While you hunt with the game in front, reads the name over the mob you are locked on to a few times a second and records which mob each kill was. A kill it misses between looks takes the mob you have been hunting while you hunt only one, else the mob you typed; pin a mob on the overlay to stop reading.',
 		);
 		expect(creatures.failure).toBe('Failed to update mob detection');
 		expect(creatures.patch(false)).toEqual({ mob_detection_enabled: false });

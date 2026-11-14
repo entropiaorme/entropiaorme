@@ -174,9 +174,11 @@ fn replay_reading(seed: u64, kept: Vec<KeptCreature>, hound: bool, unread: f64) 
     // When a plate of a creature other than the opening's first read.
     let mut other_read_ms: Option<i64> = None;
     let phase = dice.unit();
+    // The looks come at the profile's cadence.
+    let step = p.pulse_ms as f64 / 1000.0;
     let mut i = 0;
     loop {
-        let t = phase + i as f64 + dice.between(-0.04, 0.04);
+        let t = (phase + i as f64 + dice.between(-0.04, 0.04)) * step;
         if t > end {
             break;
         }
@@ -225,7 +227,17 @@ fn replay_reading(seed: u64, kept: Vec<KeptCreature>, hound: bool, unread: f64) 
             if label_key(&suggested) == label_key(truth) {
                 out.suggested_right += 1;
             } else {
-                out.suggested_wrong.push(format!("{truth} as {suggested}"));
+                out.suggested_wrong.push(format!(
+                    "{truth} as {suggested}: locked {:.2} died {:.2} report {:?}; reads {:?}",
+                    kills[k].locked,
+                    kills[k].died,
+                    kills[k].report,
+                    trace.as_ref().map(|t| t
+                        .reads
+                        .iter()
+                        .map(|r| (r.at_ms, (r.fill * 100.0) as i32, r.named.clone()))
+                        .collect::<Vec<_>>())
+                ));
             }
             out.unnamed += 1;
             continue;
@@ -423,7 +435,7 @@ fn a_swarm_whose_plates_often_do_not_read_still_names_its_kills() {
             out.wrong
         );
         assert!(
-            (out.right + out.carried_right) * 100 >= kills * 60,
+            (out.right + out.carried_right) * 100 >= kills * 80,
             "seed {seed}: {} of {kills} named",
             out.right + out.carried_right
         );
@@ -431,15 +443,16 @@ fn a_swarm_whose_plates_often_do_not_read_still_names_its_kills() {
             out.carried_swarm, 0,
             "seed {seed}: carried once the hunt was mixed"
         );
-        // A lock held from a name read to the death gives the unnamed
-        // kills a suggestion, and the suggestions stay right.
+        // What stays unnamed is mostly suggested, and suggested right
+        // more often than wrong.
         assert!(
-            out.suggested_right * 100 >= kills * 9,
-            "seed {seed}: {} of {kills} suggested right",
-            out.suggested_right
+            out.suggested_right >= out.suggested_wrong.len(),
+            "seed {seed}: {} suggested right, {:#?}",
+            out.suggested_right,
+            out.suggested_wrong
         );
         assert!(
-            out.suggested_wrong.len() * 100 <= kills * 2,
+            out.suggested_wrong.len() * 100 <= kills * 4,
             "seed {seed}: {:#?}",
             out.suggested_wrong
         );

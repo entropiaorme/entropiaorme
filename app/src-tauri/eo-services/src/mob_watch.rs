@@ -1,5 +1,5 @@
 //! The creature watcher: while a hunt is tracked, it looks at the game
-//! window about once a second and reads the plate of the creature the
+//! window a few times a second and reads the plate of the creature the
 //! player is locked on to, so the session can tell which creature each
 //! kill was (see [`crate::game_ui::mob_history`] and the tracker's
 //! detection).

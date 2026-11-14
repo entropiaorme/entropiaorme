@@ -223,7 +223,7 @@ impl Plate {
 }
 
 /// Buffers the plate search reuses, so that a watcher reading the screen
-/// once a second allocates nothing for the frame's size.
+/// several times a second allocates nothing for the frame's size.
 #[derive(Debug, Default)]
 pub struct PlateScratch {
     top: Vec<bool>,
@@ -770,7 +770,7 @@ pub fn find_plates(image: &BgrImage, profile: &UiProfile) -> Vec<Plate> {
 
 /// The locked plate in `image`, if exactly one plate is drawn solid with
 /// the red pointer under it (after setting aside any inside a window when
-/// there are more). The search a watcher runs every second: it looks only
+/// there are more). The search a watcher runs at every look: it looks only
 /// for solid plates, row by row with integer comparisons, and reuses
 /// `scratch`.
 pub fn find_locked_plate(

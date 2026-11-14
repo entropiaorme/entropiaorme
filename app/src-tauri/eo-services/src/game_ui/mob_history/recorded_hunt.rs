@@ -5,7 +5,10 @@
 //! (the logged second, and the span the report's arrival is known to lie
 //! in), with what the application answered at the time. The replay
 //! resolves each name afresh, runs the history over the looks, and
-//! reports what each kill is given now, beside what it was given then.
+//! reports what each kill is given now, beside what it was given then. A
+//! record taken at another cadence of looks carries the history values of
+//! that cadence, and is replayed with them: the rules are the ones under
+//! test, the timing is the hunt's own.
 //!
 //! Nobody wrote down which creature each kill really was, so a record
 //! proves no answer right. What it can hold the history to is the rule
@@ -22,12 +25,30 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::*;
-use crate::game_ui::test_support::{bundled_mobs, bundled_profile};
+use crate::game_ui::profile::UiProfile;
+use crate::game_ui::test_support::bundled_mobs;
 
 #[derive(Deserialize)]
 struct Record {
     pulses: Vec<Pulse>,
     kills: Vec<RecordedKill>,
+    /// History values to replay with in place of the bundled profile's,
+    /// by name.
+    #[serde(default)]
+    history: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The bundled profile, with `record`'s own history values over it.
+fn profile_for(record: &Record) -> UiProfile {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../entropia-orme/resources/ui_profile.json");
+    let text = std::fs::read_to_string(&path).expect("the bundled interface profile reads");
+    let mut profile: serde_json::Value =
+        serde_json::from_str(&text).expect("the bundled interface profile parses");
+    for (name, value) in &record.history {
+        profile["mob_history"][name] = value.clone();
+    }
+    UiProfile::from_json(&profile.to_string()).expect("the record's profile loads")
 }
 
 #[derive(Deserialize)]
@@ -104,7 +125,7 @@ fn shown(creature: &Creature) -> String {
 /// Replay `record`, each report taken to have arrived `lag_ms` after its
 /// logged second where the record allows that, else as near it as it does.
 fn replay(record: &Record, lag_ms: i64) -> Vec<Given> {
-    let profile = bundled_profile();
+    let profile = profile_for(record);
     let catalogue = MobCatalogue::from_entities(
         &bundled_mobs(),
         Vec::<crate::game_ui::mob_names::KeptCreature>::new(),
@@ -170,7 +191,7 @@ fn replay(record: &Record, lag_ms: i64) -> Vec<Given> {
 
 /// The names the looks read from `from_ms` up to `to_ms`, as shown.
 fn names_read(record: &Record, from_ms: i64, to_ms: i64) -> Vec<String> {
-    let profile = bundled_profile();
+    let profile = profile_for(record);
     let catalogue = MobCatalogue::from_entities(
         &bundled_mobs(),
         Vec::<crate::game_ui::mob_names::KeptCreature>::new(),
@@ -213,9 +234,9 @@ fn key(text: &str) -> String {
 /// a creature no look read before its death.
 #[test]
 fn recorded_hunts_give_no_kill_a_creature_unread_before_its_death() {
-    let profile = bundled_profile();
-    let p = &profile.mob_history;
     for (name, record) in records() {
+        let profile = profile_for(&record);
+        let p = &profile.mob_history;
         for lag_ms in [100, 500] {
             let given = replay(&record, lag_ms);
             let mut table: BTreeMap<&'static str, usize> = BTreeMap::new();

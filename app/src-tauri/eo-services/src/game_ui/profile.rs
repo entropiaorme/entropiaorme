@@ -419,7 +419,7 @@ mod tests {
         let text = bundled_text();
         assert_eq!(
             UiProfile::from_json(&text).unwrap().mob_history.pulse_ms,
-            1000
+            250
         );
         for (written, kept) in [
             (10, MIN_PULSE_MS),
@@ -427,7 +427,7 @@ mod tests {
             (-5, MIN_PULSE_MS),
             (400, 400),
         ] {
-            let quick = text.replace("\"pulse_ms\": 1000", &format!("\"pulse_ms\": {written}"));
+            let quick = text.replace("\"pulse_ms\": 250", &format!("\"pulse_ms\": {written}"));
             assert_ne!(quick, text);
             assert_eq!(
                 UiProfile::from_json(&quick).unwrap().mob_history.pulse_ms,

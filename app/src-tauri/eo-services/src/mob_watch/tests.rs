@@ -16,6 +16,11 @@ use crate::time::clock_epoch_ms;
 /// height.
 type UnreadPlate = (i64, String, usize, usize);
 
+/// The time between looks, as the bundled profile has it.
+fn pulse() -> i64 {
+    bundled_profile().mob_history.pulse_ms
+}
+
 /// The watcher over stand-in seams: a frame seam counting its captures
 /// and running `on_capture` first (a slow capture advances the clock), a
 /// wait that moves the mock clock straight to the moment a look is due
@@ -217,14 +222,16 @@ fn the_next_look_is_the_first_still_to_come_on_the_cadence() {
 
 #[test]
 fn looks_keep_the_cadence_and_a_slow_look_drops_the_ones_it_overran() {
-    // The third capture takes two and a half seconds: the looks due at
-    // three and four seconds came due while it ran, and are dropped
+    // The third capture takes two and a half looks' time: the looks due
+    // three and four looks in came due while it ran, and are dropped
     // rather than taken late one after another; and a capture that slow no
     // longer stands for the moment it was stamped with, so it is a gap.
+    let p = pulse();
+    let slow = 5 * p / 2;
     let rig = rig_with(
-        Arc::new(|n, clock| {
+        Arc::new(move |n, clock| {
             if n == 3 {
-                clock.advance(2.5).unwrap();
+                clock.advance(slow as f64 / 1000.0).unwrap();
             }
             blank_frame()
         }),
@@ -235,7 +242,7 @@ fn looks_keep_the_cadence_and_a_slow_look_drops_the_ones_it_overran() {
     let start = clock_epoch_ms(rig.clock.as_ref());
     rig.start("s1", 5);
     rig.finish();
-    assert_eq!(rig.offsets(start), [0, 1_000, 5_000, 6_000, 7_000]);
+    assert_eq!(rig.offsets(start), [0, p, 5 * p, 6 * p, 7 * p]);
     assert_eq!(
         rig.captures.load(Ordering::SeqCst),
         6,
@@ -259,7 +266,8 @@ fn looks_keep_the_cadence_and_a_slow_look_drops_the_ones_it_overran() {
         (6, 6, 1, 2)
     );
     assert_eq!((minute.unfocused, minute.found, minute.unread), (0, 0, 0));
-    assert_eq!((minute.max_look_ms, minute.max_grab_ms), (2_500, 2_500));
+    let slow = u32::try_from(slow).expect("a look's time");
+    assert_eq!((minute.max_look_ms, minute.max_grab_ms), (slow, slow));
     assert!(rig.watch.take_look_minutes().is_empty(), "handed over once");
     let seen = rig.seen.lock().unwrap();
     assert!(
@@ -330,7 +338,7 @@ fn nothing_is_captured_while_another_window_holds_focus() {
     let start = clock_epoch_ms(rig.clock.as_ref());
     rig.start("s1", 2);
     rig.finish();
-    assert_eq!(rig.offsets(start), [3_000, 4_000]);
+    assert_eq!(rig.offsets(start), [3 * pulse(), 4 * pulse()]);
     assert_eq!(
         rig.captures.load(Ordering::SeqCst),
         2,
@@ -374,7 +382,7 @@ fn a_window_that_cannot_be_captured_is_a_gap_not_an_empty_look() {
     let start = clock_epoch_ms(rig.clock.as_ref());
     rig.start("s1", 2);
     rig.finish();
-    assert_eq!(rig.offsets(start), [0, 4_000]);
+    assert_eq!(rig.offsets(start), [0, 4 * pulse()]);
 }
 
 #[test]
@@ -545,7 +553,7 @@ fn a_locked_plate_whose_name_does_not_read_is_counted_unread() {
             .iter()
             .map(|plate| plate.0 - start)
             .collect::<Vec<_>>(),
-        [0, 1_000]
+        [0, pulse()]
     );
     let (_, why, w, h) = &unread[0];
     assert!(!why.is_empty() && !why.contains(' '), "{why}");
@@ -554,14 +562,16 @@ fn a_locked_plate_whose_name_does_not_read_is_counted_unread() {
 
 #[test]
 fn a_minute_of_looks_is_finished_when_the_next_begins() {
+    // A minute's looks and two more.
+    let a_minute = u32::try_from(60_000 / pulse()).expect("a minute's looks");
     let rig = rig_with(
         Arc::new(|_, _| blank_frame()),
-        Box::new(|clock, _| driven_wait(clock, 200)),
+        Box::new(move |clock, _| driven_wait(clock, a_minute as usize + 50)),
         None,
         MobCatalogue::default(),
     );
     let start = clock_epoch_ms(rig.clock.as_ref());
-    rig.start("s1", 62);
+    rig.start("s1", a_minute as usize + 2);
     rig.finish();
     let minutes = rig.watch.take_look_minutes();
     assert_eq!(
@@ -569,7 +579,7 @@ fn a_minute_of_looks_is_finished_when_the_next_begins() {
             .iter()
             .map(|minute| (minute.started_ms - start, minute.looks))
             .collect::<Vec<_>>(),
-        [(0, 60), (60_000, 2)]
+        [(0, a_minute), (60_000, 2)]
     );
 }
 
@@ -749,7 +759,9 @@ fn the_setting_is_checked_where_the_capture_happens() {
 
 #[test]
 fn a_capture_slower_than_its_slack_is_a_gap() {
-    // The profile allows a capture 300 ms behind its stamp.
+    // The profile allows a capture 300 ms behind its stamp. The second
+    // look's capture takes 400 ms: it is a gap, and the look that came due
+    // while it ran is dropped, so the next to stand is the fourth.
     let rig = rig_with(
         Arc::new(|n, clock| {
             clock.advance(if n == 2 { 0.4 } else { 0.2 }).unwrap();
@@ -762,13 +774,15 @@ fn a_capture_slower_than_its_slack_is_a_gap() {
     let start = clock_epoch_ms(rig.clock.as_ref());
     rig.start("s1", 2);
     rig.finish();
-    assert_eq!(rig.offsets(start), [0, 2_000]);
+    assert_eq!(rig.offsets(start), [0, 3 * pulse()]);
 }
 
 #[test]
 fn time_spent_before_the_pixels_are_taken_is_no_gap() {
-    // Each capture spends 400 ms finding the window and grabs its pixels
-    // at once: every look stands, stamped when its pixels were taken.
+    // Each capture spends 400 ms finding the window, more than the slack
+    // and more than a look's time, and grabs its pixels at once: every look
+    // taken stands, stamped when its pixels were taken. The look that came
+    // due while the first ran is dropped.
     let rig = rig_with(
         Arc::new(|_, clock| {
             clock.advance(0.4).unwrap();
@@ -783,7 +797,7 @@ fn time_spent_before_the_pixels_are_taken_is_no_gap() {
     let start = clock_epoch_ms(rig.clock.as_ref());
     rig.start("s1", 2);
     rig.finish();
-    assert_eq!(rig.offsets(start), [400, 1_400]);
+    assert_eq!(rig.offsets(start), [400, 2 * pulse() + 400]);
 }
 
 /// Starts `session` on `rig`, recording each session a self-ended watch

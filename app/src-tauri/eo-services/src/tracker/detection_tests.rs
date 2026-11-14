@@ -19,6 +19,11 @@ use crate::mob_watch::{MobDetector, MobPulse, PulseSink, WatchEnded};
 use crate::time::clock_epoch_ms;
 use crate::tracker::{DeclaredMob, MobSourceView, Pin, PinnedBy, TrackerCommandError};
 
+/// The time between looks, as the bundled profile has it.
+fn pulse() -> i64 {
+    bundled_profile().mob_history.pulse_ms
+}
+
 /// The configuration a detection test runs under: the declared mob and
 /// the detection setting, switchable mid-session.
 struct DetectionConfig {
@@ -390,9 +395,6 @@ impl Hunt {
         })
     }
 
-    /// A kill nothing was read round: looks with nothing locked from
-    /// `from`, the death, and more such looks. Returns when the next look
-    /// is due.
     /// The running session's id.
     fn view_session(&self) -> String {
         self.rig.probe(&self.tracker, |actor| {
@@ -404,11 +406,16 @@ impl Hunt {
         })
     }
 
+    /// A kill nothing was read round: looks with nothing locked from
+    /// `from`, the death, and more such looks. Returns when the next look
+    /// is due.
     fn quiet_kill(&mut self, from: i64) -> i64 {
         let at = self.idle(from, 3);
         let death = at - 500;
-        self.kill(death / 1000 * 1000, Some(death + 700));
-        self.idle(at + 1_000, 6)
+        let arrived = death + 700;
+        let next = self.idle_until(at, arrived);
+        self.kill(death / 1000 * 1000, Some(arrived));
+        self.idle(next, 6)
     }
 
     /// Each answered kill's trace, in kill order: what the screen came to,
@@ -446,11 +453,12 @@ impl Hunt {
             .unwrap()
     }
 
-    /// A fight: the plate read once a second from `from`, `reads` times,
-    /// its health falling, then the creature dies half a second after the
-    /// last read and its plate is not read again. Its line is stamped with
-    /// the second of the death and read 700 ms after it (or, not `live`,
-    /// not read live off the log). Returns when the next look is due.
+    /// A fight from `from`: each of `texts` read on every look for a
+    /// second in turn, its health falling, then the creature dies between
+    /// its last look and the next and its plate is not read again. Its line
+    /// is stamped with the second of the death and read 700 ms after it
+    /// (or, not `live`, not read live off the log); the looks up to then
+    /// see nothing locked. Returns when the next look is due.
     fn fight(&mut self, from: i64, texts: &[&str], level: u32) -> i64 {
         self.fight_read(from, texts, level, true)
     }
@@ -459,22 +467,35 @@ impl Hunt {
         let mut at = from;
         for (i, text) in texts.iter().enumerate() {
             let fill = 1.0 - 0.8 * i as f64 / texts.len() as f64;
-            self.look(at, Some((text, level, fill)));
-            at += 1_000;
+            let second = at + 1_000;
+            while at < second {
+                self.look(at, Some((text, level, fill)));
+                at += pulse();
+            }
         }
-        let death = at - 500;
-        // The look due as the creature died sees nothing locked.
-        self.look(at, None);
-        self.kill(death / 1000 * 1000, live.then_some(death + 700));
-        at + 1_000
+        let death = at - pulse() / 2;
+        let arrived = death + 700;
+        // The looks due once the creature died see nothing locked.
+        let next = self.idle_until(at, arrived);
+        self.kill(death / 1000 * 1000, live.then_some(arrived));
+        next
     }
 
-    /// Looks with nothing locked from `from`, `n` of them.
-    fn idle(&mut self, from: i64, n: i64) -> i64 {
-        for k in 0..n {
-            self.look(from + k * 1_000, None);
+    /// Looks with nothing locked on every look for `seconds` from `from`.
+    /// Returns when the next look is due.
+    fn idle(&mut self, from: i64, seconds: i64) -> i64 {
+        self.idle_until(from, from + seconds * 1_000)
+    }
+
+    /// Looks with nothing locked from `from` up to (not at) `until`.
+    /// Returns when the next look is due.
+    fn idle_until(&mut self, from: i64, until: i64) -> i64 {
+        let mut at = from;
+        while at < until {
+            self.look(at, None);
+            at += pulse();
         }
-        from + n * 1_000
+        at
     }
 }
 
@@ -543,19 +564,18 @@ fn a_simulated_hunt_stamps_what_the_screen_proved_and_keeps_the_declaration_othe
     t = hunt.fight(t, &["Daikiba Mature"; 3], 9);
     t = hunt.idle(t, 6);
     // 6. Something else killed while the player stays locked on a living
-    //    creature (area damage): not that creature, so nothing is said.
-    for k in 0..3 {
-        hunt.look(
-            t + k * 1_000,
-            Some(("Atrox Young", 5, 1.0 - 0.1 * k as f64)),
-        );
+    //    creature (area damage), read on every look for nine seconds: not
+    //    that creature, so nothing is said.
+    let arrived = t + 2_400;
+    let atrox = |k: i64| Some(("Atrox Young", 5, 1.0 - 0.025 * k as f64));
+    let looks = 9_000 / pulse();
+    let before = (arrived - t) / pulse() + 1;
+    for k in 0..before {
+        hunt.look(t + k * pulse(), atrox(k));
     }
-    hunt.kill((t + 2_000) / 1000 * 1000, Some(t + 2_400));
-    for k in 3..9 {
-        hunt.look(
-            t + k * 1_000,
-            Some(("Atrox Young", 5, 0.7 - 0.05 * k as f64)),
-        );
+    hunt.kill((t + 2_000) / 1000 * 1000, Some(arrived));
+    for k in before..looks {
+        hunt.look(t + k * pulse(), atrox(k));
     }
     t += 9_000;
     t = hunt.idle(t, 6);
@@ -658,14 +678,14 @@ fn a_kill_unanswered_when_the_session_stops_keeps_its_declaration() {
 fn looks_that_reach_the_tracker_late_still_answer_the_kill_they_watched() {
     let mut hunt = hunt(true);
     hunt.start();
-    // A clean fight, its kill read live at 5.2 s.
+    // A clean fight, its kill read live at 5.575 s.
     let t = hunt.fight(0, &["Atrox Young"; 5], 5);
     // The tracker falls behind its watcher: by the time the looks taken
     // after the kill reach it, the clock reads long past the moment the
     // kill would have been given up on had the screen gone unwatched.
     hunt.at(t + 30_000);
-    for k in 0..6 {
-        hunt.look_late(t + k * 1_000, None);
+    for k in 0..6_000 / pulse() {
+        hunt.look_late(t + k * pulse(), None);
     }
     assert_eq!(
         hunt.stamps(),
@@ -683,17 +703,22 @@ fn looks_that_reach_the_tracker_late_still_answer_the_kill_they_watched() {
 fn a_kill_that_reaches_the_tracker_late_waits_for_the_looks_behind_it() {
     let mut hunt = hunt(true);
     hunt.start();
-    for (i, at) in [0, 1_000, 2_000, 3_000].into_iter().enumerate() {
-        hunt.look(at, Some(("Atrox Young", 5, 1.0 - 0.2 * i as f64)));
+    // Read on every look to 3.25 s.
+    let last = 3_250 / pulse();
+    for k in 0..=last {
+        hunt.look(
+            k * pulse(),
+            Some(("Atrox Young", 5, 1.0 - 0.6 * k as f64 / last as f64)),
+        );
     }
-    hunt.look(4_000, None);
-    // The creature died at 3.5 s and its line was read at 4.2 s, but the
+    hunt.look(3_500, None);
+    // The creature died at 3.4 s and its line was read at 4.2 s, but the
     // tracker, running behind, takes the kill only when the clock reads
     // long past that, with the looks taken after it still to come.
     hunt.at(40_000);
     hunt.report_kill(3_000, Some(4_200));
-    for k in 5..11 {
-        hunt.look_late(k * 1_000, None);
+    for k in 3_750 / pulse()..11_000 / pulse() {
+        hunt.look_late(k * pulse(), None);
     }
     assert_eq!(
         hunt.stamps(),
@@ -711,21 +736,21 @@ fn a_kill_that_reaches_the_tracker_late_waits_for_the_looks_behind_it() {
 fn the_lowest_grade_is_a_suggestion_the_kill_does_not_take() {
     let mut hunt = hunt(true);
     hunt.start();
-    // A Daikiba fought and left, then an Atrox Old locked for two looks
-    // that stops a pulse before the screen goes empty: both were read in the
-    // kill's moments, the Atrox was not read on the last look before the
-    // report, and the player had not been on it long enough to have left
-    // the Daikiba clearly. The screen leans nowhere: the creature read last
-    // is only suggested.
-    hunt.look(0, Some(("Daikiba Mature", 9, 0.9)));
-    hunt.look(1_000, Some(("Daikiba Mature", 9, 0.6)));
-    hunt.look(2_000, Some(("Daikiba Mature", 9, 0.3)));
-    hunt.look(3_000, None);
-    hunt.look(4_000, Some(("Atrox Old", 12, 0.9)));
-    hunt.look(5_000, Some(("Atrox Old", 12, 0.5)));
-    hunt.look(6_000, None);
+    // A Daikiba fought and left, then, a look with nothing locked later,
+    // an Atrox Old locked for two looks before the screen goes empty: both
+    // were read in the kill's moments, the Atrox was read on one look only
+    // and not on the last look before the report, and the player had not
+    // been on it long enough to have left the Daikiba clearly. The screen
+    // leans nowhere: the creature read last is only suggested.
+    hunt.look(3_500, Some(("Daikiba Mature", 9, 0.9)));
+    hunt.look(3_750, Some(("Daikiba Mature", 9, 0.6)));
+    hunt.look(4_000, Some(("Daikiba Mature", 9, 0.3)));
+    hunt.look(4_250, None);
+    hunt.look(4_500, Some(("Atrox Old", 12, 0.9)));
+    hunt.look(4_750, Some(("Atrox Old", 12, 0.5)));
+    let next = hunt.idle_until(5_000, 6_500);
     hunt.kill(6_000, Some(6_500));
-    hunt.idle(7_000, 4);
+    hunt.idle(next, 4);
     assert_eq!(
         hunt.stamps(),
         [(s("Atrox Young").unwrap(), s("declared"), None, None)],
@@ -869,18 +894,17 @@ fn with_detection_off_nothing_watches_and_every_kill_keeps_its_declaration() {
 fn a_look_taken_for_another_session_is_dropped() {
     let mut hunt = hunt(true);
     hunt.start();
-    for k in 0..4 {
+    // Looks on every look that, taken, would name the kill.
+    for k in 0..4_000 / pulse() {
         hunt.look_for(
             Some("an-ended-session"),
-            k * 1_000,
-            Some(("Atrox Old", 12, 0.9)),
+            k * pulse(),
+            Some(("Atrox Old", 12, 0.9 - 0.05 * k as f64)),
         );
     }
     hunt.look_for(Some("an-ended-session"), 4_000, None);
     hunt.kill(3_000, Some(4_200));
-    for k in 5..12 {
-        hunt.look(k * 1_000, None);
-    }
+    hunt.idle(4_250, 8);
     assert_eq!(
         hunt.stamps(),
         [(s("Atrox Young").unwrap(), s("declared"), None, None)],
@@ -983,7 +1007,16 @@ fn each_kill_is_named_by_the_screen_then_continuity_then_the_backstop_then_nothi
             ("no_fight", "disagree"),
         ]
     );
-    assert!(traces[..3].iter().all(|(_, _, reads)| *reads == 4));
+    // A named kill's trace holds its fight's readings from the kill's
+    // look-back on (where each fight's looks fall against its logged second
+    // differs); a kill nothing was read round, none.
+    assert_eq!(
+        traces[..3]
+            .iter()
+            .map(|(_, _, reads)| *reads)
+            .collect::<Vec<_>>(),
+        [14, 13, 12]
+    );
     assert!(traces[3..].iter().all(|(_, _, reads)| *reads == 0));
 }
 
@@ -1084,10 +1117,12 @@ fn a_kill_answered_after_the_last_look_still_moves_the_creature_recent_kills_sho
     let mut at = t;
     for i in 0..4 {
         let fill = 1.0 - 0.8 * f64::from(i) / 4.0;
-        hunt.look(at, Some(("Daikiba Mature", 9, fill)));
-        at += 1_000;
+        for _ in 0..1_000 / pulse() {
+            hunt.look(at, Some(("Daikiba Mature", 9, fill)));
+            at += pulse();
+        }
     }
-    let death = at - 500;
+    let death = at - pulse() / 2;
     hunt.idle(at, 8);
     hunt.settle();
     assert_eq!(hunt.view().continuity, None, "the kill is not logged yet");
@@ -1129,14 +1164,13 @@ fn the_view_holds_a_moment_with_nothing_read_and_never_an_unrecognised_plate() {
     assert_eq!(view.continuity, None);
     assert_eq!(*updates.lock().unwrap(), before + 1);
     // A moment with nothing read keeps it, and tells nothing.
-    hunt.look(t + 1_000, None);
-    hunt.look(t + 2_000, None);
+    let next = hunt.idle(t + pulse(), 2);
     assert_eq!(hunt.view().reading, Some(mob("Atrox", "Old")));
     assert_eq!(*updates.lock().unwrap(), before + 1);
     // Unread for longer than a reading joins its fight: it is let go, and
     // the continuity creature stays withheld while the Atrox is within the
     // span continuity looks back over.
-    hunt.idle(t + 3_000, 6);
+    let next = hunt.idle(next, 6);
     let view = hunt.view();
     assert_eq!(view.reading, None);
     assert_eq!(view.continuity, None);
@@ -1144,9 +1178,9 @@ fn the_view_holds_a_moment_with_nothing_read_and_never_an_unrecognised_plate() {
 
     // The same creature read again is shown; a plate whose name reads as
     // nothing then lets it go at once, without waiting out the hold.
-    hunt.look(t + 10_000, Some(("Daikiba Mature", 9, 1.0)));
+    hunt.look(next, Some(("Daikiba Mature", 9, 1.0)));
     assert_eq!(hunt.view().reading, Some(mob("Daikiba", "Mature")));
-    hunt.look(t + 11_000, Some(("Xq", 9, 0.9)));
+    hunt.look(next + pulse(), Some(("Xq", 9, 0.9)));
     assert_eq!(hunt.view().reading, None);
 }
 

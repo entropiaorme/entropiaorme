@@ -936,6 +936,17 @@ fn upgrade_to_baseline(tx: &rusqlite::Transaction<'_>, version: i64) -> Result<(
     Ok(())
 }
 
+/// A private in-memory database with the whole migration chain applied,
+/// for the crate's own synchronous store tests.
+#[cfg(test)]
+pub(crate) fn migrated_in_memory() -> Result<rusqlite::Connection, DbError> {
+    let mut connection = rusqlite::Connection::open_in_memory()?;
+    // As the pool's connections run.
+    connection.pragma_update(None, "foreign_keys", false)?;
+    migrate::run(&mut connection)?;
+    Ok(connection)
+}
+
 /// The pre-mastery `codex_claims` shape (no `kind` / `attribute_name`), as an
 /// earlier schema lineage left it. The single canonical fixture the db-layer
 /// and codex-service tests both reproduce the adopted-legacy drift from, so the
@@ -1967,10 +1978,11 @@ mod tests {
         // + the screen look minutes' table
         // + asset positions' purchases table and 2 indexes
         // + strongbox openings' 2 tables and opened-on index
+        // + account readings' 3 tables and 2 reading indexes
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 258);
+        assert_eq!(master.len(), 263);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

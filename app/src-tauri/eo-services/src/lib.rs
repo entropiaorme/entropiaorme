@@ -7,6 +7,7 @@
 //! [`cost_engine`] is the pure-arithmetic leaf its per-unit `cargo test`
 //! loop runs on.
 
+pub mod account;
 pub mod activity_recommender;
 pub mod analytics;
 pub mod attack_rate;

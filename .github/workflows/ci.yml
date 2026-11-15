@@ -161,7 +161,9 @@ jobs:
         # shared state is runes-native), the route line ceilings (routes
         # stay thin shells over feature modules; ceilings only ratchet
         # down), the market accounting boundary (estimated markup is
-        # informational and never joins a realised figure), and the
+        # informational and never joins a realised figure), the measured
+        # boundary (figures measured from account readings stand beside the
+        # tracked ones and never join them), and the
         # in-development register (a surface shipping ahead of its capability
         # is declared once and marked where it renders; graduating it deletes
         # both), and the latest-in-time read convention (a database read that
@@ -178,6 +180,7 @@ jobs:
           cargo run -q -p xtask -- no-new-writable
           cargo run -q -p xtask -- route-ceilings
           cargo run -q -p xtask -- market-isolation
+          cargo run -q -p xtask -- measured-isolation
           cargo run -q -p xtask -- in-development
           cargo run -q -p xtask -- id-order
           cargo run -q -p xtask -- single-search

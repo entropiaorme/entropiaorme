@@ -1,0 +1,623 @@
+//! Account readings and session measures on disk.
+//!
+//! A reading is written as one row of `account_readings` and the absolute
+//! state of its holdings in `account_reading_holdings`, in one transaction
+//! on the writer. A keyframe stores every holding; any other reading
+//! stores only the holdings whose state differs from the reading before
+//! it, with an empty state for a holding that is gone, so a reading is
+//! rebuilt from the keyframe before it and the readings between. A reading
+//! is a keyframe when no reading precedes it, when the one before it is
+//! more than ten minutes older, when it is taken on connecting, when it is
+//! the first reading of a tracked session, or when
+//! [`KEYFRAME_EVERY`] readings of changes already follow the last keyframe.
+//!
+//! The chain follows the order readings were stored, never their times:
+//! the wall clock can step back (the repeated hour when summer time ends),
+//! and no reading is refused for its time. "The reading before" is the one
+//! stored before it. A session's readings are chosen by its time window
+//! and ordered as they were stored.
+//!
+//! A session's measure is cached in `account_session_measures` with the
+//! version of the rules that computed it, and recomputed from the stored
+//! readings when that version is not the code's (older, or a later
+//! build's), or while the session is not sealed.
+
+use std::collections::BTreeMap;
+
+use rusqlite::OptionalExtension;
+
+use super::amount::Pec;
+use super::measure::{measure_session, SessionMeasure, SessionWindow, MEASURE_VERSION};
+use super::reading::{Container, ContainerKind, Holding, HoldingKey, Reading, Row};
+use super::roles::RoleSource;
+use super::AccountError;
+use crate::db::Db;
+
+/// A reading taken longer than this after the one before it is a keyframe.
+pub const KEYFRAME_AFTER_SECONDS: f64 = 600.0;
+
+/// At most this many readings of changes follow a keyframe, so rebuilding
+/// any reading reads a bounded chain.
+pub const KEYFRAME_EVERY: usize = 30;
+
+/// Why a reading was taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    /// On connecting to the account site.
+    Connect,
+    /// While a tracked session runs.
+    Session,
+    /// For a bounded run of play outside a tracked session.
+    Run,
+    /// At the player's request.
+    Manual,
+}
+
+impl Purpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Purpose::Connect => "connect",
+            Purpose::Session => "session",
+            Purpose::Run => "run",
+            Purpose::Manual => "manual",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Purpose> {
+        match value {
+            "connect" => Some(Purpose::Connect),
+            "session" => Some(Purpose::Session),
+            "run" => Some(Purpose::Run),
+            "manual" => Some(Purpose::Manual),
+            _ => None,
+        }
+    }
+}
+
+/// A stored reading's id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ReadingId(pub i64);
+
+/// How a reading's holdings are stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Frame {
+    /// Every holding.
+    Key,
+    /// Only what changed since the reading before it.
+    Delta,
+}
+
+/// A stored reading's own row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadingHeader {
+    pub id: ReadingId,
+    pub taken_at: f64,
+    pub purpose: Purpose,
+    pub session_id: Option<String>,
+    pub balance: Pec,
+    pub frame: Frame,
+    /// The reading stored before it, when there is one.
+    pub prev: Option<ReadingId>,
+    pub row_count: usize,
+}
+
+/// A stored reading, rebuilt whole.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredReading {
+    pub header: ReadingHeader,
+    pub reading: Reading,
+}
+
+const HEADER_COLUMNS: &str =
+    "id, taken_at, purpose, session_id, balance_pec, is_keyframe, prev_reading_id, row_count";
+
+type RawHeader = (i64, f64, String, Option<String>, i64, i64, Option<i64>, i64);
+
+fn raw_header(row: &rusqlite::Row) -> rusqlite::Result<RawHeader> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+    ))
+}
+
+fn decode_header(raw: RawHeader) -> Result<ReadingHeader, AccountError> {
+    let (id, taken_at, purpose, session_id, balance, keyframe, prev, row_count) = raw;
+    Ok(ReadingHeader {
+        id: ReadingId(id),
+        taken_at,
+        purpose: Purpose::parse(&purpose).ok_or(AccountError::Stored("unknown reading purpose"))?,
+        session_id,
+        balance: Pec(balance),
+        frame: match keyframe {
+            1 => Frame::Key,
+            0 => Frame::Delta,
+            _ => return Err(AccountError::Stored("unknown reading frame")),
+        },
+        prev: prev.map(ReadingId),
+        row_count: usize::try_from(row_count)
+            .map_err(|_| AccountError::Stored("negative row count"))?,
+    })
+}
+
+/// One stored reading's own row.
+pub fn header(
+    conn: &rusqlite::Connection,
+    id: ReadingId,
+) -> Result<Option<ReadingHeader>, AccountError> {
+    conn.query_row(
+        &format!("SELECT {HEADER_COLUMNS} FROM account_readings WHERE id = ?1"),
+        [id.0],
+        raw_header,
+    )
+    .optional()?
+    .map(decode_header)
+    .transpose()
+}
+
+/// The reading stored last: the one a new reading follows in the chain.
+pub fn last_stored(conn: &rusqlite::Connection) -> Result<Option<ReadingHeader>, AccountError> {
+    conn.query_row(
+        // id-order: insertion
+        &format!("SELECT {HEADER_COLUMNS} FROM account_readings ORDER BY id DESC LIMIT 1"),
+        [],
+        raw_header,
+    )
+    .optional()?
+    .map(decode_header)
+    .transpose()
+}
+
+/// The holding states one reading stored, an empty holding standing for a
+/// holding that is gone.
+fn stored_holdings(
+    conn: &rusqlite::Connection,
+    id: ReadingId,
+) -> Result<Vec<(HoldingKey, Holding)>, AccountError> {
+    let mut stmt = conn.prepare(
+        "SELECT item_name, container_kind, container_name, quantity, value_pec, row_count, \
+                rows_json \
+         FROM account_reading_holdings WHERE reading_id = ?1",
+    )?;
+    let rows = stmt
+        .query_map([id.0], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(
+            |(name, kind, container_name, quantity, value, row_count, rows_json)| {
+                let container = ContainerKind::parse(&kind)
+                    .and_then(|kind| Container::from_parts(kind, &container_name))
+                    .ok_or(AccountError::Stored("unknown container"))?;
+                let rows: Vec<(i64, i64)> = serde_json::from_str(&rows_json)
+                    .map_err(|_| AccountError::Stored("a holding's rows are not pairs"))?;
+                let holding = Holding::new(
+                    rows.into_iter()
+                        .map(|(quantity, value)| Row {
+                            quantity,
+                            value: Pec(value),
+                        })
+                        .collect(),
+                )?;
+                let whole = holding
+                    .rows()
+                    .iter()
+                    .all(|row| row.quantity >= 0 && row.value.0 >= 0);
+                if !whole
+                    || holding.quantity() != quantity
+                    || holding.value() != Pec(value)
+                    || i64::try_from(holding.row_count()).ok() != Some(row_count)
+                {
+                    return Err(AccountError::Stored(
+                        "a holding's rows do not add up to its totals",
+                    ));
+                }
+                Ok((HoldingKey { name, container }, holding))
+            },
+        )
+        .collect()
+}
+
+/// The full holdings of a stored reading: its keyframe's, with every later
+/// reading's changes applied up to it; and how many readings of changes
+/// follow that keyframe up to and including this one.
+fn state_at(
+    conn: &rusqlite::Connection,
+    reading: &ReadingHeader,
+) -> Result<(BTreeMap<HoldingKey, Holding>, usize), AccountError> {
+    let mut chain = vec![reading.id];
+    let mut frame = reading.frame;
+    let mut prev = reading.prev;
+    while frame == Frame::Delta {
+        let id = prev.ok_or(AccountError::Stored(
+            "a reading of changes has none to follow",
+        ))?;
+        let earlier =
+            header(conn, id)?.ok_or(AccountError::Stored("a reading's predecessor is missing"))?;
+        chain.push(earlier.id);
+        frame = earlier.frame;
+        prev = earlier.prev;
+    }
+    let changes_since_keyframe = chain.len() - 1;
+    let mut state = BTreeMap::new();
+    for id in chain.into_iter().rev() {
+        apply(&mut state, stored_holdings(conn, id)?);
+    }
+    Ok((state, changes_since_keyframe))
+}
+
+fn apply(state: &mut BTreeMap<HoldingKey, Holding>, changes: Vec<(HoldingKey, Holding)>) {
+    for (key, holding) in changes {
+        if holding.row_count() == 0 {
+            state.remove(&key);
+        } else {
+            state.insert(key, holding);
+        }
+    }
+}
+
+fn rebuild(
+    header: ReadingHeader,
+    holdings: BTreeMap<HoldingKey, Holding>,
+) -> Result<StoredReading, AccountError> {
+    let reading = Reading::new(header.taken_at, header.balance, holdings)?;
+    Ok(StoredReading { header, reading })
+}
+
+/// One stored reading, rebuilt whole.
+pub fn load_reading(
+    conn: &rusqlite::Connection,
+    id: ReadingId,
+) -> Result<Option<StoredReading>, AccountError> {
+    let Some(header) = header(conn, id)? else {
+        return Ok(None);
+    };
+    let (holdings, _) = state_at(conn, &header)?;
+    rebuild(header, holdings).map(Some)
+}
+
+/// Store a reading in one transaction. `session_id` names the tracked
+/// session it belongs to.
+pub fn record_reading(
+    conn: &mut rusqlite::Connection,
+    reading: &Reading,
+    purpose: Purpose,
+    session_id: Option<&str>,
+) -> Result<ReadingHeader, AccountError> {
+    let tx = conn.transaction()?;
+    let latest = last_stored(&tx)?;
+    let first_of_session = match session_id {
+        Some(session) => !tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM account_readings WHERE session_id = ?1)",
+            [session],
+            |row| row.get::<_, bool>(0),
+        )?,
+        None => false,
+    };
+    let mut before_state: Option<BTreeMap<HoldingKey, Holding>> = None;
+    let mut frame = Frame::Key;
+    if let Some(latest) = &latest {
+        if purpose != Purpose::Connect
+            && !first_of_session
+            && reading.taken_at() - latest.taken_at <= KEYFRAME_AFTER_SECONDS
+        {
+            let (state, changes) = state_at(&tx, latest)?;
+            if changes < KEYFRAME_EVERY {
+                frame = Frame::Delta;
+                before_state = Some(state);
+            }
+        }
+    }
+    let writes: Vec<(HoldingKey, Holding)> = match before_state {
+        Some(before) => {
+            let mut writes: Vec<(HoldingKey, Holding)> = reading
+                .holdings()
+                .iter()
+                .filter(|(key, holding)| before.get(*key) != Some(*holding))
+                .map(|(key, holding)| (key.clone(), holding.clone()))
+                .collect();
+            writes.extend(
+                before
+                    .into_keys()
+                    .filter(|key| reading.holding(key).is_none())
+                    .map(|key| (key, Holding::default())),
+            );
+            writes
+        }
+        None => reading
+            .holdings()
+            .iter()
+            .map(|(key, holding)| (key.clone(), holding.clone()))
+            .collect(),
+    };
+    let row_count = reading.row_count();
+    tx.execute(
+        "INSERT INTO account_readings \
+             (taken_at, purpose, session_id, balance_pec, is_keyframe, prev_reading_id, \
+              row_count) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            reading.taken_at(),
+            purpose.as_str(),
+            session_id,
+            reading.balance().0,
+            i64::from(frame == Frame::Key),
+            latest.as_ref().map(|latest| latest.id.0),
+            i64::try_from(row_count).map_err(|_| AccountError::Stored("too many rows"))?,
+        ],
+    )?;
+    let id = ReadingId(tx.last_insert_rowid());
+    {
+        let mut insert = tx.prepare(
+            "INSERT INTO account_reading_holdings \
+                 (reading_id, item_name, container_kind, container_name, quantity, value_pec, \
+                  row_count, rows_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        )?;
+        for (key, holding) in &writes {
+            let pairs: Vec<[i64; 2]> = holding
+                .rows()
+                .iter()
+                .map(|row| [row.quantity, row.value.0])
+                .collect();
+            let rows_json = serde_json::to_string(&pairs)
+                .map_err(|_| AccountError::Stored("a holding's rows do not serialise"))?;
+            insert.execute(rusqlite::params![
+                id.0,
+                key.name,
+                key.container.kind().as_str(),
+                key.container.name(),
+                holding.quantity(),
+                holding.value().0,
+                i64::try_from(holding.row_count())
+                    .map_err(|_| AccountError::Stored("too many rows"))?,
+                rows_json,
+            ])?;
+        }
+    }
+    tx.commit()?;
+    Ok(ReadingHeader {
+        id,
+        taken_at: reading.taken_at(),
+        purpose,
+        session_id: session_id.map(str::to_string),
+        balance: reading.balance(),
+        frame,
+        prev: latest.map(|latest| latest.id),
+        row_count,
+    })
+}
+
+/// Store a reading through the writer.
+pub async fn record(
+    db: &Db,
+    reading: Reading,
+    purpose: Purpose,
+    session_id: Option<String>,
+) -> Result<ReadingHeader, AccountError> {
+    db.with_writer(move |conn| {
+        Ok(record_reading(
+            conn,
+            &reading,
+            purpose,
+            session_id.as_deref(),
+        ))
+    })
+    .await?
+}
+
+/// The readings a session's measure may use, rebuilt whole and in the
+/// order they were stored: every reading taken inside the window and every
+/// reading stored between those, with the reading stored just before them
+/// and the one stored just after them (the measure decides whether those
+/// are close enough to the window's ends to use).
+pub fn readings_for_window(
+    conn: &rusqlite::Connection,
+    window: &SessionWindow,
+) -> Result<Vec<StoredReading>, AccountError> {
+    // id-order: insertion
+    let (first_inside, last_inside): (Option<i64>, Option<i64>) = conn.query_row(
+        "SELECT MIN(id), MAX(id) FROM account_readings \
+         WHERE taken_at > ?1 AND (?2 IS NULL OR taken_at < ?2)",
+        rusqlite::params![window.started_at, window.ended_at],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let neighbour = |sql: &str, id: i64| -> Result<Option<i64>, AccountError> {
+        Ok(conn
+            .query_row(sql, [id], |row| row.get::<_, i64>(0))
+            .optional()?)
+    };
+    // id-order: insertion
+    const STORED_BEFORE: &str =
+        "SELECT id FROM account_readings WHERE id < ?1 ORDER BY id DESC LIMIT 1";
+    // id-order: insertion
+    const STORED_AFTER: &str = "SELECT id FROM account_readings WHERE id > ?1 ORDER BY id LIMIT 1";
+    let (from, to) = match (first_inside, last_inside) {
+        (Some(first), Some(last)) => (
+            neighbour(STORED_BEFORE, first)?.unwrap_or(first),
+            neighbour(STORED_AFTER, last)?.unwrap_or(last),
+        ),
+        _ => {
+            // Nothing inside: the last reading stored at or before the
+            // start, and the one stored after it.
+            let opening: Option<i64> = conn
+                .query_row(
+                    // id-order: insertion
+                    "SELECT id FROM account_readings WHERE taken_at <= ?1 \
+                     ORDER BY id DESC LIMIT 1",
+                    [window.started_at],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match opening {
+                Some(opening) => (
+                    opening,
+                    neighbour(STORED_AFTER, opening)?.unwrap_or(opening),
+                ),
+                None => match neighbour(STORED_AFTER, 0)? {
+                    Some(first) => (first, first),
+                    None => return Ok(Vec::new()),
+                },
+            }
+        }
+    };
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            // id-order: insertion
+            "SELECT id FROM account_readings WHERE id BETWEEN ?1 AND ?2 ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map([from, to], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids
+    };
+
+    let mut readings: Vec<StoredReading> = Vec::with_capacity(ids.len());
+    let mut state: BTreeMap<HoldingKey, Holding> = BTreeMap::new();
+    for id in ids {
+        let header =
+            header(conn, ReadingId(id))?.ok_or(AccountError::Stored("a listed reading is gone"))?;
+        let follows_the_last = readings
+            .last()
+            .is_some_and(|last| header.prev == Some(last.header.id));
+        if header.frame == Frame::Delta && follows_the_last {
+            apply(&mut state, stored_holdings(conn, header.id)?);
+        } else {
+            state = state_at(conn, &header)?.0;
+        }
+        readings.push(rebuild(header, state.clone())?);
+    }
+    Ok(readings)
+}
+
+/// A session's cached measure, as it stands against the current rules.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CachedMeasure {
+    /// Computed by the current rules.
+    Current {
+        measure: SessionMeasure,
+        sealed_at: Option<f64>,
+    },
+    /// Computed by other rules, or no longer decodable: recompute it.
+    Stale {
+        sealed_at: Option<f64>,
+    },
+    Missing,
+}
+
+/// The cached measure of one session.
+pub fn cached_measure(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<CachedMeasure, AccountError> {
+    let row = conn
+        .query_row(
+            "SELECT measure_version, measure_json, sealed_at \
+             FROM account_session_measures WHERE session_id = ?1",
+            [session_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((version, json, sealed_at)) = row else {
+        return Ok(CachedMeasure::Missing);
+    };
+    // Older rules, or a later build's: either way not these rules.
+    if version != MEASURE_VERSION {
+        return Ok(CachedMeasure::Stale { sealed_at });
+    }
+    Ok(match serde_json::from_str::<SessionMeasure>(&json) {
+        Ok(measure) => CachedMeasure::Current { measure, sealed_at },
+        Err(_) => CachedMeasure::Stale { sealed_at },
+    })
+}
+
+/// Compute a session's measure from its stored readings and cache it.
+/// `sealed_at` marks the measure final: the session has ended and its
+/// closing reading is in.
+pub fn refresh_session_measure(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    window: &SessionWindow,
+    roles: &dyn RoleSource,
+    sealed_at: Option<f64>,
+    computed_at: f64,
+) -> Result<SessionMeasure, AccountError> {
+    let stored = readings_for_window(conn, window)?;
+    let readings: Vec<Reading> = stored.iter().map(|stored| stored.reading.clone()).collect();
+    let outcome = measure_session(window, &readings, roles)?;
+    let used = &stored[outcome.used.clone()];
+    let measure = outcome.measure;
+    let coverage = measure.coverage;
+    let json = serde_json::to_string(&measure)
+        .map_err(|_| AccountError::Stored("a measure does not serialise"))?;
+    let count = |n: usize| i64::try_from(n).map_err(|_| AccountError::Stored("too many readings"));
+    conn.execute(
+        "INSERT INTO account_session_measures \
+             (session_id, first_reading_id, last_reading_id, sealed_at, coverage, \
+              reading_count, gap_count, measure_version, measure_json, computed_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
+         ON CONFLICT(session_id) DO UPDATE SET \
+             first_reading_id = excluded.first_reading_id, \
+             last_reading_id = excluded.last_reading_id, \
+             sealed_at = excluded.sealed_at, \
+             coverage = excluded.coverage, \
+             reading_count = excluded.reading_count, \
+             gap_count = excluded.gap_count, \
+             measure_version = excluded.measure_version, \
+             measure_json = excluded.measure_json, \
+             computed_at = excluded.computed_at",
+        rusqlite::params![
+            session_id,
+            used.first().map(|stored| stored.header.id.0),
+            used.last().map(|stored| stored.header.id.0),
+            sealed_at,
+            coverage.level.as_str(),
+            count(coverage.reading_count)?,
+            count(coverage.gap_count)?,
+            MEASURE_VERSION,
+            json,
+            computed_at,
+        ],
+    )?;
+    Ok(measure)
+}
+
+/// A session's measure: the cached one when the current rules sealed it,
+/// otherwise recomputed from its readings and cached, keeping any seal.
+pub fn session_measure(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    window: &SessionWindow,
+    roles: &dyn RoleSource,
+    computed_at: f64,
+) -> Result<SessionMeasure, AccountError> {
+    let sealed_at = match cached_measure(conn, session_id)? {
+        CachedMeasure::Current {
+            measure,
+            sealed_at: Some(_),
+        } => return Ok(measure),
+        CachedMeasure::Current { sealed_at, .. } | CachedMeasure::Stale { sealed_at } => sealed_at,
+        CachedMeasure::Missing => None,
+    };
+    refresh_session_measure(conn, session_id, window, roles, sealed_at, computed_at)
+}

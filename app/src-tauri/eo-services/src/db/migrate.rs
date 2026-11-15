@@ -483,6 +483,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "strongbox openings",
         sql: include_str!("../../migrations/0089_strongbox_openings.sql"),
     },
+    Migration {
+        version: 90,
+        description: "account readings",
+        sql: include_str!("../../migrations/0090_account_readings.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -579,6 +584,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "728967B26B96DA29A26E9B7927D2A4B38683F17DC6F23D29204FCFABA7B3EAB1968EE0DE0516934B9A5A41BCB5809C75",    "3B961ADC1D523C39E4F0DC4570463EE3E70CEB0E22783FF5A782D9D7379DEB063B112506734EE21258F427BCFACA569D",
     "39AD93B5D25DDE3FEB577AA85EC73C850ABC1791FB15F9D6819D7C6391F09C2A350D28C2C5674EC8B2755DC35A6B223C",
     "25264B102360470EC811B7FEA6BD93BA7453AA1686E563ABA086F773AFBEB3853DDB4147D876CDEB4CF5AC462F3112FA",
+    "019C311629BE9CEBBE7A60B9F48E3679F5DFE50313C3255DFA2AEC78C818EFF27C328AA1CEBDA20F7E2AAEB05097501A",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -2773,5 +2779,128 @@ mod tests {
             )
             .expect("an entry deleted from the library");
         assert_eq!(created("b1"), 1);
+    }
+
+    /// Account readings join additively: a version-89 database keeps its
+    /// sessions, gains three empty tables, and the tables hold only whole
+    /// readings, holdings, and measures. The purpose and the container kind
+    /// are left to the app to refuse when read, so an unknown kind of place
+    /// can be stored.
+    #[test]
+    fn account_readings_upgrade_adds_empty_tables_that_hold_only_whole_rows() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..89] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0);",
+            )
+            .expect("v89 rows");
+
+        run(&mut connection).expect("v90 upgrade");
+
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count(&connection, "tracking_sessions"), 1);
+        for table in [
+            "account_readings",
+            "account_reading_holdings",
+            "account_session_measures",
+        ] {
+            assert_eq!(count(&connection, table), 0, "{table} starts empty");
+        }
+
+        for kept in [
+            "INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+              row_count) VALUES (10.5, 'connect', 25000, 1, 2)",
+            "INSERT INTO account_readings (taken_at, purpose, session_id, balance_pec, \
+              is_keyframe, prev_reading_id, row_count) VALUES (70.5, 'session', 's', 24952, \
+              0, 1, 1)",
+            "INSERT INTO account_reading_holdings VALUES (1, 'Universal Ammo', 'carried', '', \
+              965587, 9655, 1, '[[965587,9655]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'Common Dung', 'storage', \
+              'The Hub', 29, 0, 1, '[[29,0]]')",
+            "INSERT INTO account_reading_holdings VALUES (2, 'Common Dung', 'storage', \
+              'The Hub', 0, 0, 0, '[]')",
+            "INSERT INTO account_session_measures VALUES ('s', 1, 2, NULL, 'complete', 2, 0, \
+              1, '{}', 80)",
+            "INSERT INTO account_reading_holdings VALUES (2, 'Odd', 'estate', 'Calypso', 1, \
+              0, 1, '[[1,0]]')",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // A negative balance.
+            "INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+              row_count) VALUES (1, 'run', -1, 1, 0)",
+            // A reading that stores only changes, with nothing to change from.
+            "INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+              row_count) VALUES (1, 'run', 0, 0, 0)",
+            // A place that needs no name given one, or a named kind of
+            // place without its name.
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'other', ' ', 1, 1, 1, \
+              '[[1,1]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', 'x', 1, 1, 1, \
+              '[[1,1]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'storage', ' ', 1, 1, 1, \
+              '[[1,1]]')",
+            // Rows that are not the count given, an empty state that holds
+            // something, rows that are not a list, or a blank name.
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', '', 1, 1, 2, \
+              '[[1,1]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', '', 1, 1, 0, '[]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', '', 1, 1, 1, \
+              '{}')",
+            "INSERT INTO account_reading_holdings VALUES (1, ' ', 'carried', '', 1, 1, 1, \
+              '[[1,1]]')",
+            // The same holding twice in one reading.
+            "INSERT INTO account_reading_holdings VALUES (1, 'Universal Ammo', 'carried', '', \
+              1, 0, 1, '[[1,0]]')",
+            // A measure with one end of its readings, readings it does not
+            // name, a complete one with a gap or one reading, a coverage
+            // outside the two, a measure that is not an object, or no
+            // version.
+            "INSERT INTO account_session_measures VALUES ('t', 1, NULL, NULL, 'partial', 1, 0, \
+              1, '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', NULL, NULL, NULL, 'partial', 1, \
+              0, 1, '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'complete', 2, 1, 1, \
+              '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 1, NULL, 'complete', 1, 0, 1, \
+              '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'full', 2, 0, 1, \
+              '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'partial', 2, 0, 1, \
+              '[]', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'partial', 2, 0, 0, \
+              '{}', 1)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
     }
 }

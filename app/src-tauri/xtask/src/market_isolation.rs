@@ -18,9 +18,11 @@
 use crate::git;
 
 /// The accounting surface: tracked Rust sources under these paths may
-/// not reference the market layer. Extend the list when a new realised
-/// -figure surface is minted; never shrink it to admit a consumer.
-const ACCOUNTING_SURFACES: &[&str] = &[
+/// not reference the market layer, nor the account readings (the
+/// measured-isolation guard holds the same list). Extend the list when a
+/// new realised-figure surface is minted; never shrink it to admit a
+/// consumer.
+pub(crate) const ACCOUNTING_SURFACES: &[&str] = &[
     "app/src-tauri/eo-services/src/analytics.rs",
     "app/src-tauri/eo-services/src/analytics/",
     "app/src-tauri/eo-services/src/cost_engine.rs",

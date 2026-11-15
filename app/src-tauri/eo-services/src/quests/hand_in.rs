@@ -103,6 +103,7 @@ impl QuestService {
                 let tx = conn.transaction()?;
                 let source = tx
                     .query_row(
+                        // every-kill: by-id (the row a loot source names).
                         "SELECT 'kill', id, session_id, timestamp, context_id \
                          FROM kills WHERE loot_source_id = ? \
                          UNION ALL \

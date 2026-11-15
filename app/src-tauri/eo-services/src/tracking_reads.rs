@@ -389,6 +389,7 @@ pub fn list_row_from_raw(
 ) -> Result<Value, DbError> {
     let duration = duration_seconds(started_at, ended_at, is_active, now);
 
+    // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
     let weapon_cost = scalar(
         conn,
         "SELECT COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0) \
@@ -431,6 +432,7 @@ pub fn list_row_from_raw(
         + dangling_cost
         + harvest_cost;
 
+    // every-kill: spend (the session's loot, every row's).
     let returns = as_f64(&scalar(
         conn,
         "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
@@ -439,11 +441,12 @@ pub fn list_row_from_raw(
 
     let primary_mobs = string_column(
         conn,
-        "SELECT mob_name FROM kills \
+        "SELECT mob_name FROM counted_kills \
          WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
          GROUP BY mob_name ORDER BY COUNT(*) DESC LIMIT 3",
         session_id,
     )?;
+    // every-kill: spend (ranked by shots fired, every shot counts).
     let primary_weapons = string_column(
         conn,
         "SELECT ts.tool_name FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
@@ -565,7 +568,10 @@ pub fn get_session_read(
     )?;
 
     let (kills, total_returns, total_enhancer_cost) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
+        // every-kill: spend (loot and enhancer sum every row; the count takes
+        // only the rows still counted as kills).
+        "SELECT COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
+         COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
          FROM kills WHERE session_id = ?",
         rusqlite::params![session_id],
         |row| {
@@ -578,6 +584,7 @@ pub fn get_session_read(
     )?;
 
     let merged_tools: Vec<(String, i64, f64, i64, f64)> = {
+        // every-kill: spend (each tool's shots, damage and spend).
         let mut stmt = conn.prepare(
             "SELECT t.tool_name, SUM(t.shots_fired), SUM(t.damage_dealt), SUM(t.critical_hits), \
              SUM(COALESCE(t.cost_per_shot, 0) * COALESCE(t.shots_fired, 0)) \
@@ -642,7 +649,7 @@ pub fn get_session_read(
                              WHERE c.kill_id = kills.id AND c.grade = 'provisional_pinned' \
                                AND c.reviewed_at IS NULL) THEN 'unlisted' \
                         ELSE 'recorded' END \
-             FROM kills \
+             FROM counted_kills AS kills \
              WHERE session_id = ? AND mob_name IS NOT NULL \
              GROUP BY 1, 2, 4 ORDER BY COUNT(*) DESC",
         )?;
@@ -683,6 +690,8 @@ pub fn get_session_read(
     } else {
         0.0
     };
+
+    let quest_rewards = session_quest_rewards(conn, session_id)?;
 
     let loot_breakdown = loot_breakdown_sorted(&merged_loot);
     let deactivated_loot_breakdown = loot_breakdown_sorted(&merged_deactivated_loot);
@@ -842,6 +851,7 @@ pub fn get_session_read(
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
         "deactivatedLootBreakdown": deactivated_loot_breakdown,
+        "questRewards": quest_rewards,
         "mobBreakdown": mob_breakdown,
         "effectiveLoot": round(total_returns, 2),
         "toolStats": tool_stats,
@@ -860,14 +870,68 @@ pub fn get_session_read(
     })))
 }
 
+/// The quest rewards confirmed on a session, one entry per completion in
+/// the order they were handed in, each with its reward lines. A reward that
+/// was undone, or whose latest review is not a confirmation, is left out.
+/// The lines are the reward as recorded: liquid lines (ammo) at face value,
+/// stock lines (items) at TT, for the frontend to value at market.
+fn session_quest_rewards(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Vec<Value>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, COALESCE(q.name, ''), c.completed_at, \
+                ri.item_name, ri.quantity, ri.value_ped, ri.accounting_kind \
+         FROM session_quest_completions c \
+         JOIN session_quest_completion_reward_items ri ON ri.completion_id = c.id \
+         LEFT JOIN quests q ON q.id = c.quest_id \
+         WHERE c.session_id = ?1 \
+           AND COALESCE((SELECT r.outcome FROM quest_reward_reviews r \
+                         WHERE r.completion_id = c.id \
+                         ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1), \
+                        c.reward_outcome) = 'confirmed' \
+           AND NOT EXISTS (SELECT 1 FROM quest_reward_reversals rr \
+                           WHERE rr.completion_id = c.id) \
+         ORDER BY c.completed_at, c.id, ri.id",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![session_id])?;
+    let mut rewards: Vec<Value> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let completion_id: i64 = row.get(0)?;
+        let item = json!({
+            "itemName": row.get::<_, String>(3)?,
+            "quantity": row.get::<_, i64>(4)?,
+            "valuePed": float_field(json!(row.get::<_, f64>(5)?)),
+            "accounting": row.get::<_, String>(6)?,
+        });
+        match rewards.last_mut() {
+            Some(reward) if reward["completionId"] == completion_id => {
+                reward["items"]
+                    .as_array_mut()
+                    .expect("a reward's items are a list")
+                    .push(item);
+            }
+            _ => rewards.push(json!({
+                "completionId": completion_id,
+                "questName": row.get::<_, String>(1)?,
+                "completedAt": row.get::<_, f64>(2)?,
+                "items": [item],
+            })),
+        }
+    }
+    Ok(rewards)
+}
+
 pub fn loot_agg(
     conn: &rusqlite::Connection,
     session_id: &str,
     deactivated_clause: &str,
 ) -> Result<Vec<(String, i64, f64)>, DbError> {
+    // A claimed quest reward's lines are the reward's, shown as such, never
+    // as loot taken off the session.
     let sql = format!(
         "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) \
-         FROM kill_loot_items l JOIN kills k ON k.id = l.kill_id \
+         FROM kill_loot_items l JOIN counted_kills k ON k.id = l.kill_id \
          WHERE k.session_id = ? AND COALESCE(l.is_enhancer_shrapnel, 0) = 0 AND {deactivated_clause} \
          GROUP BY l.item_name"
     );
@@ -1082,7 +1146,7 @@ pub async fn build_mob_edit_response(
     let kill_count = db
         .with_reader(move |conn| {
             Ok(conn.query_row(
-                "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = ?",
+                "SELECT COUNT(*) FROM counted_kills WHERE session_id = ? AND mob_name = ?",
                 rusqlite::params![sid, mob],
                 |row| row.get::<_, i64>(0),
             )?)
@@ -1105,6 +1169,7 @@ pub async fn build_loot_item_edit_response(
     let sid = session_id.to_string();
     let session_returns = db
         .with_reader(move |conn| {
+            // every-kill: spend (the session's loot, every row's).
             Ok(as_f64(&conn.query_row(
                 "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
                 rusqlite::params![sid],
@@ -1387,13 +1452,15 @@ pub async fn bulk_flip_loot_item(
         Flipped { affected: i64, total_delta: f64 },
     }
 
+    // A loot edit never reaches a claimed quest reward's lines: they are the
+    // reward's evidence, and putting one back would count it twice.
     let flip_sql = format!(
         "UPDATE kill_loot_items \
          SET deactivated_at = {new_flag_sql} \
          WHERE id IN ( \
              SELECT l.id \
              FROM kill_loot_items l \
-             JOIN kills k ON k.id = l.kill_id \
+             JOIN counted_kills k ON k.id = l.kill_id \
              WHERE k.session_id = ? AND l.item_name = ? AND {opposite_clause} \
          ) \
          RETURNING kill_id, value_ped"
@@ -1416,7 +1483,7 @@ pub async fn bulk_flip_loot_item(
                 let any_row: Option<i64> = tx
                     .query_row(
                         "SELECT 1 FROM kill_loot_items l \
-                         JOIN kills k ON k.id = l.kill_id \
+                         JOIN counted_kills k ON k.id = l.kill_id \
                          WHERE k.session_id = ? AND l.item_name = ? \
                          LIMIT 1",
                         rusqlite::params![sid, item],
@@ -1682,6 +1749,7 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
 
             // Child-scoped rows first (the kill-scoped tables have no ON DELETE
             // cascade), then the kills, the session-scoped rows, and the session.
+            // every-kill: write (a delete reaches every row).
             tx.execute(
                 "DELETE FROM kill_tool_stats \
                  WHERE kill_id IN (SELECT id FROM kills WHERE session_id = ?)",
@@ -1708,6 +1776,7 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 "DELETE FROM screen_look_minutes WHERE session_id = ?",
                 rusqlite::params![sid],
             )?;
+            // every-kill: write (a delete reaches every row).
             tx.execute(
                 "DELETE FROM kills WHERE session_id = ?",
                 rusqlite::params![sid],
@@ -2681,6 +2750,7 @@ mod tests {
                 ],
                 "lootBreakdown": [{"name": "Oil", "quantity": 2, "ttValue": 20.0}],
                 "deactivatedLootBreakdown": [{"name": "Hide", "quantity": 1, "ttValue": 10.0}],
+                "questRewards": [],
                 "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 2, "certainty": "recorded"}],
                 "effectiveLoot": 30.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 20, "damageDealt": 200.0, "crits": 1, "costAttributed": 10.0}],
@@ -2835,6 +2905,7 @@ mod tests {
                 "deactivatedLootBreakdown": [
                     {"name": "Wood Shavings", "quantity": 2, "ttValue": 1.0},
                 ],
+                "questRewards": [],
                 "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 1, "certainty": "recorded"}],
                 "effectiveLoot": 28.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 10, "damageDealt": 100.0, "crits": 0, "costAttributed": 5.0}],

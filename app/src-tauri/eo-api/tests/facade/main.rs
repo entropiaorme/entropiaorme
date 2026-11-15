@@ -24,6 +24,7 @@ mod maps_facade;
 mod market_facade;
 mod mob_detection_facade;
 mod quests_facade;
+mod reward_arrival_facade;
 mod scan_facade;
 mod session_definitions_facade;
 mod session_exclusion_facade;

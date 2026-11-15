@@ -42,6 +42,7 @@ pub const CATALOGUE: &[TableSpec] = &[
                 FROM tracking_sessions",
         order_by: &["rowid"],
     },
+    // every-kill: write (a dump of the stored rows, every one).
     TableSpec {
         name: "kills",
         query: "SELECT id, session_id, mob_name, mob_species, mob_maturity, \
@@ -51,6 +52,7 @@ pub const CATALOGUE: &[TableSpec] = &[
                 FROM kills",
         order_by: &["timestamp", "rowid"],
     },
+    // every-kill: write (a dump of the stored rows, every one).
     TableSpec {
         name: "kill_loot_items",
         query: "SELECT kli.kill_id, kli.item_name, kli.quantity, \
@@ -59,6 +61,7 @@ pub const CATALOGUE: &[TableSpec] = &[
                 JOIN kills k ON kli.kill_id = k.id",
         order_by: &["k.timestamp", "kli.rowid"],
     },
+    // every-kill: write (a dump of the stored rows, every one).
     TableSpec {
         name: "kill_tool_stats",
         query: "SELECT kts.kill_id, kts.tool_name, kts.shots_fired, \

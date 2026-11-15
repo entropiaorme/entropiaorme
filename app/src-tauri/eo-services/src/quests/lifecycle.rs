@@ -139,6 +139,7 @@ fn snapshot_reward_attributions(
     }
 
     let rows: Vec<ContextWeight> = {
+        // every-kill: spend (a context's cycled spend, every shot fired).
         let mut stmt = conn.prepare(
             "SELECT c.id, s.definition_id, \
                     COALESCE((SELECT SUM(k.cost_ped + k.enhancer_cost) \
@@ -430,6 +431,7 @@ impl QuestService {
                     }
                 };
                 if let Some(claim) = &manual_clump {
+                    // every-kill: by-id (the clump's own source row).
                     let valid = tx.query_row(
                         "SELECT EXISTS( \
                          SELECT 1 FROM quest_reward_clumps c \
@@ -546,10 +548,16 @@ impl QuestService {
                                  WHERE kill_id = ? AND deactivated_at IS NULL",
                                 rusqlite::params![now, claim.source_record_id],
                             )?;
+                            // The arrival is the reward's evidence from here
+                            // on, not a kill: it leaves every kill count.
                             tx.execute(
-                                "UPDATE kills SET loot_total_ped = 0 \
+                                "UPDATE kills SET loot_total_ped = 0, reward_claimed_at = ? \
                                  WHERE id = ? AND loot_source_id = ?",
-                                rusqlite::params![claim.source_record_id, claim.source_id],
+                                rusqlite::params![
+                                    now,
+                                    claim.source_record_id,
+                                    claim.source_id
+                                ],
                             )?;
                         }
                         "harvest" => {
@@ -963,6 +971,10 @@ impl QuestService {
                                 rusqlite::params![source_record_id],
                             )?;
                             recompute_kill_loot_total(&tx, &source_record_id)?;
+                            tx.execute(
+                                "UPDATE kills SET reward_claimed_at = NULL WHERE id = ?",
+                                rusqlite::params![source_record_id],
+                            )?;
                         } else {
                             tx.execute(
                                 "UPDATE harvest_loot_items SET deactivated_at = NULL \
@@ -998,6 +1010,7 @@ impl QuestService {
             let source_ids = self
                 .db
                 .with_reader(move |conn| {
+                    // every-kill: by-id (the sources of the reward's own lines).
                     let mut stmt = conn.prepare(
                         "SELECT DISTINCT k.loot_source_id \
                          FROM session_quest_completions c \

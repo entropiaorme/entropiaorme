@@ -171,6 +171,7 @@ fn rename(
     label: &str,
 ) -> Result<(), DbError> {
     let sessions: Vec<String> = {
+        // every-kill: write (every session whose rows the rename rewrites).
         let mut statement = tx.prepare(
             "SELECT DISTINCT k.session_id FROM kills k \
              JOIN session_summaries s ON s.session_id = k.session_id \

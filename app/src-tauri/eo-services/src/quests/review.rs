@@ -225,6 +225,8 @@ impl QuestService {
                         .unwrap_or(0.0)
                         .max(0.0);
                     let matches = {
+                        // every-kill: spend (active loot lines; a claimed
+                        // arrival's are deactivated).
                         let mut stmt = tx.prepare(
                             "SELECT li.id, li.kill_id, k.loot_source_id \
                              FROM kill_loot_items li \
@@ -616,6 +618,8 @@ fn loot_candidates(
     conn: &rusqlite::Connection,
     completion_id: i64,
 ) -> rusqlite::Result<Vec<Value>> {
+    // every-kill: spend (active loot lines; a claimed arrival's are
+    // deactivated).
     let mut stmt = conn.prepare(
         "SELECT li.id, li.kill_id, k.loot_source_id, li.item_name, li.quantity, li.value_ped, \
                 k.timestamp, k.mob_name \

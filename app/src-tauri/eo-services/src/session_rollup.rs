@@ -34,8 +34,9 @@
 use crate::db::DbError;
 
 /// Bump when a cell's meaning changes: below-version sessions are served
-/// raw and heal on the next read.
-pub const ROLLUP_VERSION: i64 = 5;
+/// raw and heal on the next read. 6: a quest reward claimed at a hand-in is
+/// no longer a kill in the cells' counts.
+pub const ROLLUP_VERSION: i64 = 6;
 
 /// Drop one session's cells and marker. The session reads raw from this
 /// commit on; the delete path wants exactly that, and [`recompute_session`]
@@ -84,21 +85,27 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
         return Ok(());
     }
     conn.execute(
+        // every-kill: spend (cycled and loot sum every row; the count takes
+        // only the rows still counted as kills, and a claimed reward that
+        // spent nothing makes no cell).
         "INSERT INTO session_kill_rollups \
              (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
          SELECT session_id, context_id, \
                 COALESCE(mob_species, ''), COALESCE(mob_maturity, ''), \
-                COUNT(*), \
+                COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
                 COALESCE(SUM(cost_ped + enhancer_cost), 0), \
                 COALESCE(SUM(loot_total_ped), 0) \
          FROM kills WHERE session_id = ?1 \
-         GROUP BY 1, 2, 3, 4",
+         GROUP BY 1, 2, 3, 4 \
+         HAVING COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END) > 0 \
+             OR SUM(cost_ped + enhancer_cost) > 0",
         rusqlite::params![session_id],
     )?;
     // Shrapnel rows fold their species away here, not at read time: every
     // consumer either folds it (positions) or excludes the rows entirely
     // (composition), so the cell grain carries the flag and no species.
     conn.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_loot_rollups \
              (session_id, mob_species, is_enhancer_shrapnel, item_name, quantity, value_ped) \
          SELECT k.session_id, \
@@ -113,6 +120,7 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
         rusqlite::params![session_id],
     )?;
     conn.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_context_loot_rollups \
              (session_id, context_id, item_name, quantity, value_ped) \
          SELECT k.session_id, k.context_id, li.item_name, \
@@ -133,6 +141,7 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
         rusqlite::params![session_id],
     )?;
     conn.execute(
+        // every-kill: spend (every shot fired is evidence of the loadout).
         "INSERT INTO session_offensive_evidence_rollups \
              (session_id, mob_species, evidence_fingerprint, expected_economics_json, \
               shots_fired, missing_candidate_raw_tt, missing_basis_phases, context_id) \
@@ -218,6 +227,7 @@ const SETTLED_HUNTING_LOOT_SQL: &str = "SELECT r.session_id, s.definition_id, r.
      JOIN tracking_sessions s ON s.id = r.session_id \
      WHERE (?1 IS NULL OR s.started_at >= ?1)";
 
+// every-kill: spend (loot lines; a claimed arrival's are deactivated).
 const UNSETTLED_HUNTING_LOOT_SQL: &str = "SELECT s.definition_id, \
             CASE WHEN li.is_enhancer_shrapnel = 0 THEN COALESCE(k.mob_species, '') \
                  ELSE '' END, \
@@ -382,6 +392,7 @@ const SETTLED_OFFENSIVE_EVIDENCE_SQL: &str =
      JOIN tracking_sessions s ON s.id = r.session_id \
      WHERE (?1 IS NULL OR s.started_at >= ?1)";
 
+// every-kill: spend (every shot fired is evidence of the loadout).
 const UNSETTLED_OFFENSIVE_EVIDENCE_SQL: &str =
     "SELECT k.context_id, COALESCE(k.mob_species, ''), ts.expected_economics_json, \
             SUM(CASE WHEN ts.shots_fired > 0 THEN ts.shots_fired ELSE 0 END), \
@@ -511,19 +522,25 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
     // and kill indexes); a planner-chosen order could re-scan the whole
     // raw table for a single pending session.
     tx.execute(
+        // every-kill: spend (cycled and loot sum every row; the count takes
+        // only the rows still counted as kills, and a claimed reward that
+        // spent nothing makes no cell).
         "INSERT INTO session_kill_rollups \
              (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
          SELECT p.id, k.context_id, \
                 COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
-                COUNT(*), \
+                COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
                 COALESCE(SUM(k.cost_ped + k.enhancer_cost), 0), \
                 COALESCE(SUM(k.loot_total_ped), 0) \
          FROM pending_settlement p CROSS JOIN kills k \
          WHERE k.session_id = p.id \
-         GROUP BY 1, 2, 3, 4",
+         GROUP BY 1, 2, 3, 4 \
+         HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
+             OR SUM(k.cost_ped + k.enhancer_cost) > 0",
         [],
     )?;
     tx.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_loot_rollups \
              (session_id, mob_species, is_enhancer_shrapnel, item_name, quantity, value_ped) \
          SELECT p.id, \
@@ -537,6 +554,7 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
         [],
     )?;
     tx.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_context_loot_rollups \
              (session_id, context_id, item_name, quantity, value_ped) \
          SELECT p.id, k.context_id, li.item_name, \
@@ -556,6 +574,7 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
         [],
     )?;
     tx.execute(
+        // every-kill: spend (every shot fired is evidence of the loadout).
         "INSERT INTO session_offensive_evidence_rollups \
              (session_id, mob_species, evidence_fingerprint, expected_economics_json, \
               shots_fired, missing_candidate_raw_tt, missing_basis_phases, context_id) \

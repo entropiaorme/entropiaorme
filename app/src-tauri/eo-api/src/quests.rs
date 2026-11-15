@@ -648,7 +648,9 @@ pub enum QuestCatalogueEntryKind {
 }
 
 /// The giver's own rating of a quest, easiest first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum QuestDifficulty {
     Beginner,

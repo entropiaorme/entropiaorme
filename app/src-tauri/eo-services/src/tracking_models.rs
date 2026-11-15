@@ -101,6 +101,10 @@ pub struct Kill {
     /// belongs to. None when the row predates the interval model,
     /// never "nothing was in force".
     pub context_id: Option<i64>,
+    /// A quest hand-in claimed this mob-less clump as its reward: the row
+    /// stays as the reward's evidence and is no longer a kill, so no kill
+    /// count or per-kill figure includes it.
+    pub reward_claimed: bool,
 }
 
 /// One harvesting swing (tree cutting): a successful swing arrives as

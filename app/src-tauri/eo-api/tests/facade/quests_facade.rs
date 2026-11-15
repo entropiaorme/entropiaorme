@@ -11,7 +11,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use eo_api::quests::{
-    QuestCompletionTrigger, QuestCooldownAnchor, QuestFamilyInput, QuestInput, QuestRewardPolicy,
+    QuestCompletionTrigger, QuestCooldownAnchor, QuestDifficulty, QuestFamilyInput, QuestInput,
+    QuestRewardPolicy,
 };
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
@@ -467,7 +468,7 @@ async fn the_curated_catalogue_is_served_in_board_order() {
         .iter()
         .map(|planet| planet.name.as_str())
         .collect();
-    assert_eq!(planets, vec!["ARIS", "Cyrene"]);
+    assert_eq!(planets, vec!["ARIS", "Cyrene", "Calypso"]);
     let aris = &catalogue.planets[0];
     let slots: Vec<&str> = aris.categories[0]
         .entries
@@ -488,6 +489,17 @@ async fn the_curated_catalogue_is_served_in_board_order() {
         .entries
         .iter()
         .all(|entry| entry.member_keys.is_empty() && entry.reward_label == "Hyperion voucher"));
+    // A rated category carries each quest's difficulty, easiest first.
+    let ai_dailies = &catalogue.planets[2].categories[0];
+    assert_eq!(ai_dailies.name, "AI Dailies");
+    let ladder: Vec<Option<QuestDifficulty>> = ai_dailies
+        .entries
+        .iter()
+        .map(|entry| entry.difficulty.0)
+        .collect();
+    assert_eq!(ladder.first(), Some(&Some(QuestDifficulty::Beginner)));
+    assert_eq!(ladder.last(), Some(&Some(QuestDifficulty::Extreme)));
+    assert!(ladder.windows(2).all(|pair| pair[0] <= pair[1]));
 }
 
 /// Abandon answers the refreshed quest, and a reward is settled by exactly

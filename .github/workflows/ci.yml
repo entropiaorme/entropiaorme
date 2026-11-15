@@ -168,7 +168,10 @@ jobs:
         # is declared once and marked where it renders; graduating it deletes
         # both), and the latest-in-time read convention (a database read that
         # means "the newest" orders by its timestamp column; an id-ordered read
-        # names its allowed case at the site), the single search (every
+        # names its allowed case at the site), the counted kills (a quest
+        # reward claimed at a hand-in arrives as a kill row but is no kill:
+        # kill figures read the counted_kills view, and a read of the table
+        # names its case at the site), the single search (every
         # search box, picker, and filter matches through the shared search
         # module), and the interface profile (the game-interface readers reach
         # the screen and the recogniser only through their pipeline's seams,
@@ -183,6 +186,7 @@ jobs:
           cargo run -q -p xtask -- measured-isolation
           cargo run -q -p xtask -- in-development
           cargo run -q -p xtask -- id-order
+          cargo run -q -p xtask -- counted-kills
           cargo run -q -p xtask -- single-search
           cargo run -q -p xtask -- ui-profile
 

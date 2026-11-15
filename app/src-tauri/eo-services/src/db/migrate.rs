@@ -488,6 +488,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "account readings",
         sql: include_str!("../../migrations/0090_account_readings.sql"),
     },
+    Migration {
+        version: 91,
+        description: "counted kills",
+        sql: include_str!("../../migrations/0091_counted_kills.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -585,6 +590,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "39AD93B5D25DDE3FEB577AA85EC73C850ABC1791FB15F9D6819D7C6391F09C2A350D28C2C5674EC8B2755DC35A6B223C",
     "25264B102360470EC811B7FEA6BD93BA7453AA1686E563ABA086F773AFBEB3853DDB4147D876CDEB4CF5AC462F3112FA",
     "019C311629BE9CEBBE7A60B9F48E3679F5DFE50313C3255DFA2AEC78C818EFF27C328AA1CEBDA20F7E2AAEB05097501A",
+    "DFC3384A111E842FCD868AFE5E34C22602EFE0A8A23AB0E58706C2223F8BD258FFA7B612A34160BFB747525D53C15B06",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -2902,5 +2908,71 @@ mod tests {
                 "refused: {refused}"
             );
         }
+    }
+
+    /// A reward a hand-in claimed before the view existed is marked at the
+    /// claim's instant and leaves `counted_kills`; every other row, an
+    /// unclaimed clump's included, still counts, and the view keeps the
+    /// table's rowid and columns.
+    #[test]
+    fn counted_kills_upgrade_marks_claimed_rewards_only() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..90] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO kills (id, session_id, mob_name, timestamp) VALUES \
+                   ('hunted', 's', 'Atrox', 10), ('claimed', 's', 'Unknown', 20), \
+                   ('unclaimed', 's', 'Unknown', 30); \
+                 INSERT INTO session_quest_completions (id, session_id, quest_id, completed_at) \
+                   VALUES (7, 's', 1, 25); \
+                 INSERT INTO quest_reward_clumps \
+                   (source_id, session_id, source_kind, source_record_id, context_id, \
+                    observed_at, claimed_completion_id) VALUES \
+                   ('clump-a', 's', 'kill', 'claimed', 1, 20, 7), \
+                   ('clump-b', 's', 'kill', 'unclaimed', 1, 30, NULL);",
+            )
+            .expect("v90 rows");
+
+        let migration = &MIGRATIONS[90];
+        assert_eq!(migration.version, 91);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let marked: Vec<(String, Option<f64>)> = connection
+            .prepare("SELECT id, reward_claimed_at FROM kills ORDER BY timestamp")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            marked,
+            vec![
+                ("hunted".to_string(), None),
+                ("claimed".to_string(), Some(25.0)),
+                ("unclaimed".to_string(), None),
+            ]
+        );
+        let counted: Vec<(i64, String)> = connection
+            .prepare("SELECT rowid, id FROM counted_kills ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            counted,
+            vec![(1, "hunted".to_string()), (3, "unclaimed".to_string())]
+        );
     }
 }

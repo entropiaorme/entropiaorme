@@ -68,6 +68,7 @@ pub fn compute(
     let mut looters = None;
     {
         let mut stmt = conn.prepare(
+            // every-kill: spend (every shot fired is the loadout's evidence).
             "SELECT ts.expected_economics_json, ts.tool_name, COALESCE(ts.cost_per_shot, 0), \
                     COALESCE(SUM(ts.shots_fired), 0) \
              FROM kills k CROSS JOIN kill_tool_stats ts \

@@ -103,11 +103,14 @@ pub fn compute(
     let mut events: Vec<Event> = Vec::new();
 
     let mut kills = conn.prepare(
+        // every-kill: spend (a claimed reward's row adds its weapon's spend
+        // and play time, never a kill or a pace gap; see `counted` below).
         "SELECT k.timestamp, COALESCE(k.enhancer_cost, 0), COALESCE(k.loot_total_ped, 0), \
                 COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
                 COUNT(t.kill_id), MIN(t.tool_name), \
                 COALESCE(SUM(COALESCE(t.cost_per_shot, 0) * COALESCE(t.shots_fired, 0)), 0), \
-                COALESCE(SUM(COALESCE(t.shots_fired, 0)), 0) \
+                COALESCE(SUM(COALESCE(t.shots_fired, 0)), 0), \
+                k.reward_claimed_at IS NULL \
          FROM kills k LEFT JOIN kill_tool_stats t ON t.kill_id = k.id \
          WHERE k.session_id = ?1 \
          GROUP BY k.id ORDER BY k.timestamp, k.id",
@@ -118,13 +121,23 @@ pub fn compute(
         let timestamp: f64 = row.get(0)?;
         let tools: i64 = row.get(5)?;
         let tool: Option<String> = row.get(6)?;
+        // A quest reward a hand-in claimed arrived as this row: its shots
+        // are the weapon's spend, but it is no kill.
+        let counted: bool = row.get(9)?;
         let solo = match tool {
             Some(tool) if tools == 1 && tool != UNKNOWN_TOOL => {
                 let index = weapon_index(&mut weapons, &tool);
                 let cell = &mut weapons[index];
-                cell.kills += 1;
                 cell.cycled_ped += row.get::<_, f64>(7)? + row.get::<_, f64>(1)?;
                 cell.loot_tt += row.get::<_, f64>(2)?;
+                if !counted {
+                    events.push(Event {
+                        timestamp,
+                        solo: Some(index),
+                    });
+                    continue;
+                }
+                cell.kills += 1;
                 let gap = previous_kill.map(|previous| timestamp - previous);
                 if let Some(gap) = gap.filter(|gap| *gap > 0.0 && *gap <= MAX_EVENT_GAP_SECONDS) {
                     let (species, maturity): (String, String) = (row.get(3)?, row.get(4)?);
@@ -150,7 +163,9 @@ pub fn compute(
             }
             _ => None,
         };
-        previous_kill = Some(timestamp);
+        if counted {
+            previous_kill = Some(timestamp);
+        }
         events.push(Event { timestamp, solo });
     }
     drop(rows);

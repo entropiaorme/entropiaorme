@@ -238,6 +238,7 @@ fn session_shares(
     let economy = session_scope::counts_on(StatsScope::Economy, "s");
     let mut hunted: BTreeMap<Option<i64>, f64> = BTreeMap::new();
     // Settled recordings read their projection; only the rest touch raw kills.
+    // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
     for sql in [
         format!(
             "SELECT r.context_id, COALESCE(SUM(r.cycled_ped), 0) \

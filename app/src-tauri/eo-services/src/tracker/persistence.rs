@@ -35,6 +35,8 @@ impl TrackerActor {
                 let latest = self
                     .db
                     .with_reader(move |conn| {
+                        // every-kill: write (the session's last recorded row
+                        // dates the recovered end, whatever the row is).
                         Ok(conn.query_row(
                             "SELECT MAX(timestamp) FROM (\
                                  SELECT timestamp FROM kills WHERE session_id = ? \
@@ -280,6 +282,7 @@ impl TrackerActor {
         session_id: &str,
         end_time: DateTime<Utc>,
     ) -> Result<(), DbError> {
+        // every-kill: spend (active loot lines of every row).
         let rebate: f64 = conn.query_row(
             "SELECT COALESCE(SUM(kli.value_ped), 0) \
              FROM kill_loot_items kli \

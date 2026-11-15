@@ -31,6 +31,8 @@ enum ReconciledLootSource {
     Kill {
         total: Ped,
         items: Vec<crate::tracking_models::LootItem>,
+        /// A hand-in has claimed the clump: the row is no longer a kill.
+        reward_claimed: bool,
     },
     Harvest {
         total: Ped,
@@ -50,14 +52,16 @@ impl TrackerActor {
         let reconciled = self
             .db
             .with_reader(move |conn| {
-                let kill: Option<(String, f64)> = conn
+                let kill: Option<(String, f64, bool)> = conn
                     .query_row(
-                        "SELECT id, loot_total_ped FROM kills WHERE loot_source_id = ?",
+                        // every-kill: by-id (the one row a loot source names).
+                        "SELECT id, loot_total_ped, reward_claimed_at IS NOT NULL \
+                         FROM kills WHERE loot_source_id = ?",
                         rusqlite::params![source_key],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )
                     .optional()?;
-                if let Some((kill_id, total)) = kill {
+                if let Some((kill_id, total, reward_claimed)) = kill {
                     let mut stmt = conn.prepare(
                         "SELECT item_name, quantity, value_ped, is_enhancer_shrapnel \
                          FROM kill_loot_items \
@@ -76,6 +80,7 @@ impl TrackerActor {
                     return Ok(Some(ReconciledLootSource::Kill {
                         total: Ped(total),
                         items,
+                        reward_claimed,
                     }));
                 }
                 let harvest: Option<(String, f64)> = conn
@@ -116,7 +121,11 @@ impl TrackerActor {
             return Ok(false);
         };
         let changed = match reconciled {
-            ReconciledLootSource::Kill { total, items } => {
+            ReconciledLootSource::Kill {
+                total,
+                items,
+                reward_claimed,
+            } => {
                 let Some(kill) = active
                     .session
                     .kills
@@ -125,11 +134,15 @@ impl TrackerActor {
                 else {
                     return Ok(false);
                 };
-                if kill.loot_items == items && kill.loot_total_ped == total {
+                if kill.loot_items == items
+                    && kill.loot_total_ped == total
+                    && kill.reward_claimed == reward_claimed
+                {
                     false
                 } else {
                     kill.loot_items = items;
                     kill.loot_total_ped = total;
+                    kill.reward_claimed = reward_claimed;
                     true
                 }
             }
@@ -351,6 +364,7 @@ impl TrackerActor {
                     is_global: false,
                     is_hof: false,
                     context_id,
+                    reward_claimed: false,
                 };
 
                 // The kill's stored weapon evidence is written with it.

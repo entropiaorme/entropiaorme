@@ -780,12 +780,12 @@ fn read_groups(
         "SELECT d.grade, d.mob_name, d.mob_species, d.mob_maturity, d.provisional_key, \
                 d.read_text, COALESCE(k.mob_name, ''), d.reviewed_at IS NOT NULL, \
                 k.timestamp, d.kill_id \
-         FROM kill_mob_detections d JOIN kills k ON k.id = d.kill_id \
+         FROM kill_mob_detections d JOIN counted_kills k ON k.id = d.kill_id \
          WHERE d.session_id = ?1 \
          UNION ALL \
          SELECT c.grade, c.mob_name, c.mob_species, c.mob_maturity, c.provisional_key, NULL, \
                 COALESCE(k.mob_name, ''), c.reviewed_at IS NOT NULL, k.timestamp, c.kill_id \
-         FROM kill_mob_carried c JOIN kills k ON k.id = c.kill_id \
+         FROM kill_mob_carried c JOIN counted_kills k ON k.id = c.kill_id \
          WHERE c.session_id = ?1 \
          ORDER BY 9, 10",
     )?;
@@ -922,7 +922,7 @@ fn settle_group(
     let sql = format!(
         "SELECT d.kill_id, d.declared_name, d.declared_species, d.declared_maturity, \
                 d.declared_source, COALESCE(k.mob_name, ''), COALESCE(k.mob_species, '') \
-         FROM {table} d JOIN kills k ON k.id = d.kill_id \
+         FROM {table} d JOIN counted_kills k ON k.id = d.kill_id \
          WHERE d.session_id = ? AND d.grade = ? AND d.mob_name = ? AND d.mob_species = ? \
            AND d.mob_maturity = ? AND d.provisional_key IS ?"
     );
@@ -1067,6 +1067,7 @@ fn finish_settlement(
 ) -> Result<bool, DbError> {
     let mut names_changed = false;
     for name in carried {
+        // every-kill: write (a name stays while any stored row carries it).
         let retired = tx.execute(
             "DELETE FROM confirmed_mob_names WHERE name = ?1 AND added_by = 'review' \
              AND NOT EXISTS (SELECT 1 FROM kills \

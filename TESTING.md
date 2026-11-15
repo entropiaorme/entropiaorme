@@ -215,6 +215,7 @@ The configured hooks are:
 - **`in-development`**: the in-development surface guard (a `cargo xtask` subcommand); see "In-development surfaces" below.
 - **`measured-isolation`**: the measured-figure boundary guard (a `cargo xtask` subcommand). The accounting surface (the same modules the `market-isolation` CI guard holds: the ledger, the analytics aggregates, the cost engine, the rollups, the tracker's session accounting, and the quest reward accounting) may not reference the account readings module or its tables, so figures measured from the account site stand beside the tracked figures and never join them.
 - **`id-order`**: the latest-in-time read guard (a `cargo xtask` subcommand); see "Latest-in-time reads" below.
+- **`counted-kills`**: the kill-figure guard (a `cargo xtask` subcommand); see "Counted kills" below.
 - **`ui-profile`**: the game-interface reader guard (a `cargo xtask` subcommand). Outside an allowlist that only shrinks, no file calls the screen-capture or recogniser functions directly (they are gated by default, so a new one is covered as it lands); the readers under `eo-services/src/game_ui/` hold no layout numbers outside their tests (integers above 3 and floats other than 0.0, 0.5, 1.0 and 2.0 fail, bar array lengths, tuple fields, bit patterns, and a line ending `// not layout:` with its reason, which the guard counts); every profile struct rejects unknown fields; and the `test-support` feature of `eo-services` is enabled only from `[dev-dependencies]`.
 - **authoring lint** (em dash, UK spelling, and the reference and vocabulary rules), diff-scoped against the staged change, and **version-stamp parity**, both `cargo xtask` subcommands (see "Authoring lint" below).
 - general hygiene: end-of-file and trailing-whitespace fixers, YAML and TOML validity, merge-conflict markers, and a mixed-line-ending check (line-ending policy itself is set per file type in `.gitattributes`).
@@ -243,6 +244,15 @@ The database is long-lived and its rows are not guaranteed to arrive in chronolo
 - A read that genuinely orders by id says which allowed case it is, on a one-line comment at the site: `id-order: cursor` (a stream position: the highest id seen so far, or the rows on one side of a recorded position), `id-order: retention` (a window of the most recently appended rows of an append-only journal), `id-order: tiebreak` (rows already narrowed to one timestamp), or `id-order: insertion` (insertion order is itself the meaning: a seeded default, the current entry of a stream only ever appended in process order, a test reading what it just wrote).
 
 `cargo xtask id-order` (a required CI check and a pre-commit hook) scans the tracked Rust sources of the backend crates for the id-ordering shapes (`MAX(id)` and `MIN(id)` over an `id`, `rowid`, or `<name>_id` column, an `ORDER BY` that leads with such a column and takes `DESC` or a `LIMIT`, and a placeholder comparison that bounds one) and fails on any site whose annotation is missing from the twelve lines above it, or names a case outside the four. Comment lines are skipped, so prose about the patterns does not trip it. A timestamp-first order with the id trailing as the tiebreak matches none of the shapes and needs no annotation. Migrations are immutable once applied and are out of scope.
+
+## Counted kills
+
+A quest reward handed in at its giver arrives as a loot clump with no mob, which the tracker records as a row of `kills`. Once a hand-in claims the clump, the row stays as the reward's evidence (`kills.reward_claimed_at`), but it is no kill. The convention:
+
+- Every count, per-kill figure, per-mob breakdown, latest-kill read, multiplier, and loot view reads the `counted_kills` view, which leaves the claimed rows out.
+- A read of the `kills` table itself names its case on a one-line comment at the site: `every-kill: by-id` (one row found by its id or loot source), `every-kill: spend` (sums of spend, shots, damage, or loot: the shots fired between the last kill and the reward's arrival are real spend recorded on its row, and its loot is zeroed by the claim), or `every-kill: write` (a delete, a backfill, a dump, or a refresh that must reach every row).
+
+`cargo xtask counted-kills` (a required CI check and a pre-commit hook) scans the tracked, non-test Rust sources of the backend crates for `FROM kills` and `JOIN kills` and fails on any site whose annotation is missing from the sixteen lines above it, or names a case outside the three. The behavioural pin is the `reward_arrival_facade` family: a world with a claimed arrival reads, in every cross-session statistic and in the session's own detail, exactly as a world without the row.
 
 ## Authoring lint
 

@@ -33,9 +33,10 @@ fn is_missing_table(error: &rusqlite::Error) -> bool {
 // pair retired to NULL/0); to 5 when protection costs were re-attributed by
 // hit count; to 6 when consumed doses joined cycledPed as their own bucket;
 // to 7 when a mob's shown name became the game's own (name, then maturity),
-// so the dominant and primary mob names read as the kills now do.
+// so the dominant and primary mob names read as the kills now do; to 8 when a
+// quest reward claimed at a hand-in stopped counting as a kill.
 // A below-version row heals on the next read.
-pub const SUMMARY_VERSION: i64 = 7;
+pub const SUMMARY_VERSION: i64 = 8;
 pub const DOMINANCE_THRESHOLD: f64 = 0.6;
 
 /// What a session's kills add up to: the sums and per-kill extremes a
@@ -63,15 +64,21 @@ struct KillTotals {
 impl KillTotals {
     fn read(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<Self> {
         conn.query_row(
-            "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), \
+            // every-kill: spend (loot, enhancer, damage, shots and crits sum
+            // every row; the count, the per-kill extremes, the globals and
+            // the multipliers take only the rows still counted as kills).
+            "SELECT COUNT(CASE WHEN counted THEN 1 END), COALESCE(SUM(loot_total_ped), 0), \
                COALESCE(SUM(enhancer_cost), 0), COALESCE(SUM(damage_dealt), 0), \
-               COALESCE(MAX(damage_dealt), 0), COALESCE(SUM(shots_fired), 0), \
-               COALESCE(SUM(critical_hits), 0), COALESCE(SUM(is_global), 0), \
-               COALESCE(SUM(is_hof), 0), \
-               COALESCE(SUM(CASE WHEN cost_ped > 0 THEN loot_total_ped / cost_ped END), 0), \
-               COUNT(CASE WHEN cost_ped > 0 THEN 1 END), \
-               MAX(CASE WHEN cost_ped > 0 THEN loot_total_ped / cost_ped END) \
-             FROM kills WHERE session_id = ?",
+               COALESCE(MAX(CASE WHEN counted THEN damage_dealt END), 0), \
+               COALESCE(SUM(shots_fired), 0), COALESCE(SUM(critical_hits), 0), \
+               COALESCE(SUM(CASE WHEN counted THEN is_global END), 0), \
+               COALESCE(SUM(CASE WHEN counted THEN is_hof END), 0), \
+               COALESCE(SUM(CASE WHEN counted AND cost_ped > 0 \
+                 THEN loot_total_ped / cost_ped END), 0), \
+               COUNT(CASE WHEN counted AND cost_ped > 0 THEN 1 END), \
+               MAX(CASE WHEN counted AND cost_ped > 0 THEN loot_total_ped / cost_ped END) \
+             FROM (SELECT *, reward_claimed_at IS NULL AS counted \
+                   FROM kills WHERE session_id = ?)",
             rusqlite::params![session_id],
             |row| {
                 Ok(Self {
@@ -106,7 +113,7 @@ impl LastKill {
         conn.query_row(
             "SELECT timestamp, loot_total_ped, \
                CASE WHEN cost_ped > 0 THEN loot_total_ped / cost_ped END \
-             FROM kills WHERE session_id = ? \
+             FROM counted_kills WHERE session_id = ? \
              ORDER BY timestamp DESC, rowid DESC LIMIT 1",
             rusqlite::params![session_id],
             |row| {
@@ -216,6 +223,7 @@ pub fn compute_session_summary(
     let loot_tt = kill_loot_tt + harvest_loot_tt;
 
     let weapon_cost: f64 = conn.query_row(
+        // every-kill: spend (a claimed arrival's shots are real spend).
         "SELECT COALESCE(SUM(COALESCE(ts.cost_per_shot, 0) * COALESCE(ts.shots_fired, 0)), 0) \
          FROM kill_tool_stats ts \
          JOIN kills k ON k.id = ts.kill_id \
@@ -232,7 +240,7 @@ pub fn compute_session_summary(
     let mob_rows: Vec<(String, i64)> = {
         let mut stmt = conn.prepare(
             "SELECT mob_name, COUNT(*) \
-             FROM kills \
+             FROM counted_kills \
              WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
                AND COALESCE(mob_species, '') != '' \
              GROUP BY mob_name \
@@ -259,6 +267,7 @@ pub fn compute_session_summary(
 
     let tool_rows: Vec<(String, f64)> = {
         let mut stmt = conn.prepare(
+            // every-kill: spend (dominance by shots fired, every shot counts).
             "SELECT ts.tool_name, COALESCE(SUM(ts.shots_fired), 0) \
              FROM kill_tool_stats ts \
              JOIN kills k ON k.id = ts.kill_id \
@@ -285,7 +294,7 @@ pub fn compute_session_summary(
     // the list read runs, so the stored order matches it row for row.
     let primary_mobs: Vec<String> = {
         let mut stmt = conn.prepare(
-            "SELECT mob_name FROM kills \
+            "SELECT mob_name FROM counted_kills \
              WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
                AND COALESCE(mob_species, '') != '' \
              GROUP BY mob_name ORDER BY COUNT(*) DESC LIMIT 3",
@@ -295,6 +304,7 @@ pub fn compute_session_summary(
     };
     let primary_weapons: Vec<String> = {
         let mut stmt = conn.prepare(
+            // every-kill: spend (ranked by shots fired, every shot counts).
             "SELECT ts.tool_name FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
              WHERE k.session_id = ? AND ts.tool_name IS NOT NULL AND ts.tool_name != 'Unknown' \
              GROUP BY ts.tool_name ORDER BY SUM(ts.shots_fired) DESC LIMIT 3",
@@ -697,6 +707,7 @@ pub fn write_session_expectation(
 /// and is cheap.
 pub fn heal_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
     let missing: Vec<String> = {
+        // every-kill: spend (whether a session spent anything, every row's).
         let mut stmt = conn.prepare(
             "SELECT s.id FROM tracking_sessions s \
              LEFT JOIN session_summaries ss ON ss.session_id = s.id \

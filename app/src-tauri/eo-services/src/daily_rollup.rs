@@ -127,6 +127,8 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         // they had never been recorded (has_rows included).
         let (kill_count, kill_sums) = window_sums(
             conn,
+            // every-kill: spend (loot and enhancer sums; the count only says
+            // whether the day has rows).
             &format!(
                 "SELECT COUNT(*), SUM(loot_total_ped), SUM(enhancer_cost) \
                  FROM kills WHERE timestamp >= ? AND timestamp < ? AND {}",
@@ -138,6 +140,7 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         )?;
         let (weapon_count, weapon_sums) = window_sums(
             conn,
+            // every-kill: spend (weapon spend over every shot fired).
             &format!(
                 "SELECT COUNT(*), SUM(ts.cost_per_shot * ts.shots_fired) \
                  FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
@@ -348,6 +351,7 @@ pub fn session_day_keys(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<Vec<String>, DbError> {
+    // every-kill: write (the days a refresh must reach, every row's).
     let mut stmt = conn.prepare(
         "SELECT DISTINCT date(timestamp, 'unixepoch') FROM kills WHERE session_id = ?1 \
          UNION SELECT DISTINCT date(timestamp, 'unixepoch') FROM skill_gains WHERE session_id = ?1 \
@@ -385,6 +389,7 @@ fn rolled_through(conn: &rusqlite::Connection) -> Result<Option<String>, DbError
 /// database. Ledger dates that do not name a canonical day are ignored
 /// here; the stray-key sweep in [`heal_rollups`] picks their rows up.
 fn earliest_data_day(conn: &rusqlite::Connection) -> Result<Option<NaiveDate>, DbError> {
+    // every-kill: write (where the rollup's heal starts, every row's day).
     let epoch_min: Option<f64> = conn.query_row(
         "SELECT MIN(t) FROM (\
          SELECT MIN(timestamp) AS t FROM kills \

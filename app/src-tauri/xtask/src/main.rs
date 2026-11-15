@@ -15,6 +15,7 @@
 //! xtask measured-isolation  [--warn-only]
 //! xtask in-development      [--warn-only]
 //! xtask id-order            [--warn-only]
+//! xtask counted-kills       [--warn-only]
 //! xtask route-ceilings      [--warn-only]
 //! xtask single-search       [--warn-only]
 //! xtask ui-profile          [--warn-only]
@@ -23,6 +24,7 @@
 
 mod authoring;
 mod bump_version;
+mod counted_kills;
 mod gen_ts;
 mod git;
 mod id_order;
@@ -56,6 +58,7 @@ SUBCOMMANDS:
     measured-isolation [--warn-only]          forbid account-reading references on the accounting surface
     in-development [--warn-only]              keep the in-development register and its consumers in step
     id-order [--warn-only]                    require every id-ordered database read to name its allowed case
+    counted-kills [--warn-only]               keep claimed quest rewards out of every kill figure
     route-ceilings [--warn-only]              hold tracked route files at or under their line ceilings
     single-search [--warn-only]               keep every frontend search on the shared search module
     ui-profile [--warn-only]                  keep the game-interface readers on their pipeline and their layout in the profile
@@ -81,6 +84,7 @@ fn main() -> ExitCode {
         "measured-isolation" => measured_isolation::run(rest),
         "in-development" => in_development::run(rest),
         "id-order" => id_order::run(rest),
+        "counted-kills" => counted_kills::run(rest),
         "route-ceilings" => route_ceilings::run(rest),
         "single-search" => single_search::run(rest),
         "ui-profile" => ui_profile::run(rest),

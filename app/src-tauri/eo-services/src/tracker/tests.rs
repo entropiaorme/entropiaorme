@@ -1169,6 +1169,75 @@ fn exact_loot_source_reclassification_updates_the_live_aggregate() {
     );
 }
 
+/// A reward clump a hand-in claims leaves the live kill figures: the count,
+/// the latest kill and its loot read as if only the real kills happened.
+#[test]
+fn a_claimed_reward_arrival_leaves_the_live_kill_figures() {
+    let rig = rig();
+    let tracker = rig.tracker(Providers::default());
+    rig.wait(tracker.start_session()).unwrap();
+    let group = |source: &str, at: &str, item: &str, value: f64| {
+        BusEvent::LootGroup(LootGroupPayload {
+            kind: LootTag,
+            source_id: Some(source.into()),
+            arrived_ms: None,
+            timestamp: Some(at.into()),
+            items: vec![LootItem {
+                item_name: item.into(),
+                quantity: 1,
+                value_ped: value,
+                is_enhancer_shrapnel: false,
+            }],
+            total_ped: value,
+        })
+    };
+    rig.bus
+        .publish(&group("hunt-1", "2026-01-01T00:00:02", "Animal Hide", 0.5));
+    rig.bus.publish(&group(
+        "reward-1",
+        "2026-01-01T00:01:02",
+        "Universal Ammo",
+        13.61,
+    ));
+    let before = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(
+        before.kill_count, 2,
+        "the arrival reads as a kill until claimed"
+    );
+
+    rig.wait(rig.db.with_writer(|conn| {
+        conn.execute(
+            "UPDATE kill_loot_items SET deactivated_at = 1 \
+             WHERE kill_id = (SELECT id FROM kills WHERE loot_source_id = 'reward-1')",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE kills SET loot_total_ped = 0, reward_claimed_at = 1 \
+             WHERE loot_source_id = 'reward-1'",
+            [],
+        )?;
+        Ok(())
+    }))
+    .unwrap();
+    assert!(rig.wait(tracker.reconcile_loot_source("reward-1")).unwrap());
+    let after = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(after.kill_count, 1);
+    assert_eq!(after.latest_kill_loot, Some(0.5));
+    assert_eq!(after.returns, 0.5);
+
+    rig.wait(rig.db.with_writer(|conn| {
+        conn.execute(
+            "UPDATE kills SET reward_claimed_at = NULL WHERE loot_source_id = 'reward-1'",
+            [],
+        )?;
+        Ok(())
+    }))
+    .unwrap();
+    assert!(rig.wait(tracker.reconcile_loot_source("reward-1")).unwrap());
+    let undone = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(undone.kill_count, 2, "an undone reward is a kill again");
+}
+
 #[test]
 fn loot_dedup_inside_the_window_only() {
     let rig = rig();

@@ -998,6 +998,67 @@ async fn manual_hand_in_confirms_one_exact_raw_clump() {
     assert!((evidence.2 - 31.64).abs() < 1e-9);
     assert!((evidence.3 - 1.0).abs() < 1e-9);
     assert!(svc.get_quest(quest).await.unwrap().unwrap()["started_at"].is_null());
+
+    // The claimed arrival is the reward's evidence, no longer a kill; the
+    // earlier clump nobody claimed still counts.
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM kills WHERE id = 'k-new' AND reward_claimed_at IS NOT NULL"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM counted_kills WHERE session_id = 's-manual'"
+        )
+        .await,
+        1
+    );
+    // The session's detail names the reward with its lines as recorded.
+    let detail = crate::tracking_reads::get_session_impl(&db, "s-manual", 1_772_370_000.0)
+        .await
+        .unwrap()
+        .expect("the session reads");
+    assert_eq!(
+        detail["questRewards"],
+        json!([{
+            "completionId": detail["questRewards"][0]["completionId"],
+            "questName": "Daily terminal",
+            "completedAt": detail["questRewards"][0]["completedAt"],
+            "items": [
+                {"itemName": "Universal Ammo", "quantity": 316_468, "valuePed": 31.64,
+                 "accounting": "liquid"},
+                {"itemName": "Blazar Fragment", "quantity": 238, "valuePed": 0.0023,
+                 "accounting": "stock"},
+            ],
+        }])
+    );
+    assert_eq!(detail["summary"]["kills"], 1, "the arrival is no kill");
+    assert!(
+        detail["deactivatedLootBreakdown"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the reward's lines are the reward's, not loot taken off"
+    );
+    // Undoing the reward makes the arrival a kill again, loot and all.
+    svc.cancel_quest(quest, true).await.unwrap();
+    let undone = crate::tracking_reads::get_session_impl(&db, "s-manual", 1_772_370_000.0)
+        .await
+        .unwrap()
+        .expect("the session reads");
+    assert_eq!(undone["questRewards"], json!([]));
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM counted_kills WHERE session_id = 's-manual'"
+        )
+        .await,
+        2
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -110,6 +110,16 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # A quest reward claimed at a hand-in arrives as a kill row but is no
+      # kill: kill figures read the counted_kills view, and a read of the
+      # kills table names its case at the site. A whole-tree cargo xtask
+      # guard over the backend crates.
+      - id: counted-kills
+        name: kill figures leave claimed quest rewards out (backend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- counted-kills'
+        language: system
+        pass_filenames: false
+        always_run: true
       # The game-interface readers reach the screen and the recogniser only
       # through their pipeline's seams and keep their layout numbers in the
       # interface profile. A whole-tree cargo xtask guard over the backend.

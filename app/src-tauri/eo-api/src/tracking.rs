@@ -304,6 +304,38 @@ pub struct LootEntry {
     pub tt_value: f64,
 }
 
+/// One quest reward confirmed on a session: the completion that paid it
+/// and its lines as recorded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionQuestReward {
+    pub completion_id: i64,
+    pub quest_name: String,
+    /// When it was handed in, epoch seconds.
+    pub completed_at: f64,
+    pub items: Vec<SessionQuestRewardItem>,
+}
+
+/// One line of a quest reward.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionQuestRewardItem {
+    pub item_name: String,
+    pub quantity: i64,
+    /// Its TT value, PED.
+    pub value_ped: f64,
+    pub accounting: QuestRewardAccounting,
+}
+
+/// How a reward line is held: liquid (ammo, a ledger gain at face value)
+/// or stock (an item, worth its markup only once sold).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestRewardAccounting {
+    Liquid,
+    Stock,
+}
+
 /// One per-mob breakdown row.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -560,6 +592,10 @@ pub struct SessionDetail {
     pub notable_events: Vec<NotableEvent>,
     pub loot_breakdown: Vec<LootEntry>,
     pub deactivated_loot_breakdown: Vec<LootEntry>,
+    /// The quest rewards confirmed on the session, in the order they were
+    /// handed in. A reward is never loot: none of its lines is in either
+    /// loot breakdown.
+    pub quest_rewards: Vec<SessionQuestReward>,
     pub mob_breakdown: Vec<MobBreakdownRow>,
     pub effective_loot: f64,
     pub tool_stats: Vec<ToolStat>,
@@ -1498,7 +1534,11 @@ impl Api {
                 session_id: session.id.clone(),
                 started_at: local_isoformat(session.start_time),
                 ended_at: session.end_time.map(local_isoformat).into(),
-                kill_count: session.kills.len() as i64,
+                kill_count: session
+                    .kills
+                    .iter()
+                    .filter(|kill| !kill.reward_claimed)
+                    .count() as i64,
             }),
             // Defensive: `is_tracking` was true above, so a None is a broken
             // invariant. The transport's 500 message does not survive (the

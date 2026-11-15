@@ -1000,6 +1000,7 @@ fn raw_family_sums(
     let (w, p) = where_epoch("timestamp", start, end);
     let kills = fetch(
         conn,
+        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         format!(
             "SELECT SUM(loot_total_ped), SUM(enhancer_cost) FROM kills WHERE {w} AND {}",
             economy("kills.session_id")
@@ -1013,6 +1014,7 @@ fn raw_family_sums(
     let (w, p) = where_epoch("k.timestamp", start, end);
     let weapon = fetch(
         conn,
+        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         format!(
             "SELECT SUM(ts.cost_per_shot * ts.shots_fired) \
              FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {w} AND {}",
@@ -1669,6 +1671,7 @@ fn raw_breakdown(
         String,
         &Vec<f64>,
     ); 9] = [
+        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         (
             &mut maps.loot,
             format!(
@@ -1686,6 +1689,7 @@ fn raw_breakdown(
             ),
             &enc_p,
         ),
+        // every-kill: spend (enhancer spend, every row's).
         (
             &mut maps.enhancer,
             format!(
@@ -2027,7 +2031,10 @@ fn raw_session_agg(
     };
 
     let (kills, loot_tt, enhancer_cost) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
+        // every-kill: spend (loot and enhancer sum every row; the count takes
+        // only the rows still counted as kills).
+        "SELECT COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
+         COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
          FROM kills WHERE session_id = ?",
         rusqlite::params![session_id],
         |row| Ok((row.get::<_, i64>(0)?, as_float(row, 1), as_float(row, 2))),
@@ -2037,6 +2044,7 @@ fn raw_session_agg(
     agg.enhancer_cost = enhancer_cost;
 
     let (weapon_cost, weapon_shots) = conn.query_row(
+        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         "SELECT COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0), \
          COALESCE(SUM(ts.shots_fired), 0) FROM kill_tool_stats ts \
          JOIN kills k ON k.id = ts.kill_id WHERE k.session_id = ?",
@@ -2058,7 +2066,8 @@ fn raw_session_agg(
     let mob_rows: Vec<(String, i64)> = {
         let mut stmt = conn.prepare(
             "SELECT mob_name, COUNT(*) \
-             FROM kills WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
+             FROM counted_kills WHERE session_id = ? AND mob_name IS NOT NULL \
+               AND mob_name != 'Unknown' \
                AND COALESCE(mob_species, '') != '' \
              GROUP BY mob_name ORDER BY COUNT(*) DESC, mob_name ASC",
         )?;
@@ -2483,14 +2492,19 @@ fn hunting_sessions(
     }
     if !unsettled.is_empty() {
         let mut stmt = conn.prepare(
+            // every-kill: spend (cycled and loot sum every row; the count
+            // takes only the rows still counted as kills, and a claimed
+            // reward that spent nothing makes no cell, as the projection's).
             "SELECT k.context_id, \
                     COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
-                    COUNT(*), \
+                    COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
                     COALESCE(SUM(k.cost_ped + k.enhancer_cost), 0), \
                     COALESCE(SUM(k.loot_total_ped), 0) \
              FROM kills k \
              WHERE k.session_id = ?1 \
-             GROUP BY 1, 2, 3",
+             GROUP BY 1, 2, 3 \
+             HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
+                 OR SUM(k.cost_ped + k.enhancer_cost) > 0",
         )?;
         for session_id in &unsettled {
             let mut rows = stmt.query(rusqlite::params![session_id])?;
@@ -3157,6 +3171,7 @@ fn hunting_activity_read(
     }
     if !unsettled.is_empty() {
         let mut stmt = conn.prepare(
+            // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
             "SELECT k.context_id, li.item_name, SUM(li.quantity), \
                     COALESCE(SUM(li.value_ped), 0) \
              FROM kill_loot_items li \
@@ -4926,6 +4941,7 @@ fn item_positions(
         // tool (a kill's loot is not one tool's produce). Enhancer shrapnel
         // joins the physical pile as explicitly unattributed stock.
         let mut stmt = conn.prepare(
+            // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
             "SELECT CASE WHEN li.is_enhancer_shrapnel = 0 THEN COALESCE(k.mob_species, '') \
                     ELSE '' END AS species, \
                     li.is_enhancer_shrapnel, s.definition_id, k.context_id, \

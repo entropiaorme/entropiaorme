@@ -3366,6 +3366,12 @@ export interface QuestInput {
 	cooldown_anchor?: QuestCooldownAnchor | null;
 }
 
+/**
+ * How a reward line is held: liquid (ammo, a ledger gain at face value)
+ * or stock (an item, worth its markup only once sold).
+ */
+export type QuestRewardAccounting = 'liquid' | 'stock';
+
 export interface QuestRewardCandidate {
 	itemName: string;
 	quantity: number;
@@ -3788,6 +3794,8 @@ export interface SessionDetail {
 	notableEvents: NotableEvent[];
 	lootBreakdown: LootEntry[];
 	deactivatedLootBreakdown: LootEntry[];
+	/** The quest rewards confirmed on the session, in the order they were handed in. A reward is never loot: none of its lines is in either loot breakdown. */
+	questRewards: SessionQuestReward[];
 	mobBreakdown: MobBreakdownRow[];
 	effectiveLoot: number;
 	toolStats: ToolStat[];
@@ -3867,6 +3875,29 @@ export interface SessionPage {
 	sessions: TrackingSession[];
 	nextCursor: string | null;
 	total: number;
+}
+
+/**
+ * One quest reward confirmed on a session: the completion that paid it
+ * and its lines as recorded.
+ */
+export interface SessionQuestReward {
+	completionId: number;
+	questName: string;
+	/** When it was handed in, epoch seconds. */
+	completedAt: number;
+	items: SessionQuestRewardItem[];
+}
+
+/**
+ * One line of a quest reward.
+ */
+export interface SessionQuestRewardItem {
+	itemName: string;
+	quantity: number;
+	/** Its TT value, PED. */
+	valuePed: number;
+	accounting: QuestRewardAccounting;
 }
 
 /**

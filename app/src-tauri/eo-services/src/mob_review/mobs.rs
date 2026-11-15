@@ -110,7 +110,7 @@ fn unnamed_kills(
                 COALESCE(k.mob_maturity, ''), k.mob_stamp_source, \
                 a.declared_name, a.declared_species, a.declared_maturity, a.declared_source, \
                 a.settled_kind \
-         FROM kills k \
+         FROM counted_kills k \
          JOIN kill_mob_traces t ON t.kill_id = k.id \
          LEFT JOIN kill_mob_assigned a ON a.kill_id = k.id \
          WHERE k.session_id = ?1 \

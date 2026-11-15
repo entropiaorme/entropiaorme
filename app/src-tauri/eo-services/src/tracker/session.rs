@@ -358,6 +358,12 @@ impl TrackerActor {
         });
 
         let kills = &active.session.kills;
+        // The kills a kill figure counts: a reward clump a hand-in claimed
+        // stays in `kills` (its shots are real spend, its loot is zeroed)
+        // but is no kill, so counts, per-kill extremes, the latest kill and
+        // the multipliers read this instead.
+        let counted: Vec<&crate::tracking_models::Kill> =
+            kills.iter().filter(|kill| !kill.reward_claimed).collect();
         let mut weapon_cost: Ped = kills
             .iter()
             .flat_map(|kill| kill.tool_stats.iter())
@@ -419,7 +425,7 @@ impl TrackerActor {
 
         // Multipliers use kill.cost_ped (weapon cost only) per EU
         // convention; a ratio of two PED amounts is dimensionless.
-        let mult_per_kill: Vec<f64> = kills
+        let mult_per_kill: Vec<f64> = counted
             .iter()
             .filter(|kill| kill.cost_ped.is_positive())
             .map(|kill| kill.loot_total_ped / kill.cost_ped)
@@ -434,7 +440,7 @@ impl TrackerActor {
             .fold(None, |acc: Option<f64>, value| {
                 Some(acc.map_or(value, |best| best.max(value)))
             });
-        let multiplier_last = kills
+        let multiplier_last = counted
             .last()
             .filter(|kill| kill.cost_ped.is_positive())
             .map(|kill| kill.loot_total_ped / kill.cost_ped);
@@ -530,13 +536,13 @@ impl TrackerActor {
             session_id: active.session.id.clone(),
             started_at: local_isoformat(active.session.start_time),
             elapsed: (now - start_ts) as i64,
-            kill_count: kills.len() as i64,
+            kill_count: counted.len() as i64,
             cost,
             returns,
             damage_total,
             shots_total: kills.iter().map(|kill| kill.shots_fired).sum(),
             crits_total: kills.iter().map(|kill| kill.critical_hits).sum(),
-            max_damage: kills
+            max_damage: counted
                 .iter()
                 .map(|kill| kill.damage_dealt)
                 .fold(0.0, f64::max),
@@ -550,9 +556,9 @@ impl TrackerActor {
                 .and_then(|result| result.expected_tt_rate),
             expected_return_coverage: expected_result.as_ref().map(|result| result.coverage),
             expected_return_model: expected_result.map(|result| result.model_version),
-            globals_count: kills.iter().filter(|kill| kill.is_global).count() as i64,
-            hofs_count: kills.iter().filter(|kill| kill.is_hof).count() as i64,
-            latest_kill_loot: kills.last().map(|kill| kill.loot_total_ped),
+            globals_count: counted.iter().filter(|kill| kill.is_global).count() as i64,
+            hofs_count: counted.iter().filter(|kill| kill.is_hof).count() as i64,
+            latest_kill_loot: counted.last().map(|kill| kill.loot_total_ped),
             multiplier_last,
             multiplier_avg,
             multiplier_max,

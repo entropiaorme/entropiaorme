@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use crate::common;
 
 /// 2026-01-10 00:00 UTC: the base history's first day, long rolled up.
-const DAY: f64 = 1_768_003_200.0;
+pub(crate) const DAY: f64 = 1_768_003_200.0;
 
 /// The session definition every seeded session runs under (the protected
 /// default holds the first id).
@@ -99,7 +99,7 @@ fn write_snapshot(dir: &Path) {
     );
 }
 
-async fn api_over(dir: &Path) -> (Api, Db) {
+pub(crate) async fn api_over(dir: &Path) -> (Api, Db) {
     let snapshot = dir.join("snapshot");
     std::fs::create_dir_all(&snapshot).unwrap();
     write_snapshot(&snapshot);
@@ -135,7 +135,7 @@ async fn api_over(dir: &Path) -> (Api, Db) {
     )
 }
 
-async fn run(db: &Db, sql: String) {
+pub(crate) async fn run(db: &Db, sql: String) {
     db.with_writer(move |conn| {
         conn.execute_batch(&sql)?;
         Ok(())
@@ -213,7 +213,7 @@ fn session_sql(seed: &SessionSeed) -> String {
 
 /// The definition, the scanned levels, and two ended sessions on
 /// consecutive days with a manual ledger gain between them.
-async fn seed_base(db: &Db) {
+pub(crate) async fn seed_base(db: &Db) {
     let mut sql = String::from(
         "INSERT INTO session_definitions (id, name) VALUES (7, 'Carabok run');
          INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) VALUES
@@ -286,7 +286,7 @@ const EXTRAS: [&str; 2] = ["x", "y"];
 
 /// The commands that serve cross-session statistics, each read once.
 /// Keep in step with [`STATS_COMMANDS`].
-async fn aggregates(api: &Api) -> BTreeMap<&'static str, Value> {
+pub(crate) async fn aggregates(api: &Api) -> BTreeMap<&'static str, Value> {
     let mut out = BTreeMap::new();
     let value = |result: Result<Value, eo_api::ApiError>, name: &str| {
         result.unwrap_or_else(|error| panic!("{name} failed: {error:?}"))
@@ -355,7 +355,7 @@ fn forecast_query() -> SkillingForecastQuery {
 
 /// Every projection a rebuild produces must match what the incremental
 /// maintenance left, exclusion toggles included.
-async fn assert_projections_current(db: &Db) {
+pub(crate) async fn assert_projections_current(db: &Db) {
     let report = eo_services::maintenance::rebuild_and_verify(db, now())
         .await
         .unwrap();
@@ -368,7 +368,7 @@ async fn assert_projections_current(db: &Db) {
     }
 }
 
-fn assert_same(
+pub(crate) fn assert_same(
     label: &str,
     left: &BTreeMap<&'static str, Value>,
     right: &BTreeMap<&'static str, Value>,

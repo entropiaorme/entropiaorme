@@ -49,10 +49,13 @@ const ALLOWED_CASES: &[&str] = &["by-id", "spend", "write"];
 const MARKER_WINDOW: usize = 16;
 
 /// A read of the table itself: `FROM kills` or `JOIN kills`, the view's
-/// name aside.
+/// name aside, or the table named in a list a statement is built from
+/// (`("kills", 0)` read through a `{table}` placeholder).
 fn table_read_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)\b(FROM|JOIN)\s+kills\b").expect("valid read pattern"))
+    RE.get_or_init(|| {
+        Regex::new(r#"(?i)\b(FROM|JOIN)\s+kills\b|\(\s*"kills"\s*,"#).expect("valid read pattern")
+    })
 }
 
 /// The annotation marker: `every-kill: <case>` inside a line comment.
@@ -211,6 +214,7 @@ mod tests {
             "\"SELECT COUNT(*) FROM kills WHERE session_id = ?\"",
             "\"SELECT k.id FROM kill_loot_items li JOIN kills k ON k.id = li.kill_id\"",
             "\"select count(*) from kills k\"",
+            "for (table, slot) in [(\"kills\", 0usize), (\"harvest_events\", 1)] {",
         ] {
             let f = scan_text(FILE, line);
             assert_eq!(f.len(), 1, "expected one finding for {line}");
@@ -226,6 +230,8 @@ mod tests {
             "\"SELECT * FROM kill_loot_items\"",
             "\"SELECT * FROM session_kill_rollups\"",
             "\"UPDATE kills SET loot_total_ped = 0 WHERE id = ?\"",
+            "for (table, slot) in [(\"counted_kills\", 0usize)] {",
+            "summary.insert(\"kills\".into(), Value::from(kills));",
         ] {
             assert!(scan_text(FILE, line).is_empty(), "false positive on {line}");
         }

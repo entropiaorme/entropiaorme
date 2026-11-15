@@ -588,6 +588,12 @@ impl QuestService {
                             "That loot clump has already been used".to_string(),
                         ));
                     }
+                    // An ended session's summary counted the arrival as a
+                    // kill with loot: drop it, and the next read rebuilds it.
+                    tx.execute(
+                        "DELETE FROM session_summaries WHERE session_id = ?",
+                        rusqlite::params![claim.session_id],
+                    )?;
                     crate::session_rollup::recompute_session(&tx, &claim.session_id)?;
                     crate::daily_rollup::refresh_session_days(&tx, &claim.session_id)?;
                 }
@@ -991,6 +997,12 @@ impl QuestService {
                             )?;
                         }
                     }
+                    // The summary counted the reward as no kill and no loot:
+                    // drop it, and the next read rebuilds it.
+                    tx.execute(
+                        "DELETE FROM session_summaries WHERE session_id = ?",
+                        rusqlite::params![session_id],
+                    )?;
                     crate::session_rollup::recompute_session(&tx, session_id)?;
                     crate::daily_rollup::refresh_session_days(&tx, session_id)?;
                     crate::daily_rollup::refresh_days(

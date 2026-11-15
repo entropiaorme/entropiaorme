@@ -1044,8 +1044,36 @@ async fn manual_hand_in_confirms_one_exact_raw_clump() {
             .is_empty(),
         "the reward's lines are the reward's, not loot taken off"
     );
-    // Undoing the reward makes the arrival a kill again, loot and all.
+    // End the session with its summary written: the summary counts one kill.
+    db.with_writer(|conn| {
+        conn.execute(
+            "UPDATE tracking_sessions SET is_active = 0, ended_at = 1772370000.0, \
+             armour_cost = 1.0 WHERE id = 's-manual'",
+            [],
+        )?;
+        crate::session_summary::write_session_summary(conn, "s-manual")
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT kills FROM session_summaries WHERE session_id = 's-manual'"
+        )
+        .await,
+        1
+    );
+    // Undoing the reward makes the arrival a kill again, loot and all, and
+    // drops the summary that said otherwise.
     svc.cancel_quest(quest, true).await.unwrap();
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM session_summaries WHERE session_id = 's-manual'"
+        )
+        .await,
+        0
+    );
     let undone = crate::tracking_reads::get_session_impl(&db, "s-manual", 1_772_370_000.0)
         .await
         .unwrap()

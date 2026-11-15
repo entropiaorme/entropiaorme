@@ -252,7 +252,7 @@ A quest reward handed in at its giver arrives as a loot clump with no mob, which
 - Every count, per-kill figure, per-mob breakdown, latest-kill read, multiplier, and loot view reads the `counted_kills` view, which leaves the claimed rows out.
 - A read of the `kills` table itself names its case on a one-line comment at the site: `every-kill: by-id` (one row found by its id or loot source), `every-kill: spend` (sums of spend, shots, damage, or loot: the shots fired between the last kill and the reward's arrival are real spend recorded on its row, and its loot is zeroed by the claim), or `every-kill: write` (a delete, a backfill, a dump, or a refresh that must reach every row).
 
-`cargo xtask counted-kills` (a required CI check and a pre-commit hook) scans the tracked, non-test Rust sources of the backend crates for `FROM kills` and `JOIN kills` and fails on any site whose annotation is missing from the sixteen lines above it, or names a case outside the three. The behavioural pin is the `reward_arrival_facade` family: a world with a claimed arrival reads, in every cross-session statistic and in the session's own detail, exactly as a world without the row.
+`cargo xtask counted-kills` (a required CI check and a pre-commit hook) scans the tracked, non-test Rust sources of the backend crates for `FROM kills`, `JOIN kills`, and the table named in a list a statement is built from (`("kills", ...)`), and fails on any site whose annotation is missing from the sixteen lines above it, or names a case outside the three. The behavioural pin is the `reward_arrival_facade` family: a world with a claimed arrival reads, in every cross-session statistic and in the session's own detail, exactly as a world without the row.
 
 ## Authoring lint
 

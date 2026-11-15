@@ -590,7 +590,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "39AD93B5D25DDE3FEB577AA85EC73C850ABC1791FB15F9D6819D7C6391F09C2A350D28C2C5674EC8B2755DC35A6B223C",
     "25264B102360470EC811B7FEA6BD93BA7453AA1686E563ABA086F773AFBEB3853DDB4147D876CDEB4CF5AC462F3112FA",
     "019C311629BE9CEBBE7A60B9F48E3679F5DFE50313C3255DFA2AEC78C818EFF27C328AA1CEBDA20F7E2AAEB05097501A",
-    "DFC3384A111E842FCD868AFE5E34C22602EFE0A8A23AB0E58706C2223F8BD258FFA7B612A34160BFB747525D53C15B06",
+    "F557B841622CA46037A12CD5DCD9DDF84325EEF9FE87915BB257D4A38CAD443FF93C8D93E46B282D589D57C3BE1E8AF4",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -2912,8 +2912,8 @@ mod tests {
 
     /// A reward a hand-in claimed before the view existed is marked at the
     /// claim's instant and leaves `counted_kills`; every other row, an
-    /// unclaimed clump's included, still counts, and the view keeps the
-    /// table's rowid and columns.
+    /// unclaimed clump's and an undone reward's included, still counts, and
+    /// the view keeps the table's rowid and columns.
     #[test]
     fn counted_kills_upgrade_marks_claimed_rewards_only() {
         let mut connection = Connection::open_in_memory().expect("memory database");
@@ -2932,13 +2932,17 @@ mod tests {
                  INSERT INTO kills (id, session_id, mob_name, timestamp) VALUES \
                    ('hunted', 's', 'Atrox', 10), ('claimed', 's', 'Unknown', 20), \
                    ('unclaimed', 's', 'Unknown', 30); \
+                 INSERT INTO kills (id, session_id, mob_name, timestamp) VALUES \
+                   ('undone', 's', 'Unknown', 40); \
                  INSERT INTO session_quest_completions (id, session_id, quest_id, completed_at) \
-                   VALUES (7, 's', 1, 25); \
+                   VALUES (7, 's', 1, 25), (8, 's', 2, 45); \
+                 INSERT INTO quest_reward_reversals (completion_id, reversed_at) VALUES (8, 50); \
                  INSERT INTO quest_reward_clumps \
                    (source_id, session_id, source_kind, source_record_id, context_id, \
                     observed_at, claimed_completion_id) VALUES \
                    ('clump-a', 's', 'kill', 'claimed', 1, 20, 7), \
-                   ('clump-b', 's', 'kill', 'unclaimed', 1, 30, NULL);",
+                   ('clump-b', 's', 'kill', 'unclaimed', 1, 30, NULL), \
+                   ('clump-c', 's', 'kill', 'undone', 1, 40, 8);",
             )
             .expect("v90 rows");
 
@@ -2961,6 +2965,7 @@ mod tests {
                 ("hunted".to_string(), None),
                 ("claimed".to_string(), Some(25.0)),
                 ("unclaimed".to_string(), None),
+                ("undone".to_string(), None),
             ]
         );
         let counted: Vec<(i64, String)> = connection
@@ -2972,7 +2977,11 @@ mod tests {
             .unwrap();
         assert_eq!(
             counted,
-            vec![(1, "hunted".to_string()), (3, "unclaimed".to_string())]
+            vec![
+                (1, "hunted".to_string()),
+                (3, "unclaimed".to_string()),
+                (4, "undone".to_string())
+            ]
         );
     }
 }

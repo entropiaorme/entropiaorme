@@ -5,7 +5,8 @@
 --
 -- reward_claimed_at is when the claim was made (NULL while the row is a
 -- kill); undoing the reward clears it. The row and its loot lines stay as
--- the evidence the claim points at.
+-- the evidence the claim points at. A reward already undone keeps its clump
+-- claimed but has its lines back as loot, so it is a kill and stays unmarked.
 --
 -- counted_kills is every kill a hunting figure counts: each count, per-kill
 -- figure, breakdown and projection reads it rather than the table, so a
@@ -26,6 +27,10 @@ WHERE id IN (
     SELECT source_record_id
     FROM quest_reward_clumps
     WHERE source_kind = 'kill' AND claimed_completion_id IS NOT NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM quest_reward_reversals rr
+          WHERE rr.completion_id = quest_reward_clumps.claimed_completion_id
+      )
 );
 
 CREATE VIEW counted_kills AS

@@ -197,15 +197,22 @@ export function valueLiveLoot(
 	};
 }
 
-/** What the snapshot says about the loot: when it changes, the
- * composition behind it has moved. */
+/** What the snapshot says about the loot and the rewards: when it
+ * changes, the composition behind it has moved. A completion is its own
+ * signal, since a reward can arrive with no kill, and the kill a reward's
+ * clump makes can land before the completion that claims it. */
 function lootKey(status: TrackingSnapshot | null): string | null {
 	if (status?.status !== 'active' || !status.session_id) return null;
+	const completions = (status.recentEvents ?? [])
+		.filter((event) => event.eventType === 'quest_completed')
+		.map((event) => event.timestamp ?? '')
+		.join(',');
 	return [
 		status.session_id,
 		status.returns ?? 0,
 		status.kill_count ?? 0,
 		status.harvestSwings ?? 0,
+		completions,
 	].join('|');
 }
 

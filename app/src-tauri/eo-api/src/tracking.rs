@@ -1461,10 +1461,14 @@ impl Api {
                     .collect::<rusqlite::Result<Vec<_>>>()?;
 
                 // One count map per event table: every event whose
-                // stamped context names the interval belongs to it.
+                // stamped context names the interval belongs to it. A quest
+                // reward claimed at a hand-in is no kill of its interval.
                 let mut counts: HashMap<i64, (i64, i64, i64)> = HashMap::new();
-                for (table, slot) in [("kills", 0usize), ("harvest_events", 1), ("skill_gains", 2)]
-                {
+                for (table, slot) in [
+                    ("counted_kills", 0usize),
+                    ("harvest_events", 1),
+                    ("skill_gains", 2),
+                ] {
                     let sql = format!(
                         "SELECT sci.interval_id, COUNT(*) \
                          FROM session_context_intervals sci \

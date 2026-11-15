@@ -184,6 +184,30 @@ describe('createLiveLootValuation', () => {
 		expect(valuation.view?.reward?.ttPed).toBeCloseTo(0.02, 9);
 	});
 
+	it('re-reads the session when a quest completes, whatever the loot did', async () => {
+		const io = ports();
+		const valuation = createLiveLootValuation(() => 'all', io);
+		valuation.sync(active());
+		await settle();
+		expect(io.readSession).toHaveBeenCalledTimes(1);
+		valuation.sync(
+			active({
+				recentEvents: [
+					{
+						type: 'quest',
+						description: 'Quest completed: AI Daily: Hanna Hendrix',
+						value: 13.63,
+						eventType: 'quest_completed',
+						timestamp: '2026-11-15T17:14:06',
+						id: 'ne-0',
+					},
+				],
+			} as Partial<TrackingSnapshot>),
+		);
+		await settle();
+		expect(io.readSession).toHaveBeenCalledTimes(2);
+	});
+
 	it('re-reads the market on a market write', async () => {
 		const io = ports();
 		const valuation = createLiveLootValuation(() => 'all', io);

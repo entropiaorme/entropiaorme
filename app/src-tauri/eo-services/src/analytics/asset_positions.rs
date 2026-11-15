@@ -91,6 +91,8 @@ fn position_of(conn: &rusqlite::Connection, item_id: &str) -> rusqlite::Result<O
 
 /// The latest purchase of a position, which a disposal made now draws on.
 fn latest_purchase(conn: &rusqlite::Connection, position: &str) -> rusqlite::Result<Option<i64>> {
+    // id-order: insertion (a disposal fixes every purchase recorded before it,
+    // whatever date each was bought on, so "latest" is the last one written).
     conn.query_row(
         "SELECT MAX(id) FROM asset_purchases WHERE position_id = ?",
         rusqlite::params![position],
@@ -323,6 +325,7 @@ pub(super) fn is_sole_open_purchase(
     let Some(position) = position_of(conn, item_id)? else {
         return Ok(false);
     };
+    // id-order: insertion (with a single purchase, MAX(id) is simply its id).
     let only: Option<i64> = conn.query_row(
         "SELECT CASE WHEN COUNT(*) = 1 THEN MAX(id) END FROM asset_purchases \
          WHERE position_id = ?",

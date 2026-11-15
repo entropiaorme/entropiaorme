@@ -7678,6 +7678,8 @@ impl AnalyticsService {
             .db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
+                // id-order: insertion (the sale fixes every purchase recorded
+                // before it; see `asset_positions::latest_purchase`).
                 let affected = tx.execute(
                     "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
                          updated_at = unixepoch('now'), \

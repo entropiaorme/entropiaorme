@@ -28,7 +28,9 @@ pub fn system_cpu_pressure() -> Option<f64> {
     }
 }
 
-/// The one-minute average of the `some` line of a pressure file.
+/// The one-minute average of the `some` line of a pressure file. Only Linux
+/// keeps one, so elsewhere the parser is compiled for its tests alone.
+#[cfg(any(target_os = "linux", test))]
 fn parse_pressure(text: &str) -> Option<f64> {
     text.lines()
         .find_map(|line| line.strip_prefix("some "))?

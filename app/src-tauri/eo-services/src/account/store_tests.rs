@@ -7,8 +7,9 @@ use super::measure::{SessionWindow, MEASURE_VERSION};
 use super::reading::Container;
 use super::roles::{Role, RoleSource};
 use super::store::{
-    cached_measure, last_stored, load_reading, readings_for_window, record, record_reading,
-    refresh_session_measure, session_measure, CachedMeasure, Frame, Purpose, ReadingId,
+    cached_measure, last_stored, load_reading, readings_for_session, readings_for_window, record,
+    record_reading, refresh_session_measure, session_measure, CachedMeasure, Frame, Purpose,
+    ReadingId,
 };
 use super::test_support::{reading, recorded_hunt, ReadingSpec};
 use super::AccountError;
@@ -469,7 +470,7 @@ fn a_session_measure_is_cached_with_its_readings_and_version() {
     assert_eq!(
         cached_measure(&conn, "hunt").unwrap(),
         CachedMeasure::Current {
-            measure,
+            measure: Box::new(measure),
             sealed_at: Some(1_794_755_400.0)
         }
     );
@@ -565,37 +566,81 @@ fn an_unsealed_measure_is_recomputed_on_every_read() {
 }
 
 #[test]
-fn a_zero_length_or_inverted_session_caches_a_partial_measure() {
+fn a_session_stopped_the_moment_it_started_caches_a_partial_measure() {
     let mut conn = migrated_in_memory().unwrap();
-    store_the_hunt(&mut conn);
-    // At the last reading: only one reading can be used, so it is partial.
-    let at_the_end = SessionWindow {
-        started_at: 1_794_755_364.0,
-        ended_at: Some(1_794_755_364.0),
+    record_reading(
+        &mut conn,
+        &ammo(1_000.0, 900_000),
+        Purpose::Baseline,
+        Some("zero"),
+    )
+    .unwrap();
+    // Its one reading reads both its start and its end; complete would
+    // break the cache's own rule that a complete measure has two readings.
+    let window = SessionWindow {
+        started_at: 1_000.0,
+        ended_at: Some(1_000.0),
     };
-    let measure = refresh_session_measure(&conn, "odd", &at_the_end, &Nothing, Some(1.0), 1.0)
+    let measure = refresh_session_measure(&conn, "zero", &window, &Nothing, Some(1.0), 1.0)
         .expect("the cache takes it");
     assert_eq!(measure.coverage.reading_count, 1);
     assert_eq!(
         measure.coverage.level,
         super::measure::CoverageLevel::Partial
     );
-    for window in [
-        SessionWindow {
-            started_at: 1_794_754_700.0,
-            ended_at: Some(1_794_754_700.0),
-        },
-        SessionWindow {
-            started_at: 1_794_754_700.0,
-            ended_at: Some(1_794_754_600.0),
-        },
+}
+
+#[test]
+fn a_session_s_readings_are_its_own_never_another_session_s_between_them() {
+    let mut conn = migrated_in_memory().unwrap();
+    // Two sessions' readings stored interleaved: A's ammo holds steady,
+    // B's falls.
+    let mut ids = Vec::new();
+    for (at, session, quantity) in [
+        (100.0, "a", 900_000),
+        (150.0, "b", 500_000),
+        (200.0, "a", 900_000),
+        (250.0, "b", 400_000),
+        (300.0, "a", 900_000),
     ] {
-        let measure = refresh_session_measure(&conn, "odd", &window, &Nothing, Some(1.0), 1.0)
-            .expect("the cache takes it");
-        let coverage = measure.coverage;
-        assert!(
-            coverage.level == super::measure::CoverageLevel::Partial || coverage.reading_count >= 2,
-            "{coverage:?}"
+        ids.push(
+            record_reading(
+                &mut conn,
+                &ammo(at, quantity),
+                Purpose::Session,
+                Some(session),
+            )
+            .unwrap()
+            .id,
         );
     }
+    let window = SessionWindow {
+        started_at: 90.0,
+        ended_at: Some(310.0),
+    };
+    let own = readings_for_session(&conn, "a", &window).unwrap();
+    let read: Vec<ReadingId> = own.readings.iter().map(|stored| stored.header.id).collect();
+    assert_eq!(read, vec![ids[0], ids[2], ids[4]]);
+    assert_eq!(own.own, Some(0..3));
+    let measure = refresh_session_measure(&conn, "a", &window, &Nothing, None, 1.0).unwrap();
+    assert_eq!(measure.coverage.reading_count, 3);
+    assert!(measure.ammo.is_empty(), "nothing of B's ammo is A's");
+    // B's readings bring A's neighbours: the reading stored just before
+    // its first (A's) reads its start when close enough.
+    let b = readings_for_session(
+        &conn,
+        "b",
+        &SessionWindow {
+            started_at: 140.0,
+            ended_at: Some(260.0),
+        },
+    )
+    .unwrap();
+    let read: Vec<ReadingId> = b.readings.iter().map(|stored| stored.header.id).collect();
+    assert_eq!(read, vec![ids[0], ids[1], ids[3], ids[4]]);
+    assert_eq!(b.own, Some(1..3));
+    // Readings tagged with no session are chosen by the window.
+    let untagged = readings_for_session(&conn, "c", &window).unwrap();
+    assert_eq!(untagged.own, None);
+    assert_eq!(untagged.readings.len(), 5);
 }

@@ -15,10 +15,10 @@
 use std::sync::Arc;
 
 use eo_services::account::amount::{Amount, Pec, Precision, MICRO_PER_PED};
-use eo_services::account::composite::{OpenedContent, Opening, Settlement};
+use eo_services::account::composite::{OpenedContent, Opening, RepairCost, Settlement};
 use eo_services::account::diff::{MoveKind, Span};
 use eo_services::account::measure::{
-    AmmoSplit, CoverageLevel, Edge, GainMark, NotableEvent, SessionMeasure,
+    AmmoSplit, CoverageLevel, Edge, GainMark, ItemUnits, NotableEvent, SessionMeasure,
 };
 use eo_services::account::reading::{Container, HoldingKey};
 use eo_services::account::roles::{Role, Stacking};
@@ -289,16 +289,28 @@ pub struct MeasuredItemAmount {
     pub amount: MeasuredAmount,
 }
 
-/// A repair: what it restored, and what the PED Card paid when that is
-/// known.
+/// What a repair cost, as far as the PED Card shows it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MeasuredRepairCost {
+    /// The Card's fall, with nothing else in its minute moving it.
+    Paid { amount: MeasuredAmount },
+    /// What remains of the Card's change beside a sale or a purchase in
+    /// the same minute: within what the restorations allow, but resting on
+    /// those figures too.
+    Derived { amount: MeasuredAmount },
+    /// The Card's movement cannot be read as the repair's cost.
+    Unknown,
+}
+
+/// A repair: what it restored, and what the PED Card shows it cost.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MeasuredRepair {
     pub between: MeasuredSpan,
     pub items: Vec<MeasuredItemAmount>,
     pub restored: MeasuredAmount,
-    /// `null` when the Card's movement cannot be read as the repair's cost.
-    pub cost: Nullable<MeasuredAmount>,
+    pub cost: MeasuredRepairCost,
 }
 
 /// A stackable consumed that is not ammo.
@@ -325,6 +337,9 @@ pub enum MeasuredStacking {
 pub enum MeasuredGainMark {
     Arrived,
     PossiblyStrongbox,
+    /// Arrived in a minute whose PED Card movement nothing explains: it
+    /// may have been bought.
+    CardMovedUnexplained,
 }
 
 /// What arrived of one holding.
@@ -348,7 +363,15 @@ pub struct MeasuredEventItem {
     pub amount: MeasuredAmount,
 }
 
-/// Whether an opening's keys were paid back on one reading of its rows.
+/// Boxes of one kind an opening used.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredBoxes {
+    pub name: String,
+    pub count: i64,
+}
+
+/// Whether an opening's ammo was read on one reading of its rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum MeasuredSettlement {
@@ -372,15 +395,19 @@ pub enum MeasuredEvent {
     #[serde(rename_all = "camelCase")]
     StrongboxOpening {
         between: MeasuredSpan,
-        box_name: String,
-        boxes: i64,
+        /// The boxes that left, one entry for each kind.
+        boxes: Vec<MeasuredBoxes>,
+        keys_used: i64,
         /// The keys' TT: the deposit the boxes pay back.
         keys: MeasuredAmount,
         ammo_units: i64,
         ammo_rows: i64,
         ammo_from_rows: MeasuredAmount,
         ammo_from_keys: MeasuredAmount,
+        /// What every way of closing the keys' balance takes.
         contents: Vec<MeasuredEventItem>,
+        /// What some ways take: possibly the opening's.
+        possible_contents: Vec<MeasuredEventItem>,
         settlement: MeasuredSettlement,
     },
     #[serde(rename_all = "camelCase")]
@@ -409,19 +436,21 @@ pub enum MeasuredEvent {
         units: i64,
         value: MeasuredAmount,
     },
+    /// What left, sold to the Trade Terminal, as the one reading of the
+    /// Card's change in its minute has it.
     #[serde(rename_all = "camelCase")]
     Sale {
         between: MeasuredSpan,
         items: Vec<MeasuredEventItem>,
         amount: MeasuredAmount,
-        card_rise: MeasuredAmount,
     },
+    /// What arrived, bought at TT, as the one reading of the Card's change
+    /// in its minute has it.
     #[serde(rename_all = "camelCase")]
     Purchase {
         between: MeasuredSpan,
         items: Vec<MeasuredEventItem>,
         amount: MeasuredAmount,
-        card_fall: MeasuredAmount,
     },
     #[serde(rename_all = "camelCase")]
     ShrapnelConverted {
@@ -459,6 +488,8 @@ pub struct AccountSessionMeasure {
     pub decay: Vec<MeasuredDecay>,
     pub repairs: Vec<MeasuredRepair>,
     pub other_consumption: Vec<MeasuredConsumption>,
+    /// Stacks that left with nothing to explain them: never a cost.
+    pub unexplained_departures: Vec<MeasuredConsumption>,
     /// What arrived that no opening claimed, no purchase paid for and no
     /// move brought: the figure tracked loot compares with.
     pub gained: Vec<MeasuredGain>,
@@ -494,14 +525,22 @@ fn opened(content: &OpenedContent) -> MeasuredEventItem {
 fn opening(between: &Span, opening: &Opening) -> MeasuredEvent {
     MeasuredEvent::StrongboxOpening {
         between: span(between),
-        box_name: opening.box_name.clone(),
-        boxes: opening.boxes,
+        boxes: opening
+            .boxes
+            .iter()
+            .map(|boxes| MeasuredBoxes {
+                name: boxes.name.clone(),
+                count: boxes.count,
+            })
+            .collect(),
+        keys_used: opening.keys_used,
         keys: amount(opening.keys),
         ammo_units: opening.ammo_units,
         ammo_rows: count(opening.ammo_rows),
         ammo_from_rows: amount(opening.ammo_from_rows),
         ammo_from_keys: amount(opening.ammo_from_keys),
         contents: opening.contents.iter().map(opened).collect(),
+        possible_contents: opening.possible_contents.iter().map(opened).collect(),
         settlement: match opening.settlement {
             Settlement::Settled => MeasuredSettlement::Settled,
             Settlement::Unsettled => MeasuredSettlement::Unsettled,
@@ -562,7 +601,6 @@ fn event(value: &NotableEvent) -> MeasuredEvent {
             between,
             items,
             amount: sold,
-            card_rise,
         } => MeasuredEvent::Sale {
             between: span(between),
             items: items
@@ -574,13 +612,11 @@ fn event(value: &NotableEvent) -> MeasuredEvent {
                 })
                 .collect(),
             amount: amount(*sold),
-            card_rise: card(*card_rise),
         },
         NotableEvent::Purchase {
             between,
             items,
             amount: bought,
-            card_fall,
         } => MeasuredEvent::Purchase {
             between: span(between),
             items: items
@@ -592,7 +628,6 @@ fn event(value: &NotableEvent) -> MeasuredEvent {
                 })
                 .collect(),
             amount: amount(*bought),
-            card_fall: card(*card_fall),
         },
         NotableEvent::ShrapnelConverted {
             between,
@@ -623,6 +658,15 @@ fn event(value: &NotableEvent) -> MeasuredEvent {
             from: card(*from),
             to: card(*to),
         },
+    }
+}
+
+fn consumption(item: &ItemUnits) -> MeasuredConsumption {
+    MeasuredConsumption {
+        item: holding(&item.key),
+        role: role(item.role),
+        units: item.units,
+        amount: amount(item.amount),
     }
 }
 
@@ -694,18 +738,20 @@ fn session_measure(
                     })
                     .collect(),
                 restored: amount(timed.repair.restored),
-                cost: timed.repair.cost.map(card).into(),
+                cost: match timed.repair.cost {
+                    RepairCost::Paid { pec } => MeasuredRepairCost::Paid { amount: card(pec) },
+                    RepairCost::Derived { amount: cost } => MeasuredRepairCost::Derived {
+                        amount: amount(cost),
+                    },
+                    RepairCost::Unknown => MeasuredRepairCost::Unknown,
+                },
             })
             .collect(),
-        other_consumption: measure
-            .other_consumption
+        other_consumption: measure.other_consumption.iter().map(consumption).collect(),
+        unexplained_departures: measure
+            .unexplained_departures
             .iter()
-            .map(|item| MeasuredConsumption {
-                item: holding(&item.key),
-                role: role(item.role),
-                units: item.units,
-                amount: amount(item.amount),
-            })
+            .map(consumption)
             .collect(),
         gained: measure
             .gained
@@ -720,6 +766,7 @@ fn session_measure(
                 mark: match gain.mark {
                     GainMark::Arrived => MeasuredGainMark::Arrived,
                     GainMark::PossiblyStrongbox => MeasuredGainMark::PossiblyStrongbox,
+                    GainMark::CardMovedUnexplained => MeasuredGainMark::CardMovedUnexplained,
                 },
                 units: gain.units,
                 amount: amount(gain.amount),
@@ -755,8 +802,13 @@ pub struct MeasuredTotals {
     /// Everything else that wore.
     pub other_equipment_decay: MeasuredAmount,
     pub other_consumption: MeasuredAmount,
-    /// What the repairs whose cost the PED Card shows cost.
+    /// Stacks that left with nothing to explain them: never a cost.
+    pub unexplained_departures: MeasuredAmount,
+    /// What the repairs whose cost the PED Card's fall shows alone cost.
     pub repair_cost: MeasuredAmount,
+    /// What the repairs beside a sale or a purchase cost, as what remains
+    /// of the Card's change.
+    pub repair_cost_derived: MeasuredAmount,
     /// Repairs whose cost could not be read, left out of `repairCost`.
     pub repairs_uncosted: i64,
     pub gained: MeasuredAmount,
@@ -776,7 +828,9 @@ fn totals(value: &MeasureTotals) -> MeasuredTotals {
         armour_decay: amount(value.armour_decay),
         other_equipment_decay: amount(value.other_decay),
         other_consumption: amount(value.other_consumption),
+        unexplained_departures: amount(value.unexplained_departures),
         repair_cost: amount(value.repairs.known),
+        repair_cost_derived: amount(value.repairs.derived),
         repairs_uncosted: count(value.repairs.unknown),
         gained: amount(value.gained),
         gained_possibly_strongbox: amount(value.gained_possibly_strongbox),

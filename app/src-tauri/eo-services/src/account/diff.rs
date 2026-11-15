@@ -226,11 +226,30 @@ fn rows_of(holding: Option<&Holding>) -> &[Row] {
     holding.map(Holding::rows).unwrap_or_default()
 }
 
+/// The after-rows not identical to a before-row: rows that changed or are
+/// new, in canonical order.
+pub fn added_rows(before: &[Row], after: &[Row]) -> Vec<Row> {
+    row_change(before, after).added
+}
+
+/// The gap between two rows' values, checked.
+fn value_gap(a: &Row, b: &Row) -> Result<i64, AccountError> {
+    checked(a.value.0.checked_sub(b.value.0).and_then(i64::checked_abs))
+}
+
 /// The rows new in a step, read the one canonical way: identical rows are
 /// the same row; each remaining after-row, largest first, is a before-row
 /// at least as large that shrank; an after-row no such before-row can
 /// account for is new.
 pub fn canonical_new_rows(before: &[Row], after: &[Row]) -> Vec<Row> {
+    canonical_rows(before, after).0
+}
+
+/// The canonical reading of a holding's rows: the rows new in the step
+/// (as [`canonical_new_rows`] reads them), and the before-rows no
+/// after-row accounts for. A vanished row smaller than a new one may have
+/// been fired out or grown into it by stacking: the rows cannot tell.
+pub fn canonical_rows(before: &[Row], after: &[Row]) -> (Vec<Row>, Vec<Row>) {
     let change = row_change(before, after);
     let mut available: Vec<Option<Row>> = change.removed.into_iter().map(Some).collect();
     let mut new = Vec::new();
@@ -244,7 +263,7 @@ pub fn canonical_new_rows(before: &[Row], after: &[Row]) -> Vec<Row> {
         }
     }
     new.sort_unstable();
-    new
+    (new, available.into_iter().flatten().collect())
 }
 
 /// Whether every after-row can be a distinct before-row at least as large.
@@ -424,12 +443,15 @@ pub fn diff(
 
 /// Pair rows of equal quantity, closest value first, each at most once.
 /// Returns the pairs and the unpaired rows on each side.
-fn pair_in_place(removed: &[Row], added: &[Row]) -> (Vec<(Row, Row)>, Vec<Row>, Vec<Row>) {
+/// Rows paired in place, and the rows left unpaired on each side.
+type InPlace = (Vec<(Row, Row)>, Vec<Row>, Vec<Row>);
+
+fn pair_in_place(removed: &[Row], added: &[Row]) -> Result<InPlace, AccountError> {
     let mut candidates: Vec<(i64, usize, usize)> = Vec::new();
     for (i, before) in removed.iter().enumerate() {
         for (j, after) in added.iter().enumerate() {
             if before.quantity == after.quantity {
-                candidates.push(((before.value.0 - after.value.0).abs(), i, j));
+                candidates.push((value_gap(before, after)?, i, j));
             }
         }
     }
@@ -451,11 +473,11 @@ fn pair_in_place(removed: &[Row], added: &[Row]) -> (Vec<(Row, Row)>, Vec<Row>, 
             .map(|(row, _)| *row)
             .collect()
     };
-    (
+    Ok((
         pairs,
         left(removed, &used_removed),
         left(added, &used_added),
-    )
+    ))
 }
 
 /// Rows still to be matched; a matched row is taken out as `None`.
@@ -477,7 +499,7 @@ fn single_steps(
     // values are two items wearing, not one moving.
     for (index, key) in keys.iter().enumerate() {
         let change = row_change(rows_of(before.holding(key)), rows_of(after.holding(key)));
-        let (pairs, left, arrived) = pair_in_place(&change.removed, &change.added);
+        let (pairs, left, arrived) = pair_in_place(&change.removed, &change.added)?;
         for (b, a) in pairs {
             let change = checked(a.value.0.checked_sub(b.value.0))?;
             if change < 0 {
@@ -504,8 +526,7 @@ fn single_steps(
                 for (b, new) in arrived.iter().enumerate() {
                     if let (Some(gone), Some(new)) = (gone, new) {
                         if gone.quantity == new.quantity {
-                            let gap = (gone.value.0 - new.value.0).abs();
-                            candidates.push((gap, source, a, destination, b));
+                            candidates.push((value_gap(gone, new)?, source, a, destination, b));
                         }
                     }
                 }
@@ -608,8 +629,55 @@ fn stack_steps(
             after: rows_of(now).to_vec(),
         });
     }
-    // A fall in one container beside a rise in another is a move of the
-    // smaller figure; only the remainder is consumed or gained.
+    // Row evidence first: a row that arrived in one container is a move
+    // when an identical row vanished from another, or failing that, when
+    // another container fell by exactly its units.
+    for by_identical_row in [true, false] {
+        for destination in 0..changes.len() {
+            let arrived = added_rows(&changes[destination].before, &changes[destination].after);
+            for row in arrived {
+                let source = (0..changes.len()).find(|&source| {
+                    let from = &changes[source];
+                    source != destination
+                        && if by_identical_row {
+                            from.before.contains(&row) && !from.after.contains(&row)
+                        } else {
+                            from.units < 0 && from.units == -row.quantity
+                        }
+                });
+                let Some(source) = source else {
+                    continue;
+                };
+                let amount = match changes[source].unit.or(changes[destination].unit) {
+                    Some(unit) => Amount::exact_units(row.quantity, unit)?,
+                    None => Amount::whole_pec(row.value)?,
+                };
+                steps.push(Step::Moved {
+                    name: name.to_string(),
+                    units: row.quantity,
+                    amount,
+                    from: changes[source].key.container.clone(),
+                    to: changes[destination].key.container.clone(),
+                });
+                let from = &mut changes[source];
+                from.units = checked(from.units.checked_add(row.quantity))?;
+                from.amount = from.amount.plus(amount)?;
+                if by_identical_row {
+                    if let Some(index) = from.before.iter().position(|kept| *kept == row) {
+                        from.before.remove(index);
+                    }
+                }
+                let to = &mut changes[destination];
+                to.units = checked(to.units.checked_sub(row.quantity))?;
+                to.amount = to.amount.minus(amount)?;
+                if let Some(index) = to.after.iter().position(|kept| *kept == row) {
+                    to.after.remove(index);
+                }
+            }
+        }
+    }
+    // Then a fall in one container beside a rise in another is a move of
+    // the smaller figure; only the remainder is consumed or gained.
     for source in 0..changes.len() {
         for destination in 0..changes.len() {
             let (from, to) = (&changes[source], &changes[destination]);
@@ -1109,6 +1177,95 @@ mod tests {
         );
         assert!(matches!(&found[0], Step::Moved { units: 1_000, .. }));
         assert!(matches!(&found[1], Step::Consumed { units: 500, .. }));
+    }
+
+    #[test]
+    fn a_whole_row_moved_while_its_new_container_also_changes_is_moved_by_its_row() {
+        let storage = Container::Storage {
+            planet: "Arkadia".into(),
+        };
+        let found = steps(
+            &reading(
+                0.0,
+                0,
+                &[
+                    ("Animal Oil Residue", Container::Carried, 1_000, 10),
+                    ("Animal Oil Residue", storage.clone(), 500, 5),
+                ],
+            ),
+            &reading(
+                60.0,
+                0,
+                &[
+                    ("Animal Oil Residue", storage.clone(), 300, 3),
+                    ("Animal Oil Residue", storage.clone(), 1_000, 10),
+                ],
+            ),
+            &stack,
+        );
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(matches!(
+            &found[0],
+            Step::Moved {
+                units: 1_000,
+                from: Container::Carried,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&found[1], Step::Consumed { key, units: 200, .. } if key.container == storage)
+        );
+    }
+
+    #[test]
+    fn a_listing_sold_beside_a_new_listing_is_read_by_the_new_row() {
+        let found = steps(
+            &reading(
+                0.0,
+                0,
+                &[
+                    ("Animal Oil Residue", Container::Carried, 5_000, 50),
+                    ("Animal Oil Residue", Container::Auction, 500, 5),
+                ],
+            ),
+            &reading(
+                60.0,
+                0,
+                &[
+                    ("Animal Oil Residue", Container::Carried, 4_000, 40),
+                    ("Animal Oil Residue", Container::Auction, 1_000, 10),
+                ],
+            ),
+            &stack,
+        );
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(matches!(
+            &found[0],
+            Step::Moved {
+                units: 1_000,
+                from: Container::Carried,
+                to: Container::Auction,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &found[1],
+            Step::Consumed { key, units: 500, .. } if key.container == Container::Auction
+        ));
+    }
+
+    #[test]
+    fn a_gap_in_values_that_would_overflow_is_an_error() {
+        let found = diff(
+            &reading(0.0, 0, &[("Opalo", Container::Carried, 1, 0)]),
+            &reading(60.0, 0, &[("Opalo", Container::Auction, 1, 0)]),
+            &by_name,
+        );
+        assert!(found.is_ok());
+        assert!(matches!(
+            value_gap(&row(1, i64::MIN), &row(1, 1)),
+            Err(AccountError::Overflow)
+        ));
     }
 
     #[test]

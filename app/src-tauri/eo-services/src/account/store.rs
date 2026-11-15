@@ -14,8 +14,9 @@
 //! The chain follows the order readings were stored, never their times:
 //! the wall clock can step back (the repeated hour when summer time ends),
 //! and no reading is refused for its time. "The reading before" is the one
-//! stored before it. A session's readings are chosen by its time window
-//! and ordered as they were stored.
+//! stored before it. A session's readings are the ones tagged with it,
+//! ordered as they were stored; only readings tagged with no session are
+//! chosen by a session's time window.
 //!
 //! A session's measure is cached in `account_session_measures` with the
 //! version of the rules that computed it, and recomputed from the stored
@@ -28,7 +29,8 @@ use rusqlite::OptionalExtension;
 
 use super::amount::Pec;
 use super::measure::{
-    measure_session_with_baseline, SessionMeasure, SessionWindow, MEASURE_VERSION,
+    measure_own_readings, measure_session_with_baseline, SessionMeasure, SessionWindow,
+    MEASURE_VERSION,
 };
 use super::reading::{Container, ContainerKind, Holding, HoldingKey, Reading, Row};
 use super::roles::RoleSource;
@@ -492,9 +494,78 @@ pub fn readings_for_window(
         ids
     };
 
+    load_in_order(conn, &ids)
+}
+
+/// A session's readings, rebuilt whole, in the order they were stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionReadings {
+    pub readings: Vec<StoredReading>,
+    /// The session's own readings among them, when any reading is tagged
+    /// with it. `None` when none is, and the readings were chosen by its
+    /// window instead.
+    pub own: Option<std::ops::Range<usize>>,
+}
+
+/// The readings a session's measure uses: the ones tagged with it, in the
+/// order they were stored, with the reading stored just before the first
+/// of them and the one stored just after the last (the measure uses those
+/// only to read an end its own readings leave unread). Readings tagged
+/// with another session are never taken among its own. When no reading is
+/// tagged with it (readings recorded without a session), they are chosen
+/// by its window as [`readings_for_window`] does.
+pub fn readings_for_session(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    window: &SessionWindow,
+) -> Result<SessionReadings, AccountError> {
+    let tagged: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            // id-order: insertion
+            "SELECT id FROM account_readings WHERE session_id = ?1 ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map([session_id], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids
+    };
+    let (Some(&first), Some(&last)) = (tagged.first(), tagged.last()) else {
+        return Ok(SessionReadings {
+            readings: readings_for_window(conn, window)?,
+            own: None,
+        });
+    };
+    let neighbour = |sql: &str, id: i64| -> Result<Option<i64>, AccountError> {
+        Ok(conn
+            .query_row(sql, [id], |row| row.get::<_, i64>(0))
+            .optional()?)
+    };
+    // id-order: insertion
+    const STORED_BEFORE: &str =
+        "SELECT id FROM account_readings WHERE id < ?1 ORDER BY id DESC LIMIT 1";
+    // id-order: insertion
+    const STORED_AFTER: &str = "SELECT id FROM account_readings WHERE id > ?1 ORDER BY id LIMIT 1";
+    let before = neighbour(STORED_BEFORE, first)?;
+    let after = neighbour(STORED_AFTER, last)?;
+    let mut ids: Vec<i64> = Vec::with_capacity(tagged.len() + 2);
+    ids.extend(before);
+    ids.extend(&tagged);
+    ids.extend(after);
+    let start = usize::from(before.is_some());
+    Ok(SessionReadings {
+        readings: load_in_order(conn, &ids)?,
+        own: Some(start..start + tagged.len()),
+    })
+}
+
+/// These stored readings, rebuilt whole, in the order given.
+fn load_in_order(
+    conn: &rusqlite::Connection,
+    ids: &[i64],
+) -> Result<Vec<StoredReading>, AccountError> {
     let mut readings: Vec<StoredReading> = Vec::with_capacity(ids.len());
     let mut state: BTreeMap<HoldingKey, Holding> = BTreeMap::new();
-    for id in ids {
+    for &id in ids {
         let header =
             header(conn, ReadingId(id))?.ok_or(AccountError::Stored("a listed reading is gone"))?;
         let follows_the_last = readings
@@ -515,7 +586,7 @@ pub fn readings_for_window(
 pub enum CachedMeasure {
     /// Computed by the current rules.
     Current {
-        measure: SessionMeasure,
+        measure: Box<SessionMeasure>,
         sealed_at: Option<f64>,
     },
     /// Computed by other rules, or no longer decodable: recompute it.
@@ -552,7 +623,10 @@ pub fn cached_measure(
         return Ok(CachedMeasure::Stale { sealed_at });
     }
     Ok(match serde_json::from_str::<SessionMeasure>(&json) {
-        Ok(measure) => CachedMeasure::Current { measure, sealed_at },
+        Ok(measure) => CachedMeasure::Current {
+            measure: Box::new(measure),
+            sealed_at,
+        },
         Err(_) => CachedMeasure::Stale { sealed_at },
     })
 }
@@ -574,14 +648,20 @@ pub fn compute_session_measure(
     window: &SessionWindow,
     roles: &dyn RoleSource,
 ) -> Result<ComputedMeasure, AccountError> {
-    let stored = readings_for_window(conn, window)?;
+    let SessionReadings {
+        readings: stored,
+        own,
+    } = readings_for_session(conn, session_id, window)?;
     let readings: Vec<Reading> = stored.iter().map(|stored| stored.reading.clone()).collect();
     // The session's own baseline: the reading it started.
     let baseline = stored.iter().position(|stored| {
         stored.header.purpose == Purpose::Baseline
             && stored.header.session_id.as_deref() == Some(session_id)
     });
-    let outcome = measure_session_with_baseline(window, &readings, baseline, roles)?;
+    let outcome = match own {
+        Some(own) => measure_own_readings(window, &readings, own, baseline, roles)?,
+        None => measure_session_with_baseline(window, &readings, baseline, roles)?,
+    };
     let used = &stored[outcome.used.clone()];
     Ok(ComputedMeasure {
         measure: outcome.measure,
@@ -663,7 +743,7 @@ pub fn session_measure(
         CachedMeasure::Current {
             measure,
             sealed_at: Some(_),
-        } => return Ok(measure),
+        } => return Ok(*measure),
         CachedMeasure::Current { sealed_at, .. } | CachedMeasure::Stale { sealed_at } => sealed_at,
         CachedMeasure::Missing => None,
     };

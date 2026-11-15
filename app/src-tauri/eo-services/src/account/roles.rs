@@ -41,6 +41,14 @@ pub const UNIVERSAL_AMMO: &str = "Universal Ammo";
 /// Universal Ammo.
 pub const SHRAPNEL: &str = "Shrapnel";
 
+/// The key every strongbox takes, as the game names it.
+pub use crate::inventory_changes::STRONGBOX_KEY;
+
+/// Whether a name is a strongbox's: it ends in `Strongbox`.
+pub fn is_strongbox(name: &str) -> bool {
+    name.trim().to_ascii_lowercase().ends_with("strongbox")
+}
+
 /// The prefix every armour plate's name carries.
 const PLATING_PREFIX: &str = "Armor Plating";
 
@@ -71,8 +79,6 @@ pub enum Role {
     OtherEquipment,
     Material,
 }
-
-impl Role {}
 
 /// Whether an item's rows count units of a stackable or hold one item
 /// each.
@@ -241,6 +247,8 @@ impl RoleSource for KnownRoles {
 #[derive(Debug, Default)]
 struct Facts {
     largest_row: i64,
+    /// Whether any row of the name held TT.
+    any_value: bool,
     wears: bool,
     /// Names of the items this name sits attached to.
     parents: BTreeSet<String>,
@@ -265,6 +273,7 @@ impl RoleBook {
                 let fact = facts.entry(key.name.clone()).or_default();
                 let largest = holding.rows().iter().map(|row| row.quantity).max();
                 fact.largest_row = fact.largest_row.max(largest.unwrap_or(0));
+                fact.any_value |= holding.rows().iter().any(|row| row.value.0 != 0);
                 if let Container::Attached { parent } = &key.container {
                     fact.parents.insert(parent.clone());
                     facts
@@ -326,7 +335,14 @@ impl RoleBook {
             let known_consumable = source.library_role(name) == Some(Role::Material)
                 || (source.library_role(name).is_none()
                     && source.catalogue_role(name) == Some(Role::Material));
-            let stacking = if fact.largest_row > 1 || role == Role::Ammo || known_consumable {
+            // Keys and zero-TT strongboxes are always counted in units, so
+            // their leaving is always read as an opening's.
+            let opening_input = name == STRONGBOX_KEY || (is_strongbox(name) && !fact.any_value);
+            let stacking = if fact.largest_row > 1
+                || role == Role::Ammo
+                || known_consumable
+                || opening_input
+            {
                 Stacking::Stack
             } else {
                 Stacking::Single
@@ -580,6 +596,28 @@ mod tests {
         );
         assert_eq!(book.role("Odd Weapon"), Role::Weapon);
         assert_eq!(book.stacking("Odd Weapon"), Stacking::Stack);
+    }
+
+    #[test]
+    fn keys_and_zero_tt_strongboxes_held_singly_still_count_units() {
+        let book = RoleBook::resolve(
+            &Stand::default(),
+            &[reading(
+                0.0,
+                &[
+                    ("Strongbox Key", Container::Carried, 1, 1_000),
+                    ("Halloween Strongbox", Container::Carried, 1, 0),
+                    ("Golden Strongbox", Container::Carried, 1, 500),
+                ],
+            )],
+        );
+        assert_eq!(book.stacking("Strongbox Key"), Stacking::Stack);
+        assert_eq!(book.stacking("Halloween Strongbox"), Stacking::Stack);
+        assert_eq!(
+            book.stacking("Golden Strongbox"),
+            Stacking::Single,
+            "a strongbox with TT is no opening's box"
+        );
     }
 
     #[test]

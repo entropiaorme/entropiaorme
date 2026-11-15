@@ -94,6 +94,8 @@ export interface AccountSessionMeasure {
 	decay: MeasuredDecay[];
 	repairs: MeasuredRepair[];
 	otherConsumption: MeasuredConsumption[];
+	/** Stacks that left with nothing to explain them: never a cost. */
+	unexplainedDepartures: MeasuredConsumption[];
 	/** What arrived that no opening claimed, no purchase paid for and no move brought: the figure tracked loot compares with. */
 	gained: MeasuredGain[];
 	gainedTotal: MeasuredAmount;
@@ -2543,6 +2545,14 @@ export interface MeasuredAmount {
 }
 
 /**
+ * Boxes of one kind an opening used.
+ */
+export interface MeasuredBoxes {
+	name: string;
+	count: number;
+}
+
+/**
  * A stackable consumed that is not ammo.
  */
 export interface MeasuredConsumption {
@@ -2588,15 +2598,19 @@ export type MeasuredEdge = 'read' | 'unread';
  */
 export type MeasuredEvent = {
 		between: MeasuredSpan;
-		boxName: string;
-		boxes: number;
+		/** The boxes that left, one entry for each kind. */
+		boxes: MeasuredBoxes[];
+		keysUsed: number;
 		/** The keys' TT: the deposit the boxes pay back. */
 		keys: MeasuredAmount;
 		ammoUnits: number;
 		ammoRows: number;
 		ammoFromRows: MeasuredAmount;
 		ammoFromKeys: MeasuredAmount;
+		/** What every way of closing the keys' balance takes. */
 		contents: MeasuredEventItem[];
+		/** What some ways take: possibly the opening's. */
+		possibleContents: MeasuredEventItem[];
 		settlement: MeasuredSettlement;
 		kind: 'strongboxOpening';
 	} | {
@@ -2624,13 +2638,11 @@ export type MeasuredEvent = {
 		between: MeasuredSpan;
 		items: MeasuredEventItem[];
 		amount: MeasuredAmount;
-		cardRise: MeasuredAmount;
 		kind: 'sale';
 	} | {
 		between: MeasuredSpan;
 		items: MeasuredEventItem[];
 		amount: MeasuredAmount;
-		cardFall: MeasuredAmount;
 		kind: 'purchase';
 	} | {
 		between: MeasuredSpan;
@@ -2676,7 +2688,7 @@ export interface MeasuredGain {
 /**
  * Whether something gained may be a strongbox's contents.
  */
-export type MeasuredGainMark = 'arrived' | 'possiblyStrongbox';
+export type MeasuredGainMark = 'arrived' | 'possiblyStrongbox' | 'cardMovedUnexplained';
 
 /**
  * One item's share of a figure.
@@ -2697,16 +2709,27 @@ export type MeasuredMoveKind = 'listing' | 'listingReturned' | 'transfer';
 export type MeasuredPrecision = 'exact' | 'wholePec';
 
 /**
- * A repair: what it restored, and what the PED Card paid when that is
- * known.
+ * A repair: what it restored, and what the PED Card shows it cost.
  */
 export interface MeasuredRepair {
 	between: MeasuredSpan;
 	items: MeasuredItemAmount[];
 	restored: MeasuredAmount;
-	/** `null` when the Card's movement cannot be read as the repair's cost. */
-	cost: MeasuredAmount | null;
+	cost: MeasuredRepairCost;
 }
+
+/**
+ * What a repair cost, as far as the PED Card shows it.
+ */
+export type MeasuredRepairCost = {
+		amount: MeasuredAmount;
+		kind: 'paid';
+	} | {
+		amount: MeasuredAmount;
+		kind: 'derived';
+	} | {
+		kind: 'unknown';
+	};
 
 /**
  * What an item is.
@@ -2743,7 +2766,7 @@ export interface MeasuredSessionRow {
 }
 
 /**
- * Whether an opening's keys were paid back on one reading of its rows.
+ * Whether an opening's ammo was read on one reading of its rows.
  */
 export type MeasuredSettlement = 'settled' | 'unsettled';
 
@@ -2773,8 +2796,12 @@ export interface MeasuredTotals {
 	/** Everything else that wore. */
 	otherEquipmentDecay: MeasuredAmount;
 	otherConsumption: MeasuredAmount;
-	/** What the repairs whose cost the PED Card shows cost. */
+	/** Stacks that left with nothing to explain them: never a cost. */
+	unexplainedDepartures: MeasuredAmount;
+	/** What the repairs whose cost the PED Card's fall shows alone cost. */
 	repairCost: MeasuredAmount;
+	/** What the repairs beside a sale or a purchase cost, as what remains of the Card's change. */
+	repairCostDerived: MeasuredAmount;
 	/** Repairs whose cost could not be read, left out of `repairCost`. */
 	repairsUncosted: number;
 	gained: MeasuredAmount;

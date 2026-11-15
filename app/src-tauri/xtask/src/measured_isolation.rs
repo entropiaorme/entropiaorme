@@ -17,15 +17,16 @@
 //! What it sees: every `use` statement, joined across lines and expanded
 //! through its `{...}` groups, whose path reaches a segment named
 //! `account` from `crate`, `super`, `eo_services` or `eo_api` (or from a
-//! name one of those roots was renamed to in the same file); any
-//! `account::` path outside a `use`; and the account tables by name, so raw
-//! SQL cannot smuggle a read past the module boundary. Comment lines are
-//! skipped.
+//! name one of those roots was renamed to in the same file, including a
+//! rename through `self as` inside a group), or starts at a bare `account`
+//! segment (as one may after a glob of the crate root); any `account::`
+//! path outside a `use`; and the account tables by name, so raw SQL cannot
+//! smuggle a read past the module boundary. Comment lines are skipped.
 //!
 //! What it cannot see: a re-export of the account module's items through a
 //! module off the accounting surface (`crate::elsewhere::Reading`), a glob
-//! import of such a module, or a reference built inside a macro. Those stay
-//! a matter for review.
+//! of a module off the surface that re-exports them, or a reference built
+//! inside a macro. Those stay a matter for review.
 //!
 //! Whole-tree rather than diff-scoped, like its siblings: the guarantee is
 //! "no consumer anywhere on the accounting surface".
@@ -127,6 +128,10 @@ fn expand(tree: &str, prefix: &[String], out: &mut Vec<(Vec<String>, Option<Stri
     };
     let mut segments = prefix.to_vec();
     segments.extend(segment_list(path));
+    // `self` inside a group names the group's own prefix.
+    if segments.last().is_some_and(|last| last == "self") {
+        segments.pop();
+    }
     out.push((segments, rename));
 }
 
@@ -199,8 +204,10 @@ pub fn scan_text(path: &str, text: &str) -> Vec<Finding> {
         let mut paths = Vec::new();
         expand(statement, &[], &mut paths);
         let reaches = paths.iter().any(|(segments, _)| {
-            segments.first().is_some_and(|first| roots.contains(first))
-                && segments.iter().skip(1).any(|segment| segment == "account")
+            let from_a_root = segments.first().is_some_and(|first| roots.contains(first))
+                && segments.iter().skip(1).any(|segment| segment == "account");
+            let bare = segments.first().is_some_and(|first| first == "account");
+            from_a_root || bare
         });
         if reaches {
             flagged_lines.push(*lineno);
@@ -347,6 +354,17 @@ mod tests {
         assert_eq!(lines(text), vec![2]);
         let text = "use crate as root;\nuse root::{account};\n";
         assert_eq!(lines(text), vec![2]);
+    }
+
+    #[test]
+    fn flags_a_bare_account_import_and_a_root_renamed_through_self() {
+        let text = "use crate::*;\nuse account::Reading;\n";
+        assert_eq!(lines(text), vec![2]);
+        let text = "use eo_services::{self as services, db};\nuse services::account::Reading;\n";
+        assert_eq!(lines(text), vec![2]);
+        let text = "use crate::{self as root};\nuse root::{account};\n";
+        assert_eq!(lines(text), vec![2]);
+        assert!(lines("use crate::{self as root};\nuse root::db;\n").is_empty());
     }
 
     #[test]

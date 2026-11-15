@@ -335,11 +335,11 @@ async fn a_session_recorded_end_to_end_measures_as_the_recorded_hunt() {
         .iter()
         .filter_map(|event| match event {
             MeasuredEvent::StrongboxOpening {
-                boxes,
+                keys_used,
                 contents,
                 settlement,
                 ..
-            } => Some((*boxes, contents.clone(), *settlement)),
+            } => Some((*keys_used, contents.clone(), *settlement)),
             _ => None,
         })
         .collect();

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::amount::{Amount, Pec, Precision};
-use super::composite::{recognise, Settlement};
+use super::composite::{recognise, OpenedBoxes, RepairCost, Settlement};
 use super::diff::diff;
 use super::measure::{
     measure_session, AmmoSplit, CoverageLevel, Edge, GainMark, NotableEvent, SessionWindow,
@@ -79,20 +79,32 @@ fn the_opening_before_the_session_is_five_boxes_settled_within_the_truncation() 
     let book = RoleBook::resolve(&roles(), &readings);
     let set = diff(&readings[1], &readings[2], &|name| book.stacking(name)).unwrap();
     assert_eq!(set.span.from, 1_794_754_577.0);
-    let opening = recognise(&set, &readings[1], &readings[2])
+    let opening = recognise(&set, &readings[1], &readings[2], &[])
         .unwrap()
         .opening
         .expect("an opening");
-    assert_eq!(opening.box_name, "Halloween Strongbox");
-    assert_eq!(opening.boxes, 5);
+    assert_eq!(
+        opening.boxes,
+        vec![OpenedBoxes {
+            name: "Halloween Strongbox".into(),
+            count: 5
+        }]
+    );
+    assert_eq!(opening.keys_used, 5);
     assert_eq!(opening.keys, Amount::whole_pec(Pec(5_000)).unwrap());
     assert_eq!(opening.ammo_units, 499_500);
     assert_eq!(opening.ammo_rows, 5);
     assert_eq!(opening.ammo_from_rows, Amount::exact(49_950_000));
     assert_eq!(opening.ammo_from_keys.micro_ped(), 50 * PED);
-    assert_eq!(opening.contents.len(), 1);
-    assert_eq!(opening.contents[0].key, carried("Halloween Fireworks"));
-    assert_eq!(opening.contents[0].amount.micro_ped(), 0);
+    // The fireworks have no TT: the balance closes with them and without
+    // them, so they are only possibly the opening's.
+    assert!(opening.contents.is_empty());
+    assert_eq!(opening.possible_contents.len(), 1);
+    assert_eq!(
+        opening.possible_contents[0].key,
+        carried("Halloween Fireworks")
+    );
+    assert_eq!(opening.possible_contents[0].amount.micro_ped(), 0);
     assert_eq!(opening.settlement, Settlement::Settled);
 }
 
@@ -137,7 +149,7 @@ fn the_hunt_measures_as_a_human_read_it() {
         .collect();
     assert_eq!(openings.len(), 1);
     let opening = openings[0];
-    assert_eq!(opening.boxes, 7);
+    assert_eq!(opening.keys_used, 7);
     assert_eq!(opening.keys.micro_ped(), 70 * PED);
     assert_eq!(opening.contents.len(), 1);
     assert_eq!(opening.contents[0].key, carried("Skeleton Pants Red (F)"));
@@ -285,7 +297,7 @@ fn the_hunt_measures_as_a_human_read_it() {
     assert_eq!(repair.between.from, 1_794_755_123.0);
     assert_eq!(repair.repair.items.len(), 16);
     assert_eq!(repair.repair.restored, Amount::whole_pec(Pec(57)).unwrap());
-    assert_eq!(repair.repair.cost, Some(Pec(48)));
+    assert_eq!(repair.repair.cost, RepairCost::Paid { pec: Pec(48) });
 }
 
 #[test]
@@ -321,7 +333,7 @@ fn without_a_reading_close_to_either_end_the_measure_is_partial() {
         "the reading taken 124 seconds before the start is not used"
     );
     assert!(outcome.measure.events.iter().all(|event| match event {
-        NotableEvent::StrongboxOpening { opening, .. } => opening.boxes == 7,
+        NotableEvent::StrongboxOpening { opening, .. } => opening.keys_used == 7,
         _ => true,
     }));
 

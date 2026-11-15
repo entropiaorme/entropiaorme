@@ -21,6 +21,7 @@
 use rusqlite::OptionalExtension;
 
 use super::amount::{Amount, Pec};
+use super::composite::RepairCost;
 use super::measure::{AmmoSplit, CoverageLevel, SessionMeasure, SessionWindow};
 use super::roles::{KnownRoles, Role};
 use super::store::{
@@ -183,7 +184,7 @@ fn measure_of(
         CachedMeasure::Current {
             measure,
             sealed_at: Some(_),
-        } => return Ok((measure, true, None)),
+        } => return Ok((*measure, true, None)),
         CachedMeasure::Current { sealed_at, .. } | CachedMeasure::Stale { sealed_at } => sealed_at,
         CachedMeasure::Missing => None,
     };
@@ -240,8 +241,11 @@ pub enum AmmoTotal {
 /// What repairs cost across a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RepairTotal {
-    /// The sum of the repairs whose cost the PED Card shows.
+    /// The sum of the repairs whose cost the PED Card's fall shows alone.
     pub known: Amount,
+    /// The sum of the repairs whose cost is what remains of the Card's
+    /// change beside a sale or a purchase.
+    pub derived: Amount,
     /// Repairs whose cost could not be read.
     pub unknown: usize,
 }
@@ -260,6 +264,8 @@ pub struct MeasureTotals {
     /// the app has no role for.
     pub other_decay: Amount,
     pub other_consumption: Amount,
+    /// Stacks that left with nothing to explain them: never a cost.
+    pub unexplained_departures: Amount,
     pub repairs: RepairTotal,
     pub gained: Amount,
     pub gained_possibly_strongbox: Amount,
@@ -285,11 +291,13 @@ impl MeasureTotals {
         };
         let other_roles = [Role::Ammo, Role::OtherEquipment, Role::Material];
         let mut known = Amount::NONE;
+        let mut derived = Amount::NONE;
         let mut unknown = 0;
         for timed in &measure.repairs {
             match timed.repair.cost {
-                Some(cost) => known = known.plus(repair_cost(cost)?)?,
-                None => unknown += 1,
+                RepairCost::Paid { pec } => known = known.plus(repair_cost(pec)?)?,
+                RepairCost::Derived { amount } => derived = derived.plus(amount)?,
+                RepairCost::Unknown => unknown += 1,
             }
         }
         Ok(MeasureTotals {
@@ -301,7 +309,17 @@ impl MeasureTotals {
             other_consumption: Amount::total(
                 measure.other_consumption.iter().map(|item| item.amount),
             )?,
-            repairs: RepairTotal { known, unknown },
+            unexplained_departures: Amount::total(
+                measure
+                    .unexplained_departures
+                    .iter()
+                    .map(|item| item.amount),
+            )?,
+            repairs: RepairTotal {
+                known,
+                derived,
+                unknown,
+            },
             gained: measure.gained_total,
             gained_possibly_strongbox: measure.gained_possibly_strongbox,
         })

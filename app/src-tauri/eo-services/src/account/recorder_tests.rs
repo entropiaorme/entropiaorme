@@ -356,7 +356,8 @@ async fn a_session_is_read_at_once_then_every_minute_then_closed_and_sealed() {
     };
     assert!(sealed);
     assert_eq!(measure.coverage.level, CoverageLevel::Complete);
-    assert_eq!(measure.coverage.reading_count, 4);
+    // Every reading tagged with the session: its closing readings too.
+    assert_eq!(measure.coverage.reading_count, 6);
     assert_eq!(calls(&rig), 2 + 6 * 2);
 }
 

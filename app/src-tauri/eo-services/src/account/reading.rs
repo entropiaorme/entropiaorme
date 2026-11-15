@@ -172,11 +172,14 @@ impl Container {
     /// The site's container text for a row with no parent: `CARRIED`,
     /// `AUCTION`, `STORAGE (<planet>)`, or a place the app does not know.
     /// A row with a parent is attached (see `holdings_of`).
+    /// The text is trimmed before it is recognised (`"AUCTION\n"` is the
+    /// auction).
     fn from_site(raw: &str) -> Result<Container, RowRefusal> {
+        let raw = raw.trim();
         match raw {
             "CARRIED" => Ok(Container::Carried),
             "AUCTION" => Ok(Container::Auction),
-            _ if raw.trim().is_empty() => Err(RowRefusal::BlankContainer),
+            "" => Err(RowRefusal::BlankContainer),
             _ => match raw
                 .strip_prefix("STORAGE (")
                 .and_then(|rest| rest.strip_suffix(')'))
@@ -186,7 +189,7 @@ impl Container {
                     planet: planet.trim().to_string(),
                 }),
                 None => Ok(Container::Other {
-                    name: raw.trim().to_string(),
+                    name: raw.to_string(),
                 }),
             },
         }
@@ -855,6 +858,15 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn container_text_is_trimmed_before_it_is_recognised() {
+        let mut padded = sample();
+        padded["items"][1]["container"] = json!("CARRIED ");
+        padded["items"][5]["container"] = json!("AUCTION\n");
+        padded["items"][3]["container"] = json!(" STORAGE (The Hub\n) ");
+        assert_eq!(read(&padded).unwrap(), read(&sample()).unwrap());
     }
 
     #[test]

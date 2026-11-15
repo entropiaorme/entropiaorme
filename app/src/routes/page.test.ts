@@ -49,6 +49,10 @@ function answer(command: string): unknown {
 			return Promise.resolve(dashboardFixture.snapshot);
 		case 'tracking_activity_options':
 			return Promise.resolve(ACTIVITY_OPTIONS);
+		case 'tracking_session_detail':
+			// The live loot valuation reads the running session's loot and
+			// quest rewards; an empty record keeps it on its empty state.
+			return Promise.resolve({ lootBreakdown: [], questRewards: [] });
 		default:
 			return Promise.resolve([]);
 	}

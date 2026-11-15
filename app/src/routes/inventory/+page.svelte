@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import type { AssetPurchase, AssetPurchaseInput, InventoryItem } from '$lib/api';
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
@@ -141,6 +142,7 @@
 			onremove={(item) => (lootToRemove = item)}
 			onshrapnel={(item) => (shrapnelToConvert = item)}
 			onconvertitems={startConversion}
+			onopenboxes={() => goto('/inventory/strongboxes')}
 			onaddequipment={addEquipment}
 			oncreatelisting={() => (createListingOpen = true)}
 			oneditequipment={editEquipment}

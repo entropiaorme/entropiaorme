@@ -74,6 +74,14 @@ export const undoInventoryConversion = commands.stockConversionUndo;
 export const undoInventoryTrade = commands.privateSaleUndo;
 export const undoInventoryRemoval = commands.stockRemovalUndo;
 
+/** Read a pasted Inventory Changes export as an opening of one box type. */
+export const readStrongboxExport = commands.strongboxExportRead;
+/** Record a run of strongbox openings, all or nothing. */
+export const recordStrongboxOpening = commands.strongboxOpen;
+export const getStrongboxOpenings = commands.strongboxOpenings;
+/** Take a recorded run back whole. */
+export const undoStrongboxOpening = commands.strongboxOpeningUndo;
+
 export const addEquipmentHolding = commands.inventoryCreate;
 /** Record buying more of an asset, which moves its average cost. */
 export const addAssetPurchase = commands.inventoryPurchaseAdd;

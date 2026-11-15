@@ -22,12 +22,14 @@ use crate::git;
 /// -figure surface is minted; never shrink it to admit a consumer.
 const ACCOUNTING_SURFACES: &[&str] = &[
     "app/src-tauri/eo-services/src/analytics.rs",
+    "app/src-tauri/eo-services/src/analytics/",
     "app/src-tauri/eo-services/src/cost_engine.rs",
     "app/src-tauri/eo-services/src/daily_rollup.rs",
     "app/src-tauri/eo-services/src/session_summary.rs",
     "app/src-tauri/eo-services/src/tracker/",
     "app/src-tauri/eo-services/src/quests/",
     "app/src-tauri/eo-api/src/analytics.rs",
+    "app/src-tauri/eo-api/src/strongbox.rs",
     "app/src-tauri/eo-api/src/tracking.rs",
 ];
 

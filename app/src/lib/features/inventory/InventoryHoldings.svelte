@@ -39,6 +39,7 @@
 		onremove,
 		onshrapnel,
 		onconvertitems,
+		onopenboxes,
 		onaddequipment,
 		oncreatelisting,
 		oneditequipment,
@@ -62,6 +63,8 @@
 		onshrapnel: (item: TreeCuttingStock) => void;
 		/** Start a conversion, from one holding or from nothing in particular. */
 		onconvertitems: (start: { name: string; assetId: string | null } | null) => void;
+		/** Go to the strongbox opening view. */
+		onopenboxes?: () => void;
 		onaddequipment: () => void;
 		oncreatelisting: () => void;
 		oneditequipment: (item: InventoryItem) => void;
@@ -131,6 +134,7 @@
 				</div>
 			{/snippet}
 			{#snippet actions()}
+				{#if onopenboxes}<Button size="sm" variant="secondary" onclick={onopenboxes}>Open strongboxes</Button>{/if}
 				<Button size="sm" variant="secondary" onclick={() => onconvertitems(null)}>Convert items</Button>
 				<Button size="sm" onclick={oncreatelisting}>Create listing</Button>
 			{/snippet}
@@ -155,6 +159,7 @@
 				/>
 			</div>
 			<div class="flex h-full items-end justify-end gap-2">
+				{#if onopenboxes}<Button size="sm" variant="secondary" onclick={onopenboxes}>Open strongboxes</Button>{/if}
 				<Button size="sm" variant="secondary" onclick={() => onconvertitems(null)}>Convert items</Button>
 				<Button size="sm" variant="secondary" onclick={onaddequipment}>Add asset</Button>
 				<Button size="sm" onclick={oncreatelisting}>Create listing</Button>

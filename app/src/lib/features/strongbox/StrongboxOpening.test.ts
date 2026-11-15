@@ -19,8 +19,8 @@ vi.mock('$lib/api/market', () => ({ getMarketItemMarkups: api.getMarketItemMarku
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
-import StrongboxOpening from './StrongboxOpening.svelte';
 import { createOpeningModel } from './openingModel.svelte';
+import StrongboxOpening from './StrongboxOpening.svelte';
 
 const EXPORT = [
 	'Name\tQuantity\tValue(PED)',
@@ -136,7 +136,10 @@ describe('the strongbox opening view', () => {
 		expect(input.ammoPed).toBe(58);
 		expect(input.intake).toBe('export');
 		expect(
-			input.contents.map((row: { itemName: string; recycle: boolean }) => [row.itemName, row.recycle]),
+			input.contents.map((row: { itemName: string; recycle: boolean }) => [
+				row.itemName,
+				row.recycle,
+			]),
 		).toEqual([
 			['Skeleton Shirt White (F)', false],
 			['Red Heart Fireworks', true],

@@ -10,16 +10,20 @@
  *
  * Past loot is valued at today's market, not the market it dropped into. A
  * Nanocube mark stays with the live session figures and is not applied here.
+ * The family's confirmed quest rewards are read beside its loot and valued
+ * apart from it, the running instance's arriving from the live valuation.
  */
 
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { untrack } from 'svelte';
 import {
 	getDefinitionLoot,
+	getDefinitionRewards,
 	getMarketItemMarkups,
 	type LootEntry,
 	MARKET_TOPIC,
 	type MarketHarvestData,
+	type SessionQuestRewardItem,
 	type TrackingSnapshot,
 } from '$lib/api';
 import type { ConfidenceMode } from '$lib/features/analytics/treeCuttingModel.svelte';
@@ -27,12 +31,14 @@ import { type LiveValuationView, valueLiveLoot } from './liveLootValuation.svelt
 
 export interface LifetimeLootValuationPorts {
 	readFamilyLoot: (definitionId: number) => Promise<LootEntry[]>;
+	readFamilyRewards: (definitionId: number) => Promise<SessionQuestRewardItem[]>;
 	readMarket: (names: string[]) => Promise<MarketHarvestData>;
 	followMarket: (onChange: () => void) => Promise<UnlistenFn>;
 }
 
 const DEFAULT_PORTS: LifetimeLootValuationPorts = {
 	readFamilyLoot: (definitionId) => getDefinitionLoot(definitionId),
+	readFamilyRewards: (definitionId) => getDefinitionRewards(definitionId),
 	readMarket: (names) => getMarketItemMarkups(names),
 	followMarket: (onChange) => listen(MARKET_TOPIC, onChange),
 };
@@ -74,13 +80,16 @@ export function createLifetimeLootValuation(
 	confidence: () => ConfidenceMode,
 	runningLoot: () => LootEntry[] | null,
 	ports: LifetimeLootValuationPorts = DEFAULT_PORTS,
+	runningRewards: () => readonly SessionQuestRewardItem[] = () => [],
 ) {
 	let definitionId = $state<string | null>(null);
 	let family = $state<LootEntry[] | null>(null);
+	let familyRewards = $state<SessionQuestRewardItem[]>([]);
 	let market = $state<MarketHarvestData | null>(null);
 	let marketFailed = $state(false);
 
 	const loot = $derived(family === null ? null : mergeLoot(family, runningLoot() ?? []));
+	const rewards = $derived([...familyRewards, ...runningRewards()]);
 
 	let lastKey: string | null = null;
 	let wantedNow = false;
@@ -91,7 +100,12 @@ export function createLifetimeLootValuation(
 	let marketStale = false;
 
 	function marketNames(): string[] {
-		return [...new Set((loot ?? []).map((entry) => entry.name))].sort();
+		return [
+			...new Set([
+				...(loot ?? []).map((entry) => entry.name),
+				...rewards.map((line) => line.itemName),
+			]),
+		].sort();
 	}
 
 	async function readMarket(): Promise<void> {
@@ -136,8 +150,14 @@ export function createLifetimeLootValuation(
 		}
 		familyInFlight = true;
 		try {
-			const entries = await ports.readFamilyLoot(Number(id));
-			if (definitionId === id) family = entries;
+			const [entries, lines] = await Promise.all([
+				ports.readFamilyLoot(Number(id)),
+				ports.readFamilyRewards(Number(id)),
+			]);
+			if (definitionId === id) {
+				family = entries;
+				familyRewards = lines;
+			}
 		} catch {
 			// The next change re-reads; the last good composition stands.
 		} finally {
@@ -170,6 +190,7 @@ export function createLifetimeLootValuation(
 		if (id !== definitionId) {
 			definitionId = id;
 			family = null;
+			familyRewards = [];
 			market = null;
 			marketFailed = false;
 			lastMarketNames = '';
@@ -187,7 +208,7 @@ export function createLifetimeLootValuation(
 
 	const view = $derived(
 		definitionId && loot
-			? valueLiveLoot(definitionId, loot, market, confidence(), { live: false })
+			? valueLiveLoot(definitionId, loot, market, confidence(), { live: false }, rewards)
 			: null,
 	);
 
@@ -204,6 +225,10 @@ export function createLifetimeLootValuation(
 		get loot(): LootEntry[] | null {
 			return loot;
 		},
+		/** The reward lines being valued, running instance included. */
+		get rewards(): SessionQuestRewardItem[] {
+			return rewards;
+		},
 	};
 }
 
@@ -216,22 +241,30 @@ export type LifetimeLootValuation = ReturnType<typeof createLifetimeLootValuatio
  *
  * @param wanted Whether this surface is drawing a figure that needs it.
  * @param runningLoot The running instance's loot, from the live valuation.
+ * @param runningRewards The running instance's reward lines, likewise.
  */
 export function attachLifetimeLootValuation(
 	status: () => TrackingSnapshot | null,
 	confidence: () => ConfidenceMode,
 	wanted: () => boolean,
 	runningLoot: () => LootEntry[] | null,
+	runningRewards: () => readonly SessionQuestRewardItem[] = () => [],
 ): LifetimeLootValuation {
-	const valuation = createLifetimeLootValuation(confidence, runningLoot);
+	const valuation = createLifetimeLootValuation(
+		confidence,
+		runningLoot,
+		DEFAULT_PORTS,
+		runningRewards,
+	);
 	$effect(() => {
 		const current = status();
 		const show = wanted();
 		untrack(() => valuation.sync(current, show));
 	});
-	// A running instance can loot something the family never has.
+	// A running instance can loot, or be paid, something the family never has.
 	$effect(() => {
 		void valuation.loot;
+		void valuation.rewards;
 		untrack(() => void valuation.readMarketIfNew());
 	});
 	$effect(() => {

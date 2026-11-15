@@ -6212,6 +6212,10 @@ export async function trackingDefinitionLoot(definitionId: number): Promise<Loot
 	return invokeCommand('tracking_definition_loot', { definition_id: definitionId });
 }
 
+export async function trackingDefinitionRewards(definitionId: number): Promise<SessionQuestRewardItem[]> {
+	return invokeCommand('tracking_definition_rewards', { definition_id: definitionId });
+}
+
 export async function trackingSessionIntervals(sessionId: string): Promise<SessionIntervals> {
 	return invokeCommand('tracking_session_intervals', { session_id: sessionId });
 }

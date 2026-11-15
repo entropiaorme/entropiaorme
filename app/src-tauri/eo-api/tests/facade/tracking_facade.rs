@@ -1960,6 +1960,100 @@ async fn the_definition_loot_merges_the_family_over_what_the_lifetime_sums() {
     assert!(api.tracking_definition_loot(999).await.unwrap().is_empty());
 }
 
+/// The family's quest rewards: every confirmed reward line of the instances
+/// the family's loot is read over, merged by item, never an undone reward,
+/// one whose latest review is not a confirmation, a running instance's, or
+/// an economy-excluded instance's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_definition_rewards_fold_the_family_confirmed_rewards() {
+    let dir = tempfile::tempdir().unwrap();
+    let (api, db) = make_api_db(dir.path(), false, None).await;
+    db.with_writer(|conn| {
+        conn.execute_batch(
+            "INSERT INTO session_definitions (id, name) VALUES (40, 'Other');
+             INSERT INTO tracking_sessions
+                 (id, started_at, ended_at, is_active, armour_cost, definition_id,
+                  economy_excluded_at) VALUES
+               ('a', 1000.0, 2000.0, 0, 1.0, 1, NULL),
+               ('b', 3000.0, 4000.0, 0, 1.0, 1, NULL),
+               ('out', 5000.0, 6000.0, 0, 1.0, 1, 6500.0),
+               ('other', 7000.0, 8000.0, 0, 1.0, 40, NULL);
+             INSERT INTO tracking_sessions (id, started_at, is_active, definition_id)
+               VALUES ('live', 9000.0, 1, 1);
+             INSERT INTO quests (id, name) VALUES
+               (1, 'First'), (2, 'Second'), (3, 'Third'), (4, 'Fourth');
+             INSERT INTO session_quest_completions
+                 (id, session_id, quest_id, completed_at, reward_outcome) VALUES
+               (1, 'a', 1, 1500.0, 'confirmed'),
+               (2, 'b', 2, 3500.0, 'confirmed'),
+               (3, 'b', 3, 3600.0, 'confirmed'),
+               (4, 'b', 4, 3700.0, 'unresolved'),
+               (5, 'out', 1, 5500.0, 'confirmed'),
+               (6, 'other', 1, 7500.0, 'confirmed'),
+               (7, 'live', 1, 9500.0, 'confirmed');
+             INSERT INTO quest_reward_reversals (completion_id, reversed_at) VALUES (3, 3650.0);
+             INSERT INTO session_quest_completion_reward_items
+                 (completion_id, item_name, quantity, value_ped, accounting_kind) VALUES
+               (1, 'Universal Ammo', 1000, 10.0, 'liquid'),
+               (1, 'Blazar Fragment', 100, 0.001, 'stock'),
+               (2, 'Universal Ammo', 500, 5.0, 'liquid'),
+               (3, 'Universal Ammo', 900, 9.0, 'liquid'),
+               (4, 'Universal Ammo', 800, 8.0, 'liquid'),
+               (5, 'Universal Ammo', 700, 7.0, 'liquid'),
+               (6, 'Universal Ammo', 600, 6.0, 'liquid'),
+               (7, 'Universal Ammo', 400, 4.0, 'liquid');",
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+    for session in ["a", "b", "out", "other"] {
+        let session = session.to_string();
+        db.with_writer(move |conn| {
+            eo_services::session_summary::write_session_summary(conn, &session)
+        })
+        .await
+        .unwrap();
+    }
+
+    let lines: Vec<_> = api
+        .tracking_definition_rewards(1)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|line| {
+            (
+                line.item_name,
+                line.quantity,
+                line.value_ped,
+                line.accounting,
+            )
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            (
+                "Blazar Fragment".to_string(),
+                100,
+                0.001,
+                eo_api::tracking::QuestRewardAccounting::Stock
+            ),
+            (
+                "Universal Ammo".to_string(),
+                1500,
+                15.0,
+                eo_api::tracking::QuestRewardAccounting::Liquid
+            ),
+        ]
+    );
+    assert!(api
+        .tracking_definition_rewards(999)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
 // ── The review surface: definition-scoped reads and re-filing ───────
 
 /// Seed `count` ended sessions under `definition_id` (or unattached when

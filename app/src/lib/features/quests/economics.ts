@@ -10,7 +10,7 @@
  */
 
 import type { MarketHarvestData, MarketHarvestItem } from '$lib/api/commands.gen';
-import { projectRewardItems } from '$lib/features/analytics/huntingModel.svelte';
+import { projectRewardItems } from '$lib/features/analytics/rewardValue';
 import type { QuestAnalyticsRow } from '$lib/types';
 
 export type RewardMode = 'tt' | 'markup';

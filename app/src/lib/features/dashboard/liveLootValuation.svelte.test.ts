@@ -44,7 +44,7 @@ function active(overrides: Partial<TrackingSnapshot> = {}): TrackingSnapshot {
 
 function ports(overrides: Partial<LiveLootValuationPorts> = {}): LiveLootValuationPorts {
 	return {
-		readLoot: vi.fn(async () => LOOT),
+		readSession: vi.fn(async () => ({ loot: LOOT, rewards: [] })),
 		readMarket: vi.fn(async () => FEED),
 		followMarket: vi.fn(async () => () => {}),
 		...overrides,
@@ -108,6 +108,26 @@ describe('valueLiveLoot', () => {
 	it('gives no figure without the market signals', () => {
 		expect(valueLiveLoot('s1', LOOT, null, 'all')).toBeNull();
 	});
+
+	it('values the confirmed rewards apart from the loot', () => {
+		const feed: MarketHarvestData = {
+			...FEED,
+			items: [
+				...FEED.items,
+				{ ...FEED.items[0], itemName: 'Blazar Fragment', markupPct: 30_000, readings: [] },
+			],
+		};
+		const view = valueLiveLoot('s1', LOOT, feed, 'all', { live: true }, [
+			{ itemName: 'Universal Ammo', quantity: 136_177, valuePed: 13.61, accounting: 'liquid' },
+			{ itemName: 'Blazar Fragment', quantity: 103, valuePed: 0.001, accounting: 'stock' },
+		]);
+		// The loot's own figures are untouched by the reward.
+		expect(view?.lootTt).toBe(12);
+		expect(view?.reward?.ttPed).toBeCloseTo(13.611, 9);
+		// Ammo at face value; the fragment at its 30,000% market.
+		expect(view?.reward?.muPed).toBeCloseTo(13.61 + 0.3, 9);
+		expect(valueLiveLoot('s1', LOOT, feed, 'all')?.reward).toBeNull();
+	});
 });
 
 describe('createLiveLootValuation', () => {
@@ -116,7 +136,7 @@ describe('createLiveLootValuation', () => {
 		const valuation = createLiveLootValuation(() => 'liquidMiddling', io);
 		valuation.sync(active());
 		await settle();
-		expect(io.readLoot).toHaveBeenCalledTimes(1);
+		expect(io.readSession).toHaveBeenCalledTimes(1);
 		expect(io.readMarket).toHaveBeenCalledWith([
 			'Animal Oil Residue',
 			'Shrapnel',
@@ -127,13 +147,41 @@ describe('createLiveLootValuation', () => {
 		// The same snapshot again changes nothing.
 		valuation.sync(active());
 		await settle();
-		expect(io.readLoot).toHaveBeenCalledTimes(1);
+		expect(io.readSession).toHaveBeenCalledTimes(1);
 
 		// New loot re-reads the composition; the same items need no market read.
 		valuation.sync(active({ returns: 13, kill_count: 4 }));
 		await settle();
-		expect(io.readLoot).toHaveBeenCalledTimes(2);
+		expect(io.readSession).toHaveBeenCalledTimes(2);
 		expect(io.readMarket).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads the session's rewards with its loot and asks the market for their items", async () => {
+		const reward = {
+			completionId: 1,
+			questName: 'AI Daily: Hanna Hendrix',
+			completedAt: 1_794_762_846,
+			items: [
+				{
+					itemName: 'HyperStim 10mg',
+					quantity: 2,
+					valuePed: 0.02,
+					accounting: 'stock' as const,
+				},
+			],
+		};
+		const io = ports({ readSession: vi.fn(async () => ({ loot: LOOT, rewards: [reward] })) });
+		const valuation = createLiveLootValuation(() => 'all', io);
+		valuation.sync(active());
+		await settle();
+		expect(io.readMarket).toHaveBeenCalledWith([
+			'Animal Oil Residue',
+			'HyperStim 10mg',
+			'Shrapnel',
+			'Unlisted Thing',
+		]);
+		expect(valuation.rewardItems).toEqual(reward.items);
+		expect(valuation.view?.reward?.ttPed).toBeCloseTo(0.02, 9);
 	});
 
 	it('re-reads the market on a market write', async () => {

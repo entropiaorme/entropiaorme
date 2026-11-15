@@ -47,6 +47,7 @@ function active(overrides: Partial<TrackingSnapshot> = {}): TrackingSnapshot {
 function ports(overrides: Partial<LifetimeLootValuationPorts> = {}): LifetimeLootValuationPorts {
 	return {
 		readFamilyLoot: vi.fn(async () => FAMILY),
+		readFamilyRewards: vi.fn(async () => []),
 		readMarket: vi.fn(async () => FEED),
 		followMarket: vi.fn(async () => () => {}),
 		...overrides,
@@ -131,6 +132,38 @@ describe('createLifetimeLootValuation', () => {
 		valuation.sync(active(), true);
 		await settle();
 		expect(valuation.view?.lootTt).toBe(11);
+	});
+
+	it("values the family's rewards with the running instance's, apart from the loot", async () => {
+		const seams = ports({
+			readFamilyRewards: vi.fn(async () => [
+				{
+					itemName: 'Universal Ammo',
+					quantity: 1000,
+					valuePed: 10,
+					accounting: 'liquid' as const,
+				},
+			]),
+		});
+		const valuation = createLifetimeLootValuation(
+			() => 'all',
+			() => null,
+			seams,
+			() => [
+				{
+					itemName: 'Universal Ammo',
+					quantity: 500,
+					valuePed: 5,
+					accounting: 'liquid' as const,
+				},
+			],
+		);
+		valuation.sync(active(), true);
+		await settle();
+		expect(seams.readFamilyRewards).toHaveBeenCalledWith(7);
+		expect(valuation.view?.reward?.ttPed).toBe(15);
+		expect(valuation.view?.reward?.muPed).toBe(15);
+		expect(valuation.view?.lootTt).toBe(10);
 	});
 
 	it('fetches the market afresh when the figures come back into view', async () => {

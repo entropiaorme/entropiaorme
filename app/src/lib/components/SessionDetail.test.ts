@@ -107,6 +107,49 @@ beforeEach(() => {
 // this instance: identity comes from the definition, so the record shows
 // what was recorded and offers no way to retype it. A mis-recorded
 // session is corrected by moving it to another definition.
+describe('the quest rewards a session handed in', () => {
+	it('lists each reward with its lines, apart from the loot', () => {
+		render(SessionDetail, {
+			props: {
+				detail: detail({
+					questRewards: [
+						{
+							completionId: 225,
+							questName: 'AI Daily: Hanna Hendrix',
+							completedAt: 1_794_762_846,
+							items: [
+								{
+									itemName: 'Universal Ammo',
+									quantity: 136_177,
+									valuePed: 13.61,
+									accounting: 'liquid',
+								},
+								{
+									itemName: 'Blazar Fragment',
+									quantity: 103,
+									valuePed: 0.001,
+									accounting: 'stock',
+								},
+							],
+						},
+					],
+				}),
+			},
+		});
+		const section = screen.getByTestId('session-quest-rewards');
+		expect(section.textContent).toContain('AI Daily: Hanna Hendrix');
+		expect(section.textContent).toContain('13.61 PED');
+		expect(section.textContent).toContain('Universal Ammo');
+		// An item with no TT shows how many there are, never 0.00.
+		expect(section.textContent).toContain('\u00d7103');
+	});
+
+	it('shows nothing for a session that handed nothing in', () => {
+		render(SessionDetail, { props: { detail: detail({ questRewards: [] }) } });
+		expect(screen.queryByTestId('session-quest-rewards')).toBeNull();
+	});
+});
+
 describe('the recorded session name', () => {
 	it('shows the recorded name, and Unnamed when there is none', () => {
 		const { unmount } = render(SessionDetail, {

@@ -336,6 +336,17 @@ pub enum QuestRewardAccounting {
     Stock,
 }
 
+impl QuestRewardAccounting {
+    /// The stored value, or `None` for one the app does not know.
+    pub fn parse(stored: &str) -> Option<Self> {
+        match stored {
+            "liquid" => Some(Self::Liquid),
+            "stock" => Some(Self::Stock),
+            _ => None,
+        }
+    }
+}
+
 /// One per-mob breakdown row.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -1384,6 +1395,31 @@ impl Api {
                 tt_value: round_half_even(tt_value, 2),
             })
             .collect())
+    }
+
+    /// The quest rewards confirmed on a session family's ended instances,
+    /// line by item: what the lifetime forms of the reward figures fold.
+    pub async fn tracking_definition_rewards(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<SessionQuestRewardItem>, ApiError> {
+        let lines = self
+            .session_definitions
+            .lifetime_rewards(definition_id)
+            .await
+            .map_err(ApiError::internal("definition rewards"))?;
+        lines
+            .into_iter()
+            .map(|(item_name, quantity, value_ped, accounting)| {
+                Ok(SessionQuestRewardItem {
+                    item_name,
+                    quantity,
+                    value_ped: round_half_even(value_ped, 4),
+                    accounting: QuestRewardAccounting::parse(&accounting)
+                        .ok_or_else(|| ApiError::invalid_state("unknown reward accounting"))?,
+                })
+            })
+            .collect()
     }
 
     /// A session's recorded intervals with bounds and attributed event

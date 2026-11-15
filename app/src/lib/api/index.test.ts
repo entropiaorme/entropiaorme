@@ -226,6 +226,12 @@ describe('tracking reads dispatch typed commands', () => {
 			'tracking_definition_loot',
 			{ definition_id: 7 },
 		],
+		[
+			'getDefinitionRewards',
+			() => api.getDefinitionRewards(7),
+			'tracking_definition_rewards',
+			{ definition_id: 7 },
+		],
 	];
 
 	it.each(rows)('%s invokes its command', async (_name, call, command, args) => {

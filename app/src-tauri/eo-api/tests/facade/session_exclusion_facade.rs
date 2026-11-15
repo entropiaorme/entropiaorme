@@ -314,6 +314,10 @@ pub(crate) async fn aggregates(api: &Api) -> BTreeMap<&'static str, Value> {
         api.tracking_definition_loot(DEFINITION)
     );
     read!(
+        "tracking_definition_rewards",
+        api.tracking_definition_rewards(DEFINITION)
+    );
+    read!(
         "character_skilling_forecast",
         api.character_skilling_forecast(&forecast_query())
     );
@@ -414,7 +418,9 @@ async fn an_excluded_session_reads_as_never_recorded() {
     // The fixture moves every figure the comparison covers (sales are
     // pinned by their own test below).
     for (name, value) in &included[1] {
-        if name.ends_with("realised_markup") {
+        // The fixture records no quest rewards; the family rewards' scope
+        // is pinned by its own tracking facade test.
+        if name.ends_with("realised_markup") || *name == "tracking_definition_rewards" {
             continue;
         }
         assert_ne!(
@@ -790,6 +796,7 @@ const STATS_COMMANDS: &[&str] = &[
     "character_skilling_forecast",
     "tracking_snapshot",
     "tracking_definition_loot",
+    "tracking_definition_rewards",
 ];
 
 /// Every other command, by why it is not a cross-session statistic.

@@ -51,6 +51,7 @@
 		() => liveMarkupSettings.confidence,
 		() => statsScope.current === 'lifetime' && drawsLifetimeValuation(dashboardStats.current),
 		() => liveValuation.loot,
+		() => liveValuation.rewardItems,
 	);
 
 	// The sessions surface: the island renders the picker and the review

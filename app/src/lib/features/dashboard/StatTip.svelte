@@ -7,6 +7,7 @@
 	import ExpectedMuTip from './ExpectedMuTip.svelte';
 	import type { LiveValuationView } from './liveLootValuation.svelte';
 	import MarkupStatTip from './MarkupStatTip.svelte';
+	import RewardStatTip from './RewardStatTip.svelte';
 
 	/**
 	 * What a dashboard stat tile carries beside its label, when its figure
@@ -35,6 +36,11 @@
 			? valuation
 			: null,
 	);
+	// The reward is valued with the loot, but stands whether or not any loot
+	// has dropped yet.
+	const reward = $derived(
+		active && valuation && valuation.sessionId === active.session_id ? valuation.reward : null,
+	);
 	const cycle = $derived(active?.expectedCycle ?? null);
 	const levels = $derived(
 		cycle
@@ -49,6 +55,7 @@
 		active !== null &&
 			(id === 'cycled' ||
 				((id === 'loot_mu' || id === 'mu_rate') && valued !== null) ||
+				((id === 'reward' || id === 'reward_mu') && reward !== null) ||
 				(id === 'expected_mu_rate' && levels !== null)),
 	);
 </script>
@@ -66,6 +73,8 @@
 			<MarkupStatTip valuation={valued} />
 		{:else if valued && id === 'mu_rate'}
 			<MarkupStatTip valuation={valued} cycledPed={active.cost ?? 0} />
+		{:else if reward && (id === 'reward' || id === 'reward_mu')}
+			<RewardStatTip {reward} />
 		{:else if id === 'expected_mu_rate' && levels && cycle}
 			<LooterBasisSelect
 				compact
@@ -79,6 +88,7 @@
 					basis={liveMarkupSettings.looterBasis}
 					lootMuFactor={valued.lootMuFactor}
 					cycledPed={active.cost ?? 0}
+					rewardMuPed={valued.reward?.muPed ?? 0}
 				/>
 			{/if}
 		{/if}

@@ -86,8 +86,8 @@ use crate::tool_sighting::{
 use crate::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
     ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
-    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
-    StartResult, StopResult, TrackingSnapshot,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionQuestRewardItem,
+    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
 };
 use crate::weapons::{
     WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
@@ -1552,6 +1552,14 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(i64)),
             }],
             returns: Some(schema(schema_for!(Vec<LootEntry>))),
+        },
+        CommandSpec {
+            name: "tracking_definition_rewards",
+            args: vec![ArgSpec {
+                name: "definition_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(Vec<SessionQuestRewardItem>))),
         },
         CommandSpec {
             name: "tracking_session_intervals",

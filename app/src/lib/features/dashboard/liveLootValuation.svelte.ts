@@ -1,12 +1,15 @@
 /**
  * The live session's loot valued at market markup: the one place the
  * dashboard and the overlay read the session's loot composition and the
- * markup it is worth, so the Loot Composition widget, the Loot MU and MU
- * Rate stats, and the expected figure built on them can never disagree.
+ * markup it is worth, so the Loot Composition widget, the Loot MU and Loot
+ * MU Rate stats, and the expected figure built on them can never disagree.
+ * The quest rewards confirmed on the session are read and valued here too,
+ * apart from the loot: a reward is never loot.
  *
  * Reads are event-driven, never polled. The loot composition is re-read
  * when the session's loot moves (its Loot TT, kills, or swings change in
- * the tracking snapshot); the market signals are re-read when the set of
+ * the tracking snapshot; a hand-in moves both, as the reward's clump leaves
+ * the loot and the kills); the market signals are re-read when the set of
  * looted items grows or any market write lands (`market:updated`). A read
  * already in flight is never doubled: a change during it re-reads once it
  * settles.
@@ -28,22 +31,35 @@ import {
 	MARKET_TOPIC,
 	type MarketHarvestData,
 	type MarketHarvestItem,
+	type SessionQuestReward,
+	type SessionQuestRewardItem,
 	type TrackingSnapshot,
 } from '$lib/api';
+import { projectRewardValue } from '$lib/features/analytics/rewardValue';
 import {
 	type ConfidenceMode,
 	projectLoot,
 	type TreeCuttingItem,
 } from '$lib/features/analytics/treeCuttingModel.svelte';
 
+/** What one read of the session gives: its loot, and its quest rewards
+ * confirmed so far. */
+export interface SessionComposition {
+	loot: LootEntry[];
+	rewards: SessionQuestReward[];
+}
+
 export interface LiveLootValuationPorts {
-	readLoot: (sessionId: string) => Promise<LootEntry[]>;
+	readSession: (sessionId: string) => Promise<SessionComposition>;
 	readMarket: (names: string[]) => Promise<MarketHarvestData>;
 	followMarket: (onChange: () => void) => Promise<UnlistenFn>;
 }
 
 const DEFAULT_PORTS: LiveLootValuationPorts = {
-	readLoot: async (sessionId) => (await getSessionDetail(sessionId)).lootBreakdown,
+	readSession: async (sessionId) => {
+		const detail = await getSessionDetail(sessionId);
+		return { loot: detail.lootBreakdown, rewards: detail.questRewards };
+	},
 	readMarket: (names) => getMarketItemMarkups(names),
 	followMarket: (onChange) => listen(MARKET_TOPIC, onChange),
 };
@@ -66,6 +82,17 @@ export interface ValuationCoverage {
 	noTtValuePed: number;
 }
 
+/** The quest rewards confirmed on a session or a family, valued. */
+export interface RewardValuation {
+	/** Every line, as recorded. */
+	lines: SessionQuestRewardItem[];
+	/** The reward at TT: liquid lines at face value, items at TT. */
+	ttPed: number;
+	/** The reward at market: liquid lines at face value, items through the
+	 * one reward projection. */
+	muPed: number;
+}
+
 /** The live valuation's figures, for the stats and the widget. */
 export interface LiveValuationView {
 	sessionId: string;
@@ -78,6 +105,26 @@ export interface LiveValuationView {
 	lootMuFactor: number | null;
 	coverage: ValuationCoverage;
 	confidence: ConfidenceMode;
+	/** The quest rewards confirmed so far, or null while none has been. */
+	reward: RewardValuation | null;
+}
+
+/** Every line of the rewards, in the order they were paid. */
+export function rewardLines(rewards: readonly SessionQuestReward[]): SessionQuestRewardItem[] {
+	return rewards.flatMap((reward) => reward.items);
+}
+
+/** Value reward lines through the one reward projection; null with none. */
+export function valueRewards(
+	lines: readonly SessionQuestRewardItem[],
+	market: MarketHarvestData,
+	marketByItem: Map<string, MarketHarvestItem>,
+	confidence: ConfidenceMode,
+): RewardValuation | null {
+	if (lines.length === 0) return null;
+	const ttPed = lines.reduce((sum, line) => sum + line.valuePed, 0);
+	const muPed = projectRewardValue(lines, market, marketByItem, confidence) ?? ttPed;
+	return { lines: [...lines], ttPed, muPed };
 }
 
 function coverageOf(items: readonly TreeCuttingItem[]): ValuationCoverage {
@@ -124,6 +171,7 @@ export function valueLiveLoot(
 	market: MarketHarvestData | null,
 	confidence: ConfidenceMode,
 	options: { live: boolean } = { live: true },
+	rewards: readonly SessionQuestRewardItem[] = [],
 ): LiveValuationView | null {
 	if (!market) return null;
 	const marketByItem = new Map<string, MarketHarvestItem>(
@@ -145,6 +193,7 @@ export function valueLiveLoot(
 		lootMuFactor: lootTt > 0 ? marketValuePed / lootTt : null,
 		coverage: coverageOf(projection.items),
 		confidence,
+		reward: valueRewards(rewards, market, marketByItem, confidence),
 	};
 }
 
@@ -166,6 +215,7 @@ export function createLiveLootValuation(
 ) {
 	let sessionId = $state<string | null>(null);
 	let loot = $state<LootEntry[] | null>(null);
+	let rewards = $state<SessionQuestReward[]>([]);
 	let market = $state<MarketHarvestData | null>(null);
 	let marketFailed = $state(false);
 
@@ -185,8 +235,11 @@ export function createLiveLootValuation(
 		}
 		lootInFlight = true;
 		try {
-			const entries = await ports.readLoot(id);
-			if (sessionId === id) loot = entries;
+			const composition = await ports.readSession(id);
+			if (sessionId === id) {
+				loot = composition.loot;
+				rewards = composition.rewards;
+			}
 		} catch {
 			// The next loot change re-reads; the last good composition stands.
 		} finally {
@@ -201,7 +254,12 @@ export function createLiveLootValuation(
 	}
 
 	function marketNames(): string[] {
-		return [...new Set((loot ?? []).map((entry) => entry.name))].sort();
+		return [
+			...new Set([
+				...(loot ?? []).map((entry) => entry.name),
+				...rewardLines(rewards).map((line) => line.itemName),
+			]),
+		].sort();
 	}
 
 	async function readMarket(): Promise<void> {
@@ -247,6 +305,7 @@ export function createLiveLootValuation(
 		if (id !== sessionId) {
 			sessionId = id;
 			loot = null;
+			rewards = [];
 			market = null;
 			marketFailed = false;
 			lastMarketNames = '';
@@ -265,7 +324,9 @@ export function createLiveLootValuation(
 	}
 
 	const view = $derived(
-		sessionId && loot ? valueLiveLoot(sessionId, loot, market, confidence()) : null,
+		sessionId && loot
+			? valueLiveLoot(sessionId, loot, market, confidence(), { live: true }, rewardLines(rewards))
+			: null,
 	);
 
 	return {
@@ -279,6 +340,14 @@ export function createLiveLootValuation(
 		/** The session's loot composition, valued or not. */
 		get loot(): LootEntry[] | null {
 			return loot;
+		},
+		/** The quest rewards confirmed on the session so far. */
+		get rewards(): SessionQuestReward[] {
+			return rewards;
+		},
+		/** Every line of those rewards, as the family valuation folds them. */
+		get rewardItems(): SessionQuestRewardItem[] {
+			return rewardLines(rewards);
 		},
 		/** True until the first composition read for the session answers. */
 		get loading(): boolean {

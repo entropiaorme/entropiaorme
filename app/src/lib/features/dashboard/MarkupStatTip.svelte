@@ -6,7 +6,7 @@
 	/**
 	 * What the live markup figures are made of: how much of the loot was
 	 * valued at its own market reading, at the player's own markup, at the
-	 * Nanocube floor, or by a Nanocube mark. Shared by Loot MU and MU Rate,
+	 * Nanocube floor, or by a Nanocube mark. Shared by Loot MU and Loot MU Rate,
 	 * which differ only in their denominator.
 	 */
 	let {
@@ -14,7 +14,7 @@
 		cycledPed = null,
 	}: {
 		valuation: LiveValuationView;
-		/** The session's Cycled, for MU Rate; absent for Loot MU. */
+		/** The session's Cycled, for Loot MU Rate; absent for Loot MU. */
 		cycledPed?: number | null;
 	} = $props();
 
@@ -39,7 +39,7 @@
 	});
 </script>
 
-<InfoTip label={cycledPed === null ? 'What Loot MU is made of' : 'What MU Rate is made of'} align="left" width="w-80">
+<InfoTip label={cycledPed === null ? 'What Loot MU is made of' : 'What Loot MU Rate is made of'} align="left" width="w-80">
 	<span class="block text-xs font-medium text-text">
 		{cycledPed === null ? 'Loot at market, over its TT' : 'Loot at market, over Cycled'}
 	</span>

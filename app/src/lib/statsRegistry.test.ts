@@ -394,8 +394,8 @@ describe('drift guard', () => {
 		expect(ALL_STAT_IDS).toEqual(Object.keys(STAT_DEFS));
 	});
 
-	it('ALL_STAT_IDS has length 23', () => {
-		expect(ALL_STAT_IDS).toHaveLength(23);
+	it('ALL_STAT_IDS has length 25', () => {
+		expect(ALL_STAT_IDS).toHaveLength(25);
 	});
 });
 
@@ -487,6 +487,7 @@ describe('the live markup stats', () => {
 			noTtValuePed: 0,
 		},
 		confidence: 'liquidMiddling' as const,
+		reward: null,
 	};
 	const session = (fields: Partial<Record<keyof TrackingStatus, unknown>> = {}) =>
 		active({ session_id: 's1', cost: 50, ...fields });
@@ -525,6 +526,7 @@ describe('the expected MU rate', () => {
 			noTtValuePed: 0,
 		},
 		confidence: 'liquidMiddling' as const,
+		reward: null,
 	};
 	const basis = (level: number, loot: number, low: number, high: number) => ({
 		looterLevel: level,
@@ -570,6 +572,86 @@ describe('the expected MU rate', () => {
 			STAT_DEFS.expected_mu_rate.render(active({ session_id: 's1', cost: 5 }), { valuation }),
 		).toEqual(EMPTY);
 		expect(STAT_DEFS.expected_mu_rate.render(session, {})).toEqual(EMPTY);
+	});
+
+	it('adds the confirmed reward at market over Cycled, its margin untouched', () => {
+		const rewarded = {
+			...valuation,
+			reward: { lines: [], ttPed: 10.5, muPed: 11.2 },
+		};
+		const render = STAT_DEFS.expected_mu_rate.render(session, {
+			valuation: rewarded,
+			looterBasis: 'three_looter_mean',
+		});
+		// (99.835 x 1.08 + 11.2) / 112 = 106.27%.
+		expect(render.value).toBe('106.3%');
+		expect(render.detail).toBe('±0.3');
+		// Loot MU Rate stays the loot's own: 108 over 112.
+		expect(STAT_DEFS.mu_rate.render(session, { valuation: rewarded }).value).toBe('96.4%');
+	});
+});
+
+describe('the reward stats', () => {
+	const valuation = {
+		sessionId: 's1',
+		items: [],
+		lootTt: 100,
+		marketValuePed: 108,
+		lootMuFactor: 1.08,
+		coverage: {
+			marketTt: 100,
+			manualTt: 0,
+			flooredTt: 0,
+			markedTt: 0,
+			shrapnelTt: 0,
+			noTtValuePed: 0,
+		},
+		confidence: 'liquidMiddling' as const,
+		reward: {
+			lines: [
+				{
+					itemName: 'Universal Ammo',
+					quantity: 136177,
+					valuePed: 13.61,
+					accounting: 'liquid' as const,
+				},
+				{
+					itemName: 'Blazar Fragment',
+					quantity: 103,
+					valuePed: 0.001,
+					accounting: 'stock' as const,
+				},
+			],
+			ttPed: 13.611,
+			muPed: 14.32,
+		},
+	};
+	const session = active({ session_id: 's1', cost: 400 });
+
+	it('reads the reward at TT and at market once a hand-in has paid one', () => {
+		expect(STAT_DEFS.reward.render(session, { valuation }).value).toBe('13.61');
+		expect(STAT_DEFS.reward_mu.render(session, { valuation }).value).toBe('14.32');
+	});
+
+	it('reads empty until a hand-in, or for another session', () => {
+		const unpaid = { ...valuation, reward: null };
+		expect(STAT_DEFS.reward.render(session, { valuation: unpaid })).toEqual(EMPTY);
+		expect(STAT_DEFS.reward_mu.render(session, { valuation: unpaid })).toEqual(EMPTY);
+		const stale = { ...valuation, sessionId: 's0' };
+		expect(STAT_DEFS.reward.render(session, { valuation: stale })).toEqual(EMPTY);
+	});
+
+	it("reads the family's rewards on the lifetime side", () => {
+		const lifetimeValuation = { ...valuation, sessionId: '7' };
+		expect(STAT_DEFS.reward.renderLifetime(FAMILY, { lifetimeValuation }).value).toBe('13.61');
+		expect(STAT_DEFS.reward_mu.renderLifetime(FAMILY, { lifetimeValuation }).value).toBe('14.32');
+		expect(STAT_DEFS.reward.renderLifetime(FAMILY, {}).value).toBe(EMPTY.value);
+	});
+
+	it('names the loot-only markup figures as loot, keeping their stored ids', () => {
+		expect(STAT_DEFS.mu_rate.label).toBe('Loot MU Rate');
+		expect(ALL_STAT_IDS).toContain('mu_rate');
+		expect(ALL_STAT_IDS).toEqual(expect.arrayContaining(['reward', 'reward_mu']));
 	});
 });
 
@@ -641,6 +723,7 @@ describe('lifetime forms', () => {
 				noTtValuePed: 0,
 			},
 			confidence: 'all',
+			reward: null,
 		} as NonNullable<StatContext['lifetimeValuation']>;
 		const read = (id: StatId, context?: StatContext) =>
 			STAT_DEFS[id].renderLifetime(FAMILY, context).value;
@@ -706,6 +789,17 @@ describe('lifetime forms', () => {
 		it('reads empty with no evidence, or before the loot is valued', () => {
 			expect(read(FAMILY).value).toBe(EMPTY.value);
 			expect(read({ ...FAMILY, expectedCycle }, {}).value).toBe(EMPTY.value);
+		});
+
+		it("adds the family's rewards as their own rate over its whole Cycled", () => {
+			const rewarded = {
+				lootMuFactor: 1.05,
+				reward: { lines: [], ttPed: 9, muPed: 10 },
+			} as unknown as NonNullable<StatContext['lifetimeValuation']>;
+			// 99.75% from the loot, plus 10 over the family's 250 cycled.
+			expect(read({ ...FAMILY, expectedCycle }, { lifetimeValuation: rewarded }).value).toBe(
+				'103.8%',
+			);
 		});
 	});
 

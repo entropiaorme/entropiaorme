@@ -93,6 +93,7 @@
 		() => liveMarkupSettings.confidence,
 		() => statsScope.current === 'lifetime' && drawsLifetimeValuation(overlayStats.current),
 		() => liveValuation.loot,
+		() => liveValuation.rewardItems,
 	);
 	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
 	// for the client-side elapsed tick. null when no active session is timed.

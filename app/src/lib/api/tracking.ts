@@ -207,6 +207,7 @@ export async function getTrackingSessions(cursor?: string, limit?: number, defin
 }
 export const getSessionDetail = commands.trackingSessionDetail;
 export const getDefinitionLoot = commands.trackingDefinitionLoot;
+export const getDefinitionRewards = commands.trackingDefinitionRewards;
 export const getTrackingSnapshot = commands.trackingSnapshot;
 
 /** Most mob names the declared-mob picker offers at once. */

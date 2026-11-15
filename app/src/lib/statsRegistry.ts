@@ -32,7 +32,9 @@ export type StatId =
 	| 'uses_tree'
 	| 'loot_mu'
 	| 'mu_rate'
-	| 'expected_mu_rate';
+	| 'expected_mu_rate'
+	| 'reward'
+	| 'reward_mu';
 
 export type StatRender = {
 	value: string;
@@ -442,7 +444,9 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 	},
 	// The markup stats are estimates over the informational market layer:
 	// what the loot would be worth at market, never realised P&L. The
-	// lifetime forms value the family's past loot at today's market.
+	// lifetime forms value the family's past loot at today's market. Every
+	// loot-only figure says so in its name (Loot TT, Loot MU, Loot MU Rate);
+	// Expected MU Rate, without the prefix, also counts the quest rewards.
 	loot_mu: {
 		id: 'loot_mu',
 		label: 'Loot MU',
@@ -458,9 +462,10 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 				return factor === null ? EMPTY : { value: formatPercent(factor), color: PLAIN };
 			}),
 	},
+	// The stored id predates the name and stays, so saved layouts keep it.
 	mu_rate: {
 		id: 'mu_rate',
-		label: 'MU Rate',
+		label: 'Loot MU Rate',
 		defaultEnabled: false,
 		render: liveCost((status, context) => {
 			const valuation = liveValuation(status, context);
@@ -482,7 +487,9 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		// Modelled loot over the whole Cycled (the model's Efficiency span
 		// for spend of unknown efficiency), valued at the loot's own markup:
 		// what this play would return at that markup with the variance taken
-		// out. The margin is the unknown-efficiency span.
+		// out, plus the quest rewards confirmed so far at their market value
+		// (Reward MU), as the Analytics outlook adds them. The margin is the
+		// unknown-efficiency span; a reward has none.
 		render: liveCost((status, context) => {
 			const valuation = liveValuation(status, context);
 			const cycle = status.expectedCycle ?? null;
@@ -491,7 +498,8 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 			if (!cycle || factor === null || cost <= 0) return EMPTY;
 			const basis = context.looterBasis ?? DEFAULT_LOOTER_BASIS;
 			const at = atLooterBasis(cycle.bases, basis);
-			const rate = (at.expectedLootTtPed * factor) / cost;
+			const rewardMu = valuation?.reward?.muPed ?? 0;
+			const rate = (at.expectedLootTtPed * factor + rewardMu) / cost;
 			const margin = ((at.highPed - at.lowPed) * factor) / cost / 2;
 			return {
 				value: formatPercent(rate),
@@ -502,14 +510,19 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		}),
 		// Over the instances that recorded weapon evidence, each at its own
 		// session-start looter levels, against those instances' own Cycled.
-		// The rest are in neither side of the ratio, and the figure says so.
+		// The rest are in neither side of the loot ratio, and the figure says
+		// so. The family's rewards join as their own rate over its whole
+		// Cycled, which is the play they were earned beside.
 		renderLifetime: lifetimeCost((l, context) => {
 			const cycle = l.expectedCycle;
 			const factor = context.lifetimeValuation?.lootMuFactor ?? null;
 			if (!cycle || factor === null || cycle.cycledPed <= 0) return EMPTY;
 			const basis = context.looterBasis ?? DEFAULT_LOOTER_BASIS;
 			const at = atLooterBasis(cycle.bases, basis);
-			const rate = (at.expectedLootTtPed * factor) / cycle.cycledPed;
+			const rewardMu = context.lifetimeValuation?.reward?.muPed ?? 0;
+			const rate =
+				(at.expectedLootTtPed * factor) / cycle.cycledPed +
+				(l.cycled > 0 ? rewardMu / l.cycled : 0);
 			const margin = ((at.highPed - at.lowPed) * factor) / cycle.cycledPed / 2;
 			return {
 				value: formatPercent(rate),
@@ -522,6 +535,42 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 						: undefined,
 			};
 		}),
+	},
+	// The quest rewards confirmed on the session: never loot and never a
+	// kill. A reward is a fixed amount handed in, not a return on what was
+	// cycled, so it is stated in PED, never as a rate of its own. Empty until
+	// a hand-in pays one.
+	reward: {
+		id: 'reward',
+		label: 'Reward',
+		defaultEnabled: false,
+		render: (status, context = {}) => {
+			if (!isActive(status)) return EMPTY;
+			const reward = liveValuation(status, context)?.reward ?? null;
+			return reward ? { value: formatPed(reward.ttPed), color: PLAIN } : EMPTY;
+		},
+		renderLifetime: (lifetime, context = {}) =>
+			overSpan(lifetime, () => {
+				const reward = context.lifetimeValuation?.reward ?? null;
+				return reward ? { value: formatPed(reward.ttPed), color: PLAIN } : EMPTY;
+			}),
+	},
+	// The same reward at market: liquid units (ammo) at face value, items
+	// through the one reward projection. PED, where Loot MU is a percentage.
+	reward_mu: {
+		id: 'reward_mu',
+		label: 'Reward MU',
+		defaultEnabled: false,
+		render: (status, context = {}) => {
+			if (!isActive(status)) return EMPTY;
+			const reward = liveValuation(status, context)?.reward ?? null;
+			return reward ? { value: formatPed(reward.muPed), color: PLAIN } : EMPTY;
+		},
+		renderLifetime: (lifetime, context = {}) =>
+			overSpan(lifetime, () => {
+				const reward = context.lifetimeValuation?.reward ?? null;
+				return reward ? { value: formatPed(reward.muPed), color: PLAIN } : EMPTY;
+			}),
 	},
 };
 
@@ -549,10 +598,18 @@ export const ALL_STAT_IDS: StatId[] = [
 	'loot_mu',
 	'mu_rate',
 	'expected_mu_rate',
+	'reward',
+	'reward_mu',
 ];
 
-/** The stats whose lifetime form values the family's loot at market. */
-const LIFETIME_VALUED_STAT_IDS: readonly string[] = ['loot_mu', 'mu_rate', 'expected_mu_rate'];
+/** The stats whose lifetime form values the family's loot or rewards. */
+const LIFETIME_VALUED_STAT_IDS: readonly string[] = [
+	'loot_mu',
+	'mu_rate',
+	'expected_mu_rate',
+	'reward',
+	'reward_mu',
+];
 
 /**
  * Whether a surface's selection draws a stat that needs the family's loot

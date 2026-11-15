@@ -32,6 +32,7 @@
 	import { createMobDetectionModel } from '$lib/features/tracking/mobDetectionModel.svelte';
 	import ToolSightings from '$lib/features/tracking/ToolSightings.svelte';
 	import { createToolSightingModel } from '$lib/features/tracking/toolSightingModel.svelte';
+	import SessionQuestRewards from '$lib/features/quests/SessionQuestRewards.svelte';
 	import { describeCertainty } from '$lib/features/tracking/mobDetection';
 	import { TRACKING_TOPIC } from '$lib/realtime/trackingTopic';
 	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
@@ -516,6 +517,9 @@
 			</div>
 		</div>
 	{/if}
+
+	<!-- 1b3. Quest rewards (shown only when a hand-in paid one) -->
+	<SessionQuestRewards rewards={detail.questRewards ?? []} />
 
 	<!-- 1c. Weapon cycle breakdown -->
 	{#if weaponCycleRows.length > 0}

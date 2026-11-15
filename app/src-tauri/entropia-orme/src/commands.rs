@@ -84,8 +84,8 @@ use eo_api::tool_sighting::{
 use eo_api::tracking::{
     ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
     ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
-    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionReassignResult,
-    StartResult, StopResult, TrackingSnapshot,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionQuestRewardItem,
+    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
 };
 use eo_api::weapons::{
     WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
@@ -1398,6 +1398,16 @@ pub async fn tracking_definition_loot(
     definition_id: i64,
 ) -> Result<Vec<LootEntry>, ApiError> {
     facade(&app)?.tracking_definition_loot(definition_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_definition_rewards(
+    app: tauri::AppHandle,
+    definition_id: i64,
+) -> Result<Vec<SessionQuestRewardItem>, ApiError> {
+    facade(&app)?
+        .tracking_definition_rewards(definition_id)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

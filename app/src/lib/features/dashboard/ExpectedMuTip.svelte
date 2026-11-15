@@ -7,23 +7,31 @@
 	/**
 	 * What the Expected MU Rate rests on: the modelled loot over the whole
 	 * Cycled at the declared looter basis, the range the unknown-efficiency
-	 * spend leaves, and the markup it is valued at. It discloses the model,
-	 * because an expected figure must never read as a measured one.
+	 * spend leaves, and the markup it is valued at, plus the quest rewards
+	 * confirmed so far at their market value. It discloses the model,
+	 * because an expected figure must never read as a measured one, and it
+	 * names the reward's part, because a hand-in is a fixed amount and must
+	 * never read as what the hunting pays.
 	 */
 	let {
 		cycle,
 		basis,
 		lootMuFactor,
 		cycledPed,
+		rewardMuPed = 0,
 	}: {
 		cycle: LiveExpectedCycle;
 		basis: LooterBasis;
 		lootMuFactor: number;
 		cycledPed: number;
+		/** The confirmed quest rewards at market, PED; 0 before a hand-in. */
+		rewardMuPed?: number;
 	} = $props();
 
 	const at = $derived(atLooterBasis(cycle.bases, basis));
-	const rate = (loot: number) => (cycledPed > 0 ? (loot * lootMuFactor) / cycledPed : 0);
+	const rewardRate = $derived(cycledPed > 0 ? rewardMuPed / cycledPed : 0);
+	const rate = (loot: number) =>
+		cycledPed > 0 ? (loot * lootMuFactor) / cycledPed + rewardRate : 0;
 	const lines = $derived(
 		[
 			{
@@ -42,12 +50,30 @@
 </script>
 
 <InfoTip label="What Expected MU Rate rests on" align="left" width="w-96">
-	<span class="block text-xs font-medium text-text">Expected loot at its markup, over Cycled</span>
+	<span class="block text-xs font-medium text-text">
+		{rewardMuPed > 0
+			? 'Expected loot at its markup, and the quest rewards, over Cycled'
+			: 'Expected loot at its markup, over Cycled'}
+	</span>
 	<span class="mt-1 block text-xs leading-relaxed text-text-secondary tabular-nums">
 		{formatPed(at.expectedLootTtPed)} PED expected TT at {formatPercent(lootMuFactor)} Loot MU, over
 		{formatPed(cycledPed)} PED cycled. Range {formatPercent(rate(at.lowPed))} to
 		{formatPercent(rate(at.highPed))}.
 	</span>
+	{#if rewardMuPed > 0}
+		<span class="mt-1.5 flex flex-col gap-1 text-xs tabular-nums" data-testid="expected-reward-split">
+			<span class="flex items-baseline gap-3">
+				<span class="min-w-0 flex-1 text-text-secondary">From the loot</span>
+				<span class="text-text">{formatPercent(rate(at.expectedLootTtPed) - rewardRate)}</span>
+			</span>
+			<span class="flex items-baseline gap-3">
+				<span class="min-w-0 flex-1 text-text-secondary">
+					From quest rewards ({formatPed(rewardMuPed)} PED at market)
+				</span>
+				<span class="text-text">+{formatPercent(rewardRate)}</span>
+			</span>
+		</span>
+	{/if}
 	<span class="mt-2 flex flex-col gap-1" data-testid="expected-cycle-split">
 		<span class="flex items-baseline gap-3">
 			<span class="eyebrow min-w-0 flex-1">Cycled</span>
@@ -68,5 +94,9 @@
 		Armour, healing, absorbers, implants, harvesting, and weapons without an Efficiency return
 		somewhere across the model's Efficiency span, which is the range. Markup paid over TT and doses
 		return nothing. An estimate of what this play returns at this markup; never Net or Rate.
+		{#if rewardMuPed > 0}
+			A quest reward is a fixed amount for the hand-in, not something the hunting pays: its part
+			shrinks the more the session cycles.
+		{/if}
 	</span>
 </InfoTip>

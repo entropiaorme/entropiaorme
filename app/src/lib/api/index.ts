@@ -93,6 +93,8 @@ export type {
 	SaleQueueCapture,
 	SaleQueueRefusal,
 	ScreenCapture,
+	SessionQuestReward,
+	SessionQuestRewardItem,
 	SettingsPatch,
 	ShrapnelConversionInput,
 	SightedToolKind,

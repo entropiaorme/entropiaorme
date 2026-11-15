@@ -143,7 +143,7 @@ vi.mock('$lib/api', () => {
 		decideWeaponMismatch: seams.decideWeaponMismatch,
 		// The markup pills' live valuation: no loot, so no market read.
 		MARKET_TOPIC: 'market:updated',
-		getSessionDetail: vi.fn(async () => ({ lootBreakdown: [] })),
+		getSessionDetail: vi.fn(async () => ({ lootBreakdown: [], questRewards: [] })),
 		getMarketItemMarkups: vi.fn(async () => ({ nanocubeMarkupPct: null, items: [] })),
 	};
 });

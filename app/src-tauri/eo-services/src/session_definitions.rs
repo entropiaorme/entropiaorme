@@ -596,6 +596,46 @@ impl SessionDefinitionService {
             .await?)
     }
 
+    /// The quest rewards confirmed on the family's ended instances, line
+    /// by item and accounting kind: (item, quantity, TT, `liquid` or
+    /// `stock`). The same sessions as [`Self::lifetime_loot`] (ended, with
+    /// a summary, counted in the economy scope), so a family's reward and
+    /// its Cycled describe the same play. An undone reward, or one whose
+    /// latest review is not a confirmation, is left out.
+    pub async fn lifetime_rewards(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<(String, i64, f64, String)>, SessionDefinitionError> {
+        Ok(self
+            .db
+            .with_reader(move |conn| {
+                let economy =
+                    crate::session_scope::counts_on(crate::session_scope::StatsScope::Economy, "s");
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT ri.item_name, SUM(ri.quantity), COALESCE(SUM(ri.value_ped), 0), \
+                            ri.accounting_kind \
+                     FROM tracking_sessions s \
+                     JOIN session_summaries ss ON ss.session_id = s.id \
+                     JOIN session_quest_completions c ON c.session_id = s.id \
+                     JOIN session_quest_completion_reward_items ri ON ri.completion_id = c.id \
+                     WHERE s.definition_id = ?1 AND {economy} \
+                       AND COALESCE((SELECT r.outcome FROM quest_reward_reviews r \
+                                     WHERE r.completion_id = c.id \
+                                     ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1), \
+                                    c.reward_outcome) = 'confirmed' \
+                       AND NOT EXISTS (SELECT 1 FROM quest_reward_reversals rr \
+                                       WHERE rr.completion_id = c.id) \
+                     GROUP BY ri.item_name, ri.accounting_kind \
+                     ORDER BY ri.item_name, ri.accounting_kind"
+                ))?;
+                let rows = stmt.query_map(rusqlite::params![definition_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await?)
+    }
+
     /// Create a definition with its roster.
     pub async fn create(
         &self,

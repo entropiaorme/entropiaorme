@@ -739,8 +739,11 @@ fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::Path
                 match composition::compose_native(resource_dir).await {
                     composition::Composition::Ready(composed) => {
                         install_native_services(&app, composed);
-                        // A player who connected before is reconnected
-                        // with the session the webview kept, quietly.
+                        // A player who connected before has any session
+                        // kept through the session store taken up,
+                        // quietly. The app keeps sessions in memory only,
+                        // so today there is none and the connection waits
+                        // for a sign-in.
                         account_window::adopt_stored_session(&app);
                         substrate::SubstrateOutcome::Ready
                     }

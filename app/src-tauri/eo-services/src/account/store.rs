@@ -638,6 +638,33 @@ pub struct ComputedMeasure {
     pub measure: SessionMeasure,
     first_reading: Option<ReadingId>,
     last_reading: Option<ReadingId>,
+    /// The session's tagged readings when it was computed: how many, and
+    /// the last stored. A cache write checks they still hold.
+    tagged: TaggedReadings,
+}
+
+/// How many readings are tagged with a session, and the last of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaggedReadings {
+    count: i64,
+    last: Option<i64>,
+}
+
+fn tagged_readings(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<TaggedReadings, AccountError> {
+    Ok(conn.query_row(
+        // id-order: insertion (the last reading stored, not the latest taken)
+        "SELECT COUNT(*), MAX(id) FROM account_readings WHERE session_id = ?1",
+        [session_id],
+        |row| {
+            Ok(TaggedReadings {
+                count: row.get(0)?,
+                last: row.get(1)?,
+            })
+        },
+    )?)
 }
 
 /// Compute a session's measure from its stored readings. A read: run it
@@ -667,7 +694,47 @@ pub fn compute_session_measure(
         measure: outcome.measure,
         first_reading: used.first().map(|stored| stored.header.id),
         last_reading: used.last().map(|stored| stored.header.id),
+        tagged: tagged_readings(conn, session_id)?,
     })
+}
+
+/// Cache a computed measure only while it is still the truth, in one
+/// short transaction: the session still exists, its tagged readings are
+/// the ones the computation saw, and it would not replace a sealed measure
+/// computed from more readings. `Ok(false)` when it is not written; that is
+/// no error, and the next read computes again.
+pub fn cache_session_measure_if_current(
+    conn: &mut rusqlite::Connection,
+    session_id: &str,
+    computed: &ComputedMeasure,
+    sealed_at: Option<f64>,
+    computed_at: f64,
+) -> Result<bool, AccountError> {
+    let tx = conn.transaction()?;
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM tracking_sessions WHERE id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    if !exists || tagged_readings(&tx, session_id)? != computed.tagged {
+        return Ok(false);
+    }
+    let sealed_from: Option<i64> = tx
+        .query_row(
+            "SELECT reading_count FROM account_session_measures \
+             WHERE session_id = ?1 AND sealed_at IS NOT NULL",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let reading_count = i64::try_from(computed.measure.coverage.reading_count)
+        .map_err(|_| AccountError::Stored("too many readings"))?;
+    if sealed_from.is_some_and(|sealed| sealed > reading_count) {
+        return Ok(false);
+    }
+    cache_session_measure(&tx, session_id, computed, sealed_at, computed_at)?;
+    tx.commit()?;
+    Ok(true)
 }
 
 /// Cache a computed measure. `sealed_at` marks it final: the session has

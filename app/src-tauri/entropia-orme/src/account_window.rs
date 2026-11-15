@@ -25,6 +25,7 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use eo_api::ApiError;
@@ -63,11 +64,73 @@ const SIGN_IN_LIFE: Duration = Duration::from_secs(15 * 60);
 /// How long a value the site refused waits before it is tried again.
 const REFUSED_WAIT: Duration = Duration::from_secs(15);
 
-/// The window this module opened and still owns: its number, or 0 when it
-/// owns none. A window carrying the label that this module did not open
-/// (or no longer owns) is never adopted.
-static OWNED_WINDOW: AtomicU64 = AtomicU64::new(0);
+/// The window this module opened and still owns: its number and the
+/// identity of its native window. A window carrying the label that is not
+/// this one is never adopted.
+static OWNED_WINDOW: Mutex<Option<Owned>> = Mutex::new(None);
 static WINDOWS_OPENED: AtomicU64 = AtomicU64::new(0);
+
+/// A window this module opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Owned {
+    number: u64,
+    /// The native window's identity, when the platform gives one.
+    identity: Option<u64>,
+}
+
+fn owned() -> Option<Owned> {
+    *OWNED_WINDOW
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn set_owned(owned: Option<Owned>) {
+    *OWNED_WINDOW
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = owned;
+}
+
+/// An X window id as a 64-bit identity (the id's width differs by
+/// platform).
+fn widen(id: impl Into<u64>) -> u64 {
+    id.into()
+}
+
+/// The identity of a window's native window, which no other window
+/// shares while it lives.
+fn identity(window: &WebviewWindow) -> Option<u64> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as u64),
+        RawWindowHandle::Xlib(handle) => Some(widen(handle.window)),
+        RawWindowHandle::Xcb(handle) => Some(u64::from(handle.window.get())),
+        RawWindowHandle::Wayland(handle) => Some(handle.surface.as_ptr() as usize as u64),
+        RawWindowHandle::AppKit(handle) => Some(handle.ns_view.as_ptr() as usize as u64),
+        _ => None,
+    }
+}
+
+/// What the sign-in command does with the window it finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Existing {
+    /// None carries the label: open one.
+    Open,
+    /// It is the one this module opened: bring it forward.
+    Focus,
+    /// Another window carries the label: close it, and open one.
+    Replace,
+}
+
+/// Decide from the identity of the window found carrying the label (none
+/// found: `None`; found without a readable identity: `Some(None)`) and the
+/// identity of the window this module opened.
+pub fn existing(found: Option<Option<u64>>, opened: Option<Option<u64>>) -> Existing {
+    match (found, opened) {
+        (None, _) => Existing::Open,
+        (Some(Some(found)), Some(Some(opened))) if found == opened => Existing::Focus,
+        _ => Existing::Replace,
+    }
+}
 
 /// The store the shell keeps the session in: memory only, so nothing is
 /// kept between runs.
@@ -173,14 +236,14 @@ fn recorder(app: &AppHandle) -> Option<std::sync::Arc<AccountRecorder>> {
 
 /// The sign-in window, if it is the one this module opened as `number`.
 fn owned_window(app: &AppHandle, number: u64) -> Option<WebviewWindow> {
-    (OWNED_WINDOW.load(Ordering::SeqCst) == number)
-        .then(|| app.get_webview_window(SIGN_IN_WINDOW))
-        .flatten()
+    let owned = owned().filter(|owned| owned.number == number)?;
+    let window = app.get_webview_window(SIGN_IN_WINDOW)?;
+    (existing(Some(identity(&window)), Some(owned.identity)) == Existing::Focus).then_some(window)
 }
 
 /// The window closed, by any route: this module owns none now.
 pub fn window_gone() {
-    OWNED_WINDOW.store(0, Ordering::SeqCst);
+    set_owned(None);
 }
 
 /// Refuse every permission the remote page asks for.
@@ -229,25 +292,36 @@ pub async fn account_sign_in(app: AppHandle) -> Result<(), ApiError> {
         ));
     };
     if let Some(window) = app.get_webview_window(SIGN_IN_WINDOW) {
-        if OWNED_WINDOW.load(Ordering::SeqCst) != 0 {
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
-            return Ok(());
-        }
-        let _ = window.destroy();
-        // The label frees once the window is gone.
-        for _ in 0..40 {
-            if app.get_webview_window(SIGN_IN_WINDOW).is_none() {
-                break;
+        let opened = owned().map(|owned| owned.identity);
+        match existing(Some(identity(&window)), opened) {
+            Existing::Focus => {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+                return Ok(());
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            Existing::Replace | Existing::Open => {
+                window_gone();
+                let _ = window.destroy();
+                // The label frees once the window is gone.
+                for _ in 0..40 {
+                    if app.get_webview_window(SIGN_IN_WINDOW).is_none() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
         }
     }
+    let blank: Url = "about:blank"
+        .parse()
+        .map_err(|_| ApiError::invalid_state("the empty page is not a URL"))?;
     let page: Url = SIGN_IN_PAGE
         .parse()
         .map_err(|_| ApiError::invalid_state("the sign-in page is not a URL"))?;
-    let window = WebviewWindowBuilder::new(&app, SIGN_IN_WINDOW, WebviewUrl::External(page))
+    // Opened on the empty page, so the permission refusal is in place
+    // before the site's page loads.
+    let window = WebviewWindowBuilder::new(&app, SIGN_IN_WINDOW, WebviewUrl::External(blank))
         .title("Sign in at account.entropiauniverse.com")
         .inner_size(1100.0, 850.0)
         .incognito(true)
@@ -257,8 +331,14 @@ pub async fn account_sign_in(app: AppHandle) -> Result<(), ApiError> {
         .build()
         .map_err(ApiError::internal("opening the sign-in window"))?;
     refuse_permissions(&window);
+    window
+        .navigate(page)
+        .map_err(ApiError::internal("opening the sign-in page"))?;
     let number = WINDOWS_OPENED.fetch_add(1, Ordering::SeqCst) + 1;
-    OWNED_WINDOW.store(number, Ordering::SeqCst);
+    set_owned(Some(Owned {
+        number,
+        identity: identity(&window),
+    }));
     tauri::async_runtime::spawn(watch_for_sign_in(app, number, recorder.epoch()));
     Ok(())
 }
@@ -365,20 +445,51 @@ pub fn adopt_stored_session(app: &AppHandle) {
     ));
 }
 
-/// Disconnect, in an order that always completes: stop the watcher and
-/// close the sign-in window, forget the stored session, then disconnect
-/// the connection (when there is one).
+/// The three steps of a disconnect.
+pub(crate) trait DisconnectSteps {
+    /// Stop the sign-in window's watcher and close the window.
+    fn close_sign_in(&self);
+    /// Forget the stored session.
+    async fn forget_stored(&self);
+    /// Disconnect the connection, when there is one.
+    async fn disconnect_connection(&self);
+}
+
+/// Disconnect, in an order that always completes: no sign-in can hand
+/// over a session once the window is gone, nothing is kept once the store
+/// has forgotten, and only then does the connection drop its session.
+pub(crate) async fn disconnect_in_order(steps: &impl DisconnectSteps) {
+    steps.close_sign_in();
+    steps.forget_stored().await;
+    steps.disconnect_connection().await;
+}
+
+struct AppDisconnect<'a>(&'a AppHandle);
+
+impl DisconnectSteps for AppDisconnect<'_> {
+    fn close_sign_in(&self) {
+        let window = self.0.get_webview_window(SIGN_IN_WINDOW);
+        window_gone();
+        if let Some(window) = window {
+            let _ = window.close();
+        }
+    }
+
+    async fn forget_stored(&self) {
+        let store = session_store();
+        let _ = tauri::async_runtime::spawn_blocking(move || store.forget()).await;
+    }
+
+    async fn disconnect_connection(&self) {
+        if let Some(recorder) = recorder(self.0) {
+            recorder.disconnect().await;
+        }
+    }
+}
+
+/// Disconnect the app (see [`disconnect_in_order`]).
 pub async fn disconnect(app: &AppHandle) {
-    let window = app.get_webview_window(SIGN_IN_WINDOW);
-    window_gone();
-    if let Some(window) = window {
-        let _ = window.close();
-    }
-    let store = session_store();
-    let _ = tauri::async_runtime::spawn_blocking(move || store.forget()).await;
-    if let Some(recorder) = recorder(app) {
-        recorder.disconnect().await;
-    }
+    disconnect_in_order(&AppDisconnect(app)).await;
 }
 
 #[cfg(test)]
@@ -536,6 +647,10 @@ mod tests {
     /// object holding a `capabilities` array), and any declared inline in
     /// a `tauri*.conf.json` beside the main one.
     fn every_capability() -> Vec<(String, serde_json::Value)> {
+        every_capability_in(std::path::Path::new(env!("CARGO_MANIFEST_DIR")))
+    }
+
+    fn every_capability_in(root: &std::path::Path) -> Vec<(String, serde_json::Value)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -563,7 +678,6 @@ mod tests {
                 other => out.push((origin.to_string(), other)),
             }
         }
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
         walk(&root.join("capabilities"), &mut files);
         let mut capabilities = Vec::new();
@@ -581,7 +695,10 @@ mod tests {
         for entry in std::fs::read_dir(root).unwrap() {
             let path = entry.unwrap().path();
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            if name.starts_with("tauri") && name.ends_with(".conf.json") {
+            // Every JSON file beside the main configuration whose name
+            // begins `tauri`: the platform overlays, and the development
+            // overlay the dev launcher writes.
+            if name.starts_with("tauri") && name.ends_with(".json") {
                 let conf: serde_json::Value =
                     serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
                 let inline = conf["app"]["security"]["capabilities"].clone();
@@ -645,11 +762,36 @@ mod tests {
         }
     }
 
+    /// Whether `text` uses `identifier` as a whole identifier, however it
+    /// is spaced or called.
+    fn uses_identifier(text: &str, identifier: &str) -> bool {
+        let part = |c: char| c.is_alphanumeric() || c == '_';
+        text.match_indices(identifier).any(|(at, _)| {
+            let before = text[..at].chars().next_back();
+            let after = text[at + identifier.len()..].chars().next();
+            !before.is_some_and(part) && !after.is_some_and(part)
+        })
+    }
+
     #[test]
-    fn no_capability_is_added_at_run_time() {
-        let needle = ["add_", "capability("].concat();
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut stack = vec![src];
+    fn the_identifier_search_finds_a_use_however_it_is_written() {
+        let name = ["add_", "capability"].concat();
+        for text in [
+            format!("app.{name}(cap)"),
+            format!("app.{name} (cap)"),
+            format!("let f = Manager::{name};"),
+            format!("use tauri::Manager::{{{name}}};"),
+        ] {
+            assert!(uses_identifier(&text, &name), "{text}");
+        }
+        assert!(!uses_identifier(&format!("my_{name}s"), &name));
+    }
+
+    #[test]
+    fn no_capability_is_added_at_run_time_or_loaded_from_elsewhere() {
+        let adds = ["add_", "capability"].concat();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut stack = vec![root.join("src")];
         while let Some(dir) = stack.pop() {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -658,18 +800,60 @@ mod tests {
                 } else if path.extension().is_some_and(|ext| ext == "rs") {
                     let text = std::fs::read_to_string(&path).unwrap();
                     assert!(
-                        !text.contains(&needle),
+                        !uses_identifier(&text, &adds),
                         "{} adds a capability",
                         path.display()
                     );
                 }
             }
         }
+        let build = std::fs::read_to_string(root.join("build.rs")).unwrap();
+        let elsewhere = ["capabilities_", "path_pattern"].concat();
+        assert!(
+            !uses_identifier(&build, &elsewhere),
+            "the build points the capability loader at another directory"
+        );
+        assert!(!uses_identifier(&build, &adds));
+    }
+
+    /// The permission identifiers a capability grants, written as strings
+    /// or as objects with an identifier.
+    fn granted(capability: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+        capability
+            .get("permissions")
+            .and_then(|list| list.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|permission| match permission {
+                serde_json::Value::String(name) => Some(name.clone()),
+                serde_json::Value::Object(entry) => entry
+                    .get("identifier")
+                    .and_then(|name| name.as_str())
+                    .map(str::to_string),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_permission_is_read_whether_written_as_a_name_or_an_entry() {
+        let capability = serde_json::json!({"permissions": [
+            "account-commands",
+            {"identifier": "account-commands", "allow": []},
+            7
+        ]});
+        assert_eq!(
+            granted(capability.as_object().unwrap()),
+            ["account-commands", "account-commands"]
+        );
     }
 
     #[test]
     fn the_account_commands_are_the_main_window_s_alone() {
-        use crate::command_acl::{trusted_commands, ACCOUNT_COMMANDS};
+        use crate::command_acl::{
+            trusted_commands, ACCOUNT_COMMANDS, CARTOGRAPHY_COMMANDS, NAVIGATION_COMMANDS,
+            RADAR_GUIDANCE_COMMANDS, SALE_CAPTURE_COMMANDS,
+        };
         let trusted = trusted_commands();
         for command in ACCOUNT_COMMANDS {
             assert!(
@@ -677,20 +861,31 @@ mod tests {
                 "{command} is in the permission every trusted window gets"
             );
             assert!(crate::command_acl::app_commands().contains(command));
+            for narrow in [
+                SALE_CAPTURE_COMMANDS,
+                CARTOGRAPHY_COMMANDS,
+                NAVIGATION_COMMANDS,
+                RADAR_GUIDANCE_COMMANDS,
+            ] {
+                assert!(
+                    !narrow.contains(command),
+                    "{command} is in a per-window command list"
+                );
+            }
         }
         assert!(ACCOUNT_COMMANDS.contains(&"account_sign_in"));
+        let mut granting = 0;
         for (origin, capability) in every_capability() {
             let Some(object) = capability.as_object() else {
                 continue;
             };
-            let grants_account = object["permissions"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|permission| permission.as_str() == Some("account-commands"));
-            if !grants_account {
+            if !granted(object)
+                .iter()
+                .any(|name| name == "account-commands")
+            {
                 continue;
             }
+            granting += 1;
             let windows: Vec<&str> = object["windows"]
                 .as_array()
                 .into_iter()
@@ -700,5 +895,52 @@ mod tests {
             assert_eq!(windows, ["main"], "{origin} grants the account commands");
             assert!(object.get("webviews").is_none());
         }
+        assert_eq!(granting, 1, "one capability grants the account commands");
+    }
+
+    #[test]
+    fn the_sign_in_command_brings_forward_only_the_window_it_opened() {
+        assert_eq!(existing(None, None), Existing::Open);
+        assert_eq!(existing(None, Some(Some(7))), Existing::Open);
+        assert_eq!(existing(Some(Some(7)), Some(Some(7))), Existing::Focus);
+        // Another window carrying the label: never adopted.
+        assert_eq!(existing(Some(Some(8)), Some(Some(7))), Existing::Replace);
+        assert_eq!(existing(Some(Some(7)), None), Existing::Replace);
+        // An identity that cannot be read is never taken as a match.
+        assert_eq!(existing(Some(None), Some(None)), Existing::Replace);
+        assert_eq!(existing(Some(None), Some(Some(7))), Existing::Replace);
+        assert_eq!(existing(Some(Some(7)), Some(None)), Existing::Replace);
+    }
+
+    /// Steps that write down the order they ran in.
+    #[derive(Default)]
+    struct Recorded(std::sync::Mutex<Vec<&'static str>>);
+
+    impl DisconnectSteps for Recorded {
+        fn close_sign_in(&self) {
+            self.0.lock().unwrap().push("close the sign-in window");
+        }
+
+        async fn forget_stored(&self) {
+            self.0.lock().unwrap().push("forget the stored session");
+        }
+
+        async fn disconnect_connection(&self) {
+            self.0.lock().unwrap().push("disconnect the connection");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_disconnect_closes_the_window_then_forgets_then_disconnects() {
+        let steps = Recorded::default();
+        disconnect_in_order(&steps).await;
+        assert_eq!(
+            *steps.0.lock().unwrap(),
+            [
+                "close the sign-in window",
+                "forget the stored session",
+                "disconnect the connection"
+            ]
+        );
     }
 }

@@ -25,7 +25,8 @@ use super::composite::RepairCost;
 use super::measure::{AmmoSplit, CoverageLevel, SessionMeasure, SessionWindow};
 use super::roles::{KnownRoles, Role};
 use super::store::{
-    cache_session_measure, cached_measure, compute_session_measure, CachedMeasure, ComputedMeasure,
+    cache_session_measure_if_current, cached_measure, compute_session_measure, CachedMeasure,
+    ComputedMeasure,
 };
 use super::AccountError;
 use crate::game_data_store::GameDataStore;
@@ -63,6 +64,16 @@ pub fn tracked_session(
             },
         )
         .optional()?)
+}
+
+/// Whether the session's measure is sealed.
+pub fn is_sealed(conn: &rusqlite::Connection, session_id: &str) -> Result<bool, AccountError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM account_session_measures \
+                        WHERE session_id = ?1 AND sealed_at IS NOT NULL)",
+        [session_id],
+        |row| row.get::<_, bool>(0),
+    )?)
 }
 
 /// Whether any stored reading is tagged with the session.
@@ -154,22 +165,28 @@ pub fn session_measure(
     ))
 }
 
-/// Cache the measures a read sealed. A short write.
+/// Cache the measures a read sealed, each only while it is still the
+/// truth (see [`cache_session_measure_if_current`]): a short write. Returns
+/// how many were written; one that no longer holds is left for the next
+/// read to compute again.
 pub fn cache_sealed(
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     sealed: &[ToSeal],
     computed_at: f64,
-) -> Result<(), AccountError> {
+) -> Result<usize, AccountError> {
+    let mut written = 0;
     for seal in sealed {
-        cache_session_measure(
+        if cache_session_measure_if_current(
             conn,
             &seal.session_id,
             &seal.computed,
             Some(seal.sealed_at),
             computed_at,
-        )?;
+        )? {
+            written += 1;
+        }
     }
-    Ok(())
+    Ok(written)
 }
 
 fn measure_of(

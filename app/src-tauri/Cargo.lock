@@ -993,6 +993,7 @@ dependencies = [
  "gtk",
  "libc",
  "ort",
+ "raw-window-handle",
  "rusqlite",
  "serde",
  "serde_json",

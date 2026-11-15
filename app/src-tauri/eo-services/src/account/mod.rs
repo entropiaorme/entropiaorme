@@ -52,7 +52,7 @@ pub use amount::{Amount, Pec, Precision};
 pub use measure::{measure_session, SessionMeasure, SessionWindow};
 pub use reading::{Container, Holding, HoldingKey, Reading, Row};
 pub use recorder::{
-    AccountRecorder, ConnectEpoch, ConnectOutcome, ConnectionFlag, ConnectionState,
+    AccountRecorder, ConnectEpoch, ConnectOutcome, ConnectSource, ConnectionFlag, ConnectionState,
     ConnectionStatus, RecorderParts,
 };
 pub use roles::{KnownRoles, Role, RoleBook, RoleSource};

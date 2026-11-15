@@ -62,7 +62,9 @@ fn still_unconfirmed(status: &ConnectionStatus) -> bool {
 pub async fn confirm_stored_session(recorder: Arc<AccountRecorder>, store: Arc<dyn SessionStore>) {
     let epoch = recorder.epoch();
     let mut status = recorder.watch_status();
-    if !status.borrow().has_connected {
+    // Nothing to take up for a player who never connected, nor for one
+    // who has already connected through the sign-in window.
+    if !status.borrow().has_connected || status.borrow().state != ConnectionState::Disconnected {
         return;
     }
     let mut tries = 0u32;
@@ -81,7 +83,7 @@ pub async fn confirm_stored_session(recorder: Arc<AccountRecorder>, store: Arc<d
         if tries == 0 {
             recorder.confirming_stored_session();
         }
-        match recorder.connect(epoch, session).await {
+        match recorder.connect_stored(epoch, session).await {
             ConnectOutcome::Connected | ConnectOutcome::NotAccepted => return,
             ConnectOutcome::Unreachable(_) | ConnectOutcome::Interrupted => {}
         }

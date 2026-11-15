@@ -236,6 +236,18 @@ async fn read<T: Send + 'static>(
         .unwrap()
 }
 
+/// Write the database without letting paused time move.
+async fn write(
+    db: &Db,
+    job: impl FnOnce(&mut rusqlite::Connection) -> Result<(), crate::db::DbError> + Send + 'static,
+) {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || db.with_writer_blocking(job))
+        .await
+        .unwrap()
+        .unwrap();
+}
+
 fn tagged(at: f64, purpose: &str, session: Option<&str>) -> (f64, String, Option<String>) {
     (at, purpose.to_string(), session.map(str::to_string))
 }
@@ -530,7 +542,7 @@ async fn a_connect_begun_before_a_disconnect_cannot_undo_it() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_reading_for_a_session_already_ended_and_sealed_is_dropped() {
+async fn a_reading_for_a_stopped_session_not_yet_sealed_is_kept() {
     let plan = [
         Planned {
             id: "first",
@@ -557,21 +569,58 @@ async fn a_reading_for_a_session_already_ended_and_sealed_is_dropped() {
     rig.start("second");
     rig.at(160.0).await;
     rig.site.release();
-    rig.until(|status| status.readings_stored == 2).await;
-    // The first session's baseline came back after it had ended and a new
-    // session had started: the site served it, nothing kept it. The new
+    rig.until(|status| status.readings_stored == 3).await;
+    rig.recorder.shutdown().await;
+    // The first session's baseline came back after it had stopped and a
+    // new session had started, but before the first was sealed: it is
+    // kept, tagged with the first, and sealed into its measure. The new
     // session's baseline (due when it started, at 150) waited for that
     // request and then fell inside its floor, so its first reading is the
     // minute after, due at 210.
-    assert_eq!(rig.site.readings_served(), 3);
     assert_eq!(
         rig.stored().await,
         vec![
             tagged(0.0, "connect", None),
+            tagged(160.0, "baseline", Some("first")),
             tagged(210.0, "session", Some("second")),
         ]
     );
-    assert_eq!(rig.sealed_at("first").await, None);
+    assert!(rig.sealed_at("first").await.is_some());
+    // The kept reading was taken after the second session began, so it
+    // cannot read the second's start: honestly unread.
+    let MeasureRead::Measured { measure, .. } =
+        rig.recorder.session_measure("second".into()).await.unwrap()
+    else {
+        panic!("the second session has readings");
+    };
+    assert_eq!(measure.coverage.opening, Edge::Unread);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reading_for_a_session_deleted_meanwhile_is_not_kept() {
+    let plan = [Planned {
+        id: "gone",
+        start: 120.0,
+        end: None,
+        active: false,
+    }];
+    let rig = rig(script(6), false, &plan).await;
+    rig.connect(COOKIE).await;
+    rig.until(|status| status.readings_stored == 1).await;
+    rig.site.hold();
+    rig.at(120.0).await;
+    rig.start("gone");
+    rig.at(125.0).await;
+    write(&rig.db, |conn| {
+        conn.execute("DELETE FROM tracking_sessions WHERE id = 'gone'", [])?;
+        Ok(())
+    })
+    .await;
+    rig.site.release();
+    rig.at(130.0).await;
+    rig.recorder.shutdown().await;
+    assert_eq!(rig.site.readings_served(), 2, "the site did answer");
+    assert_eq!(rig.stored().await, vec![tagged(0.0, "connect", None)]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -618,9 +667,15 @@ async fn a_stop_before_the_baseline_returns_keeps_it_and_closes_the_session() {
     assert_eq!(measure.coverage.level, CoverageLevel::Partial);
 }
 
-/// Connect during a running session, with the session stopping either
-/// before or after the check answers; what is stored either way.
-async fn connect_around_a_stop(stop_first: bool) -> (Vec<(f64, String, Option<String>)>, bool) {
+/// Connect during a running session that stops at 20 seconds, in the same
+/// instant the check answers: the stop first, or the answer first. What is
+/// stored for the session, and its sealed measure.
+async fn connect_around_a_stop(
+    stop_first: bool,
+) -> (
+    Vec<(f64, String, Option<String>)>,
+    super::measure::SessionMeasure,
+) {
     let plan = [Planned {
         id: "hunt",
         start: 5.0,
@@ -642,33 +697,82 @@ async fn connect_around_a_stop(stop_first: bool) -> (Vec<(f64, String, Option<St
                 .await
         })
     };
+    tokio::time::sleep_until(rig.clock.instant_at(20.0)).await;
     if stop_first {
-        tokio::time::sleep_until(rig.clock.instant_at(20.0)).await;
         rig.stop("hunt");
-        tokio::time::sleep_until(rig.clock.instant_at(21.0)).await;
         rig.site.release();
     } else {
-        tokio::time::sleep_until(rig.clock.instant_at(6.0)).await;
         rig.site.release();
-        rig.at(20.0).await;
+        rig.until(|status| status.state == ConnectionState::Connected)
+            .await;
         rig.stop("hunt");
     }
     assert_eq!(connecting.await.unwrap(), ConnectOutcome::Connected);
-    rig.until(|status| status.reading_session.is_none()).await;
+    rig.until(|status| status.reading_session.is_none() && !status.working)
+        .await;
     rig.at(1_000.0).await;
-    let sealed = rig.sealed_at("hunt").await.is_some();
-    (rig.stored().await, sealed)
+    assert!(rig.sealed_at("hunt").await.is_some());
+    let MeasureRead::Measured { measure, sealed } =
+        rig.recorder.session_measure("hunt".into()).await.unwrap()
+    else {
+        panic!("the session has readings");
+    };
+    assert!(sealed);
+    (rig.stored().await, *measure)
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_connect_reading_is_tagged_with_the_session_it_was_started_for() {
-    let (stopped_first, sealed_a) = connect_around_a_stop(true).await;
-    let (answered_first, sealed_b) = connect_around_a_stop(false).await;
-    for stored in [&stopped_first, &answered_first] {
-        assert_eq!(stored[0].1, "connect");
-        assert_eq!(stored[0].2.as_deref(), Some("hunt"));
-    }
-    assert!(sealed_a && sealed_b);
+async fn a_stop_while_a_connect_is_checked_comes_out_as_if_the_answer_came_first() {
+    let stopped_first = connect_around_a_stop(true).await;
+    let answered_first = connect_around_a_stop(false).await;
+    assert_eq!(stopped_first, answered_first);
+    let hunt = Some("hunt");
+    // The connect reading, then the closing readings any stopped session
+    // gets (the first held to the floor of the check that began at 5).
+    assert_eq!(
+        stopped_first.0,
+        vec![
+            tagged(20.0, "connect", hunt),
+            tagged(60.0, "session", hunt),
+            tagged(120.0, "session", hunt),
+            tagged(180.0, "session", hunt),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stop_while_a_refused_connect_is_checked_seals_with_what_there_is() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 5.0,
+        end: Some(20.0),
+        active: false,
+    }];
+    let rig = rig(script(3), false, &plan).await;
+    rig.at(5.0).await;
+    rig.start("hunt");
+    rig.site.hold();
+    let connecting = {
+        let recorder = rig.recorder.clone();
+        tokio::spawn(async move {
+            recorder
+                .connect(
+                    recorder.epoch(),
+                    SessionSecret::new("someone-else".to_string()).unwrap(),
+                )
+                .await
+        })
+    };
+    tokio::time::sleep_until(rig.clock.instant_at(20.0)).await;
+    rig.stop("hunt");
+    rig.site.release();
+    assert_eq!(connecting.await.unwrap(), ConnectOutcome::NotAccepted);
+    rig.at(100.0).await;
+    let status = rig.recorder.status();
+    assert_eq!(status.state, ConnectionState::Disconnected);
+    assert_eq!(status.tracked_session, None);
+    assert!(!status.working, "nothing waits on the stopped session");
+    assert!(rig.stored().await.is_empty());
 }
 
 #[tokio::test(start_paused = true)]
@@ -985,4 +1089,156 @@ fn the_stored_session_is_tried_again_after_30_seconds_2_minutes_then_every_10() 
     assert_eq!(retry_after(2), Duration::from_secs(120));
     assert_eq!(retry_after(3), Duration::from_secs(600));
     assert_eq!(retry_after(9), Duration::from_secs(600));
+}
+
+/// Fail the minutes at 120 and 180 of a session that started at 60, then
+/// `between` at 200, then fail one more minute: the minute after it falls
+/// a minute later only if the failures were counted afresh.
+async fn failures_counted_afresh_after(
+    between: impl AsyncFnOnce(&Rig),
+    expected_calls_at_321: usize,
+) {
+    let plan = [
+        Planned {
+            id: "hunt",
+            start: 60.0,
+            end: None,
+            active: false,
+        },
+        Planned {
+            id: "next",
+            start: 200.0,
+            end: None,
+            active: false,
+        },
+    ];
+    let rig = rig(script(12), false, &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(60.0).await;
+    rig.start("hunt");
+    rig.site.fail_at(4, ScriptedFault::Network);
+    rig.site.fail_at(5, ScriptedFault::Network);
+    rig.at(200.0).await;
+    between(&rig).await;
+    // The next minute (at 260) fails too: a third failure only if nothing
+    // above counted afresh.
+    let next = calls(&rig);
+    rig.site.fail_at(next, ScriptedFault::Network);
+    rig.at(321.0).await;
+    assert_eq!(calls(&rig), expected_calls_at_321);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_failures_are_counted_afresh_for_a_new_session() {
+    failures_counted_afresh_after(
+        async |rig: &Rig| {
+            rig.stop("hunt");
+            rig.start("next");
+        },
+        // 2 connect, 2 baseline, 2 failed minutes, 1 failed at 260, then
+        // the minute at 320 read.
+        2 + 2 + 2 + 1 + 2,
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_failures_are_counted_afresh_for_a_new_connection() {
+    failures_counted_afresh_after(
+        async |rig: &Rig| {
+            assert_eq!(rig.connect(COOKIE).await, ConnectOutcome::Connected);
+        },
+        // The check at 200 is a call of its own.
+        2 + 2 + 2 + 1 + 1 + 2,
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_failures_are_counted_afresh_after_a_disconnect() {
+    failures_counted_afresh_after(
+        async |rig: &Rig| {
+            rig.recorder.disconnect().await;
+            assert_eq!(rig.connect(COOKIE).await, ConnectOutcome::Connected);
+        },
+        2 + 2 + 2 + 1 + 1 + 2,
+    )
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_failures_are_counted_afresh_after_an_expiry() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 60.0,
+        end: None,
+        active: false,
+    }];
+    let rig = rig(script(12), false, &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(60.0).await;
+    rig.start("hunt");
+    // The minutes at 120 and 180 fail; the site refuses the one at 240.
+    rig.site.fail_at(4, ScriptedFault::Network);
+    rig.site.fail_at(5, ScriptedFault::Network);
+    rig.site.fail_at(6, ScriptedFault::Unauthorised);
+    rig.until(|status| status.state == ConnectionState::Expired)
+        .await;
+    // The player signs in again at 250; its reading waits out the floor
+    // of the refused minute, so the session's next minute falls at 310.
+    rig.at(250.0).await;
+    rig.site.accept(COOKIE);
+    assert_eq!(rig.connect(COOKIE).await, ConnectOutcome::Connected);
+    rig.site.fail_at(8, ScriptedFault::Network);
+    // That minute fails: the first of the new connection, so the next
+    // falls a minute later, not five.
+    rig.at(371.0).await;
+    assert_eq!(calls(&rig), 11);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sign_in_the_site_refuses_leaves_an_unconfirmed_session_to_its_retries() {
+    let rig = rig(script(3), true, &[]).await;
+    rig.site.fail_at(0, ScriptedFault::Network);
+    let kept = store(Some(COOKIE));
+    let confirming = tokio::spawn(super::adoption::confirm_stored_session(
+        rig.recorder.clone(),
+        kept.clone(),
+    ));
+    rig.at(10.0).await;
+    assert_eq!(rig.recorder.status().state, ConnectionState::Unconfirmed);
+    // A sign-in through the window that the site refuses is not the
+    // stored session: nothing changes, and the retries go on.
+    assert_eq!(
+        rig.connect("someone-else").await,
+        ConnectOutcome::NotAccepted
+    );
+    assert_eq!(rig.recorder.status().state, ConnectionState::Unconfirmed);
+    rig.at(31.0).await;
+    confirming.await.unwrap();
+    assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
+    assert_eq!(kept.loads.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn taking_up_the_stored_session_does_nothing_once_the_player_has_signed_in() {
+    let rig = rig(script(3), true, &[]).await;
+    assert_eq!(rig.connect(COOKIE).await, ConnectOutcome::Connected);
+    rig.at(1.0).await;
+    let kept = store(Some("kept-elsewhere"));
+    super::adoption::confirm_stored_session(rig.recorder.clone(), kept.clone()).await;
+    rig.at(20.0).await;
+    assert_eq!(kept.loads.load(Ordering::SeqCst), 0);
+    assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
+    // Nor is a stored session taken while connected, however it arrives.
+    assert_eq!(
+        rig.recorder
+            .connect_stored(
+                rig.recorder.epoch(),
+                SessionSecret::new("kept-elsewhere".into()).unwrap()
+            )
+            .await,
+        ConnectOutcome::Interrupted
+    );
+    assert_eq!(calls(&rig), 2);
 }

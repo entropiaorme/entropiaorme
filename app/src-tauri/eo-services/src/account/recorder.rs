@@ -210,6 +210,15 @@ pub struct RecorderParts {
     pub changed: Option<ChangedSink>,
 }
 
+/// Where a session handed to the connection comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectSource {
+    /// The player signed in, in the sign-in window.
+    SignIn,
+    /// The store a session is kept in between runs.
+    Stored,
+}
+
 /// The epoch a connect was started in; a disconnect moves it on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectEpoch(u64);
@@ -227,7 +236,12 @@ pub struct AccountRecorder {
 enum Msg {
     SessionStarted(String),
     SessionStopped(String),
-    Connect(ConnectEpoch, SessionSecret, oneshot::Sender<ConnectOutcome>),
+    Connect(
+        ConnectEpoch,
+        ConnectSource,
+        SessionSecret,
+        oneshot::Sender<ConnectOutcome>,
+    ),
     Confirming,
     Disconnect(oneshot::Sender<()>),
     Shutdown(oneshot::Sender<()>),
@@ -314,10 +328,32 @@ impl AccountRecorder {
     /// before a disconnect is dropped. The session is checked with one
     /// balance read first.
     pub async fn connect(&self, epoch: ConnectEpoch, session: SessionSecret) -> ConnectOutcome {
+        self.connect_from(epoch, ConnectSource::SignIn, session)
+            .await
+    }
+
+    /// Hand over the session kept in the store. Only an unconfirmed
+    /// connection takes it: one the player has meanwhile connected (or
+    /// disconnected) is left as it is.
+    pub async fn connect_stored(
+        &self,
+        epoch: ConnectEpoch,
+        session: SessionSecret,
+    ) -> ConnectOutcome {
+        self.connect_from(epoch, ConnectSource::Stored, session)
+            .await
+    }
+
+    async fn connect_from(
+        &self,
+        epoch: ConnectEpoch,
+        source: ConnectSource,
+        session: SessionSecret,
+    ) -> ConnectOutcome {
         let (reply, answer) = oneshot::channel();
         if self
             .sender
-            .send(Msg::Connect(epoch, session, reply))
+            .send(Msg::Connect(epoch, source, session, reply))
             .is_err()
         {
             return ConnectOutcome::Interrupted;
@@ -406,6 +442,7 @@ impl AccountRecorder {
             })
             .await,
         )
+        .map(|_| ())
     }
 }
 
@@ -501,6 +538,8 @@ enum Tracking {
     Grace {
         session: String,
         attempts: u32,
+        /// When it stopped.
+        stopped: Instant,
     },
 }
 
@@ -558,6 +597,7 @@ struct Ticket {
 
 /// A connect waiting for its check.
 struct PendingConnect {
+    source: ConnectSource,
     session: Arc<SessionSecret>,
     reply: oneshot::Sender<ConnectOutcome>,
 }
@@ -580,7 +620,7 @@ enum Work {
         ticket: Ticket,
         /// Whether the reading is identical to the one stored before it.
         identical: bool,
-        task: JoinHandle<Result<(ReadingHeader, Reading), AccountError>>,
+        task: JoinHandle<Result<Option<(ReadingHeader, Reading)>, AccountError>>,
     },
     Seal {
         session: String,
@@ -591,7 +631,7 @@ enum Work {
 enum Done {
     Validated(Result<SiteOutcome<Pec>, JoinError>),
     Fetched(Result<SiteOutcome<Reading>, JoinError>),
-    Stored(Result<Result<(ReadingHeader, Reading), AccountError>, JoinError>),
+    Stored(Result<Result<Option<(ReadingHeader, Reading)>, AccountError>, JoinError>),
     Sealed(Result<Result<bool, AccountError>, JoinError>),
 }
 
@@ -844,7 +884,9 @@ impl Actor {
         match message {
             Msg::SessionStarted(session) => self.session_started(session),
             Msg::SessionStopped(session) => self.session_stopped(session),
-            Msg::Connect(epoch, session, reply) => self.connect(epoch, session, reply),
+            Msg::Connect(epoch, source, session, reply) => {
+                self.connect(epoch, source, session, reply)
+            }
             Msg::Confirming => {
                 if matches!(self.connection, Connection::Disconnected) && self.has_connected {
                     self.connection = Connection::Unconfirmed;
@@ -893,13 +935,23 @@ impl Actor {
         }
         self.attempt_due = None;
         self.baseline_for = None;
+        let stopped = Instant::now();
         if self.is_connected() {
-            let closing = Instant::now() + CLOSING_AFTER;
-            let floor = self.floor_end().unwrap_or(closing);
-            self.next_attempt = Some(closing.max(floor));
+            self.next_attempt = Some(self.closing_from(stopped));
             self.tracking = Tracking::Grace {
                 session,
                 attempts: 0,
+                stopped,
+            };
+        } else if self.connecting() {
+            // A connect is being checked: the session waits for its
+            // answer, and is read to its close exactly as it would be had
+            // the answer come first.
+            self.next_attempt = None;
+            self.tracking = Tracking::Grace {
+                session,
+                attempts: 0,
+                stopped,
             };
         } else {
             self.next_attempt = None;
@@ -907,6 +959,33 @@ impl Actor {
             self.tracking = Tracking::Idle;
         }
         self.mark_changed();
+    }
+
+    /// When the first closing reading of a session stopped at `stopped`
+    /// falls due: 20 seconds on, and never inside the floor.
+    fn closing_from(&self, stopped: Instant) -> Instant {
+        let closing = stopped + CLOSING_AFTER;
+        closing.max(self.floor_end().unwrap_or(closing))
+    }
+
+    /// Whether a connect is being checked or waits to be.
+    fn connecting(&self) -> bool {
+        self.queued_connect.is_some() || matches!(self.work, Some(Work::Validate { .. }))
+    }
+
+    /// A connect came to nothing. A session that stopped while it was
+    /// being checked, with nothing connected to read it, is sealed with
+    /// what it has.
+    fn connect_failed(&mut self) {
+        if self.is_connected() || self.connecting() {
+            return;
+        }
+        if let Tracking::Grace { session, .. } = &self.tracking {
+            self.pending_seals.push_back(session.clone());
+            self.tracking = Tracking::Idle;
+            self.next_attempt = None;
+            self.mark_changed();
+        }
     }
 
     /// Queue a connect behind the work in flight. A connect begun before
@@ -917,10 +996,15 @@ impl Actor {
     fn connect(
         &mut self,
         epoch: ConnectEpoch,
+        source: ConnectSource,
         session: SessionSecret,
         reply: oneshot::Sender<ConnectOutcome>,
     ) {
-        if epoch.0 != self.epoch.load(Ordering::SeqCst) {
+        let stale = epoch.0 != self.epoch.load(Ordering::SeqCst);
+        // The stored session is only ever the unconfirmed one's.
+        let unwanted =
+            source == ConnectSource::Stored && !matches!(self.connection, Connection::Unconfirmed);
+        if stale || unwanted {
             let _ = reply.send(ConnectOutcome::Interrupted);
             return;
         }
@@ -931,6 +1015,7 @@ impl Actor {
             self.abandon_request();
         }
         self.queued_connect = Some(PendingConnect {
+            source,
             session: Arc::new(session),
             reply,
         });
@@ -1079,10 +1164,13 @@ impl Actor {
                 let Some(seal) = seal else {
                     return Ok(false);
                 };
-                db.with_writer_blocking(move |conn| Ok(sessions::cache_sealed(conn, &[seal], now)))
+                let written = db
+                    .with_writer_blocking(move |conn| {
+                        Ok(sessions::cache_sealed(conn, &[seal], now))
+                    })
                     .map_err(AccountError::from)
                     .and_then(|cached| cached)?;
-                Ok(true)
+                Ok(written > 0)
             });
             self.work = Some(Work::Seal { session, task });
             return;
@@ -1179,23 +1267,33 @@ impl Actor {
         started: Instant,
         answer: Result<SiteOutcome<Pec>, JoinError>,
     ) {
-        let PendingConnect { session, reply } = connect;
+        let PendingConnect {
+            source,
+            session,
+            reply,
+        } = connect;
         let balance = match answer {
             Ok(SiteOutcome::Read(balance)) => balance,
             Ok(SiteOutcome::Unauthorised) => {
-                // An unconfirmed stored session the site refuses is over.
-                if matches!(self.connection, Connection::Unconfirmed) {
+                // An unconfirmed stored session the site refuses is over;
+                // a refused sign-in leaves everything as it was.
+                if source == ConnectSource::Stored
+                    && matches!(self.connection, Connection::Unconfirmed)
+                {
                     self.connection = Connection::Expired;
                     self.mark_changed();
                 }
+                self.connect_failed();
                 let _ = reply.send(ConnectOutcome::NotAccepted);
                 return;
             }
             Ok(SiteOutcome::Failed(failure)) => {
+                self.connect_failed();
                 let _ = reply.send(ConnectOutcome::Unreachable(failure));
                 return;
             }
             Err(_) => {
+                self.connect_failed();
                 let _ = reply.send(ConnectOutcome::Interrupted);
                 return;
             }
@@ -1227,10 +1325,19 @@ impl Actor {
             });
         }
         // A session already running is read from now on; its first
-        // reading is the connect reading.
-        if matches!(self.tracking, Tracking::Running(_)) {
-            self.next_attempt = None;
-            self.attempt_due = Some(Instant::now());
+        // reading is the connect reading. One that stopped while the check
+        // was out is read to its close.
+        match &self.tracking {
+            Tracking::Running(_) => {
+                self.next_attempt = None;
+                self.attempt_due = Some(Instant::now());
+            }
+            Tracking::Grace { stopped, .. }
+                if self.next_attempt.is_none() && self.attempt_due.is_none() =>
+            {
+                self.next_attempt = Some(self.closing_from(*stopped));
+            }
+            Tracking::Grace { .. } | Tracking::Idle => {}
         }
         self.mark_changed();
         if !self.has_connected {
@@ -1243,9 +1350,14 @@ impl Actor {
 
     fn fetched(&mut self, ticket: Ticket, answer: Result<SiteOutcome<Reading>, JoinError>) {
         let current = ticket.generation == self.generation && self.is_connected();
+        // A reading for a session still being read, or stopped and not
+        // yet sealed, is kept; one for a session already sealed is not.
         let for_this = match ticket.purpose.session() {
             None => true,
-            Some(session) => self.tracking.session() == Some(session),
+            Some(session) => {
+                self.tracking.session() == Some(session)
+                    || self.pending_seals.iter().any(|pending| pending == session)
+            }
         };
         let closing = matches!(ticket.purpose, ReadingFor::Closing(_));
         let minute = matches!(
@@ -1317,11 +1429,17 @@ impl Actor {
         &mut self,
         ticket: Ticket,
         identical: bool,
-        stored: Result<Result<(ReadingHeader, Reading), AccountError>, JoinError>,
+        stored: Result<Result<Option<(ReadingHeader, Reading)>, AccountError>, JoinError>,
     ) {
         let closing = matches!(ticket.purpose, ReadingFor::Closing(_));
         match stored {
-            Ok(Ok((header, reading))) => {
+            Ok(Ok(None)) => {
+                tracing::debug!(target: "eo::account", "a reading for a sealed or deleted session was not kept");
+                if closing {
+                    self.closing_done(None);
+                }
+            }
+            Ok(Ok(Some((header, reading)))) => {
                 self.last_reading_at = Some(header.taken_at);
                 self.latest = Some(reading);
                 self.readings_stored += 1;
@@ -1349,7 +1467,10 @@ impl Actor {
     /// (`Some(true)`), different, or failed (`None`). Unless it ends the
     /// wait, the next closing reading stays due as `attempt` set it.
     fn closing_done(&mut self, identical: Option<bool>) {
-        let Tracking::Grace { session, attempts } = &mut self.tracking else {
+        let Tracking::Grace {
+            session, attempts, ..
+        } = &mut self.tracking
+        else {
             return;
         };
         *attempts += 1;
@@ -1381,11 +1502,22 @@ fn store_reading(
     reading: Reading,
     purpose: Purpose,
     session: Option<String>,
-) -> Result<(ReadingHeader, Reading), AccountError> {
+) -> Result<Option<(ReadingHeader, Reading)>, AccountError> {
     let tag = match session {
-        Some(session) if sessions::tracked_session(conn, &session)?.is_some() => Some(session),
-        _ => None,
+        Some(session) => {
+            let gone = sessions::tracked_session(conn, &session)?.is_none();
+            let sealed = sessions::is_sealed(conn, &session)?;
+            match purpose {
+                // A reading taken for a session already sealed or deleted
+                // has nothing left to measure: it is not kept.
+                Purpose::Baseline | Purpose::Session if gone || sealed => return Ok(None),
+                // A connect reading stands on its own.
+                _ if gone || sealed => None,
+                _ => Some(session),
+            }
+        }
+        None => None,
     };
     let header = store::record_reading(conn, &reading, purpose, tag.as_deref())?;
-    Ok((header, reading))
+    Ok(Some((header, reading)))
 }

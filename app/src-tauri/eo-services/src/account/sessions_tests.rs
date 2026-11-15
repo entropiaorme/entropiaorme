@@ -90,7 +90,7 @@ fn a_measure_is_read_only_for_a_known_session_with_readings() {
     assert!(matches!(read, MeasureRead::Measured { sealed: true, .. }));
     let to_seal = to_seal.expect("a seal to cache");
     assert_eq!(to_seal.sealed_at, 2.0);
-    cache_sealed(&conn, &[to_seal], 2.0).unwrap();
+    cache_sealed(&mut conn, &[to_seal], 2.0).unwrap();
     assert!(matches!(
         cached_measure(&conn, "hunt").unwrap(),
         CachedMeasure::Current {
@@ -186,7 +186,7 @@ fn measured_sessions_page_newest_first_beside_their_tracked_figures() {
         measured_sessions(&conn, Some(&next), Some(1), None, 10.0, None).unwrap();
     assert!(second.next.is_none());
     assert_eq!(sealed.len(), 1, "the ended hunt is sealed by this read");
-    cache_sealed(&conn, &sealed, 10.0).unwrap();
+    cache_sealed(&mut conn, &sealed, 10.0).unwrap();
     let hunt = &second.sessions[0];
     assert_eq!(hunt.id, "hunt");
     assert_eq!(hunt.name.as_deref(), Some("hunt run"));
@@ -311,4 +311,84 @@ fn releasing_a_session_touches_no_other() {
         )
         .unwrap();
     assert_eq!(tagged, 12);
+}
+
+/// The hunt computed for sealing, as a read hands it back.
+fn hunt_to_seal(conn: &mut rusqlite::Connection) -> super::sessions::ToSeal {
+    store_the_hunt(conn, "hunt");
+    measure_to_seal(conn, "hunt", None, 1.0)
+        .unwrap()
+        .expect("an ended hunt with readings")
+}
+
+#[test]
+fn a_seal_is_not_written_once_a_reading_was_stored_after_it_was_computed() {
+    let mut conn = migrated_in_memory().unwrap();
+    let seal = hunt_to_seal(&mut conn);
+    let late = recorded_hunt().pop().unwrap();
+    record_reading(&mut conn, &late, Purpose::Session, Some("hunt")).unwrap();
+    assert_eq!(cache_sealed(&mut conn, &[seal], 2.0).unwrap(), 0);
+    assert_eq!(cached_rows(&conn), 0);
+    // The next read computes again, over every reading.
+    let (_, to_seal) = session_measure(&conn, "hunt", &KnownRoles::default(), 3.0, None).unwrap();
+    assert_eq!(
+        cache_sealed(&mut conn, &[to_seal.unwrap()], 3.0).unwrap(),
+        1
+    );
+}
+
+#[test]
+fn a_seal_is_not_written_for_a_session_deleted_after_it_was_computed() {
+    let mut conn = migrated_in_memory().unwrap();
+    let seal = hunt_to_seal(&mut conn);
+    release_session(&conn, "hunt").unwrap();
+    conn.execute("DELETE FROM tracking_sessions WHERE id = 'hunt'", [])
+        .unwrap();
+    assert_eq!(cache_sealed(&mut conn, &[seal], 2.0).unwrap(), 0);
+    assert_eq!(cached_rows(&conn), 0, "no row is put back");
+}
+
+#[test]
+fn a_late_seal_never_replaces_one_computed_from_more_readings() {
+    let mut conn = migrated_in_memory().unwrap();
+    // A read computes a seal while the connection's closing readings are
+    // still to come.
+    session_row(&conn, "hunt", STARTED, Some(ENDED));
+    let readings = recorded_hunt();
+    for reading in readings.iter().take(10) {
+        record_reading(&mut conn, reading, Purpose::Session, Some("hunt")).unwrap();
+    }
+    let early = measure_to_seal(&conn, "hunt", None, 1.0).unwrap().unwrap();
+    for reading in readings.iter().skip(10) {
+        record_reading(&mut conn, reading, Purpose::Session, Some("hunt")).unwrap();
+    }
+    // The connection's own seal, over every reading, lands first.
+    let full = measure_to_seal(&conn, "hunt", None, 2.0).unwrap().unwrap();
+    assert_eq!(cache_sealed(&mut conn, &[full], 2.0).unwrap(), 1);
+    let sealed_count = |conn: &rusqlite::Connection| -> i64 {
+        conn.query_row(
+            "SELECT reading_count FROM account_session_measures WHERE session_id = 'hunt'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let before = sealed_count(&conn);
+    // The late write is refused: its readings are not the session's now.
+    assert_eq!(
+        cache_sealed(&mut conn, std::slice::from_ref(&early), 3.0).unwrap(),
+        0
+    );
+    assert_eq!(sealed_count(&conn), before);
+    // Even with the reading count put back as it was, a sealed measure of
+    // more readings is not replaced by one of fewer.
+    conn.execute(
+        // id-order: insertion (the five stored last)
+        "DELETE FROM account_readings WHERE id IN \
+         (SELECT id FROM account_readings ORDER BY id DESC LIMIT 5)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(cache_sealed(&mut conn, &[early], 4.0).unwrap(), 0);
+    assert_eq!(sealed_count(&conn), before);
 }

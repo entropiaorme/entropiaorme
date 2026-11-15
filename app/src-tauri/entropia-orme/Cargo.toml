@@ -40,6 +40,9 @@ rusqlite = { workspace = true }
 # command surface).
 base64 = { workspace = true }
 tokio = { workspace = true }
+# Tells the account sign-in window the app opened from any other window
+# carrying its label, by its native window handle.
+raw-window-handle = { workspace = true }
 # The composition root discharges the ONNX Runtime obligations the
 # recogniser depends on: it pins the bundled dylib to an absolute path
 # (`ort::init_from`) and configures the execution-provider ladder before

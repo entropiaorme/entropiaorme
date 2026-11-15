@@ -954,8 +954,9 @@ impl Api {
         })
     }
 
-    /// Drop the session and stop reading. The shell also forgets the
-    /// stored session and closes the sign-in window.
+    /// Drop the session and stop reading. The shell's disconnect closes
+    /// the sign-in window and forgets the stored session before the
+    /// connection drops it (it does not go through this method).
     pub async fn account_disconnect(&self) -> Result<(), ApiError> {
         self.account()?.disconnect().await;
         Ok(())

@@ -40,6 +40,7 @@ pub mod harvest_yield;
 pub mod healing_profile;
 pub mod healing_review;
 pub mod hotbar_listener;
+pub mod inventory_changes;
 pub mod keyset;
 pub mod keystroke_source;
 pub mod loaded_expectation;

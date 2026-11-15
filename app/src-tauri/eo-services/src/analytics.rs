@@ -32,6 +32,7 @@ use crate::time::{naive_to_epoch, to_iso_utc};
 mod asset_positions;
 mod conversion;
 mod realised;
+mod strongbox_opening;
 
 pub use asset_positions::{AssetPurchaseRow, PurchaseFigures};
 
@@ -40,6 +41,9 @@ pub use conversion::{
     ConversionLineSide, ConversionOutput, ItemConversion,
 };
 pub(crate) use realised::realised_markup_by_quest;
+pub use strongbox_opening::{
+    BoxSource, OpenedItem, OpenedItemRow, OpeningIntake, StrongboxOpening, StrongboxOpeningRow,
+};
 
 /// The analytics domain service over the shared database and injected
 /// clock: the Overview / Activity aggregates and the ledger / preset /
@@ -4447,6 +4451,54 @@ fn produced_unit_tt(item_name: &str) -> Option<f64> {
     }
 }
 
+/// Undo one conversion inside the caller's transaction: what it consumed
+/// comes back and what it produced is unmade. `Ok(false)` when there is no
+/// standing conversion by that id; the refusal reason when what it produced
+/// has since left. Nothing is committed here, so a caller undoing several
+/// conversions takes them all back or none.
+fn undo_conversion_within(
+    tx: &rusqlite::Transaction<'_>,
+    conversion_id: &str,
+    undone_at: &str,
+    now: f64,
+) -> Result<Result<bool, String>, DbError> {
+    use rusqlite::OptionalExtension as _;
+    let conversion: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT converted_at, gain_entry_id FROM stock_conversions \
+             WHERE id = ? AND undone_at IS NULL",
+            rusqlite::params![conversion_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((converted_at, gain_entry_id)) = conversion else {
+        return Ok(Ok(false));
+    };
+    if let Some((item, short)) = conversion::conversion_blocker(tx, conversion_id)? {
+        return Ok(Err(blocked_reason(&item, short)));
+    }
+
+    tx.execute(
+        "DELETE FROM stock_movements WHERE ref_id = ?",
+        rusqlite::params![conversion_id],
+    )?;
+    conversion::unwind_assets_and_credits(tx, conversion_id, now)?;
+    if let Some(entry_id) = gain_entry_id {
+        tx.execute(
+            "DELETE FROM ledger_entries WHERE id = ?",
+            rusqlite::params![entry_id],
+        )?;
+    }
+    tx.execute(
+        "UPDATE stock_conversions SET undone_at = ?, gain_entry_id = NULL WHERE id = ?",
+        rusqlite::params![undone_at, conversion_id],
+    )?;
+    // A conversion writes no money, but its day is refreshed all the same:
+    // cheap, and it keeps every undo path the same shape.
+    daily_rollup::refresh_days(tx, [converted_at])?;
+    Ok(Ok(true))
+}
+
 /// Why a reversal cannot go ahead, in terms of the stock rather than the
 /// tables. The reader owns an inventory, not a movement ledger.
 fn blocked_reason(item_name: &str, short: f64) -> String {
@@ -7220,43 +7272,12 @@ impl AnalyticsService {
         let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let conversion: Option<(String, Option<String>)> = tx
-                    .query_row(
-                        "SELECT converted_at, gain_entry_id FROM stock_conversions \
-                         WHERE id = ? AND undone_at IS NULL",
-                        rusqlite::params![conversion_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .optional()?;
-                let Some((converted_at, gain_entry_id)) = conversion else {
-                    return Ok(Ok(false));
-                };
-                if let Some((item, short)) = conversion::conversion_blocker(&tx, &conversion_id)? {
-                    return Ok(Err(blocked_reason(&item, short)));
+                let undone = undo_conversion_within(&tx, &conversion_id, &undone_at, now)?;
+                if matches!(undone, Ok(true)) {
+                    tx.commit()?;
                 }
-
-                tx.execute(
-                    "DELETE FROM stock_movements WHERE ref_id = ?",
-                    rusqlite::params![conversion_id],
-                )?;
-                conversion::unwind_assets_and_credits(&tx, &conversion_id, now)?;
-                if let Some(entry_id) = gain_entry_id {
-                    tx.execute(
-                        "DELETE FROM ledger_entries WHERE id = ?",
-                        rusqlite::params![entry_id],
-                    )?;
-                }
-                tx.execute(
-                    "UPDATE stock_conversions SET undone_at = ?, gain_entry_id = NULL WHERE id = ?",
-                    rusqlite::params![undone_at, conversion_id],
-                )?;
-                // A conversion writes no money, but its day is refreshed all
-                // the same: cheap, and it keeps every undo path the same shape.
-                daily_rollup::refresh_days(&tx, [converted_at])?;
-                tx.commit()?;
-                Ok(Ok(true))
+                Ok(undone)
             })
             .await?
             .map_err(AnalyticsError::Rejected)

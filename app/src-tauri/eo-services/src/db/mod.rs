@@ -1966,10 +1966,11 @@ mod tests {
         //   session index
         // + the screen look minutes' table
         // + asset positions' purchases table and 2 indexes
+        // + strongbox openings' 2 tables and opened-on index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 255);
+        assert_eq!(master.len(), 258);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

@@ -1274,7 +1274,7 @@ pub(super) fn push_history_rows(
     Ok(())
 }
 
-fn validate(request: &mut ItemConversion) -> Result<(), AnalyticsError> {
+pub(super) fn validate(request: &mut ItemConversion) -> Result<(), AnalyticsError> {
     let invalid = AnalyticsError::InvalidInput;
     if request.inputs.is_empty() {
         return Err(invalid("a conversion needs something going in"));
@@ -1391,7 +1391,7 @@ impl AnalyticsService {
 }
 
 #[cfg(test)]
-mod tests {
+pub(in crate::analytics) mod tests {
     use super::super::tests::write_service;
     use super::*;
 
@@ -1399,7 +1399,7 @@ mod tests {
     const MAYHEM: i64 = 17;
     const MINING: i64 = 9;
 
-    fn held(item: &str, quantity: f64) -> ConversionInput {
+    pub(in crate::analytics) fn held(item: &str, quantity: f64) -> ConversionInput {
         ConversionInput::Held {
             item_name: item.to_string(),
             quantity,
@@ -1415,7 +1415,12 @@ mod tests {
         }
     }
 
-    fn bought(item: &str, quantity: f64, tt_value: f64, markup_paid: f64) -> ConversionInput {
+    pub(in crate::analytics) fn bought(
+        item: &str,
+        quantity: f64,
+        tt_value: f64,
+        markup_paid: f64,
+    ) -> ConversionInput {
         ConversionInput::Bought {
             item_name: item.to_string(),
             quantity,
@@ -1424,7 +1429,11 @@ mod tests {
         }
     }
 
-    fn output(item: &str, tt_value: f64, holding: ConversionHolding) -> ConversionOutput {
+    pub(in crate::analytics) fn output(
+        item: &str,
+        tt_value: f64,
+        holding: ConversionHolding,
+    ) -> ConversionOutput {
         ConversionOutput {
             item_name: item.to_string(),
             quantity: 1.0,
@@ -1434,7 +1443,7 @@ mod tests {
     }
 
     /// Put `quantity` of an item in stock as hunted loot under a definition.
-    async fn seed_hunted(
+    pub(in crate::analytics) async fn seed_hunted(
         service: &AnalyticsService,
         definition_id: i64,
         item: &str,
@@ -1481,7 +1490,10 @@ mod tests {
             .unwrap();
     }
 
-    async fn credited(service: &AnalyticsService, definition_id: i64) -> f64 {
+    pub(in crate::analytics) async fn credited(
+        service: &AnalyticsService,
+        definition_id: i64,
+    ) -> f64 {
         service
             .realised_markup_by_definition()
             .await
@@ -1491,7 +1503,7 @@ mod tests {
             .map_or(0.0, |row| row.net_markup)
     }
 
-    async fn stock(
+    pub(in crate::analytics) async fn stock(
         service: &AnalyticsService,
         item: &str,
     ) -> Option<crate::analytics::StockPositionRow> {
@@ -1503,7 +1515,9 @@ mod tests {
             .find(|row| row.item_name == item)
     }
 
-    async fn ledger(service: &AnalyticsService) -> Vec<(String, String, f64)> {
+    pub(in crate::analytics) async fn ledger(
+        service: &AnalyticsService,
+    ) -> Vec<(String, String, f64)> {
         service
             .db
             .with_reader(|conn| {
@@ -1532,7 +1546,12 @@ mod tests {
         }
     }
 
-    async fn list_and_sell(service: &AnalyticsService, item: &str, price: f64, fee: f64) {
+    pub(in crate::analytics) async fn list_and_sell(
+        service: &AnalyticsService,
+        item: &str,
+        price: f64,
+        fee: f64,
+    ) {
         let listing = service
             .create_auction_listing(
                 Profession::Inventory,

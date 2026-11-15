@@ -53,6 +53,21 @@ tauri-plugin-store = "2"
 # it that way.
 tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
+# The account connection's reader (`eo-services` `account::site`): two
+# fixed read requests to the Entropia Universe account site over HTTPS.
+# reqwest 0.13 is already in the graph through the updater plugin. This
+# crate asks for default features off and only `rustls-no-provider`: no
+# native TLS, no cookie store (its one cookie is set on each request), no
+# HTTP/2, and no system proxy lookup; it reads bodies as capped bytes and
+# hands them to the strict reading parser. The crypto provider is passed in
+# explicitly below rather than installed process-wide.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+# The TLS stack under that reader, at the versions the updater already
+# resolves: rustls over the ring provider (no aws-lc-rs), its floor at the
+# first release clear of its open advisories, and the platform's own
+# certificate verifier.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.6"
 serde = { version = "1", features = ["derive"] }
 # preserve_order keeps JSON object members in insertion order end to end,
 # which the typed command DTOs' byte-for-byte response fidelity (the facades
@@ -83,6 +98,15 @@ libc = "0.2"
 # The GTK binding Tauri's Linux shell is built on (pinned to the line it
 # resolves), for the overlay input shapes the shell sets on its windows.
 gtk = "0.18"
+# The platform webviews under Tauri, at the versions it already resolves,
+# for the one thing Tauri does not expose: refusing the permission
+# requests (camera, microphone, location, notifications, clipboard) a
+# remote page makes in the account sign-in window.
+webkit2gtk = "2"
+webview2-com = "0.38"
+# Window-pattern matching as Tauri reads a capability's window list, for
+# the test that no capability reaches the account sign-in window.
+glob = "0.3"
 # Pure-Rust, safe X11 protocol bindings: the Linux game-window discovery
 # and geometry lookups run over XWayland (where the game and our windows
 # both live), mirroring the Windows EnumWindows/GetClientRect helpers.

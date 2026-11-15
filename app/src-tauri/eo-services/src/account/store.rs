@@ -27,7 +27,9 @@ use std::collections::BTreeMap;
 use rusqlite::OptionalExtension;
 
 use super::amount::Pec;
-use super::measure::{measure_session, SessionMeasure, SessionWindow, MEASURE_VERSION};
+use super::measure::{
+    measure_session_with_baseline, SessionMeasure, SessionWindow, MEASURE_VERSION,
+};
 use super::reading::{Container, ContainerKind, Holding, HoldingKey, Reading, Row};
 use super::roles::RoleSource;
 use super::AccountError;
@@ -45,7 +47,9 @@ pub const KEYFRAME_EVERY: usize = 30;
 pub enum Purpose {
     /// On connecting to the account site.
     Connect,
-    /// While a tracked session runs.
+    /// The first reading of a tracked session, taken because it started.
+    Baseline,
+    /// While a tracked session runs, and when it has stopped.
     Session,
     /// For a bounded run of play outside a tracked session.
     Run,
@@ -57,6 +61,7 @@ impl Purpose {
     pub fn as_str(self) -> &'static str {
         match self {
             Purpose::Connect => "connect",
+            Purpose::Baseline => "baseline",
             Purpose::Session => "session",
             Purpose::Run => "run",
             Purpose::Manual => "manual",
@@ -66,6 +71,7 @@ impl Purpose {
     pub fn parse(value: &str) -> Option<Purpose> {
         match value {
             "connect" => Some(Purpose::Connect),
+            "baseline" => Some(Purpose::Baseline),
             "session" => Some(Purpose::Session),
             "run" => Some(Purpose::Run),
             "manual" => Some(Purpose::Manual),
@@ -551,24 +557,51 @@ pub fn cached_measure(
     })
 }
 
-/// Compute a session's measure from its stored readings and cache it.
-/// `sealed_at` marks the measure final: the session has ended and its
-/// closing reading is in.
-pub fn refresh_session_measure(
+/// A session's measure computed from its stored readings, with the
+/// readings it used, ready to cache.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComputedMeasure {
+    pub measure: SessionMeasure,
+    first_reading: Option<ReadingId>,
+    last_reading: Option<ReadingId>,
+}
+
+/// Compute a session's measure from its stored readings. A read: run it
+/// on a reader.
+pub fn compute_session_measure(
     conn: &rusqlite::Connection,
     session_id: &str,
     window: &SessionWindow,
     roles: &dyn RoleSource,
-    sealed_at: Option<f64>,
-    computed_at: f64,
-) -> Result<SessionMeasure, AccountError> {
+) -> Result<ComputedMeasure, AccountError> {
     let stored = readings_for_window(conn, window)?;
     let readings: Vec<Reading> = stored.iter().map(|stored| stored.reading.clone()).collect();
-    let outcome = measure_session(window, &readings, roles)?;
+    // The session's own baseline: the reading it started.
+    let baseline = stored.iter().position(|stored| {
+        stored.header.purpose == Purpose::Baseline
+            && stored.header.session_id.as_deref() == Some(session_id)
+    });
+    let outcome = measure_session_with_baseline(window, &readings, baseline, roles)?;
     let used = &stored[outcome.used.clone()];
-    let measure = outcome.measure;
+    Ok(ComputedMeasure {
+        measure: outcome.measure,
+        first_reading: used.first().map(|stored| stored.header.id),
+        last_reading: used.last().map(|stored| stored.header.id),
+    })
+}
+
+/// Cache a computed measure. `sealed_at` marks it final: the session has
+/// ended and its closing readings are in. A short write.
+pub fn cache_session_measure(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    computed: &ComputedMeasure,
+    sealed_at: Option<f64>,
+    computed_at: f64,
+) -> Result<(), AccountError> {
+    let measure = &computed.measure;
     let coverage = measure.coverage;
-    let json = serde_json::to_string(&measure)
+    let json = serde_json::to_string(measure)
         .map_err(|_| AccountError::Stored("a measure does not serialise"))?;
     let count = |n: usize| i64::try_from(n).map_err(|_| AccountError::Stored("too many readings"));
     conn.execute(
@@ -588,8 +621,8 @@ pub fn refresh_session_measure(
              computed_at = excluded.computed_at",
         rusqlite::params![
             session_id,
-            used.first().map(|stored| stored.header.id.0),
-            used.last().map(|stored| stored.header.id.0),
+            computed.first_reading.map(|id| id.0),
+            computed.last_reading.map(|id| id.0),
             sealed_at,
             coverage.level.as_str(),
             count(coverage.reading_count)?,
@@ -599,7 +632,22 @@ pub fn refresh_session_measure(
             computed_at,
         ],
     )?;
-    Ok(measure)
+    Ok(())
+}
+
+/// Compute a session's measure from its stored readings and cache it, on
+/// one connection.
+pub fn refresh_session_measure(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    window: &SessionWindow,
+    roles: &dyn RoleSource,
+    sealed_at: Option<f64>,
+    computed_at: f64,
+) -> Result<SessionMeasure, AccountError> {
+    let computed = compute_session_measure(conn, session_id, window, roles)?;
+    cache_session_measure(conn, session_id, &computed, sealed_at, computed_at)?;
+    Ok(computed.measure)
 }
 
 /// A session's measure: the cached one when the current rules sealed it,

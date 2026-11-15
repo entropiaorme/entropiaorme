@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use eo_api::account::{AccountSessionMeasure, AccountStatus, MeasuredSessionPage};
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use eo_api::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
@@ -1004,6 +1005,37 @@ pub async fn strongbox_opening_undo(
     input: ActivityUndoInput,
 ) -> Result<(), ApiError> {
     facade(&app)?.strongbox_opening_undo(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_status(app: tauri::AppHandle) -> Result<AccountStatus, ApiError> {
+    facade(&app)?.account_status().await
+}
+
+/// Disconnect, completed in the shell so it always completes: the sign-in
+/// window closes and its watcher stops, the stored session is forgotten,
+/// then the connection drops the session and stops reading.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_disconnect(app: tauri::AppHandle) -> Result<(), ApiError> {
+    crate::account_window::disconnect(&app).await;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_session_measure(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Nullable<AccountSessionMeasure>, ApiError> {
+    facade(&app)?.account_session_measure(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_measured_sessions(
+    app: tauri::AppHandle,
+    cursor: Option<String>,
+    limit: Option<i64>,
+) -> Result<MeasuredSessionPage, ApiError> {
+    facade(&app)?.account_measured_sessions(cursor, limit).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

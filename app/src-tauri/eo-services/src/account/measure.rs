@@ -9,10 +9,16 @@
 //! reading stored just before them when it was taken at or before the
 //! session's start and at most 90 seconds before it, and the reading
 //! stored just after them when it was taken at or after the session's end
-//! and at most 90 seconds after it. The measure is complete only with both
-//! of those, at least two readings, and no gap between consecutive
-//! readings above 150 seconds; otherwise it is partial, with its gaps
-//! counted. A gap is never filled with an estimate: what changed across it
+//! and at most 90 seconds after it. The session's start is read by that
+//! reading before it, or by the session's own baseline: the reading the
+//! connection took because the session started, which necessarily lands a
+//! moment after it, when it is the first reading inside the session and
+//! was taken at most 10 seconds after the start. Any other reading inside
+//! the session (one taken on connecting part-way through, say) leaves the
+//! start unread, however early it lands. The
+//! measure is complete only with both ends read, at least two readings,
+//! and no gap between consecutive readings above 150 seconds; otherwise it
+//! is partial, with its gaps counted. A gap is never filled with an estimate: what changed across it
 //! is measured as one step, and the coverage says so.
 //!
 //! Nothing that arrives or leaves vanishes from the measure, and nothing
@@ -46,6 +52,10 @@ use super::AccountError;
 
 /// How far before its start a session's opening reading may be taken.
 pub const OPENING_WITHIN_SECONDS: f64 = 90.0;
+/// How far after its start a session's own baseline may be taken and still
+/// read the start. The baseline usually lands within a second; a longer
+/// allowance would claim coverage the readings do not have.
+pub const BASELINE_WITHIN_SECONDS: f64 = 10.0;
 /// How far after its end a session's closing reading may be taken.
 pub const CLOSING_WITHIN_SECONDS: f64 = 90.0;
 /// The longest interval between consecutive readings that is not a gap.
@@ -57,7 +67,7 @@ pub const SHRAPNEL_TO_AMMO_PERCENT: i64 = 101;
 
 /// The version of the measure's shape and rules. A cached measure of
 /// another version is recomputed from its readings.
-pub const MEASURE_VERSION: i64 = 1;
+pub const MEASURE_VERSION: i64 = 3;
 
 /// A tracked session's span, unix seconds; no end while it runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -310,7 +320,11 @@ pub struct MeasureOutcome {
 
 /// Which of the readings, in the order they were stored, a session's
 /// measure uses.
-fn select(window: &SessionWindow, readings: &[Reading]) -> (Range<usize>, Edge, Edge) {
+fn select(
+    window: &SessionWindow,
+    readings: &[Reading],
+    baseline: Option<usize>,
+) -> (Range<usize>, Edge, Edge) {
     let n = readings.len();
     let at = |index: usize| readings[index].taken_at();
     let inside = |reading: &Reading| {
@@ -334,6 +348,13 @@ fn select(window: &SessionWindow, readings: &[Reading]) -> (Range<usize>, Edge, 
     let opening = before.filter(|&index| {
         at(index) <= window.started_at && window.started_at - at(index) <= OPENING_WITHIN_SECONDS
     });
+    // Without a reading close before the start, the session's own
+    // baseline reads it, when it is the first reading inside the session
+    // and was taken the moment the session started.
+    let baseline = baseline.filter(|&index| {
+        core.as_ref().is_some_and(|core| core.start == index)
+            && at(index) - window.started_at <= BASELINE_WITHIN_SECONDS
+    });
     let closing = window.ended_at.and_then(|ended| {
         after.filter(|&index| {
             index < n && at(index) >= ended && at(index) - ended <= CLOSING_WITHIN_SECONDS
@@ -355,16 +376,33 @@ fn select(window: &SessionWindow, readings: &[Reading]) -> (Range<usize>, Edge, 
             Edge::Unread
         }
     };
-    (first..last.max(first), edge(opening), edge(closing))
+    (
+        first..last.max(first),
+        edge(opening.or(baseline)),
+        edge(closing),
+    )
 }
 
-/// Measure a session over its readings, in the order they were stored.
+/// Measure a session over its readings, in the order they were stored,
+/// none of them its baseline.
 pub fn measure_session(
     window: &SessionWindow,
     readings: &[Reading],
     roles: &dyn RoleSource,
 ) -> Result<MeasureOutcome, AccountError> {
-    let (used, opening, closing) = select(window, readings);
+    measure_session_with_baseline(window, readings, None, roles)
+}
+
+/// Measure a session over its readings, in the order they were stored;
+/// `baseline` is the position of the session's own baseline among them,
+/// when it has one.
+pub fn measure_session_with_baseline(
+    window: &SessionWindow,
+    readings: &[Reading],
+    baseline: Option<usize>,
+    roles: &dyn RoleSource,
+) -> Result<MeasureOutcome, AccountError> {
+    let (used, opening, closing) = select(window, readings, baseline);
     let span = &readings[used.clone()];
     let book = RoleBook::resolve(roles, span);
     let gap_count = span
@@ -1390,6 +1428,63 @@ mod tests {
         );
         assert_eq!(beyond.level, CoverageLevel::Partial);
         assert_eq!(beyond.reading_count, 1);
+    }
+
+    #[test]
+    fn only_the_session_s_own_baseline_within_ten_seconds_reads_its_start() {
+        let window = SessionWindow {
+            started_at: 100.0,
+            ended_at: Some(200.0),
+        };
+        let measured = |first: f64, baseline: Option<usize>| {
+            measure_session_with_baseline(
+                &window,
+                &at(&[first, 160.0, 220.0]),
+                baseline,
+                &OneWeapon,
+            )
+            .unwrap()
+            .measure
+            .coverage
+        };
+        // The baseline taken the moment the session started: the start is
+        // read and the session is complete.
+        let prompt = measured(100.4, Some(0));
+        assert_eq!(prompt.opening, Edge::Read);
+        assert_eq!(prompt.level, CoverageLevel::Complete);
+        assert_eq!(prompt.reading_count, 3);
+        assert_eq!(measured(105.0, Some(0)).opening, Edge::Read);
+        assert_eq!(measured(110.0, Some(0)).opening, Edge::Read);
+        // A baseline that landed later than that does not read it.
+        assert_eq!(measured(110.5, Some(0)).opening, Edge::Unread);
+        assert_eq!(measured(120.0, Some(0)).opening, Edge::Unread);
+        // Nor does any other reading, however early: a connect part-way
+        // through is partial at 5, 20 or 100 seconds in.
+        for first in [105.0, 120.0, 200.0] {
+            let coverage = measured(first, None);
+            assert_eq!(coverage.opening, Edge::Unread, "{first}");
+            assert_eq!(coverage.level, CoverageLevel::Partial, "{first}");
+        }
+        // A baseline that is not the first reading inside the session does
+        // not read it either.
+        let outcome = measure_session_with_baseline(
+            &window,
+            &at(&[100.4, 103.0, 160.0, 220.0]),
+            Some(1),
+            &OneWeapon,
+        )
+        .unwrap();
+        assert_eq!(outcome.measure.coverage.opening, Edge::Unread);
+        // An older reading close before the start is still the one used.
+        let outcome = measure_session_with_baseline(
+            &window,
+            &at(&[50.0, 100.4, 160.0, 220.0]),
+            Some(1),
+            &OneWeapon,
+        )
+        .unwrap();
+        assert_eq!(outcome.used, 0..4);
+        assert_eq!(outcome.measure.coverage.opening, Edge::Read);
     }
 
     #[test]

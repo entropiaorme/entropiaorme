@@ -48,6 +48,7 @@ pub enum Topic {
     WeaponsUpdated,
     ConsumablesUpdated,
     MarketUpdated,
+    AccountUpdated,
 }
 
 impl Topic {
@@ -77,6 +78,7 @@ impl Topic {
             Topic::WeaponsUpdated => eo_wire::domain_events::TOPIC_WEAPONS_UPDATED,
             Topic::ConsumablesUpdated => eo_wire::domain_events::TOPIC_CONSUMABLES_UPDATED,
             Topic::MarketUpdated => eo_wire::domain_events::TOPIC_MARKET_UPDATED,
+            Topic::AccountUpdated => eo_wire::domain_events::TOPIC_ACCOUNT_UPDATED,
         }
     }
 }
@@ -307,6 +309,7 @@ mod tests {
             (Topic::TrackingSessionUpdated, "tracking.session.updated"),
             (Topic::ScanStatusChanged, "scan.status.changed"),
             (Topic::MarketUpdated, "market.updated"),
+            (Topic::AccountUpdated, "account.updated"),
         ];
         for (topic, wire) in expected {
             assert_eq!(topic.as_str(), wire);

@@ -46,6 +46,7 @@ use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::tracker::HuntTracker;
 use eo_services::weapon_review::WeaponReviewService;
 
+pub mod account;
 pub mod activities;
 pub mod analytics;
 pub mod character;
@@ -203,6 +204,10 @@ pub struct Api {
     /// the native capture and producer seams are available.
     navigation: Option<Arc<eo_services::navigation::NavigationService>>,
     input: settings::InputAccess,
+    /// The account connection, attached by composition; `None` on a
+    /// facade built without it (the account family then answers an
+    /// internal error).
+    account: Option<Arc<eo_services::account::AccountRecorder>>,
 }
 
 /// Weapon pricing over the live config and the running doses: the reload
@@ -320,6 +325,7 @@ impl Api {
             coord_capture,
             navigation,
             input: settings::InputAccess::inert(),
+            account: None,
         }
     }
 

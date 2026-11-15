@@ -12,6 +12,7 @@
 
 mod common;
 
+mod account_facade;
 mod analytics_facade;
 mod character_facade;
 mod codex_facade;

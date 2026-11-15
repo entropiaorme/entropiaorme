@@ -52,6 +52,72 @@ export interface AcceptResult {
 }
 
 /**
+ * The connection's state.
+ */
+export type AccountConnectionState = 'disconnected' | 'connected' | 'unconfirmed' | 'expired';
+
+/**
+ * An item in one place.
+ */
+export interface AccountHolding {
+	name: string;
+	place: AccountPlace;
+}
+
+/**
+ * Where a holding sits.
+ */
+export type AccountPlace = {
+		kind: 'carried';
+	} | {
+		kind: 'auction';
+	} | {
+		planet: string;
+		kind: 'storage';
+	} | {
+		parent: string;
+		kind: 'attached';
+	} | {
+		name: string;
+		kind: 'other';
+	};
+
+/**
+ * A tracked session's measured account.
+ */
+export interface AccountSessionMeasure {
+	sessionId: string;
+	/** Final: the session has ended and its closing readings are in. */
+	sealed: boolean;
+	coverage: MeasuredCoverage;
+	ammo: MeasuredAmmo[];
+	decay: MeasuredDecay[];
+	repairs: MeasuredRepair[];
+	otherConsumption: MeasuredConsumption[];
+	/** What arrived that no opening claimed, no purchase paid for and no move brought: the figure tracked loot compares with. */
+	gained: MeasuredGain[];
+	gainedTotal: MeasuredAmount;
+	/** Of the gained total, what may be strongbox contents. */
+	gainedPossiblyStrongbox: MeasuredAmount;
+	events: MeasuredEvent[];
+}
+
+/**
+ * The account connection as it stands.
+ */
+export interface AccountStatus {
+	state: AccountConnectionState;
+	/** When the current connection was made. */
+	connectedAt: string | null;
+	/** When the latest reading was taken. */
+	lastReadingAt: string | null;
+	/** Whether a tracked session is being read now (running, or waiting for its closing readings). */
+	readingSession: boolean;
+	/** Whether the player has connected and not disconnected since. */
+	hasConnected: boolean;
+}
+
+/**
  * One standing activity, as the control renders its chip.
  */
 export interface ActiveActivityView {
@@ -2427,6 +2493,292 @@ export interface MarketUnitPriceResult {
 	pedPerUnit: number;
 	/** Epoch seconds. */
 	observedAt: number;
+}
+
+/**
+ * The ammo of one type a session used.
+ */
+export interface MeasuredAmmo {
+	name: string;
+	/** The change in units, always exact. */
+	netUnits: number;
+	net: MeasuredAmount;
+	split: MeasuredAmmoSplit;
+}
+
+/**
+ * How an ammo type's change splits into burned and paid back.
+ */
+export type MeasuredAmmoSplit = {
+		burnedUnits: number;
+		burned: MeasuredAmount;
+		strongboxUnits: number;
+		strongbox: MeasuredAmount;
+		convertedUnits: number;
+		converted: MeasuredAmount;
+		kind: 'settled';
+	} | {
+		burnedUnitsByRows: number;
+		strongboxUnitsByRows: number;
+		convertedUnits: number;
+		kind: 'unsettled';
+	};
+
+/**
+ * What the ammo across a session's types burned.
+ */
+export type MeasuredAmmoTotal = {
+		burned: MeasuredAmount;
+		kind: 'settled';
+	} | {
+		kind: 'unsettled';
+	};
+
+/**
+ * An amount in PED, with how exactly it is known.
+ */
+export interface MeasuredAmount {
+	ped: number;
+	precision: MeasuredPrecision;
+}
+
+/**
+ * A stackable consumed that is not ammo.
+ */
+export interface MeasuredConsumption {
+	item: AccountHolding;
+	role: MeasuredRole;
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * How well the readings cover the session.
+ */
+export interface MeasuredCoverage {
+	level: MeasuredCoverageLevel;
+	opening: MeasuredEdge;
+	closing: MeasuredEdge;
+	readingCount: number;
+	/** Intervals between consecutive readings longer than 150 seconds. */
+	gapCount: number;
+}
+
+/**
+ * Whether a measure's readings bracket the session.
+ */
+export type MeasuredCoverageLevel = 'partial' | 'complete';
+
+/**
+ * One item's wear across the session, never netted against repairs.
+ */
+export interface MeasuredDecay {
+	item: AccountHolding;
+	role: MeasuredRole;
+	decay: MeasuredAmount;
+}
+
+/**
+ * Whether one end of the session was read.
+ */
+export type MeasuredEdge = 'read' | 'unread';
+
+/**
+ * Something worth listing that is not a cost or a gain.
+ */
+export type MeasuredEvent = {
+		between: MeasuredSpan;
+		boxName: string;
+		boxes: number;
+		/** The keys' TT: the deposit the boxes pay back. */
+		keys: MeasuredAmount;
+		ammoUnits: number;
+		ammoRows: number;
+		ammoFromRows: MeasuredAmount;
+		ammoFromKeys: MeasuredAmount;
+		contents: MeasuredEventItem[];
+		settlement: MeasuredSettlement;
+		kind: 'strongboxOpening';
+	} | {
+		between: MeasuredSpan;
+		name: string;
+		units: number;
+		amount: MeasuredAmount;
+		from: AccountPlace;
+		to: AccountPlace;
+		moveKind: MeasuredMoveKind;
+		kind: 'moved';
+	} | {
+		between: MeasuredSpan;
+		item: AccountHolding;
+		units: number;
+		value: MeasuredAmount;
+		kind: 'appeared';
+	} | {
+		between: MeasuredSpan;
+		item: AccountHolding;
+		units: number;
+		value: MeasuredAmount;
+		kind: 'left';
+	} | {
+		between: MeasuredSpan;
+		items: MeasuredEventItem[];
+		amount: MeasuredAmount;
+		cardRise: MeasuredAmount;
+		kind: 'sale';
+	} | {
+		between: MeasuredSpan;
+		items: MeasuredEventItem[];
+		amount: MeasuredAmount;
+		cardFall: MeasuredAmount;
+		kind: 'purchase';
+	} | {
+		between: MeasuredSpan;
+		shrapnelUnits: number;
+		shrapnel: MeasuredAmount;
+		ammoUnits: number;
+		ammo: MeasuredAmount;
+		kind: 'shrapnelConverted';
+	} | {
+		between: MeasuredSpan;
+		item: AccountHolding;
+		units: number;
+		amount: MeasuredAmount;
+		kind: 'listingSold';
+	} | {
+		between: MeasuredSpan;
+		from: MeasuredAmount;
+		to: MeasuredAmount;
+		kind: 'cardChanged';
+	};
+
+/**
+ * One line of an opening, a sale or a purchase.
+ */
+export interface MeasuredEventItem {
+	item: AccountHolding;
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * What arrived of one holding.
+ */
+export interface MeasuredGain {
+	item: AccountHolding;
+	role: MeasuredRole;
+	stacking: MeasuredStacking;
+	mark: MeasuredGainMark;
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * Whether something gained may be a strongbox's contents.
+ */
+export type MeasuredGainMark = 'arrived' | 'possiblyStrongbox';
+
+/**
+ * One item's share of a figure.
+ */
+export interface MeasuredItemAmount {
+	item: AccountHolding;
+	amount: MeasuredAmount;
+}
+
+/**
+ * What a move between places is.
+ */
+export type MeasuredMoveKind = 'listing' | 'listingReturned' | 'transfer';
+
+/**
+ * How an amount was derived.
+ */
+export type MeasuredPrecision = 'exact' | 'wholePec';
+
+/**
+ * A repair: what it restored, and what the PED Card paid when that is
+ * known.
+ */
+export interface MeasuredRepair {
+	between: MeasuredSpan;
+	items: MeasuredItemAmount[];
+	restored: MeasuredAmount;
+	/** `null` when the Card's movement cannot be read as the repair's cost. */
+	cost: MeasuredAmount | null;
+}
+
+/**
+ * What an item is.
+ */
+export type MeasuredRole = 'ammo' | 'weapon' | 'amplifier' | 'healing' | 'armour' | 'plating' | 'otherEquipment' | 'material';
+
+/**
+ * A keyset page of measured sessions, newest first, with the cursor for
+ * the next page (`null` on the last) and how many sessions have readings.
+ */
+export interface MeasuredSessionPage {
+	sessions: MeasuredSessionRow[];
+	nextCursor: string | null;
+	total: number;
+}
+
+/**
+ * One measured session on a page, beside its tracked figures.
+ */
+export interface MeasuredSessionRow {
+	id: string;
+	name: string | null;
+	startTime: string;
+	endTime: string | null;
+	coverage: MeasuredCoverageLevel;
+	readingCount: number;
+	gapCount: number;
+	sealed: boolean;
+	/** `null` while the session counts in every stats scope; an excluded session keeps its readings and its measure. */
+	exclusion: SessionExclusion | null;
+	measured: MeasuredTotals;
+	/** `null` while the session has no summary. */
+	tracked: TrackedSessionFigures | null;
+}
+
+/**
+ * Whether an opening's keys were paid back on one reading of its rows.
+ */
+export type MeasuredSettlement = 'settled' | 'unsettled';
+
+/**
+ * When something happened: after one reading, by the next.
+ */
+export interface MeasuredSpan {
+	from: string;
+	to: string;
+}
+
+/**
+ * Whether an item's rows count units or hold one item each.
+ */
+export type MeasuredStacking = 'stack' | 'single';
+
+/**
+ * A session's measure, by category.
+ */
+export interface MeasuredTotals {
+	ammo: MeasuredAmmoTotal;
+	/** Weapons and their amplifiers. */
+	weaponDecay: MeasuredAmount;
+	healingDecay: MeasuredAmount;
+	/** Armour and its plates. */
+	armourDecay: MeasuredAmount;
+	/** Everything else that wore. */
+	otherEquipmentDecay: MeasuredAmount;
+	otherConsumption: MeasuredAmount;
+	/** What the repairs whose cost the PED Card shows cost. */
+	repairCost: MeasuredAmount;
+	/** Repairs whose cost could not be read, left out of `repairCost`. */
+	repairsUncosted: number;
+	gained: MeasuredAmount;
+	gainedPossiblyStrongbox: MeasuredAmount;
 }
 
 /**
@@ -4966,6 +5318,17 @@ export type ToolUse = 'shot' | 'heal' | 'swing';
 export type ToolUsesCosting = 'withoutAttachments' | 'asBooked' | 'notCosted';
 
 /**
+ * A session's tracked figures, as its summary holds them.
+ */
+export interface TrackedSessionFigures {
+	weaponCost: number;
+	healingCost: number;
+	armourCost: number;
+	lootTt: number;
+	totalCycled: number;
+}
+
+/**
  * One row of the session list.
  */
 export interface TrackingSession {
@@ -6010,6 +6373,22 @@ export async function strongboxOpenings(): Promise<StrongboxOpeningEntry[]> {
 
 export async function strongboxOpeningUndo(input: ActivityUndoInput): Promise<void> {
 	return invokeCommand('strongbox_opening_undo', { input });
+}
+
+export async function accountStatus(): Promise<AccountStatus> {
+	return invokeCommand('account_status', {});
+}
+
+export async function accountDisconnect(): Promise<void> {
+	return invokeCommand('account_disconnect', {});
+}
+
+export async function accountSessionMeasure(sessionId: string): Promise<AccountSessionMeasure | null> {
+	return invokeCommand('account_session_measure', { session_id: sessionId });
+}
+
+export async function accountMeasuredSessions(cursor: string | null, limit: number | null): Promise<MeasuredSessionPage> {
+	return invokeCommand('account_measured_sessions', { cursor, limit });
 }
 
 export async function ledgerList(cursor: string | null, limit: number | null): Promise<LedgerPage> {

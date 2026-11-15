@@ -908,6 +908,14 @@ const OTHER_COMMANDS: &[&str] = &[
     "strongbox_open",
     "strongbox_openings",
     "strongbox_opening_undo",
+    // The account connection's state and the measures it reads: a
+    // measured session's figures stand beside the tracked ones and feed no
+    // statistic, and the measured list shows exclusion rather than
+    // honouring it.
+    "account_status",
+    "account_disconnect",
+    "account_session_measure",
+    "account_measured_sessions",
     "ledger_list",
     "ledger_create",
     "ledger_delete",

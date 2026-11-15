@@ -36,6 +36,12 @@ tracing = { workspace = true }
 rusqlite = { workspace = true }
 # SHA-384 for the migration ledger's checksum accounting.
 sha2 = { workspace = true }
+# The account connection's reader: HTTPS to the one account site host,
+# over rustls with the ring provider and the platform's verifier (see the
+# workspace manifest for the feature set).
+reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-platform-verifier = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -85,6 +91,9 @@ proptest = { workspace = true }
 tempfile = { workspace = true }
 # Test-only: a capturing layer for the eo::input breadcrumb instrument test.
 tracing-subscriber = { workspace = true }
+# Test-only: paused time, so the account recorder's minute cadence is driven
+# deterministically.
+tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]
 name = "smoke"

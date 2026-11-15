@@ -3,6 +3,7 @@
 #[allow(dead_code)]
 #[macro_use]
 mod command_acl;
+mod account_window;
 mod commands;
 mod composition;
 mod crash;
@@ -563,6 +564,9 @@ pub fn run() {
                 }
             }
             if let WindowEvent::Destroyed = event {
+                if window.label() == account_window::SIGN_IN_WINDOW {
+                    account_window::window_gone();
+                }
                 if window.label() == SCAN_OVERLAY {
                     scan_overlay_gone(window.app_handle());
                 }
@@ -594,9 +598,11 @@ pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
     // Stop the producer spine: end any open session so its stop events
     // publish, then stop the chat-log tail thread. The substrate's compose
     // task has no shutdown signal, so this is where the producers wind down.
+    let mut runtime = None;
     if let Some(state) = app.try_state::<Producers>() {
         if let Ok(mut guard) = state.0.lock() {
             if let Some(producers) = guard.take() {
+                runtime = Some(producers.runtime_handle());
                 producers.stop();
             }
         }
@@ -614,6 +620,14 @@ pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
     // closing app is not capturing the screen behind it.
     if let Ok(facade) = commands::facade(app) {
         facade.radar_guidance_shutdown();
+    }
+
+    // The account connection ends, abandoning any request in flight
+    // (waited for a second or two at most). Through the composition's
+    // pool bridge, since this also runs on a runtime worker (the updater's
+    // exit hook), where starting a runtime would panic.
+    if let (Ok(facade), Some(runtime)) = (commands::facade(app), runtime.as_ref()) {
+        composition::block_on_pool(runtime, facade.account_shutdown());
     }
 
     // With the producers stopped (no writes in flight), refresh the database's
@@ -725,6 +739,9 @@ fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::Path
                 match composition::compose_native(resource_dir).await {
                     composition::Composition::Ready(composed) => {
                         install_native_services(&app, composed);
+                        // A player who connected before is reconnected
+                        // with the session the webview kept, quietly.
+                        account_window::adopt_stored_session(&app);
                         substrate::SubstrateOutcome::Ready
                     }
                     composition::Composition::Declined(decline) => {

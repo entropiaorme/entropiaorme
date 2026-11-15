@@ -33,6 +33,8 @@ tokio = { workspace = true }
 # fixtures the service's own tests use (dev builds only: features a
 # dev-dependency enables do not reach a normal build).
 eo-services = { workspace = true, features = ["test-support"] }
-tokio = { workspace = true }
+# Paused time drives the account connection's minute cadence in its facade
+# tests.
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 chrono = { workspace = true }

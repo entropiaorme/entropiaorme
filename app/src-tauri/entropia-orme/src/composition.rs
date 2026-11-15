@@ -396,6 +396,11 @@ impl ProducerState {
         self.watcher.stop();
     }
 
+    /// The substrate runtime, for the exit seam's other bridges onto it.
+    pub fn runtime_handle(&self) -> tokio::runtime::Handle {
+        self.runtime.clone()
+    }
+
     /// Where creature detection is bound once the recogniser has loaded.
     pub fn mob_detection_handle(&self) -> Arc<DetectorSlot> {
         self.mob_detection.clone()
@@ -1062,6 +1067,46 @@ async fn compose_with(
         (service, radar_confirm)
     };
 
+    // The account connection: reads the player's own account site while a
+    // tracked session needs it, once the player has connected. It hears
+    // session starts and stops on the producer bus and announces its
+    // changes there for the frontend. Without a reader it stands down and
+    // the account commands answer an internal error.
+    let account = match eo_services::account::HttpAccountSite::new() {
+        Ok(site) => Some(eo_services::account::AccountRecorder::start(
+            &producers.bus_handle(),
+            eo_services::account::RecorderParts {
+                db: db.clone(),
+                clock: clock.clone(),
+                site: Arc::new(site),
+                flag: Arc::new(eo_services::account::recorder::SettingsFlag(
+                    producers.config_service_handle(),
+                )),
+                game_data: Some(game_data.clone()),
+                changed: Some({
+                    let bus = producers.bus_handle();
+                    let clock = clock.clone();
+                    Arc::new(move || {
+                        use eo_wire::domain_events::{
+                            AccountUpdated, AccountUpdatedPayload, AccountUpdatedTag,
+                        };
+                        bus.publish(&BusEvent::AccountUpdated(AccountUpdated {
+                            topic: AccountUpdatedTag,
+                            event_version: 1,
+                            occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                            payload: AccountUpdatedPayload {},
+                        }));
+                    })
+                }),
+            },
+            &tokio::runtime::Handle::current(),
+        )),
+        Err(error) => {
+            tracing::error!(target: "eo::composition", %error, "the account site reader could not be built; the account connection stands down");
+            None
+        }
+    };
+
     // The typed-command facade shares the read surface's handles plus the
     // producers the write families signal (the config writer, the hunt
     // tracker, the hotbar gate, the chat-log watcher, the skill tracker
@@ -1182,7 +1227,8 @@ async fn compose_with(
                     payload: WeaponsUpdatedPayload {},
                 }));
             })
-        }),
+        })
+        .with_account(account),
     );
     Composition::Ready(Composed {
         db,
@@ -1860,6 +1906,7 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
         Topic::WeaponsUpdated,
         Topic::ConsumablesUpdated,
         Topic::MarketUpdated,
+        Topic::AccountUpdated,
     ] {
         let domain_bus = domain_bus.clone();
         bus.subscribe(topic, move |event| match event {
@@ -1889,6 +1936,9 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
             }
             BusEvent::MarketUpdated(envelope) => {
                 domain_bus.publish(DomainEvent::MarketUpdated(envelope.clone()));
+            }
+            BusEvent::AccountUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::AccountUpdated(envelope.clone()));
             }
             // A foreign event on a domain topic is unrepresentable at the
             // publish site; nothing to forward.
@@ -2199,7 +2249,10 @@ fn build_providers(
 /// from either calling context: a runtime worker thread (a facade-driven
 /// reload) yields its slot, while a plain producer thread parks. The
 /// tracker's own `block_on` uses this exact dual shape.
-fn block_on_pool<F: std::future::Future>(handle: &tokio::runtime::Handle, future: F) -> F::Output {
+pub(crate) fn block_on_pool<F: std::future::Future>(
+    handle: &tokio::runtime::Handle,
+    future: F,
+) -> F::Output {
     // Never `Handle::current()`: the provider callbacks run on the
     // chat-log watcher's plain OS thread (no current runtime), so the
     // handle is the one captured at composition time. A runtime worker

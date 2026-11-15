@@ -56,6 +56,9 @@ tracing-appender = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Matches capability window patterns as Tauri does (the sign-in window's
+# capability test).
+glob = { workspace = true }
 # Test-only: the composition-integration and concurrency tests assert
 # directly against the database through its closure API (rusqlite is already
 # a normal dependency) and build a frozen clock.
@@ -71,6 +74,9 @@ windows = { workspace = true, features = [
   "Win32_UI_HiDpi",
   "Win32_UI_WindowsAndMessaging"
 ] }
+# Refusing the account sign-in page's permission requests on the WebView2
+# webview Tauri already runs.
+webview2-com = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The page size behind the /proc resident-set sampler (resources.rs).
@@ -82,3 +88,6 @@ eo-services = { workspace = true, features = ["linux-capture"] }
 # The overlay windows' input shapes (hit_region.rs), on the GTK window
 # Tauri already runs.
 gtk = { workspace = true }
+# Refusing the account sign-in page's permission requests on the WebKitGTK
+# webview Tauri already runs.
+webkit2gtk = { workspace = true }

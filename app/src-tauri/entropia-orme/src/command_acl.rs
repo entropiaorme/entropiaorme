@@ -132,6 +132,10 @@ macro_rules! app_command_surface {
             strongbox_open,
             strongbox_openings,
             strongbox_opening_undo,
+            account_status,
+            account_disconnect,
+            account_session_measure,
+            account_measured_sessions,
             ledger_list,
             ledger_summary,
             ledger_create,
@@ -271,6 +275,7 @@ macro_rules! app_command_surface {
             hide_navigation_overlays,
             begin_navigation_area_selection,
             hit_region::set_window_hit_region,
+            account_window::account_sign_in,
             updater::check_for_update,
             updater::download_update,
             updater::install_update,
@@ -355,6 +360,27 @@ pub const NAVIGATION_COMMANDS: &[&str] = &[
     "set_window_hit_region",
     "substrate_ready",
 ];
+
+/// The account connection's commands: the main window's alone. They are
+/// kept out of the permission every trusted window gets, so no overlay can
+/// open the sign-in window, disconnect, or read measured figures.
+pub const ACCOUNT_COMMANDS: &[&str] = &[
+    "account_status",
+    "account_disconnect",
+    "account_session_measure",
+    "account_measured_sessions",
+    "account_sign_in",
+];
+
+/// The commands every trusted window may call: the whole surface less the
+/// account connection's.
+#[allow(dead_code)]
+pub fn trusted_commands() -> Vec<&'static str> {
+    app_commands()
+        .into_iter()
+        .filter(|command| !ACCOUNT_COMMANDS.contains(command))
+        .collect()
+}
 
 #[allow(dead_code)]
 pub const RADAR_GUIDANCE_COMMANDS: &[&str] =

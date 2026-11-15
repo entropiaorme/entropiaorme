@@ -989,6 +989,7 @@ dependencies = [
  "eo-api",
  "eo-services",
  "eo-wire",
+ "glob",
  "gtk",
  "libc",
  "ort",
@@ -1007,6 +1008,8 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "webkit2gtk",
+ "webview2-com",
  "windows",
 ]
 
@@ -1068,7 +1071,10 @@ dependencies = [
  "proptest",
  "rapidfuzz",
  "regex",
+ "reqwest",
  "rusqlite",
+ "rustls",
+ "rustls-platform-verifier",
  "serde",
  "serde_json",
  "sha2",

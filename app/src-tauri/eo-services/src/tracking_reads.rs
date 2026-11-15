@@ -1900,6 +1900,10 @@ pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditEr
                 rusqlite::params![sid],
             )?;
             crate::consumables::detach_session(&tx, &sid)?;
+            // The account readings taken during the session stay (later
+            // readings may be stored as changes against them), no longer
+            // tagged with it; its measure goes with it.
+            crate::account::sessions::release_session(&tx, &sid)?;
             // Tools read off the screen during the session describe it alone.
             tx.execute(
                 "DELETE FROM tool_sightings WHERE session_id = ?",

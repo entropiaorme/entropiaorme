@@ -185,6 +185,32 @@ describe('tracking wrappers dispatch typed commands', () => {
 	});
 });
 
+describe('account wrappers dispatch typed commands', () => {
+	it.each([
+		['getAccountStatus', () => api.getAccountStatus(), 'account_status', {}],
+		['disconnectAccount', () => api.disconnectAccount(), 'account_disconnect', {}],
+		[
+			'getSessionMeasure',
+			() => api.getSessionMeasure('s1'),
+			'account_session_measure',
+			{ session_id: 's1' },
+		],
+		[
+			'getMeasuredSessions',
+			() => api.getMeasuredSessions(null, 20),
+			'account_measured_sessions',
+			{ cursor: null, limit: 20 },
+		],
+	] as const)('%s', async (_name, call, command, args) => {
+		await call();
+		expect(tauriInvoke).toHaveBeenCalledWith(command, args);
+	});
+
+	it('names the account topic in its colon form', () => {
+		expect(api.ACCOUNT_TOPIC).toBe('account:updated');
+	});
+});
+
 describe('session definition lifecycle wrappers dispatch typed commands', () => {
 	it.each([
 		[

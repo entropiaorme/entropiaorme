@@ -91,6 +91,11 @@ pub struct AppConfig {
     /// picture, for finding out why (see [`crate::unread_plates`]). Off
     /// until the player turns it on.
     pub keep_unread_plates: bool,
+    /// Whether the player has connected the app to their Entropia Universe
+    /// account (and not disconnected since). Written by the account
+    /// connection itself, never offered as a toggle: it tells the app to
+    /// take up the stored session on its next start.
+    pub account_connected: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
     /// across sessions so a declaration outlives the session that set it.
     pub manual_mob_species: String,
@@ -150,6 +155,7 @@ impl Default for AppConfig {
             keyless_input_host: None,
             repair_ocr_enabled: false,
             keep_unread_plates: false,
+            account_connected: false,
             mob_detection: None,
             tool_reading: None,
             manual_mob_species: String::new(),
@@ -502,6 +508,7 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         mob_detection: data.get("mob_detection").and_then(Value::as_bool),
         tool_reading: data.get("tool_reading").and_then(Value::as_bool),
         keep_unread_plates: toggle("keep_unread_plates"),
+        account_connected: toggle("account_connected"),
         manual_mob_species: string_or("manual_mob_species", ""),
         manual_mob_maturity: string_or("manual_mob_maturity", ""),
         // One-time legacy inheritance: a store written before the facet
@@ -586,7 +593,7 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // `developer_mode_enabled` retired with the mode it stored: the diagnostic
 // and maintenance tools it hid are open, the app being its maintainer's own.
 // A stored value carries through untouched like the others.
-const KNOWN_KEYS: [&str; 23] = [
+const KNOWN_KEYS: [&str; 24] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
@@ -595,6 +602,7 @@ const KNOWN_KEYS: [&str; 23] = [
     "mob_detection",
     "tool_reading",
     "keep_unread_plates",
+    "account_connected",
     "manual_mob_species",
     "manual_mob_maturity",
     "session_name",
@@ -813,6 +821,7 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
                 }
             }
             "keep_unread_plates" => assign_bool(&mut config.keep_unread_plates, value),
+            "account_connected" => assign_bool(&mut config.account_connected, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
             "manual_mob_maturity" => assign_string(&mut config.manual_mob_maturity, value),
             "session_name" => assign_string(&mut config.session_name, value),
@@ -1524,6 +1533,20 @@ mod tests {
         svc.update(&updates).unwrap();
         assert!(svc.get().keep_unread_plates);
         assert!(service(dir.path()).get().keep_unread_plates);
+    }
+
+    #[test]
+    fn the_account_connection_flag_is_off_until_written_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        assert!(!svc.get().account_connected);
+        let mut updates = Map::new();
+        updates.insert("account_connected".into(), Value::Bool(true));
+        svc.update(&updates).unwrap();
+        assert!(service(dir.path()).get().account_connected);
+        updates.insert("account_connected".into(), Value::Bool(false));
+        svc.update(&updates).unwrap();
+        assert!(!service(dir.path()).get().account_connected);
     }
 
     #[test]

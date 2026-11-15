@@ -11,6 +11,7 @@
  * shell's bespoke window/byte commands live in `./shell`.
  */
 
+export * from './account';
 export * from './analytics';
 export * from './character';
 export { ApiError, type ThrownErrorKind } from './client';
@@ -153,6 +154,7 @@ export {
 	showNavigationOverlays,
 	showSaleCaptureOverlay,
 	showScanOverlay,
+	signInToAccount,
 	toggleCartographyOverlay,
 	toggleOverlay,
 } from './shell';

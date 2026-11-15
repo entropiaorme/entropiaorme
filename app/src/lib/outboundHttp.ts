@@ -1,7 +1,7 @@
-// The one hardened gateway for outbound non-loopback HTTP in the app.
+// The one hardened gateway for the frontend's outbound non-loopback HTTP.
 // Every remote read (the news feed) routes through this function; the CSP
 // `connect-src` entry in app/src-tauri/entropia-orme/tauri.conf.json gates
-// the same host allowlist at the webview boundary. GET only (the app
+// the same host allowlist at the webview boundary. GET only (the frontend
 // uploads nothing), HTTPS only, no credentials, no browser cache (callers
 // manage their own), explicit timeout.
 

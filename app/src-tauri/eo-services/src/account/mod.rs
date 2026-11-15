@@ -14,29 +14,49 @@
 //! writes an accounting table. Role resolution reads the equipment library
 //! and the protection sets, never writing them.
 //!
+//! The connection that takes the readings is [`recorder`]: one task that
+//! holds the signed-in session and reads the site through [`site`] while a
+//! tracked session needs it. [`sessions`] serves the measures it leads to.
+//!
 //! Money here is integer throughout: whole PEC as the site reports it, and
 //! micro-PED amounts that carry whether they are exact or rest on the
 //! site's truncated values (see [`amount`]).
 
+pub mod adoption;
 pub mod amount;
 pub mod composite;
 pub mod diff;
 pub mod measure;
 pub mod reading;
+pub mod recorder;
 pub mod roles;
+#[cfg(any(test, feature = "test-support"))]
+pub mod scripted;
+pub mod sessions;
+pub mod site;
 pub mod store;
 
 #[cfg(test)]
+mod recorder_tests;
+#[cfg(test)]
 mod replay_tests;
+#[cfg(test)]
+mod sessions_tests;
 #[cfg(test)]
 mod store_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use adoption::{confirm_stored_session, MemoryOnly, SessionStore};
 pub use amount::{Amount, Pec, Precision};
 pub use measure::{measure_session, SessionMeasure, SessionWindow};
 pub use reading::{Container, Holding, HoldingKey, Reading, Row};
+pub use recorder::{
+    AccountRecorder, ConnectEpoch, ConnectOutcome, ConnectionFlag, ConnectionState,
+    ConnectionStatus, RecorderParts,
+};
 pub use roles::{KnownRoles, Role, RoleBook, RoleSource};
+pub use site::{AccountSite, HttpAccountSite, SessionSecret, SiteFailure, SiteOutcome};
 pub use store::{Purpose, ReadingId};
 
 use crate::db::DbError;
@@ -82,10 +102,13 @@ pub enum AccountError {
 }
 
 impl AccountError {
-    fn shape(response: reading::SiteResponse, error: &serde_json::Error) -> AccountError {
+    /// A response not in the site's shape, named by where it first
+    /// departs from it: a field path, never a value from the response, so
+    /// the error can be logged without quoting what the site sent.
+    fn shape(response: reading::SiteResponse, at: String) -> AccountError {
         AccountError::SiteShape {
             response,
-            detail: error.to_string(),
+            detail: at,
         }
     }
 }

@@ -308,10 +308,11 @@ impl Reading {
         items_body: &str,
         balance_body: &str,
     ) -> Result<Reading, AccountError> {
-        let items = serde_json::from_str::<Value>(items_body)
-            .map_err(|error| AccountError::shape(SiteResponse::Items, &error))?;
+        let not_json = |response| AccountError::shape(response, "the body (not JSON)".to_string());
+        let items =
+            serde_json::from_str::<Value>(items_body).map_err(|_| not_json(SiteResponse::Items))?;
         let balance = serde_json::from_str::<Value>(balance_body)
-            .map_err(|error| AccountError::shape(SiteResponse::Balance, &error))?;
+            .map_err(|_| not_json(SiteResponse::Balance))?;
         Reading::from_site(taken_at, &items, &balance)
     }
 
@@ -324,12 +325,23 @@ impl Reading {
         if !taken_at.is_finite() {
             return Err(AccountError::TakenAtNotFinite);
         }
-        let items = typed::<SiteItems>(items, SiteResponse::Items)?;
-        let balance = typed::<SiteBalance>(balance, SiteResponse::Balance)?;
-        let balance =
-            pec_from_decimal(&balance.account_balance).map_err(AccountError::BalanceRefused)?;
-        Reading::new(taken_at, balance, holdings_of(items.items)?)
+        let holdings = holdings_from_site(items)?;
+        Reading::new(taken_at, balance_from_site(balance)?, holdings)
     }
+}
+
+/// Read the site's item list response, already parsed as JSON, into
+/// holdings: one half of a reading, read as strictly as a whole one.
+pub fn holdings_from_site(items: &Value) -> Result<BTreeMap<HoldingKey, Holding>, AccountError> {
+    let items = typed::<SiteItems>(items, SiteResponse::Items)?;
+    holdings_of(items.items)
+}
+
+/// Read the site's PED Card balance response, already parsed as JSON: the
+/// other half of a reading.
+pub fn balance_from_site(balance: &Value) -> Result<Pec, AccountError> {
+    let balance = typed::<SiteBalance>(balance, SiteResponse::Balance)?;
+    pec_from_decimal(&balance.account_balance).map_err(AccountError::BalanceRefused)
 }
 
 /// The response's status, read before its shape, so a refusal from the
@@ -375,15 +387,84 @@ fn typed<T: serde::de::DeserializeOwned>(
     value: &Value,
     response: SiteResponse,
 ) -> Result<T, AccountError> {
-    let status =
-        SiteStatus::deserialize(value).map_err(|error| AccountError::shape(response, &error))?;
+    let refused = || AccountError::shape(response, shape_path(value, response));
+    let status = SiteStatus::deserialize(value).map_err(|_| refused())?;
     if status.status_code != SITE_OK {
         return Err(AccountError::SiteStatus {
             response,
             code: status.status_code,
         });
     }
-    T::deserialize(value).map_err(|error| AccountError::shape(response, &error))
+    T::deserialize(value).map_err(|_| refused())
+}
+
+/// One expected field of a response: its name, and whether a value fits.
+type Field = (&'static str, fn(&Value) -> bool);
+
+fn whole(value: &Value) -> bool {
+    value.as_i64().is_some()
+}
+
+fn number(value: &Value) -> bool {
+    value.is_number()
+}
+
+fn text(value: &Value) -> bool {
+    value.is_string()
+}
+
+fn parent(value: &Value) -> bool {
+    value.is_null() || value.as_i64().is_some()
+}
+
+/// The first of `fields` that `object` lacks or holds a value of the
+/// wrong kind in, as a path.
+fn first_misfit(
+    object: &serde_json::Map<String, Value>,
+    fields: &[Field],
+    prefix: &str,
+) -> Option<String> {
+    fields.iter().find_map(|(name, fits)| {
+        (!object.get(*name).is_some_and(fits)).then(|| format!("{prefix}{name}"))
+    })
+}
+
+/// Where a response first departs from the site's shape, as a field path
+/// (`items[3].quantity`). Names fields only: nothing of the response's
+/// values.
+fn shape_path(value: &Value, response: SiteResponse) -> String {
+    let Some(object) = value.as_object() else {
+        return "the body (not an object)".to_string();
+    };
+    if let Some(path) = first_misfit(object, &[("statusCode", whole)], "") {
+        return path;
+    }
+    match response {
+        SiteResponse::Balance => first_misfit(object, &[("accountBalance", number)], "")
+            .unwrap_or_else(|| "the body".to_string()),
+        SiteResponse::Items => {
+            let Some(items) = object.get("items").and_then(Value::as_array) else {
+                return "items".to_string();
+            };
+            const ROW: [Field; 6] = [
+                ("id", whole),
+                ("value", number),
+                ("quantity", whole),
+                ("name", text),
+                ("container", text),
+                ("containerRefId", parent),
+            ];
+            for (index, item) in items.iter().enumerate() {
+                let Some(row) = item.as_object() else {
+                    return format!("items[{index}]");
+                };
+                if let Some(path) = first_misfit(row, &ROW, &format!("items[{index}].")) {
+                    return path;
+                }
+            }
+            "the body".to_string()
+        }
+    }
 }
 
 fn holdings_of(items: Vec<SiteItem>) -> Result<BTreeMap<HoldingKey, Holding>, AccountError> {
@@ -722,6 +803,40 @@ mod tests {
                 other => panic!("{field}: expected {expected:?}, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn a_refusal_names_where_and_quotes_nothing_the_site_sent() {
+        let mut hostile = sample();
+        hostile["items"][3]["quantity"] = json!("SECRET-VALUE-quantity");
+        let error = read(&hostile).unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("items[3].quantity"), "{text}");
+        assert!(!text.contains("SECRET"), "{text}");
+        let mut hostile = sample();
+        hostile["items"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("containerRefId");
+        hostile["items"][1]["name"] = json!("SECRET name");
+        let text = read(&hostile).unwrap_err().to_string();
+        assert!(text.contains("items[1].containerRefId"), "{text}");
+        assert!(!text.contains("SECRET"), "{text}");
+        let text = Reading::from_site(
+            1.0,
+            &sample(),
+            &json!({"statusCode": 200, "accountBalance": "SECRET"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            text.contains("accountBalance") && !text.contains("SECRET"),
+            "{text}"
+        );
+        let text = Reading::parse(1.0, "<html>SECRET</html>", "{}")
+            .unwrap_err()
+            .to_string();
+        assert!(!text.contains("SECRET"), "{text}");
     }
 
     #[test]

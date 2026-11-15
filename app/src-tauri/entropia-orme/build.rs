@@ -11,7 +11,16 @@ fn main() {
          description = \"Allows the full application command surface to trusted windows.\"\n\
          commands.allow = [\n",
     );
-    for command in app_commands() {
+    for command in trusted_commands() {
+        permissions.push_str(&format!("  \"{command}\",\n"));
+    }
+    permissions.push_str(
+        "]\n\n[[permission]]\n\
+         identifier = \"account-commands\"\n\
+         description = \"Allows the account connection's commands to the main window alone.\"\n\
+         commands.allow = [\n",
+    );
+    for command in ACCOUNT_COMMANDS {
         permissions.push_str(&format!("  \"{command}\",\n"));
     }
     permissions.push_str(

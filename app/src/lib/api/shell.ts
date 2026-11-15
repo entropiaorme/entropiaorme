@@ -96,6 +96,13 @@ export async function captureSaleFromOverlay(): Promise<OverlayCaptureReply> {
 	return invoke('capture_sale_from_overlay');
 }
 
+/** Open the window where the player signs in to their Entropia Universe
+ * account, or bring it forward. The app connects once the site accepts
+ * the sign-in; the window closes itself then. */
+export async function signInToAccount(): Promise<void> {
+	await invoke('account_sign_in');
+}
+
 /** Metadata about an available update (mirrors the Rust `UpdateInfo`). */
 export type UpdateInfo = {
 	version: string;

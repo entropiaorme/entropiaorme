@@ -4,6 +4,8 @@
 	import { theme, setTheme, type Theme } from '$lib/theme.svelte';
 	import { newsOptIn, setNewsOptIn } from '$lib/news.svelte';
 	import AuctionFeeResearchSettings from '$lib/features/settings/AuctionFeeResearchSettings.svelte';
+	import AccountSettings from '$lib/features/account/AccountSettings.svelte';
+	import { inDevelopment } from '$lib/inDevelopment';
 	import { hotbarListenerCopy, keyboardNote } from '$lib/features/settings/keyboardAccess';
 	import { autoUpdateEnabled, setAutoUpdateEnabled } from '$lib/updater.svelte';
 	import { goto } from '$app/navigation';
@@ -296,6 +298,8 @@
 			</div>
 		</div>
 	</section>
+
+	{#if inDevelopment.visible}<AccountSettings />{/if}
 
 	<!-- Cluster: Session tracking -->
 	<section>

@@ -28,6 +28,12 @@ export const IN_DEVELOPMENT_SURFACES: readonly InDevelopmentSurface[] = [
 			'Armour costs can be recorded, reviewed, undone and re-recorded, but recording has not yet been walked in live play.',
 		graduates: 'Recording has been walked in live play.',
 	},
+	{
+		id: 'account-readings',
+		summary:
+			'The account connection and the figures measured from its readings have not yet been walked in live play, so a measured figure may still differ from what the account site shows.',
+		graduates: 'Connecting, reading, and the measured figures have been walked in live play.',
+	},
 ] as const;
 
 /** The registered surface for `id`. Throws on an unregistered id, matching

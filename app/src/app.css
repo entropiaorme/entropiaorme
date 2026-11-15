@@ -274,6 +274,10 @@ input[type="number"] {
 	background: var(--color-text-tertiary);
 	box-shadow: none;
 }
+.signal-dot.warning {
+	background: var(--color-warning);
+	box-shadow: 0 0 10px color-mix(in oklab, var(--color-warning) 70%, transparent);
+}
 
 /* ========================================
    Reduced Motion

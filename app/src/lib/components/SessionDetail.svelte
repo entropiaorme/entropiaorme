@@ -36,6 +36,9 @@
 	import { describeCertainty } from '$lib/features/tracking/mobDetection';
 	import { TRACKING_TOPIC } from '$lib/realtime/trackingTopic';
 	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
+	import SessionMeasure from '$lib/features/account/SessionMeasure.svelte';
+	import { trackedFromSummary } from '$lib/features/account/measure';
+	import { inDevelopment } from '$lib/inDevelopment';
 	import { describeUnpriced, hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
 	import { createWeaponReviewModel } from '$lib/features/weapons/weaponReviewModel.svelte';
 
@@ -488,6 +491,15 @@
 				<span>Harvesting: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.harvestCost)}</span></span>
 			{/if}
 		</div>
+	{/if}
+
+	<!-- 1b1. What the account readings measured, beside the tracked figures
+		 (shown only when the session has a measure) -->
+	{#if inDevelopment.visible}
+		<SessionMeasure
+			sessionId={detail.sessionId}
+			tracked={trackedFromSummary(detail.summary, unrecordedHits > 0)}
+		/>
 	{/if}
 
 	{#if detail.weaponAttribution && hasWeaponEvidence(detail.weaponAttribution)}

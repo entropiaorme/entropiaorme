@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings } from '$lib/types';
 
@@ -22,6 +22,22 @@ vi.mock('$lib/api', async (importOriginal) => ({
 	getSettings: vi.fn(async () => seams.settings),
 	updateSettings: vi.fn(),
 }));
+// The account connection: never connected.
+const account = vi.hoisted(() => ({
+	ACCOUNT_TOPIC: 'account:updated',
+	getAccountStatus: vi.fn(async () => ({
+		state: 'disconnected',
+		connectedAt: null,
+		lastReadingAt: null,
+		readingSession: false,
+		hasConnected: false,
+	})),
+	disconnectAccount: vi.fn(),
+	getSessionMeasure: vi.fn(),
+	getMeasuredSessions: vi.fn(),
+}));
+vi.mock('$lib/api/account', () => account);
+
 vi.mock('@tauri-apps/api/event', () => ({
 	listen: vi.fn(async () => () => {}),
 	emit: vi.fn(async () => {}),
@@ -65,6 +81,7 @@ function toggles(): string[] {
 beforeEach(() => {
 	channel.visible = true;
 	seams.settings = settings();
+	account.getAccountStatus.mockClear();
 });
 
 describe('the screen-reading settings', () => {
@@ -90,10 +107,34 @@ describe('the screen-reading settings', () => {
 		render(SettingsPage);
 		expect(await screen.findByText(CREATURES)).toBeTruthy();
 		expect(screen.getByText(HELD_TOOL)).toBeTruthy();
-		expect(screen.queryByText('In development')).toBeNull();
+		// The only mark on the page is the account cluster's.
+		for (const mark of screen.queryAllByText('In development')) {
+			expect(mark.closest('[data-testid="account-settings"]')).not.toBeNull();
+		}
 		const order = toggles();
 		expect(order.indexOf(HELD_TOOL)).toBe(order.indexOf('Enable hotbar key listener') + 1);
 		expect(order.indexOf(CREATURES)).toBe(order.indexOf(HELD_TOOL) + 1);
+	});
+});
+
+describe('the Entropia Universe account', () => {
+	it('follows the game connection, marked, where surfaces in development show', async () => {
+		render(SettingsPage);
+		const cluster = await screen.findByTestId('account-settings');
+		expect(await within(cluster).findByRole('button', { name: 'Connect' })).toBeTruthy();
+		expect(within(cluster).getByText('In development')).toBeTruthy();
+		const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent?.trim());
+		expect(headings.indexOf('Entropia Universe account')).toBe(
+			headings.indexOf('Game connection') + 1,
+		);
+	});
+
+	it('is absent, and the account never read, in a published build', async () => {
+		channel.visible = false;
+		render(SettingsPage);
+		expect(await screen.findByText(CREATURES)).toBeTruthy();
+		expect(screen.queryByTestId('account-settings')).toBeNull();
+		expect(account.getAccountStatus).not.toHaveBeenCalled();
 	});
 });
 

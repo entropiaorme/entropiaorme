@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { render, screen, waitFor, within } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '$lib/api';
@@ -50,6 +50,16 @@ vi.mock('$lib/api', () => ({
 	setLibraryEnabled: vi.fn(),
 	getTrackingSnapshot: vi.fn(),
 }));
+
+// The account readings: no measure unless a test gives the session one.
+const account = vi.hoisted(() => ({
+	ACCOUNT_TOPIC: 'account:updated',
+	getAccountStatus: vi.fn(),
+	disconnectAccount: vi.fn(),
+	getSessionMeasure: vi.fn(),
+	getMeasuredSessions: vi.fn(),
+}));
+vi.mock('$lib/api/account', () => account);
 
 // The protection and tracking bridges: capture the listeners so a test can
 // fire a write or the tracker moving on.
@@ -101,6 +111,7 @@ beforeEach(() => {
 	protectionListeners.length = 0;
 	trackingListeners.length = 0;
 	channel.visible = true;
+	account.getSessionMeasure.mockResolvedValue(null);
 });
 
 // The name is a stamp of the session definition's name, not a label of
@@ -270,5 +281,57 @@ describe('the after-session reviews in a build that hides surfaces in developmen
 		render(SessionDetail, { props: { detail: detail() } });
 		await waitFor(() => expect(api.getMobDetections).toHaveBeenCalled());
 		expect(api.getToolSightings).toHaveBeenCalled();
+	});
+});
+
+describe('what the account readings measured', () => {
+	const measure = {
+		sessionId: 's1',
+		sealed: true,
+		coverage: {
+			level: 'complete',
+			opening: 'read',
+			closing: 'read',
+			readingCount: 10,
+			gapCount: 0,
+		},
+		ammo: [],
+		decay: [],
+		repairs: [],
+		otherConsumption: [],
+		unexplainedDepartures: [],
+		gained: [],
+		gainedTotal: { ped: 11.5, precision: 'exact' },
+		gainedPossiblyStrongbox: { ped: 0, precision: 'exact' },
+		events: [],
+	} as const;
+
+	it('adds nothing to the detail of a session the account never read', async () => {
+		render(SessionDetail, { props: { detail: detail() } });
+		await waitFor(() => expect(account.getSessionMeasure).toHaveBeenCalledWith('s1'));
+		expect(screen.queryByText('Measured from the account')).toBeNull();
+	});
+
+	it('stands the measure beside the tracked figures, after the cost summary', async () => {
+		account.getSessionMeasure.mockResolvedValue(measure);
+		render(SessionDetail, { props: { detail: detail() } });
+		const block = await screen.findByTestId('account-measure');
+		expect(block.textContent).toContain('Measured from the account');
+		const loot = within(block).getByText('Loot').closest('tr');
+		if (!loot) throw new Error('no loot row');
+		expect(loot.textContent).toContain('12.00');
+		expect(loot.textContent).toContain('11.5000');
+		expect(loot.textContent).toContain('-0.5000');
+		// The tracked summary itself is unchanged.
+		expect(screen.getByText('Loot TT').closest('div')?.parentElement?.textContent).toContain(
+			'12.00',
+		);
+	});
+
+	it('is not read at all in a build that hides surfaces in development', async () => {
+		channel.visible = false;
+		render(SessionDetail, { props: { detail: detail() } });
+		await waitFor(() => expect(api.getMobDetections).toHaveBeenCalled());
+		expect(account.getSessionMeasure).not.toHaveBeenCalled();
 	});
 });

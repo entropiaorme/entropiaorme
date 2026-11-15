@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import type { QuestCatalogue, QuestDifficulty } from '$lib/types';
 import { CATALOGUE, curatedRows, family, HOUR, NOW, quest, unresolved } from './boardFixtures';
 import type { BoardInput, BoardPlanet, BoardRow } from './questBoard';
-import { buildBoard, formatBackAt, unplacedRewards, variantOf, waypointLabel } from './questBoard';
+import {
+	buildBoard,
+	formatBackAt,
+	ladder,
+	unplacedRewards,
+	variantOf,
+	waypointLabel,
+} from './questBoard';
 
 function input(overrides: Partial<BoardInput> = {}): BoardInput {
 	const rows = curatedRows();
@@ -251,6 +259,72 @@ describe('a quest', () => {
 		expect(calypso.sections[0].rows.map((entry) => [entry.kind, entry.label])).toEqual([
 			['slot', 'My Daily'],
 		]);
+	});
+});
+
+describe('a difficulty ladder', () => {
+	const rated: [string, QuestDifficulty][] = [
+		['Alice Laurent', 'beginner'],
+		['Leia Cassidy', 'hard'],
+		['Hanna Hendrix', 'hard'],
+		['Hans Kaufman', 'extreme'],
+	];
+	const catalogue: QuestCatalogue = {
+		planets: [
+			{
+				key: 'calypso',
+				name: 'Calypso',
+				categories: [
+					{
+						key: 'calypso/ai-dailies',
+						name: 'AI Dailies',
+						entries: rated.map(([label, difficulty]) => ({
+							kind: 'quest' as const,
+							key: `calypso/${label}`,
+							label,
+							detail: null,
+							difficulty,
+							rewardLabel: 'Ammo and items',
+							memberKeys: [],
+						})),
+					},
+				],
+			},
+		],
+	};
+	const quests = rated.map(([label], index) =>
+		quest({
+			id: String(100 + index),
+			name: `AI Daily: ${label}`,
+			planet: 'Calypso',
+			completionTrigger: 'manual_hand_in',
+			waypoint: `/wp [Calypso, 1, 2, 3, ${label}]`,
+			curated: true,
+			catalogueKey: `calypso/${label}`,
+		}),
+	);
+
+	it('groups rated rows into rungs in the authored order, easiest first', () => {
+		const board = buildBoard(input({ catalogue, quests, families: [] }));
+		const section = planet(board, 'Calypso').sections[0];
+		expect(section.rewardNote).toBe('Ammo and items');
+		const rungs = ladder(section.rows);
+		expect(rungs.map((rung) => rung.difficulty)).toEqual(['beginner', 'hard', 'extreme']);
+		expect(rungs[1].rows.map((entry) => entry.label)).toEqual(['Leia Cassidy', 'Hanna Hendrix']);
+	});
+
+	it('names no giver for a hand-in, whose label already is the giver', () => {
+		const board = buildBoard(input({ catalogue, quests, families: [] }));
+		const alice = row(board, 'calypso/Alice Laurent');
+		expect(alice.giver).toBeNull();
+		expect(alice.difficulty).toBe('beginner');
+	});
+
+	it('leaves an unrated section as one unnamed rung', () => {
+		const board = buildBoard(input());
+		const rungs = ladder(planet(board, 'ARIS').sections[0].rows);
+		expect(rungs).toHaveLength(1);
+		expect(rungs[0].difficulty).toBeNull();
 	});
 });
 

@@ -3,7 +3,7 @@
 	import QuestBoardRow from './QuestBoardRow.svelte';
 	import QuestSettlePanel from './QuestSettlePanel.svelte';
 	import { EARLIER_KEY, type QuestBoardModel } from './questBoardModel.svelte';
-	import type { BoardRow } from './questBoard';
+	import { type BoardRow, DIFFICULTY_LABEL, ladder } from './questBoard';
 
 	let {
 		model,
@@ -91,28 +91,35 @@
 							{section.done} of {section.rows.length} done
 						</span>
 					</div>
-					<ul>
-						{#each section.rows as row (row.key)}
-							<QuestBoardRow
-								{row}
-								now={model.now}
-								busy={model.busy === row.key}
-								settling={model.settling === row.key}
-								copied={copiedKey === row.key}
-								onCopyWaypoint={() => row.waypoint && onCopyWaypoint(row.key, row.waypoint)}
-								onStart={() => model.start(row)}
-								onComplete={() => model.complete(row)}
-								onAbandon={() => model.abandon(row)}
-								onStopRun={() => model.stopRun(row)}
-								onResetCooldown={() => model.resetCooldown(row)}
-								onUndoReward={() => model.undoReward(row)}
-								onToggleSettle={() => model.toggleSettle(row)}
-								onSettle={(input) => model.settle(row, input)}
-								onEdit={() => onEditCustom(row)}
-								onDelete={() => onDeleteCustom(row)}
-							/>
-						{/each}
-					</ul>
+					<!-- A rated section reads as its ladder: each rung named once, the
+					     name's weight rising with the difficulty. -->
+					{#each ladder(section.rows) as rung (rung.difficulty ?? 'unrated')}
+						{#if rung.difficulty}
+							<h5 class="rung rung-{rung.difficulty}">{DIFFICULTY_LABEL[rung.difficulty]}</h5>
+						{/if}
+						<ul aria-label={rung.difficulty ? DIFFICULTY_LABEL[rung.difficulty] : undefined}>
+							{#each rung.rows as row (row.key)}
+								<QuestBoardRow
+									{row}
+									now={model.now}
+									busy={model.busy === row.key}
+									settling={model.settling === row.key}
+									copied={copiedKey === row.key}
+									onCopyWaypoint={() => row.waypoint && onCopyWaypoint(row.key, row.waypoint)}
+									onStart={() => model.start(row)}
+									onComplete={() => model.complete(row)}
+									onAbandon={() => model.abandon(row)}
+									onStopRun={() => model.stopRun(row)}
+									onResetCooldown={() => model.resetCooldown(row)}
+									onUndoReward={() => model.undoReward(row)}
+									onToggleSettle={() => model.toggleSettle(row)}
+									onSettle={(input) => model.settle(row, input)}
+									onEdit={() => onEditCustom(row)}
+									onDelete={() => onDeleteCustom(row)}
+								/>
+							{/each}
+						</ul>
+					{/each}
 				</section>
 			{/each}
 
@@ -194,5 +201,27 @@
 	}
 	.header-action:hover {
 		color: var(--color-accent-hover);
+	}
+	/* A difficulty rung: a quiet tracked label whose weight and tone climb
+	   with the difficulty, so the ladder reads at a glance without a badge
+	   per row. */
+	.rung {
+		padding: 0.625rem 0.25rem 0.125rem;
+		font-size: 10.5px;
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: 0.16em;
+		color: var(--color-text-tertiary);
+	}
+	.rung-medium {
+		color: var(--color-text-secondary);
+	}
+	.rung-hard {
+		font-weight: 600;
+		color: var(--color-text);
+	}
+	.rung-extreme {
+		font-weight: 700;
+		color: color-mix(in oklab, var(--color-negative) 70%, var(--color-text));
 	}
 </style>

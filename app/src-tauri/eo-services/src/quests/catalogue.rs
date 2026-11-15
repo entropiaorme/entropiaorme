@@ -111,6 +111,11 @@ pub struct CatalogueQuest {
     /// A short qualifier the board shows beside the label.
     #[serde(default)]
     pub detail: Option<String>,
+    /// How hard the giver rates the quest, where it rates one. A category
+    /// lists its rated quests easiest first, so the board's order is the
+    /// ladder.
+    #[serde(default)]
+    pub difficulty: Option<Difficulty>,
     pub completion: Completion,
     #[serde(default)]
     pub signal_item: Option<String>,
@@ -144,6 +149,8 @@ impl Anchor {
 pub enum Completion {
     MissionLog,
     SignalItem,
+    /// Handed in at the giver: the reward clump that arrives is the reward.
+    ManualHandIn,
 }
 
 impl Completion {
@@ -151,8 +158,30 @@ impl Completion {
         match self {
             Completion::MissionLog => "mission_log",
             Completion::SignalItem => "signal_item",
+            Completion::ManualHandIn => "manual_hand_in",
         }
     }
+
+    /// The value for the older `completion_trigger` column, which predates
+    /// hand-ins and admits only the first two modes; `completion_mode` is
+    /// the column every reader takes the mode from.
+    pub fn legacy_trigger(self) -> &'static str {
+        match self {
+            Completion::SignalItem => "signal_item",
+            Completion::MissionLog | Completion::ManualHandIn => "mission_log",
+        }
+    }
+}
+
+/// The giver's own rating of a quest, easiest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Difficulty {
+    Beginner,
+    Easy,
+    Medium,
+    Hard,
+    Extreme,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +244,7 @@ impl Catalogue {
                 if category.entries.is_empty() {
                     return Err(format!("category '{}' is empty", category.key));
                 }
+                validate_ladder(category)?;
                 for entry in &category.entries {
                     claim_key(entry.key())?;
                     match entry {
@@ -267,6 +297,16 @@ impl Catalogue {
                                     quest.key
                                 ));
                             }
+                            // A hand-in's reward is whatever clump arrives,
+                            // which is what the clump policy settles.
+                            if quest.completion == Completion::ManualHandIn
+                                && quest.reward.policy != RewardPolicy::CompletionClump
+                            {
+                                return Err(format!(
+                                    "hand-in quest '{}' must take its reward from the clump",
+                                    quest.key
+                                ));
+                            }
                             for name in std::iter::once(&quest.name).chain(&quest.aliases) {
                                 if !names.insert(normalize_quest_name(name)) {
                                     return Err(format!("quest name '{name}' is repeated"));
@@ -279,6 +319,35 @@ impl Catalogue {
         }
         Ok(())
     }
+}
+
+/// A category rates all of its quests or none, and lists rated ones easiest
+/// first, so the authored order is the ladder the board shows.
+fn validate_ladder(category: &CatalogueCategory) -> Result<(), String> {
+    let ratings: Vec<Option<Difficulty>> = category
+        .entries
+        .iter()
+        .map(|entry| match entry {
+            CatalogueEntry::Quest(quest) => quest.difficulty,
+            CatalogueEntry::Family(_) => None,
+        })
+        .collect();
+    if ratings.iter().all(Option::is_none) {
+        return Ok(());
+    }
+    let Some(rated) = ratings.iter().copied().collect::<Option<Vec<_>>>() else {
+        return Err(format!(
+            "category '{}' rates some quests' difficulty but not all",
+            category.key
+        ));
+    };
+    if rated.windows(2).any(|pair| pair[0] > pair[1]) {
+        return Err(format!(
+            "category '{}' must list its quests easiest first",
+            category.key
+        ));
+    }
+    Ok(())
 }
 
 fn validate_reward(key: &str, reward: &CatalogueReward) -> Result<(), String> {
@@ -544,6 +613,7 @@ fn sync_quest(
         reward_is_skill,
         fields.reward.label,
         fields.family_id,
+        fields.completion.legacy_trigger(),
     ];
     let quest_id = match find_row(tx, "quests", fields.key, &names)? {
         Some((id, adopted)) => {
@@ -554,13 +624,13 @@ fn sync_quest(
                 "UPDATE quests \
                  SET catalogue_key = ?1, name = ?2, planet = ?3, category = ?4, waypoint = ?5, \
                      cooldown_hours = ?6, cooldown_anchor = ?7, completion_mode = ?8, \
-                     completion_trigger = ?8, signal_loot_item = ?9, reward_policy = ?10, \
+                     completion_trigger = ?15, signal_loot_item = ?9, reward_policy = ?10, \
                      reward_ped = ?11, reward_is_skill = ?12, reward_description = ?13, \
-                     family_id = ?14, is_active = 1, updated_at = ?15 \
-                 WHERE id = ?16 AND (catalogue_key IS NOT ?1 OR name IS NOT ?2 \
+                     family_id = ?14, is_active = 1, updated_at = ?16 \
+                 WHERE id = ?17 AND (catalogue_key IS NOT ?1 OR name IS NOT ?2 \
                      OR planet IS NOT ?3 OR category IS NOT ?4 OR waypoint IS NOT ?5 \
                      OR cooldown_hours IS NOT ?6 OR cooldown_anchor IS NOT ?7 \
-                     OR completion_mode IS NOT ?8 OR completion_trigger IS NOT ?8 \
+                     OR completion_mode IS NOT ?8 OR completion_trigger IS NOT ?15 \
                      OR signal_loot_item IS NOT ?9 OR reward_policy IS NOT ?10 \
                      OR reward_ped IS NOT ?11 OR reward_is_skill IS NOT ?12 \
                      OR reward_description IS NOT ?13 OR family_id IS NOT ?14 \
@@ -580,7 +650,7 @@ fn sync_quest(
                  (catalogue_key, name, planet, category, waypoint, cooldown_hours, \
                   cooldown_anchor, completion_mode, completion_trigger, signal_loot_item, \
                   reward_policy, reward_ped, reward_is_skill, reward_description, family_id) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?15, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params,
             )?;
             report.inserted += 1;

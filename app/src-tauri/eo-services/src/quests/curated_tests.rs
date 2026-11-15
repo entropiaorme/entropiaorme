@@ -9,7 +9,10 @@ use tokio::runtime::Handle;
 
 use crate::db::Db;
 
-use super::catalogue::{apply_catalogue, Catalogue, CatalogueEntry, SyncReport, CATALOGUE};
+use super::catalogue::{
+    apply_catalogue, Catalogue, CatalogueEntry, Completion, Difficulty, RewardPolicy, SyncReport,
+    CATALOGUE,
+};
 use super::{QuestError, QuestService};
 
 async fn rig(dir: &std::path::Path) -> (Arc<QuestService>, Db, Arc<crate::clock::MockClock>) {
@@ -138,6 +141,147 @@ fn the_shipped_catalogue_is_well_formed() {
         .flat_map(|category| &category.entries)
         .count();
     assert_eq!(cyrene_quests, 31);
+
+    let ai_dailies: Vec<_> = planet("Calypso")
+        .categories
+        .iter()
+        .filter(|category| category.key == "calypso/ai-dailies")
+        .flat_map(|category| &category.entries)
+        .map(|entry| match entry {
+            CatalogueEntry::Quest(quest) => quest,
+            CatalogueEntry::Family(_) => panic!("every AI Daily stands alone"),
+        })
+        .collect();
+    assert_eq!(
+        ai_dailies.len(),
+        8,
+        "every hunting AI Daily, the item turn-in aside"
+    );
+    for quest in &ai_dailies {
+        assert_eq!(quest.completion, Completion::ManualHandIn, "{}", quest.key);
+        assert_eq!(quest.reward.policy, RewardPolicy::CompletionClump);
+        assert!(
+            quest.difficulty.is_some() && quest.waypoint.is_some(),
+            "{}",
+            quest.key
+        );
+    }
+    assert_eq!(ai_dailies[0].difficulty, Some(Difficulty::Beginner));
+    assert_eq!(ai_dailies[7].difficulty, Some(Difficulty::Extreme));
+}
+
+/// A hand-in quest takes its reward from the clump that arrives; a category
+/// rates every quest or none, easiest first.
+#[test]
+fn validation_holds_hand_ins_to_the_clump_and_the_ladder_to_its_order() {
+    let hand_in = |key: &str, difficulty: Option<&str>, policy: Value| {
+        let mut entry = json!({
+            "kind": "quest", "key": key, "name": format!("AI Daily: {key}"),
+            "completion": "manual_hand_in", "cooldownHours": 24,
+            "cooldownAnchor": "completion", "reward": policy,
+        });
+        if let Some(difficulty) = difficulty {
+            entry["difficulty"] = json!(difficulty);
+        }
+        entry
+    };
+    let clump = || json!({"policy": "completion_clump", "label": "Ammo and items"});
+    let catalogue = |entries: Vec<Value>| -> Catalogue {
+        serde_json::from_value(json!({"version": 1, "planets": [
+            {"key": "calypso", "name": "Calypso", "categories": [
+                {"key": "calypso/ai", "name": "AI Dailies", "entries": entries}
+            ]}
+        ]}))
+        .unwrap()
+    };
+
+    catalogue(vec![
+        hand_in("a", Some("easy"), clump()),
+        hand_in("b", Some("easy"), clump()),
+        hand_in("c", Some("extreme"), clump()),
+    ])
+    .validate()
+    .expect("a ladder listed easiest first, ties allowed");
+    catalogue(vec![
+        hand_in("a", None, clump()),
+        hand_in("b", None, clump()),
+    ])
+    .validate()
+    .expect("an unrated category");
+
+    let named = json!({"policy": "named_items", "items": ["Universal Ammo"], "label": "Ammo"});
+    assert!(catalogue(vec![hand_in("a", None, named)])
+        .validate()
+        .unwrap_err()
+        .contains("from the clump"));
+    assert!(catalogue(vec![
+        hand_in("a", Some("hard"), clump()),
+        hand_in("b", Some("medium"), clump()),
+    ])
+    .validate()
+    .unwrap_err()
+    .contains("easiest first"));
+    assert!(catalogue(vec![
+        hand_in("a", Some("hard"), clump()),
+        hand_in("b", None, clump()),
+    ])
+    .validate()
+    .unwrap_err()
+    .contains("not all"));
+}
+
+/// The player's own hand-in quest is adopted by its old name, keeps its
+/// completions, and takes the catalogue's name, waypoint and hand-in mode.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hand_in_quest_is_adopted_by_its_old_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (svc, db, _clock) = rig(dir.path()).await;
+    let own = svc
+        .create_quest(&json!({
+            "name": "AI Daily: Hanna", "planet": "Calypso", "category": "Caly AI Dailies",
+            "cooldown_hours": 24, "cooldown_anchor": "completion",
+            "completion_trigger": "manual_hand_in",
+        }))
+        .await
+        .unwrap();
+    let own_id = own["id"].as_i64().unwrap();
+    db.with_writer(move |conn| {
+        conn.execute(
+            "INSERT INTO session_quest_completions(session_id, quest_id, completed_at) \
+             VALUES ('hand-in-1', ?, 1772300000.0)",
+            params![own_id],
+        )?;
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let report = sync(&db, CATALOGUE.clone()).await;
+    assert!(report.adopted >= 1);
+    let hanna = quest_row(&db, "calypso/ai-daily/hanna-hendrix").await;
+    assert_eq!(
+        hanna["id"], own_id,
+        "the existing row is adopted, not duplicated"
+    );
+    assert_eq!(hanna["name"], "AI Daily: Hanna Hendrix");
+    assert_eq!(hanna["category"], "AI Dailies");
+    assert_eq!(hanna["completion_mode"], "manual_hand_in");
+    assert_eq!(hanna["policy"], "completion_clump");
+    assert_eq!(
+        hanna["waypoint"],
+        "/wp [Calypso, 35469, 60113, 240, Hanna Hendrix]"
+    );
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) FROM session_quest_completions c \
+             JOIN quests q ON q.id = c.quest_id \
+             WHERE q.catalogue_key = 'calypso/ai-daily/hanna-hendrix'"
+        )
+        .await,
+        1,
+        "the completion follows the adopted row"
+    );
 }
 
 #[test]

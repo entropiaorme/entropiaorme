@@ -647,6 +647,30 @@ pub enum QuestCatalogueEntryKind {
     Quest,
 }
 
+/// The giver's own rating of a quest, easiest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestDifficulty {
+    Beginner,
+    Easy,
+    Medium,
+    Hard,
+    Extreme,
+}
+
+impl From<eo_services::quests::catalogue::Difficulty> for QuestDifficulty {
+    fn from(difficulty: eo_services::quests::catalogue::Difficulty) -> Self {
+        use eo_services::quests::catalogue::Difficulty;
+        match difficulty {
+            Difficulty::Beginner => Self::Beginner,
+            Difficulty::Easy => Self::Easy,
+            Difficulty::Medium => Self::Medium,
+            Difficulty::Hard => Self::Hard,
+            Difficulty::Extreme => Self::Extreme,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestCatalogueEntry {
@@ -657,6 +681,8 @@ pub struct QuestCatalogueEntry {
     pub label: String,
     /// A short qualifier shown beside the label.
     pub detail: Nullable<String>,
+    /// The giver's rating; a rated category lists its quests easiest first.
+    pub difficulty: Nullable<QuestDifficulty>,
     /// How the board states the reward.
     pub reward_label: String,
     /// A family's known variants, by catalogue key; empty for a quest.
@@ -688,6 +714,7 @@ impl QuestCatalogue {
                                         key: family.key.clone(),
                                         label: family.label.clone(),
                                         detail: None.into(),
+                                        difficulty: None.into(),
                                         reward_label: family.reward.label.clone(),
                                         member_keys: family
                                             .members
@@ -703,6 +730,10 @@ impl QuestCatalogue {
                                             .clone()
                                             .unwrap_or_else(|| quest.name.clone()),
                                         detail: quest.detail.clone().into(),
+                                        difficulty: quest
+                                            .difficulty
+                                            .map(QuestDifficulty::from)
+                                            .into(),
                                         reward_label: quest.reward.label.clone(),
                                         member_keys: Vec::new(),
                                     },

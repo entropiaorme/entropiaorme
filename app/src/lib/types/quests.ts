@@ -13,6 +13,7 @@ export type {
 	QuestCataloguePlanet,
 	QuestCompletionTrigger,
 	QuestCooldownAnchor,
+	QuestDifficulty,
 	QuestFamily,
 	QuestFamilyInput as QuestFamilyCreateData,
 	QuestFamilyInput as QuestFamilyUpdateData,

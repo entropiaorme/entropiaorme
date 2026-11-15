@@ -3237,6 +3237,8 @@ export interface QuestCatalogueEntry {
 	label: string;
 	/** A short qualifier shown beside the label. */
 	detail: string | null;
+	/** The giver's rating; a rated category lists its quests easiest first. */
+	difficulty: QuestDifficulty | null;
 	/** How the board states the reward. */
 	rewardLabel: string;
 	/** A family's known variants, by catalogue key; empty for a quest. */
@@ -3265,6 +3267,11 @@ export type QuestCompletionTrigger = 'mission_log' | 'signal_item' | 'manual_han
  * for boss runs).
  */
 export type QuestCooldownAnchor = 'pickup' | 'completion';
+
+/**
+ * The giver's own rating of a quest, easiest first.
+ */
+export type QuestDifficulty = 'beginner' | 'easy' | 'medium' | 'hard' | 'extreme';
 
 /**
  * A quest family in the wire shape: the authored slot (name, planet,

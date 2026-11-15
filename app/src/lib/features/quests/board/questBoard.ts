@@ -18,6 +18,7 @@ import type {
 	QuestCatalogue,
 	QuestCatalogueEntry,
 	QuestCompletionTrigger,
+	QuestDifficulty,
 	QuestFamily,
 	UnresolvedQuestReward,
 } from '$lib/types';
@@ -43,6 +44,8 @@ export interface BoardRow {
 	label: string;
 	/** A short qualifier beside the label ("Robot boss"). */
 	detail: string | null;
+	/** The giver's rating, when the catalogue carries one. */
+	difficulty: QuestDifficulty | null;
 	/** A slot's variant: the one in play, or the one last done today. */
 	variant: string | null;
 	/** Who hands the mission out, when the waypoint names them. */
@@ -157,6 +160,7 @@ function questRow(
 		key: string;
 		label: string;
 		detail: string | null;
+		difficulty: QuestDifficulty | null;
 		rewardLabel: string | null;
 		custom: boolean;
 	},
@@ -182,6 +186,7 @@ function questRow(
 		kind: 'quest',
 		label: shape.label,
 		detail: shape.detail,
+		difficulty: shape.difficulty,
 		variant: null,
 		giver,
 		rewardLabel: shape.rewardLabel,
@@ -222,6 +227,7 @@ function slotRow(
 		kind: 'slot',
 		label: shape.label,
 		detail: null,
+		difficulty: null,
 		variant: quest ? variantOf(quest.name) : null,
 		giver: null,
 		rewardLabel: shape.rewardLabel,
@@ -273,6 +279,7 @@ function curatedRow(
 		key: entry.key,
 		label: entry.label,
 		detail: entry.detail,
+		difficulty: entry.difficulty,
 		rewardLabel: entry.rewardLabel,
 		custom: false,
 	});
@@ -321,6 +328,7 @@ function customSections(
 							key: `quest:${quest.id}`,
 							label: quest.name,
 							detail: null,
+							difficulty: null,
 							rewardLabel: quest.rewardDescription || null,
 							custom: true,
 						}),
@@ -371,6 +379,34 @@ export function buildBoard(input: BoardInput): BoardPlanet[] {
 		if (sections.length > 0) planets.push({ name, curated: false, sections });
 	}
 	return planets;
+}
+
+/** One rung of a section's difficulty ladder: the consecutive rows the giver
+ * rates alike. */
+export interface LadderRung {
+	difficulty: QuestDifficulty | null;
+	rows: BoardRow[];
+}
+
+export const DIFFICULTY_LABEL: Record<QuestDifficulty, string> = {
+	beginner: 'Beginner',
+	easy: 'Easy',
+	medium: 'Medium',
+	hard: 'Hard',
+	extreme: 'Extreme',
+};
+
+/** A section's rows as the rungs of its ladder, in their authored order
+ * (the catalogue lists rated quests easiest first). An unrated section is
+ * one unnamed rung. */
+export function ladder(rows: BoardRow[]): LadderRung[] {
+	const rungs: LadderRung[] = [];
+	for (const row of rows) {
+		const last = rungs.at(-1);
+		if (last && last.difficulty === row.difficulty) last.rows.push(row);
+		else rungs.push({ difficulty: row.difficulty, rows: [row] });
+	}
+	return rungs;
 }
 
 /** Rewards still to settle that no row on the board carries: completions of

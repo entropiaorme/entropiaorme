@@ -785,6 +785,141 @@
           ]
         }
       ]
+    },
+    {
+      "key": "calypso",
+      "name": "Calypso",
+      "categories": [
+        {
+          "key": "calypso/ai-dailies",
+          "name": "AI Dailies",
+          "entries": [
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/alice-laurent",
+              "name": "AI Daily: Alice Laurent",
+              "label": "Alice Laurent",
+              "difficulty": "beginner",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 63225, 74453, 131, Alice Laurent]"
+            },
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/boris",
+              "name": "AI Daily: Boris",
+              "label": "Boris",
+              "difficulty": "easy",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 61955, 76163, 138, Boris]"
+            },
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/lauren-ashford",
+              "name": "AI Daily: Lauren Ashford",
+              "label": "Lauren Ashford",
+              "difficulty": "medium",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 63344, 87480, 126, Lauren Ashford]"
+            },
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/leia-cassidy",
+              "name": "AI Daily: Leia Cassidy",
+              "label": "Leia Cassidy",
+              "difficulty": "hard",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 80538, 68314, 160, Leia Cassidy]"
+            },
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/hanna-hendrix",
+              "name": "AI Daily: Hanna Hendrix",
+              "label": "Hanna Hendrix",
+              "difficulty": "hard",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 35469, 60113, 240, Hanna Hendrix]",
+              "aliases": [
+                "AI Daily: Hanna"
+              ]
+            },
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/bobby",
+              "name": "AI Daily: Bobby",
+              "label": "Bobby",
+              "difficulty": "hard",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 37021, 53551, 179, Bobby]"
+            },
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/hans-kaufman",
+              "name": "AI Daily: Hans Kaufman",
+              "label": "Hans Kaufman",
+              "difficulty": "extreme",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 37054, 53560, 179, Hans Kaufman]"
+            },
+            {
+              "kind": "quest",
+              "key": "calypso/ai-daily/thorleif-schtoll",
+              "name": "AI Daily: Thorleif Schtoll",
+              "label": "Thorleif Schtoll",
+              "difficulty": "extreme",
+              "completion": "manual_hand_in",
+              "cooldownHours": 24,
+              "cooldownAnchor": "completion",
+              "reward": {
+                "policy": "completion_clump",
+                "label": "Ammo and items"
+              },
+              "waypoint": "/wp [Calypso, 80459, 68299, 163, Thorleif Schtoll]"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

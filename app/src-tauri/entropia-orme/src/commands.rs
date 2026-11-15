@@ -74,6 +74,10 @@ use eo_api::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, 
 use eo_api::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use eo_api::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
+use eo_api::strongbox::{
+    StrongboxExportInput, StrongboxExportRead, StrongboxOpeningEntry, StrongboxOpeningInput,
+    StrongboxOpeningRecorded,
+};
 use eo_api::tool_sighting::{
     DismissedToolName, ToolSightingAction, ToolSightingReview, ToolSightingSettleResult,
 };
@@ -969,6 +973,37 @@ pub async fn stock_convert_items(
     input: ItemConversionInput,
 ) -> Result<(), ApiError> {
     facade(&app)?.stock_convert_items(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_export_read(
+    app: tauri::AppHandle,
+    input: StrongboxExportInput,
+) -> Result<StrongboxExportRead, ApiError> {
+    facade(&app)?.strongbox_export_read(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_open(
+    app: tauri::AppHandle,
+    input: StrongboxOpeningInput,
+) -> Result<StrongboxOpeningRecorded, ApiError> {
+    facade(&app)?.strongbox_open(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_openings(
+    app: tauri::AppHandle,
+) -> Result<Vec<StrongboxOpeningEntry>, ApiError> {
+    facade(&app)?.strongbox_openings().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_opening_undo(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.strongbox_opening_undo(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

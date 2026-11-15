@@ -76,6 +76,10 @@ use crate::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, S
 use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
 use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
 use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
+use crate::strongbox::{
+    StrongboxExportInput, StrongboxExportRead, StrongboxOpeningEntry, StrongboxOpeningInput,
+    StrongboxOpeningRecorded,
+};
 use crate::tool_sighting::{
     DismissedToolName, ToolSightingAction, ToolSightingReview, ToolSightingSettleResult,
 };
@@ -1155,6 +1159,35 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "stock_removal_undo",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "strongbox_export_read",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StrongboxExportInput)),
+            }],
+            returns: Some(schema(schema_for!(StrongboxExportRead))),
+        },
+        CommandSpec {
+            name: "strongbox_open",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StrongboxOpeningInput)),
+            }],
+            returns: Some(schema(schema_for!(StrongboxOpeningRecorded))),
+        },
+        CommandSpec {
+            name: "strongbox_openings",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<StrongboxOpeningEntry>))),
+        },
+        CommandSpec {
+            name: "strongbox_opening_undo",
             args: vec![ArgSpec {
                 name: "input",
                 schema: schema(schema_for!(ActivityUndoInput)),

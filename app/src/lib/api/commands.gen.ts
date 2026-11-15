@@ -4441,6 +4441,152 @@ export interface StopResult {
 }
 
 /**
+ * An export to read as an opening of one box type.
+ */
+export interface StrongboxExportInput {
+	text: string;
+	boxItem: string;
+}
+
+/**
+ * An export read as an opening.
+ */
+export interface StrongboxExportRead {
+	boxesOpened: number;
+	keys: StrongboxKeysUsed | null;
+	/** The Universal Ammo that came back, in PED. */
+	ammoPed: number;
+	contents: StrongboxExportRow[];
+	unexpected: StrongboxUnexpectedRow[];
+	skipped: StrongboxSkippedLine[];
+	/** TT produced minus the keys' TT: zero for a clean opening. */
+	balanceGap: number;
+}
+
+/**
+ * One item's change in the export.
+ */
+export interface StrongboxExportRow {
+	/** 1-based line number in the pasted text. */
+	line: number;
+	itemName: string;
+	quantity: number;
+	valuePed: number;
+}
+
+/**
+ * How a run's result reached the app.
+ */
+export type StrongboxIntake = 'export' | 'manual';
+
+/**
+ * One thing the boxes held besides ammo.
+ */
+export interface StrongboxItemInput {
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	/** Turned into Nanocubes rather than kept. */
+	recycle: boolean;
+}
+
+/**
+ * The keys the opening used up.
+ */
+export interface StrongboxKeysUsed {
+	count: number;
+	ttValue: number;
+}
+
+/**
+ * One item of a recorded run, as it stands.
+ */
+export interface StrongboxOpenedItem {
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	/** The Nanocubes it became, while that conversion stands. */
+	nanocubes: number | null;
+}
+
+/**
+ * A recorded run.
+ */
+export interface StrongboxOpeningEntry {
+	id: string;
+	boxItem: string;
+	boxCount: number;
+	/** What the boxes cost above TT: bought for the run or held as assets. */
+	boxMarkupPaid: number;
+	keyTt: number;
+	keyMarkupPaid: number;
+	ammoPed: number;
+	contents: StrongboxOpenedItem[];
+	intake: StrongboxIntake;
+	openedAt: string;
+	undone: boolean;
+}
+
+/**
+ * A run of openings to record.
+ */
+export interface StrongboxOpeningInput {
+	boxItem: string;
+	sources: StrongboxSource[];
+	keyUnitTt: number;
+	keyMarkupPaid?: number | null;
+	contents: StrongboxItemInput[];
+	ammoPed: number;
+	intake: StrongboxIntake;
+	openedAt?: string | null;
+}
+
+/**
+ * The run just recorded.
+ */
+export interface StrongboxOpeningRecorded {
+	id: string;
+}
+
+/**
+ * A line of the paste that was not a row.
+ */
+export interface StrongboxSkippedLine {
+	line: number;
+	text: string;
+	reason: string;
+}
+
+/**
+ * Where a run's boxes came from.
+ */
+export type StrongboxSource = {
+		quantity: number;
+		kind: 'held';
+	} | {
+		itemId: string;
+		quantity: number;
+		kind: 'asset';
+	} | {
+		quantity: number;
+		markupPaid: number;
+		kind: 'bought';
+	};
+
+/**
+ * Why a row does not fit an opening of the chosen box.
+ */
+export type StrongboxUnexpectedReason = 'other_box' | 'removed' | 'gained' | 'worn';
+
+/**
+ * A row the opening does not account for.
+ */
+export interface StrongboxUnexpectedRow {
+	row: StrongboxExportRow;
+	reason: StrongboxUnexpectedReason;
+}
+
+/**
  * One projection table's verdict from a rebuild-and-verify run: the
  * table name, whether its rebuilt rows were byte-identical to the
  * incrementally-maintained ones, and the row count after the rebuild.
@@ -5810,6 +5956,22 @@ export async function privateSaleUndo(input: ActivityUndoInput): Promise<void> {
 
 export async function stockRemovalUndo(input: ActivityUndoInput): Promise<void> {
 	return invokeCommand('stock_removal_undo', { input });
+}
+
+export async function strongboxExportRead(input: StrongboxExportInput): Promise<StrongboxExportRead> {
+	return invokeCommand('strongbox_export_read', { input });
+}
+
+export async function strongboxOpen(input: StrongboxOpeningInput): Promise<StrongboxOpeningRecorded> {
+	return invokeCommand('strongbox_open', { input });
+}
+
+export async function strongboxOpenings(): Promise<StrongboxOpeningEntry[]> {
+	return invokeCommand('strongbox_openings', {});
+}
+
+export async function strongboxOpeningUndo(input: ActivityUndoInput): Promise<void> {
+	return invokeCommand('strongbox_opening_undo', { input });
 }
 
 export async function ledgerList(cursor: string | null, limit: number | null): Promise<LedgerPage> {

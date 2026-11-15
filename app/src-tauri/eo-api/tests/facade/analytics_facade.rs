@@ -15,8 +15,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use eo_api::analytics::{
-    AuctionConfirmInput, AuctionExpireInput, AuctionListingInput, InventorySellInput,
-    LedgerEntryInput, LedgerPresetInput, Profession,
+    ActivityUndoInput, AuctionConfirmInput, AuctionExpireInput, AuctionListingInput,
+    InventorySellInput, LedgerEntryInput, LedgerPresetInput, Profession,
 };
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
@@ -852,4 +852,120 @@ async fn a_listing_drafted_from_a_capture_records_where_each_figure_came_from() 
         api.auction_listing_create(twice).await.unwrap_err(),
         ApiError::bad_request("a listing figure's source is given twice")
     );
+}
+
+/// The export of eight Halloween Strongboxes opened in game, as the account
+/// site's Inventory Changes page copies it.
+const HALLOWEEN_EXPORT: &str = "Name\tQuantity\tValue(PED)\n\
+    Red Heart Fireworks\t1\t2.0000\n\
+    Skeleton Shirt White (F)\t1\t10.0000\n\
+    Skeleton Shirt White (M)\t1\t10.0000\n\
+    Halloween Strongbox\t-8\t0.0000\n\
+    Strongbox Key\t-8\t-80.0000\n\
+    Universal Ammo\t580000\t58.0000\n";
+
+#[tokio::test]
+async fn a_strongbox_run_reads_from_the_export_records_and_undoes_over_the_wire() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = analytics_api(dir.path()).await;
+
+    let read = api
+        .strongbox_export_read(
+            serde_json::from_value(serde_json::json!({
+                "text": HALLOWEEN_EXPORT,
+                "boxItem": "Halloween Strongbox",
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read.boxes_opened, 8.0);
+    assert_eq!(read.keys.map(|keys| keys.tt_value), Some(80.0));
+    assert_eq!(read.ammo_ped, 58.0);
+    assert_eq!(read.contents.len(), 3);
+    assert!(read.unexpected.is_empty() && read.skipped.is_empty());
+    assert!(read.balance_gap.abs() < 1e-9);
+
+    // Ten boxes bought as an asset at 5 PED each above their (nil) TT.
+    let boxes = api
+        .inventory_create(
+            serde_json::from_value(serde_json::json!({
+                "name": "Halloween Strongbox",
+                "quantity": 10.0,
+                "tt_value": 0.0,
+                "markup_paid": 50.0,
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let recorded = api
+        .strongbox_open(
+            serde_json::from_value(serde_json::json!({
+                "boxItem": "Halloween Strongbox",
+                "sources": [{ "kind": "asset", "itemId": boxes.id, "quantity": 8.0 }],
+                "keyUnitTt": 10.0,
+                "contents": [
+                    { "itemName": "Red Heart Fireworks", "quantity": 1.0, "ttValue": 2.0, "recycle": true },
+                    { "itemName": "Skeleton Shirt White (F)", "quantity": 1.0, "ttValue": 10.0, "recycle": false },
+                    { "itemName": "Skeleton Shirt White (M)", "quantity": 1.0, "ttValue": 10.0, "recycle": false },
+                ],
+                "ammoPed": 58.0,
+                "intake": "export",
+                "openedAt": "2026-11-15",
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let openings = api.strongbox_openings().await.unwrap();
+    assert_eq!(openings.len(), 1);
+    let run = &openings[0];
+    assert_eq!(run.id, recorded.id);
+    assert_eq!(run.box_count, 8.0);
+    assert!((run.box_markup_paid - 40.0).abs() < 1e-9);
+    assert_eq!(run.key_tt, 80.0);
+    assert_eq!(run.contents[0].nanocubes, Some(200.0));
+    assert_eq!(run.contents[1].nanocubes, None);
+    let held = api.inventory_list().await.unwrap();
+    assert!((held[0].quantity - 2.0).abs() < 1e-9);
+
+    let undo = || {
+        serde_json::from_value::<ActivityUndoInput>(serde_json::json!({ "id": recorded.id }))
+            .unwrap()
+    };
+    api.strongbox_opening_undo(undo()).await.unwrap();
+    assert!(api.strongbox_openings().await.unwrap()[0].undone);
+    let held = api.inventory_list().await.unwrap();
+    assert!((held[0].quantity - 10.0).abs() < 1e-9);
+    assert!(matches!(
+        api.strongbox_opening_undo(undo()).await,
+        Err(ApiError::NotFound { .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_strongbox_run_the_keys_do_not_balance_is_a_bad_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = analytics_api(dir.path()).await;
+    let refused = api
+        .strongbox_open(
+            serde_json::from_value(serde_json::json!({
+                "boxItem": "Halloween Strongbox",
+                "sources": [{ "kind": "bought", "quantity": 2.0, "markupPaid": 4.0 }],
+                "keyUnitTt": 10.0,
+                "contents": [],
+                "ammoPed": 5.0,
+                "intake": "manual",
+            }))
+            .unwrap(),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(ApiError::BadRequest { .. })),
+        "{refused:?}"
+    );
+    assert!(api.strongbox_openings().await.unwrap().is_empty());
 }

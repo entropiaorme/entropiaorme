@@ -69,6 +69,7 @@ pub mod scan;
 pub mod session_definitions;
 pub mod settings;
 pub mod skilling;
+pub mod strongbox;
 pub mod tool_sighting;
 pub mod tracking;
 pub mod weapons;

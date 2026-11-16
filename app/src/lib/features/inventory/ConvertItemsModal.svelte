@@ -15,6 +15,8 @@
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
 	import { todayDate } from '$lib/utils/format';
 	import ConversionItemField from './ConversionItemField.svelte';
+	import HeldAmountField from './HeldAmountField.svelte';
+	import { type AmountMode, heldInMode } from './heldAmount';
 	import {
 		type ConversionDraft,
 		assetQuantity,
@@ -25,6 +27,7 @@
 		emptyOutput,
 		excessOverHeld,
 		heldQuantity,
+		heldUnitTt,
 		type InputDraft,
 		inputKind,
 		isHeldItem,
@@ -59,10 +62,13 @@
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let initialised = $state(false);
+	/** Whether each line's amount is entered as a count or as PED of TT. */
+	let entryModes = $state<Record<number, AmountMode>>({});
 
 	$effect(() => {
 		if (open && !initialised) {
 			draft = emptyDraft(start);
+			entryModes = {};
 			convertedAt = todayDate();
 			editingDate = false;
 			error = null;
@@ -148,16 +154,29 @@
 							class="min-w-0 flex-1"
 							onchange={(name, assetId) => setInputItem(line, name, assetId)}
 						/>
-						{#if kind !== 'asset' || takesPartOfAsset(line, items)}
+						{#if kind === 'held' || (kind === 'asset' && takesPartOfAsset(line, items))}
+							<!-- What is held can go in by count or by the PED it comes to. -->
+							<HeldAmountField
+								variant="inline"
+								class="w-28 shrink-0"
+								bind:units={line.quantity}
+								bind:mode={
+									() => entryModes[line.id] ?? 'units',
+									(next) => (entryModes[line.id] = next)
+								}
+								unitTt={heldUnitTt(line, items)}
+								held={heldQuantity(line, items)}
+								placeholder={kind === 'asset' ? roundedQuantity(heldQuantity(line, items)) : null}
+								subject={`of ${line.itemName || 'item'}`}
+							/>
+						{:else if kind !== 'asset'}
 							<Input
 								type="number"
 								min="0"
 								step="1"
 								align="right"
 								class="w-20 shrink-0"
-								placeholder={kind === 'asset'
-									? roundedQuantity(heldQuantity(line, items)).toString()
-									: 'Qty'}
+								placeholder="Qty"
 								aria-label={`Quantity of ${line.itemName || 'item'}`}
 								bind:value={line.quantity}
 							/>
@@ -224,7 +243,11 @@
 								class="tabular-nums hover:text-text {over ? 'text-warning' : ''}"
 								onclick={() => (line.quantity = null)}
 							>
-								of {roundedQuantity(heldQuantity(line, items))} held
+								of {heldInMode(
+									roundedQuantity(heldQuantity(line, items)),
+									heldUnitTt(line, items),
+									entryModes[line.id] ?? 'units',
+								)} held
 							</button>
 						{:else if kind === 'asset' && heldQuantity(line, items) > 1}
 							<span class="tabular-nums">
@@ -236,7 +259,11 @@
 								class="tabular-nums hover:text-text"
 								onclick={() => (line.quantity = heldQuantity(line, items))}
 							>
-								of {roundedQuantity(heldQuantity(line, items))} held
+								of {heldInMode(
+									roundedQuantity(heldQuantity(line, items)),
+									heldUnitTt(line, items),
+									entryModes[line.id] ?? 'units',
+								)} held
 							</button>
 							<button
 								type="button"

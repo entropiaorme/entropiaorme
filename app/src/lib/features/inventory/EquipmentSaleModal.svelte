@@ -4,8 +4,10 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
 	import type { EquipmentListingInput, EquipmentTradeInput, InventoryItem } from '$lib/api';
-	import { formatPed, formatQuantity, isZeroTt, todayDate } from '$lib/utils/format';
+	import { formatPed, formatQuantity, formatTt, isZeroTt, todayDate } from '$lib/utils/format';
 	import { isStack, perUnit, shareOf } from './assetPosition';
+	import HeldAmountField from './HeldAmountField.svelte';
+	import type { AmountMode } from './heldAmount';
 
 	let {
 		item,
@@ -26,6 +28,8 @@
 	let soldFor = $state(0);
 	/** How many of the asset's units go; every one of them by default. */
 	let quantity = $state<number | null>(null);
+	/** An asset is thought of by count, so that is where the amount opens. */
+	let entry = $state<AmountMode>('units');
 	let occurredAt = $state('');
 	let saving = $state(false);
 	let error = $state<string | null>(null);
@@ -42,6 +46,7 @@
 	/** An item with no TT is worth its markup alone: its cost is all markup,
 	 * so it is read by how many go and what each cost. */
 	const noTt = $derived(item !== null && isZeroTt(item.ttValue));
+	const unitTt = $derived(item && !noTt && item.quantity > 0 ? item.ttValue / item.quantity : 0);
 	const expectedPrice = $derived(method === 'trade' ? soldFor : (buyout ?? startingBid));
 	const expectedResult = $derived(
 		expectedPrice - costBasis - (method === 'auction' ? listingFee : 0),
@@ -55,6 +60,7 @@
 			listingFee = 0.5;
 			soldFor = 0;
 			quantity = null;
+			entry = 'units';
 			occurredAt = todayDate();
 			error = null;
 			initialisedFor = item.id;
@@ -113,28 +119,19 @@
 			/>
 
 			{#if partial}
-				<div class="flex items-end gap-3">
-					<label class="block w-28 space-y-1">
-						<span class="eyebrow text-text-tertiary">Quantity</span>
-						<Input
-							type="number"
-							min="1"
-							step="1"
-							align="right"
-							placeholder={formatQuantity(item.quantity)}
-							aria-label="Quantity to sell"
-							bind:value={quantity}
-						/>
-					</label>
-					<button
-						type="button"
-						class="pb-2 text-xs tabular-nums hover:text-text {tooMany
-							? 'text-warning'
-							: 'text-text-tertiary'}"
-						onclick={() => (quantity = null)}
-					>
-						of {formatQuantity(item.quantity)} held
-					</button>
+				<div class="space-y-1.5">
+					<HeldAmountField
+						bind:units={quantity}
+						bind:mode={entry}
+						{unitTt}
+						held={item.quantity}
+						placeholder={item.quantity}
+						label="Amount"
+						subject="to sell"
+					/>
+					{#if tooMany}
+						<p class="text-xs text-warning">More than the {formatQuantity(item.quantity)} held.</p>
+					{/if}
 				</div>
 			{/if}
 
@@ -154,7 +151,7 @@
 				{:else}
 					<div class="flex items-center justify-between">
 						<span class="text-text-secondary">TT value</span>
-						<span class="tabular-nums text-text">{formatPed(share.ttValue)} PED</span>
+						<span class="tabular-nums text-text">{formatTt(share.ttValue)} PED</span>
 					</div>
 					<div class="flex items-center justify-between">
 						<span class="text-text-secondary">MU paid</span>

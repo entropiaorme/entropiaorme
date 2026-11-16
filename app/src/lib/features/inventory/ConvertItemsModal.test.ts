@@ -81,4 +81,41 @@ describe('ConvertItemsModal', () => {
 		const convert = screen.getByRole('button', { name: 'Convert' }) as HTMLButtonElement;
 		expect(convert.disabled).toBe(true);
 	});
+
+	it('takes held Shrapnel by the PED it comes to, as units', async () => {
+		const onsubmit = vi.fn().mockResolvedValue(undefined);
+		render(ConvertItemsModal, {
+			props: {
+				open: true,
+				items: [
+					{
+						name: 'Shrapnel',
+						assetId: null,
+						heldQty: 20_000,
+						unitTt: 0.0001,
+						paidPerUnit: 0,
+						origins: [{ label: 'Hunting', quantity: 20_000 }],
+					},
+				],
+				start: { name: 'Shrapnel', assetId: null },
+				history: [],
+				onsubmit,
+			},
+		});
+
+		expect(await screen.findByText('of 20000 held')).not.toBeNull();
+		await fireEvent.click(
+			screen.getByRole('button', { name: 'Entering how many of Shrapnel; switch to PED' }),
+		);
+		expect(screen.getByText('of 2.00 PED held')).not.toBeNull();
+		await fireEvent.input(screen.getByLabelText('PED of Shrapnel'), { target: { value: '1' } });
+		await fireEvent.click(screen.getByRole('button', { name: '+ PED amount' }));
+		await fireEvent.input(screen.getByLabelText('PED received'), { target: { value: '1.01' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Convert' }));
+
+		await waitFor(() => expect(onsubmit).toHaveBeenCalledOnce());
+		expect(onsubmit.mock.calls[0][0]).toMatchObject({
+			inputs: [{ kind: 'held', itemName: 'Shrapnel', quantity: 10_000 }],
+		});
+	});
 });

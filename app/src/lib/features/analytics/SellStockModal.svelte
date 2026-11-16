@@ -15,7 +15,9 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
-	import { formatPed, formatQuantity, todayDate } from '$lib/utils/format';
+	import HeldAmountField from '$lib/features/inventory/HeldAmountField.svelte';
+	import type { AmountMode } from '$lib/features/inventory/heldAmount';
+	import { formatPed, formatQuantity, formatTt, todayDate } from '$lib/utils/format';
 	import {
 		stockHasNoTt,
 		type ActivityListingDraft,
@@ -39,7 +41,9 @@
 		activityAttributionNoun?: string;
 	} = $props();
 
-	let quantity = $state(0);
+	/** The units going, entered as a count or as PED of TT. */
+	let quantity = $state<number | null>(null);
+	let entry = $state<AmountMode>('ped');
 	let startingBid = $state(0);
 	let buyout = $state<number | null>(null);
 	let listingFee = $state(0.5);
@@ -53,13 +57,14 @@
 	let initialisedFor = $state<string | null>(null);
 
 	const unitTt = $derived(item && item.heldQty > 0 ? item.heldTt / item.heldQty : 0);
-	const listedTt = $derived(quantity * unitTt);
 	/** An item with no TT is sold by count: every PED of its price is markup. */
 	const noTt = $derived(!!item && stockHasNoTt(item));
+	const units = $derived(quantity ?? 0);
+	const listedTt = $derived(units * unitTt);
 	// Anything beyond the tracked position is real value with no activity
 	// claim on it, so the split is stated up front rather than discovered
 	// afterwards in the figures.
-	const excess = $derived(item ? Math.max(quantity - item.heldQty, 0) : 0);
+	const excess = $derived(item ? Math.max(units - item.heldQty, 0) : 0);
 	// Net of the listing fee, because the fee is spent the moment this listing
 	// is created: a preview that quoted the gross would promise more than the
 	// player can ever end up holding, and by a margin that matters on a
@@ -68,7 +73,7 @@
 	// counts as gained, in proportion to how much of it is being sold.
 	const paidShare = $derived(
 		item?.paidMarkup && item.heldQty > 0
-			? item.paidMarkup * Math.min(quantity / item.heldQty, 1)
+			? item.paidMarkup * Math.min(units / item.heldQty, 1)
 			: 0,
 	);
 	const netMarkup = $derived(
@@ -81,6 +86,7 @@
 	$effect(() => {
 		if (item && initialisedFor !== item.itemName) {
 			quantity = item.heldQty;
+			entry = 'ped';
 			startingBid = 0;
 			buyout = null;
 			listingFee = 0.5;
@@ -104,14 +110,14 @@
 	});
 
 	async function confirm() {
-		if (!item || saving || quantity <= 0) return;
+		if (!item || saving || units <= 0) return;
 		saving = true;
 		error = null;
 		try {
 			if (saleMethod === 'auction') {
 				await onlist({
 					itemName: item.itemName,
-					quantity,
+					quantity: units,
 					startingBid,
 					buyout,
 					listingFee,
@@ -120,7 +126,7 @@
 			} else {
 				await ontrade({
 					itemName: item.itemName,
-					quantity,
+					quantity: units,
 					soldFor,
 					soldAt: listedAt || null,
 				});
@@ -146,13 +152,13 @@
 				<div class="flex items-center justify-between">
 					<span class="text-text-secondary">Held</span>
 					<span class="tabular-nums text-text">
-						{formatQuantity(item.heldQty)}{noTt ? ', no TT' : ` (${formatPed(item.heldTt)} PED)`}
+						{formatQuantity(item.heldQty)}{noTt ? ', no TT' : ` (${formatTt(item.heldTt)} PED)`}
 					</span>
 				</div>
 				{#if !noTt}
 					<div class="flex items-center justify-between">
 						<span class="text-text-secondary">{saleMethod === 'auction' ? 'Listing TT' : 'Sale TT'}</span>
-						<span class="tabular-nums text-text">{formatPed(listedTt)} PED</span>
+						<span class="tabular-nums text-text">{formatTt(listedTt)} PED</span>
 					</div>
 				{/if}
 				{#if paidShare > 0}
@@ -173,14 +179,18 @@
 				{/if}
 			</div>
 
-			<label class="block space-y-1">
-				<span class="eyebrow text-text-tertiary">Quantity</span>
-				<Input type="number" min="0" step="1" bind:value={quantity} />
-			</label>
+			<HeldAmountField
+				bind:units={quantity}
+				bind:mode={entry}
+				{unitTt}
+				held={item.heldQty}
+				label="Amount"
+				subject="to sell"
+			/>
 
 			{#if excess > 0}
 				<p class="text-xs text-warning">
-					{excess} beyond tracked stock. Its value counts in your ledger, but it cannot be
+					{formatQuantity(excess)} beyond tracked stock. Its value counts in your ledger, but it cannot be
 					attributed to {activityAttributionNoun}, so it will not reach the Realised figures.
 				</p>
 			{/if}
@@ -230,7 +240,7 @@
 
 			<div class="flex items-center justify-end gap-2 pt-2">
 				<Button variant="ghost" onclick={oncancel} disabled={saving}>Cancel</Button>
-				<Button onclick={confirm} loading={saving} disabled={quantity <= 0}>
+				<Button onclick={confirm} loading={saving} disabled={units <= 0}>
 					{saleMethod === 'auction' ? 'List on auction' : 'Record trade'}
 				</Button>
 			</div>

@@ -50,7 +50,9 @@ describe('stock action modals', () => {
 
 		expect(screen.getByText('Starting bid (PED)')).not.toBeNull();
 		await fireEvent.click(screen.getByRole('button', { name: 'Trade' }));
-		await fireEvent.input(screen.getByLabelText('Quantity'), { target: { value: '5000' } });
+		// Stock opens in PED, how it is held; half of it is half the units.
+		await fireEvent.input(screen.getByLabelText('PED to sell'), { target: { value: '5' } });
+		expect(screen.getByText('5000 units')).not.toBeNull();
 		await fireEvent.input(screen.getByLabelText('Sold for (PED)'), { target: { value: '6' } });
 		await fireEvent.click(screen.getByRole('button', { name: 'Record trade' }));
 
@@ -99,10 +101,58 @@ describe('stock action modals', () => {
 			},
 		});
 
-		expect(screen.getByText('12 held, no TT')).not.toBeNull();
+		expect(screen.getByText('No TT, so by count')).not.toBeNull();
+		expect(screen.queryByRole('button', { name: 'By PED of TT' })).toBeNull();
 		await fireEvent.input(screen.getByLabelText('How many to remove'), { target: { value: '5' } });
 		await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
 		await waitFor(() => expect(onconfirm).toHaveBeenCalledWith('Halloween Strongbox', 5));
+	});
+
+	it('removes Shrapnel by PED: a TT of 0.0001 a unit is small, not none', async () => {
+		const onconfirm = vi.fn().mockResolvedValue(undefined);
+		render(AdjustStockModal, {
+			props: {
+				item: { ...stock, heldQty: 10_000, heldTt: 1, unitTt: 0.0001 },
+				mode: 'remove',
+				onconfirm,
+				oncancel: vi.fn(),
+			},
+		});
+
+		expect(screen.getByRole('button', { name: 'All 1.00 PED' })).not.toBeNull();
+		await fireEvent.input(screen.getByLabelText('PED to remove'), { target: { value: '0.25' } });
+		expect(screen.getByText('2500 units')).not.toBeNull();
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+		await waitFor(() => expect(onconfirm).toHaveBeenCalledWith('Shrapnel', 2500));
+	});
+
+	it('removes stock with TT by count when switched to quantity', async () => {
+		const onconfirm = vi.fn().mockResolvedValue(undefined);
+		render(AdjustStockModal, {
+			props: { item: stock, mode: 'remove', onconfirm, oncancel: vi.fn() },
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'By quantity' }));
+		expect(screen.getByRole('button', { name: 'All 10000' })).not.toBeNull();
+		await fireEvent.input(screen.getByLabelText('How many to remove'), {
+			target: { value: '300' },
+		});
+		expect(screen.getByText('0.30 PED')).not.toBeNull();
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+		await waitFor(() => expect(onconfirm).toHaveBeenCalledWith('Shrapnel', 300));
+	});
+
+	it('refuses to remove more than is in stock', async () => {
+		const onconfirm = vi.fn();
+		render(AdjustStockModal, {
+			props: { item: stock, mode: 'remove', onconfirm, oncancel: vi.fn() },
+		});
+
+		await fireEvent.input(screen.getByLabelText('PED to remove'), { target: { value: '11' } });
+		expect(screen.getByText('More than the Shrapnel in stock.')).not.toBeNull();
+		expect((screen.getByRole('button', { name: 'Remove' }) as HTMLButtonElement).disabled).toBe(
+			true,
+		);
 	});
 
 	it('sells stock with no TT by count, without a TT of nothing to read', () => {

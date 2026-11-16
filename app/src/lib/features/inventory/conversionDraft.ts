@@ -119,6 +119,12 @@ export function heldQuantity(line: InputDraft, items: ConvertibleItem[]): number
 	return findItem(line, items)?.heldQty ?? 0;
 }
 
+/** The TT each unit of a line's held item carries; nothing when unknown. */
+export function heldUnitTt(line: InputDraft, items: ConvertibleItem[]): number {
+	const unit = findItem(line, items)?.unitTt;
+	return unit !== undefined && Number.isFinite(unit) && unit > 0 ? unit : 0;
+}
+
 /** How many of an asset a line puts in: what it names, or every unit held. */
 export function assetQuantity(line: InputDraft, items: ConvertibleItem[]): number {
 	return line.quantity ?? heldQuantity(line, items);

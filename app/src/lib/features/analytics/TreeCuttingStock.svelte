@@ -15,7 +15,7 @@
 		shrapnelMarkupLabel,
 	} from './marketConfidence';
 	import ManualMarkupEditor from '$lib/features/market/ManualMarkupEditor.svelte';
-	import { NO_DATA, NO_TT_TITLE, formatCount, formatPed, formatPercent } from '$lib/utils/format';
+	import { NO_DATA, NO_TT_TITLE, formatCount, formatPed, formatPercent, formatTt } from '$lib/utils/format';
 
 	let {
 		stock,
@@ -343,7 +343,7 @@
 					{#if noTt}
 						<span title={NO_TT_TITLE}>{formatCount(item.heldQty)}</span>
 					{:else}
-						{formatPed(item.heldTt)}
+						{formatTt(item.heldTt)}
 					{/if}
 					{#if item.listedQty > 0}
 						<span

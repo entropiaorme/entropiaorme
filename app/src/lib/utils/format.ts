@@ -37,16 +37,30 @@ export function formatQuantity(quantity: number): string {
 }
 
 /**
- * Whether a TT figure is nothing at all: below half a PEC it reads as 0.00.
+ * Whether a TT figure is nothing at all.
  *
  * Some items have no TT (a strongbox, a token, a voucher) and are worth their
  * markup alone. They are first-class holdings, not a degenerate case: wherever
  * their TT would stand, the app shows how many there are instead
  * (`formatTtOrCount`), and their markup is written in PED, since a percentage
  * of no TT says nothing.
+ *
+ * Only a TT of exactly nothing qualifies. An item whose TT is merely small
+ * (Shrapnel, at 0.0001 PED a unit) still has one, is still held and read in
+ * PED, and still has a percentage markup; the tolerance only absorbs
+ * floating-point residue, matching the backend's stock epsilon.
  */
 export function isZeroTt(ttValue: number): boolean {
-	return Math.abs(ttValue) < 0.005;
+	return Math.abs(ttValue) < 1e-9;
+}
+
+/**
+ * A TT figure in PED. Two decimals at ordinary sizes, but a small holding of
+ * a sub-PEC item (a few hundred Shrapnel) would read as 0.00, the very figure
+ * reserved for an item with no TT, so a non-zero figure under a PEC keeps four.
+ */
+export function formatTt(ttValue: number): string {
+	return ttValue.toFixed(!isZeroTt(ttValue) && Math.abs(ttValue) < 0.01 ? 4 : 2);
 }
 
 /** A count standing where a TT figure would: "\u00d712". */
@@ -56,7 +70,7 @@ export function formatCount(quantity: number): string {
 
 /** What a TT slot shows: the TT, or for an item with no TT, how many. */
 export function formatTtOrCount(ttValue: number, quantity: number): string {
-	return isZeroTt(ttValue) ? formatCount(quantity) : formatPed(ttValue);
+	return isZeroTt(ttValue) ? formatCount(quantity) : formatTt(ttValue);
 }
 
 /** The hover text on a count shown in a TT slot. */

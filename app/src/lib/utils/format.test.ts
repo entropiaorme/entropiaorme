@@ -14,6 +14,7 @@ import {
 	formatPercent,
 	formatQuantity,
 	formatTime,
+	formatTt,
 	formatTtOrCount,
 	isZeroTt,
 	listNames,
@@ -282,16 +283,29 @@ describe('items with no TT', () => {
 		expect(formatQuantity(2.5)).toBe('2.50');
 	});
 
-	it('treats a TT that reads as 0.00 as none at all', () => {
+	it('treats only a TT of nothing as none, never a merely small one', () => {
 		expect(isZeroTt(0)).toBe(true);
-		expect(isZeroTt(0.004)).toBe(true);
-		expect(isZeroTt(0.005)).toBe(false);
+		// Floating-point residue left by summing and carving TT is still nothing.
+		expect(isZeroTt(0.1 + 0.2 - 0.3)).toBe(true);
+		// One Shrapnel, and a handful of them: small, but TT all the same.
+		expect(isZeroTt(0.0001)).toBe(false);
+		expect(isZeroTt(0.004)).toBe(false);
 		expect(isZeroTt(0.01)).toBe(false);
+	});
+
+	it('keeps a sub-PEC TT legible rather than letting it read as 0.00', () => {
+		expect(formatTt(0)).toBe('0.00');
+		expect(formatTt(0.003)).toBe('0.0030');
+		expect(formatTt(0.0001)).toBe('0.0001');
+		expect(formatTt(0.01)).toBe('0.01');
+		expect(formatTt(12.3456)).toBe('12.35');
 	});
 
 	it('shows how many stand where no TT would', () => {
 		expect(formatCount(12)).toBe('\u00d712');
 		expect(formatTtOrCount(0, 12)).toBe('\u00d712');
 		expect(formatTtOrCount(1.5, 12)).toBe('1.50');
+		// Thirty Shrapnel hold TT, so they read in PED, not by count.
+		expect(formatTtOrCount(0.003, 30)).toBe('0.0030');
 	});
 });

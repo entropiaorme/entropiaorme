@@ -143,6 +143,12 @@ describe('the quest rewards a session handed in', () => {
 									valuePed: 0.001,
 									accounting: 'stock',
 								},
+								{
+									itemName: 'Halloween Strongbox',
+									quantity: 2,
+									valuePed: 0,
+									accounting: 'stock',
+								},
 							],
 						},
 					],
@@ -153,8 +159,11 @@ describe('the quest rewards a session handed in', () => {
 		expect(section.textContent).toContain('AI Daily: Hanna Hendrix');
 		expect(section.textContent).toContain('13.61 PED');
 		expect(section.textContent).toContain('Universal Ammo');
+		// A TT of a tenth of a PEC is small, not none: it reads in PED, legibly.
+		expect(section.textContent).toContain('0.0010');
+		expect(section.textContent).not.toContain('\u00d7103');
 		// An item with no TT shows how many there are, never 0.00.
-		expect(section.textContent).toContain('\u00d7103');
+		expect(section.textContent).toContain('\u00d72');
 	});
 
 	it('shows nothing for a session that handed nothing in', () => {

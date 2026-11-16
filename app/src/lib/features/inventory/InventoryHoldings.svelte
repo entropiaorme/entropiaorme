@@ -17,6 +17,7 @@
 		formatLedgerDate,
 		formatPed,
 		formatQuantity,
+		formatTt,
 		isZeroTt,
 	} from '$lib/utils/format';
 	import { isStack, perUnit } from './assetPosition';
@@ -230,7 +231,7 @@
 						</span>
 					{:else}
 						<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
-							{formatPed(item.ttValue)}
+							{formatTt(item.ttValue)}
 						</span>
 					{/if}
 					<span class="w-24 shrink-0 text-right tabular-nums" role="cell">
@@ -305,7 +306,7 @@
 								role="cell"
 								title={isZeroTt(purchase.ttValue) ? NO_TT_TITLE : undefined}
 							>
-								{isZeroTt(purchase.ttValue) ? 'No TT' : formatPed(purchase.ttValue)}
+								{isZeroTt(purchase.ttValue) ? 'No TT' : formatTt(purchase.ttValue)}
 							</span>
 							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
 								{formatPed(purchase.markupPaid)}

@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import type { MeasuredRepairCost } from '$lib/api/commands.gen';
 import { NO_DATA } from '$lib/utils/format';
-import { carried, exact, measure, SPAN, totals, wholePec } from './__fixtures__/measure';
+import { carried, exact, gain, measure, totals, tracked, wholePec } from './__fixtures__/measure';
 import {
 	armourAside,
 	comparisonRows,
+	coversWhole,
 	describeCoverage,
 	difference,
 	formatMeasured,
 	formatShare,
 	formatSigned,
+	formatTracked,
 	lootAsides,
 	measuredByCategory,
-	measureTotals,
 	NOTHING_TRACKED,
 	shareOfTracked,
 	sumAmounts,
@@ -61,85 +61,8 @@ describe('sums', () => {
 	});
 });
 
-describe('a measure added up by category', () => {
-	it('groups wear by role as the list of measured sessions does', () => {
-		const added = measureTotals(
-			measure({
-				decay: [
-					{ item: carried('Rifle'), role: 'weapon', decay: exact(1) },
-					{ item: carried('Amp'), role: 'amplifier', decay: exact(0.5) },
-					{ item: carried('FAP'), role: 'healing', decay: exact(0.25) },
-					{ item: carried('Harness'), role: 'armour', decay: wholePec(0.1) },
-					{ item: carried('Plate'), role: 'plating', decay: exact(0.2) },
-					{ item: carried('Scope'), role: 'otherEquipment', decay: exact(0.01) },
-					{ item: carried('Oil'), role: 'material', decay: exact(0.02) },
-				],
-			}),
-		);
-		expect(added.weaponDecay).toEqual(exact(1.5));
-		expect(added.healingDecay).toEqual(exact(0.25));
-		expect(added.armourDecay).toEqual(wholePec(0.3));
-		expect(added.otherEquipmentDecay).toEqual(exact(0.03));
-	});
-
-	it('knows the ammo burned only when every type settled', () => {
-		const settled = {
-			name: 'Universal Ammo',
-			netUnits: -1000,
-			net: exact(-0.1),
-			split: {
-				kind: 'settled' as const,
-				burnedUnits: 1000,
-				burned: exact(0.1),
-				strongboxUnits: 0,
-				strongbox: exact(0),
-				convertedUnits: 0,
-				converted: exact(0),
-			},
-		};
-		expect(measureTotals(measure({ ammo: [settled] })).ammo).toEqual({
-			kind: 'settled',
-			burned: exact(0.1),
-		});
-		const unsettled = {
-			...settled,
-			name: 'Explosive Projectiles',
-			split: {
-				kind: 'unsettled' as const,
-				burnedUnitsByRows: 900,
-				strongboxUnitsByRows: 100,
-				convertedUnits: 0,
-			},
-		};
-		expect(measureTotals(measure({ ammo: [settled, unsettled] })).ammo).toEqual({
-			kind: 'unsettled',
-		});
-	});
-
-	it('adds repairs by how the PED Card shows their cost', () => {
-		const repair = (cost: MeasuredRepairCost) => ({
-			between: SPAN,
-			items: [],
-			restored: exact(1),
-			cost,
-		});
-		const added = measureTotals(
-			measure({
-				repairs: [
-					repair({ kind: 'paid', amount: wholePec(1) }),
-					repair({ kind: 'derived', amount: wholePec(0.5) }),
-					repair({ kind: 'unknown' }),
-				],
-			}),
-		);
-		expect(added.repairCost).toEqual(wholePec(1));
-		expect(added.repairCostDerived).toEqual(wholePec(0.5));
-		expect(added.repairsUncosted).toBe(1);
-	});
-});
-
 describe('the pairing', () => {
-	const tracked = { weapon: 10, healing: 2, armour: 1, loot: 9 };
+	const figures = { weapon: 10, healing: 2, armour: 1, loot: 9 };
 
 	it('stands each tracked figure beside the measured ones that answer it, in order', () => {
 		const rows = comparisonRows(
@@ -152,7 +75,8 @@ describe('the pairing', () => {
 				otherConsumption: wholePec(0.4),
 				gained: exact(9.5),
 			}),
-			tracked,
+			figures,
+			true,
 		);
 		expect(rows.map((row) => row.label)).toEqual(['Weapon', 'Healing', 'Armour', 'Other', 'Loot']);
 		expect(rows[0].measured).toEqual({ kind: 'amount', amount: exact(10.5) });
@@ -173,8 +97,28 @@ describe('the pairing', () => {
 	});
 
 	it('has no difference where nothing was tracked', () => {
-		const rows = comparisonRows(totals({ gained: exact(1) }), NOTHING_TRACKED);
+		const rows = comparisonRows(totals({ gained: exact(1) }), NOTHING_TRACKED, true);
 		expect(rows.every((row) => row.difference === null)).toBe(true);
+	});
+
+	it('never differences a measure of part of a session against the whole', () => {
+		const rows = comparisonRows(totals({ gained: exact(1) }), figures, false);
+		expect(rows.every((row) => row.difference === null)).toBe(true);
+		expect(rows[4].measured).toEqual({ kind: 'amount', amount: exact(1) });
+	});
+
+	it('takes a measure as whole only once sealed and complete', () => {
+		expect(coversWhole(measure())).toBe(true);
+		expect(coversWhole(measure({ sealed: false }))).toBe(false);
+		expect(
+			coversWhole(measure({ coverage: { ...measure().coverage, level: 'partial', gapCount: 1 } })),
+		).toBe(false);
+	});
+
+	it('shows a tracked figure to four decimals beside an exact measured one, to two otherwise', () => {
+		expect(formatTracked(12.3412, 'exact')).toBe('12.3412');
+		expect(formatTracked(12.3412, 'wholePec')).toBe('12.34');
+		expect(formatTracked(null, 'exact')).toBe(NO_DATA);
 	});
 
 	it('reads two figures within a PEC as agreeing', () => {
@@ -196,38 +140,51 @@ describe('the pairing', () => {
 describe('tracked figures', () => {
 	it('reads a measured session row, or nothing without a summary', () => {
 		expect(
-			trackedFromRow({ weaponCost: 1, healingCost: 2, armourCost: 3, lootTt: 4, totalCycled: 6 }),
+			trackedFromRow(tracked({ weaponCost: 1, healingCost: 2, armourCost: 3, lootTt: 4 })),
 		).toEqual({ weapon: 1, healing: 2, armour: 3, loot: 4 });
 		expect(trackedFromRow(null)).toEqual(NOTHING_TRACKED);
 	});
 
-	it('reads a session summary, with armour unknown while its hits await a recording', () => {
-		const summary = {
-			cost: 10,
-			returns: 9,
-			pes: 0,
-			net: -1,
-			returnRate: 0.9,
-			kills: 10,
-			duration: 600,
-			costBreakdown: {
-				weaponCost: 8,
-				healCost: 1,
-				consumableCost: 0,
-				enhancerCost: 0,
-				armourCost: 0,
-				harvestCost: 0,
-			},
-		};
+	const summary = {
+		cost: 10,
+		returns: 9,
+		pes: 0,
+		net: -1,
+		returnRate: 0.9,
+		kills: 10,
+		duration: 600,
+		costBreakdown: {
+			weaponCost: 8,
+			healCost: 1,
+			consumableCost: 0,
+			enhancerCost: 0,
+			armourCost: 0.5,
+			harvestCost: 0,
+		},
+	};
+
+	it('reads a session summary', () => {
 		expect(trackedFromSummary(summary, false)).toEqual({
 			weapon: 8,
 			healing: 1,
-			armour: 0,
+			armour: 0.5,
 			loot: 9,
 		});
-		expect(trackedFromSummary(summary, true).armour).toBeNull();
-		const repaired = { ...summary, costBreakdown: { ...summary.costBreakdown, armourCost: 0.5 } };
-		expect(trackedFromSummary(repaired, true).armour).toBe(0.5);
+	});
+
+	it('reads one session alike in its detail and in the review while its armour is not recorded', () => {
+		const inDetail = trackedFromSummary(summary, true);
+		const inReview = trackedFromRow(
+			tracked({
+				weaponCost: 8,
+				healingCost: 1,
+				armourCost: 0.5,
+				armourUnrecorded: true,
+				lootTt: 9,
+			}),
+		);
+		expect(inDetail.armour).toBeNull();
+		expect(inReview).toEqual(inDetail);
 	});
 });
 
@@ -242,17 +199,13 @@ describe('the asides', () => {
 	it("says how much of what arrived may be a strongbox's contents or came with an unexplained card move", () => {
 		const lines = lootAsides(
 			measure({
-				gainedPossiblyStrongbox: exact(2),
 				gained: [
-					{
-						item: carried('Shrapnel'),
-						role: 'material',
-						stacking: 'stack',
-						mark: 'cardMovedUnexplained',
-						units: 100,
-						amount: exact(0.01),
-					},
+					gain('Fireworks', exact(2), 'possiblyStrongbox'),
+					gain('Shrapnel', exact(0.01), 'cardMovedUnexplained'),
 				],
+				gainedTotal: exact(2.01),
+				gainedPossiblyStrongbox: exact(2),
+				totals: totals({ gained: exact(2.01), gainedPossiblyStrongbox: exact(2) }),
 			}),
 		);
 		expect(lines).toEqual([
@@ -266,6 +219,7 @@ describe('the asides', () => {
 		const lines = unsettledAmmoAsides(
 			measure({
 				decay: [{ item: carried('Rifle'), role: 'weapon', decay: exact(1.5) }],
+				totals: totals({ ammo: { kind: 'unsettled' }, weaponDecay: exact(1.5) }),
 				ammo: [
 					{
 						name: 'Universal Ammo',
@@ -295,35 +249,46 @@ describe('coverage', () => {
 	const coverage = measure().coverage;
 
 	it('is complete when the readings bracket a finished session', () => {
-		expect(describeCoverage(coverage, true).state).toBe('complete');
+		expect(describeCoverage(coverage, true, true).state).toBe('complete');
 	});
 
 	it('gives the plain reason a measure is partial', () => {
-		expect(describeCoverage({ ...coverage, level: 'partial', opening: 'unread' }, true).text).toBe(
-			'Partial: the readings missed the start of this session.',
-		);
-		expect(describeCoverage({ ...coverage, level: 'partial', closing: 'unread' }, true).text).toBe(
-			'Partial: the readings missed the end of this session.',
-		);
+		expect(
+			describeCoverage({ ...coverage, level: 'partial', opening: 'unread' }, true, true).text,
+		).toBe('Partial: the readings missed the start of this session.');
+		expect(
+			describeCoverage({ ...coverage, level: 'partial', closing: 'unread' }, true, true).text,
+		).toBe('Partial: the readings missed the end of this session.');
 		expect(
 			describeCoverage(
 				{ ...coverage, level: 'partial', opening: 'unread', closing: 'unread' },
 				true,
+				true,
 			).text,
 		).toBe('Partial: the readings missed the start and the end of this session.');
-		expect(describeCoverage({ ...coverage, level: 'partial', gapCount: 2 }, true).text).toBe(
+		expect(describeCoverage({ ...coverage, level: 'partial', gapCount: 2 }, true, true).text).toBe(
 			'Partial: the readings missed part of this session.',
 		);
 	});
 
 	it('does not call a session still being read partial for lacking its closing reading', () => {
-		const running = describeCoverage({ ...coverage, level: 'partial', closing: 'unread' }, false);
+		const lacking = { ...coverage, level: 'partial' as const, closing: 'unread' as const };
+		const running = describeCoverage(lacking, false, false);
 		expect(running.state).toBe('reading');
-		const gapped = describeCoverage(
-			{ ...coverage, level: 'partial', closing: 'unread', gapCount: 1 },
-			false,
-		);
+		expect(running.text).toBe('Still being read: the session is running.');
+		const gapped = describeCoverage({ ...lacking, gapCount: 1 }, false, false);
 		expect(gapped.state).toBe('partial');
-		expect(gapped.text).toContain('Still being read.');
+		expect(gapped.text).toContain('Still being read');
+	});
+
+	it('says an ended session is waiting on its closing readings, not that it grows', () => {
+		const lacking = { ...coverage, level: 'partial' as const, closing: 'unread' as const };
+		expect(describeCoverage(lacking, false, true).text).toBe(
+			'The session has ended; its closing readings are still being taken.',
+		);
+		expect(describeCoverage(lacking, false, null).text).toBe(
+			"Still being read: these figures may change until the session's closing readings are in.",
+		);
+		expect(describeCoverage(lacking, false, true).text).not.toMatch(/grow/);
 	});
 });

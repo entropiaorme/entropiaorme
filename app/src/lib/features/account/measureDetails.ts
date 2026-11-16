@@ -3,7 +3,8 @@
  * other consumption, the ammo by type, what left with nothing to explain
  * it, and the notable events in time order.
  *
- * Times are the minute of the reading that saw the change, local.
+ * Times are those of the reading that saw the change, local, shown by the
+ * app's time format, with the date as well when they span several days.
  */
 
 import type {
@@ -19,17 +20,37 @@ import type {
 	MeasuredRole,
 	MeasuredSpan,
 } from '$lib/api/commands.gen';
-import { listNames } from '$lib/utils/format';
+import { formatDate, formatTime, listNames } from '$lib/utils/format';
 import { formatMeasured, formatUnits, sumAmounts } from './measure';
 
-/** The reading's minute, local ("14:32"). */
-export function readingMinute(iso: string): string {
-	return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+/** How a reading's time is shown: the time of day, with the date too
+ * when the times shown span more than one calendar day. */
+export type ReadingClock = (iso: string) => string;
+
+function calendarDay(iso: string): string {
+	const at = new Date(iso);
+	return `${at.getFullYear()}-${at.getMonth()}-${at.getDate()}`;
+}
+
+/** The clock for a set of reading times: time alone within one day, date
+ * and time across several. */
+export function readingClock(isos: readonly string[]): ReadingClock {
+	const days = new Set(isos.map(calendarDay));
+	if (days.size <= 1) return formatTime;
+	return (iso) => `${formatDate(iso)}, ${formatTime(iso)}`;
+}
+
+/** The clock for everything a measure's details list with a time. */
+export function measureClock(measure: AccountSessionMeasure): ReadingClock {
+	return readingClock([
+		...measure.events.map((event) => event.between.to),
+		...measure.repairs.map((repair) => repair.between.to),
+	]);
 }
 
 /** When a change was seen: by the later of the two readings around it. */
-export function seenAt(span: MeasuredSpan): string {
-	return readingMinute(span.to);
+export function seenAt(span: MeasuredSpan, clock: ReadingClock): string {
+	return clock(span.to);
 }
 
 /** Where a holding sits, in words. */
@@ -73,7 +94,8 @@ export function eventSentence(event: MeasuredEvent): string {
 					: 'ammo that could not be settled',
 			);
 			for (const line of event.contents) parts.push(quantityOf(line.item.name, line.units));
-			let sentence = `Opened ${boxes}: ${parts.join(', ')}`;
+			const keys = `${formatUnits(event.keysUsed)} ${Math.abs(event.keysUsed) === 1 ? 'key' : 'keys'}`;
+			let sentence = `Opened ${boxes} with ${keys}: ${parts.join(', ')}`;
 			if (event.possibleContents.length > 0) {
 				sentence += `; possibly ${itemList(event.possibleContents)}`;
 			}
@@ -107,15 +129,18 @@ export function eventSentence(event: MeasuredEvent): string {
 	}
 }
 
-/** The notable events in time order, each with its minute. */
-export function eventLines(events: readonly MeasuredEvent[]): { at: string; text: string }[] {
+/** The notable events in time order, each with its reading's time. */
+export function eventLines(
+	events: readonly MeasuredEvent[],
+	clock: ReadingClock,
+): { at: string; text: string }[] {
 	return events
 		.map((event, index) => ({ event, index }))
 		.sort(
 			(a, b) =>
 				Date.parse(a.event.between.to) - Date.parse(b.event.between.to) || a.index - b.index,
 		)
-		.map(({ event }) => ({ at: seenAt(event.between), text: eventSentence(event) }));
+		.map(({ event }) => ({ at: seenAt(event.between, clock), text: eventSentence(event) }));
 }
 
 // ── Wear ────────────────────────────────────────────────────────────────
@@ -180,14 +205,14 @@ export interface RepairLine {
 
 /** One repair: when, what it restored, and what it cost as far as the PED
  * Card shows it. */
-export function repairLine(repair: MeasuredRepair): RepairLine {
+export function repairLine(repair: MeasuredRepair, clock: ReadingClock): RepairLine {
 	const names = repair.items.map((item) => item.item.name);
 	let cost: string;
 	if (repair.cost.kind === 'paid') cost = ped(repair.cost.amount);
 	else if (repair.cost.kind === 'derived') cost = `about ${ped(repair.cost.amount)}`;
 	else cost = 'cost unknown';
 	return {
-		at: seenAt(repair.between),
+		at: seenAt(repair.between, clock),
 		what: names.length > 0 ? listNames(names) : 'Repair',
 		restored: ped(repair.restored),
 		cost,
@@ -195,10 +220,10 @@ export function repairLine(repair: MeasuredRepair): RepairLine {
 }
 
 /** Repairs in time order. */
-export function repairLines(repairs: readonly MeasuredRepair[]): RepairLine[] {
+export function repairLines(repairs: readonly MeasuredRepair[], clock: ReadingClock): RepairLine[] {
 	return [...repairs]
 		.sort((a, b) => Date.parse(a.between.to) - Date.parse(b.between.to))
-		.map(repairLine);
+		.map((repair) => repairLine(repair, clock));
 }
 
 // ── Consumption and ammo ────────────────────────────────────────────────

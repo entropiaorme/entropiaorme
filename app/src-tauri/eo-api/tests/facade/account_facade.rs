@@ -16,8 +16,8 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use eo_api::account::{
     AccountConnectionState, MeasuredAmmoSplit, MeasuredAmmoTotal, MeasuredCoverageLevel,
-    MeasuredEvent, MeasuredGainMark, MeasuredPrecision, MeasuredRole, MeasuredSettlement,
-    MeasuredStacking,
+    MeasuredEvent, MeasuredGainMark, MeasuredLeftOutReason, MeasuredPrecision, MeasuredRole,
+    MeasuredSettlement, MeasuredStacking,
 };
 use eo_api::{Api, ApiError};
 use eo_services::account::recorder::{MemoryFlag, RecorderParts};
@@ -261,10 +261,16 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
             "connectedAt",
             "lastReadingAt",
             "readingSession",
-            "hasConnected"
+            "hasConnected",
+            "confirming",
+            "signingIn",
+            "hasReadings"
         ]
     );
     assert_eq!(wire["state"], "connected");
+    assert_eq!(wire["confirming"], Value::Null, "only while unconfirmed");
+    assert_eq!(wire["signingIn"], false);
+    assert_eq!(wire["hasReadings"], true);
 
     harness.at(10.0).await;
     harness.publish(true, "hunt");
@@ -289,6 +295,16 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
     let status = harness.api.account_status().await.unwrap();
     assert_eq!(status.state, AccountConnectionState::Disconnected);
     assert!(!status.has_connected);
+    // The readings stay, and so does the review of them.
+    assert!(status.has_readings);
+
+    // The sign-in window opening and going away shows in the status.
+    harness.recorder.set_signing_in(true);
+    harness.until(|status| status.signing_in).await;
+    assert!(harness.api.account_status().await.unwrap().signing_in);
+    harness.recorder.set_signing_in(false);
+    harness.until(|status| !status.signing_in).await;
+    assert!(!harness.api.account_status().await.unwrap().signing_in);
 }
 
 #[tokio::test(start_paused = true)]
@@ -385,6 +401,17 @@ async fn a_session_recorded_end_to_end_measures_as_the_recorded_hunt() {
         ]
     );
     assert!(close(measure.gained_total.ped, 37.9184));
+    // The measure carries its totals, the same the measured list carries.
+    let MeasuredAmmoTotal::Settled {
+        burned: by_category,
+    } = &measure.totals.ammo
+    else {
+        panic!("the hunt's ammo settled");
+    };
+    assert!(close(by_category.ped, 66.0288));
+    assert!(close(measure.totals.gained.ped, 37.9184));
+    assert!(close(measure.totals.healing_decay.ped, 0.30));
+    assert!(close(measure.totals.other_consumption.ped, 0.09));
     assert!(close(measure.gained_possibly_strongbox.ped, 0.0));
     assert_eq!(measure.other_consumption.len(), 1);
     assert_eq!(measure.other_consumption[0].item.name, "Mind Essence");
@@ -482,6 +509,29 @@ async fn measured_sessions_stand_beside_their_tracked_figures() {
         ),
         (64.8, 0.3, 1.4, 38.2, 66.5)
     );
+    assert!(!tracked.armour_unrecorded);
+    // A hit no armour recording covers yet: the armour cost is not
+    // recorded, whatever figure the summary holds.
+    harness
+        .db
+        .with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO protection_defence_events (session_id, damage, deflected) \
+                 VALUES ('hunt', 4.5, 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let page = harness
+        .api
+        .account_measured_sessions(None, None)
+        .await
+        .unwrap();
+    let tracked = page.sessions[0].tracked.as_ref().unwrap();
+    assert!(tracked.armour_unrecorded);
+    assert_eq!(tracked.armour_cost, 1.4);
     // The tracked figures are read, never moved.
     let summary: f64 = harness
         .db
@@ -555,4 +605,266 @@ async fn an_unauthorised_answer_mid_session_leaves_its_measure_partial() {
     assert_eq!(measure.coverage.level, MeasuredCoverageLevel::Partial);
     assert_eq!(measure.coverage.reading_count, 5);
     assert!(measure.sealed);
+}
+
+/// How a seeded session's readings measure it.
+#[derive(Clone, Copy)]
+pub(crate) struct Seeded {
+    /// A closing reading after its end: complete coverage.
+    pub complete: bool,
+    /// Its measure is sealed.
+    pub sealed: bool,
+    /// Its ammo split is unsettled.
+    pub unsettled: bool,
+}
+
+pub(crate) const COMPLETE: Seeded = Seeded {
+    complete: true,
+    sealed: true,
+    unsettled: false,
+};
+
+/// Readings for an existing tracked session from `started` to `ended`:
+/// ammo burned, a weapon worn, Shrapnel gained; tagged with it, and its
+/// measure sealed as `how` says.
+pub(crate) fn seed_measured(
+    conn: &mut rusqlite::Connection,
+    id: &str,
+    started: f64,
+    ended: f64,
+    how: Seeded,
+) {
+    use eo_services::account::amount::Pec;
+    use eo_services::account::measure::AmmoSplit;
+    use eo_services::account::reading::{Container, Holding, HoldingKey, Reading, Row};
+    use eo_services::account::sessions::{cache_sealed, measure_to_seal};
+    use eo_services::account::store::{record_reading, Purpose};
+    use std::collections::BTreeMap;
+
+    let reading = |at: f64, ammo: i64, wear: i64, shrapnel: i64| {
+        let mut holdings = BTreeMap::new();
+        let mut hold = |name: &str, quantity: i64, value: i64| {
+            holdings.insert(
+                HoldingKey {
+                    name: name.to_string(),
+                    container: Container::Carried,
+                },
+                Holding::new(vec![Row {
+                    quantity,
+                    value: Pec(value),
+                }])
+                .unwrap(),
+            );
+        };
+        hold("Universal Ammo", ammo, ammo / 100);
+        hold("Opalo", 1, 500 - wear);
+        if shrapnel > 0 {
+            hold("Shrapnel", shrapnel, shrapnel / 100);
+        }
+        Reading::new(at, Pec(10_000), holdings).unwrap()
+    };
+    // An opening reading, one every two minutes through the session, and
+    // (when complete) a closing one: no gap between them.
+    let mut readings = vec![reading(started - 30.0, 1_000_000, 0, 0)];
+    let mut at = started + 60.0;
+    let mut step = 1;
+    while at < ended {
+        readings.push(reading(at, 1_000_000 - 5_000 * step, 5, 0));
+        at += 120.0;
+        step += 1;
+    }
+    if how.complete {
+        readings.push(reading(ended + 30.0, 1_000_000 - 5_000 * step, 10, 1_000));
+    }
+    for reading in &readings {
+        record_reading(conn, reading, Purpose::Session, Some(id)).unwrap();
+    }
+    if !how.sealed {
+        return;
+    }
+    let mut seal = measure_to_seal(conn, id, None, ended + 100.0)
+        .unwrap()
+        .expect("an ended session with readings");
+    if how.unsettled {
+        for ammo in &mut seal.computed.measure.ammo {
+            ammo.split = AmmoSplit::Unsettled {
+                burned_units_by_rows: 0,
+                strongbox_units_by_rows: 0,
+                converted_units: 0,
+            };
+        }
+    }
+    assert_eq!(cache_sealed(conn, &[seal], ended + 100.0).unwrap(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_measured_summary_sums_what_both_sides_know() {
+    let harness = harness(recorded_hunt_responses(), &[]).await;
+    let sessions: [(&str, f64, Seeded); 6] = [
+        ("c1", 10_000.0, COMPLETE),
+        ("c2", 20_000.0, COMPLETE),
+        (
+            "p",
+            30_000.0,
+            Seeded {
+                complete: false,
+                ..COMPLETE
+            },
+        ),
+        ("e", 40_000.0, COMPLETE),
+        (
+            "u",
+            50_000.0,
+            Seeded {
+                unsettled: true,
+                ..COMPLETE
+            },
+        ),
+        (
+            "n",
+            60_000.0,
+            Seeded {
+                sealed: false,
+                ..COMPLETE
+            },
+        ),
+    ];
+    harness
+        .db
+        .with_writer(move |conn| {
+            conn.execute(
+                "INSERT INTO equipment_library (name, item_type, properties_json) \
+                 VALUES ('Opalo', 'weapon', '{}')",
+                [],
+            )?;
+            for (id, started, how) in sessions {
+                let ended = started + 300.0;
+                conn.execute(
+                    "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                     VALUES (?1, ?2, ?3, 0)",
+                    rusqlite::params![id, started, ended],
+                )?;
+                conn.execute(
+                    "INSERT INTO session_summaries \
+                         (session_id, started_at, ended_at, duration_hours, kills, loot_tt, \
+                          weapon_cost, enhancer_cost, armour_cost, heal_cost, dangling_cost, \
+                          cycled_ped, regular_skill_ped_json, attribute_levels_json, \
+                          regular_skill_tt, attribute_levels_total) \
+                     VALUES (?1, ?2, ?3, 0.2, 3, 0.25, 1.5, 0, 0.5, 0.25, 0, 2.25, \
+                             '{}', '{}', 0, 0)",
+                    rusqlite::params![id, started, ended],
+                )?;
+                seed_measured(conn, id, started, ended, how);
+            }
+            conn.execute(
+                "UPDATE tracking_sessions SET economy_excluded_at = 1.0 WHERE id = 'e'",
+                [],
+            )?;
+            // c2's armour has a hit no recording covers yet.
+            conn.execute(
+                "INSERT INTO protection_defence_events (session_id, damage, deflected) \
+                 VALUES ('c2', 3.0, 0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let cached = |db: &Db| {
+        let db = db.clone();
+        async move {
+            db.with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT session_id, sealed_at, computed_at, measure_json \
+                     FROM account_session_measures ORDER BY session_id",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<f64>>(1)?,
+                            row.get::<_, f64>(2)?,
+                            row.get::<_, String>(3)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap()
+        }
+    };
+    let before = cached(&harness.db).await;
+    let summary = harness.api.account_measured_summary().await.unwrap();
+    assert_eq!(cached(&harness.db).await, before, "the read writes nothing");
+
+    // c1, c2 and u went in: p is partial, e excluded, n not sealed.
+    assert_eq!(summary.included, 3);
+    let left_out: Vec<(MeasuredLeftOutReason, i64)> = summary
+        .left_out
+        .iter()
+        .map(|left| (left.reason, left.sessions))
+        .collect();
+    assert_eq!(
+        left_out,
+        [
+            (MeasuredLeftOutReason::PartialCoverage, 1),
+            (MeasuredLeftOutReason::Excluded, 1),
+            (MeasuredLeftOutReason::NotSealed, 1),
+        ]
+    );
+    // Each pair takes only the sessions whose both sides are known: u's
+    // unsettled ammo leaves it out of the weapon pair, c2's unrecorded
+    // armour out of the armour pair.
+    assert_eq!(
+        (
+            summary.weapon.sessions,
+            summary.healing.sessions,
+            summary.armour.sessions,
+            summary.other.sessions,
+            summary.loot.sessions
+        ),
+        (2, 3, 2, 3, 3)
+    );
+    assert!(close(summary.weapon.tracked, 3.0));
+    assert!(close(summary.healing.tracked, 0.75));
+    assert!(close(summary.armour.tracked, 1.0));
+    assert!(close(summary.loot.tracked, 0.75));
+    // The measured side sums the sessions' own totals.
+    let mut weapon = 0.0;
+    let mut healing = 0.0;
+    let mut armour = 0.0;
+    let mut other = 0.0;
+    let mut loot = 0.0;
+    for id in ["c1", "c2", "u"] {
+        let measure = harness
+            .api
+            .account_session_measure(id.into())
+            .await
+            .unwrap()
+            .0
+            .unwrap();
+        let totals = &measure.totals;
+        if let MeasuredAmmoTotal::Settled { burned } = &totals.ammo {
+            weapon += burned.ped + totals.weapon_decay.ped;
+        }
+        healing += totals.healing_decay.ped;
+        if id != "c2" {
+            armour += totals.armour_decay.ped;
+        }
+        other += totals.other_equipment_decay.ped + totals.other_consumption.ped;
+        loot += totals.gained.ped;
+    }
+    assert!(weapon > 0.0 && loot > 0.0);
+    assert!(close(summary.weapon.measured.ped, weapon));
+    assert!(close(summary.healing.measured.ped, healing));
+    assert!(close(summary.armour.measured.ped, armour));
+    assert!(close(summary.other.measured.ped, other));
+    assert!(close(summary.loot.measured.ped, loot));
+    // A sum keeps the weaker precision of its parts: the weapon's wear is
+    // read from truncated values.
+    assert_eq!(
+        summary.weapon.measured.precision,
+        MeasuredPrecision::WholePec
+    );
 }

@@ -52,6 +52,11 @@ export interface AcceptResult {
 }
 
 /**
+ * How confirming a kept session stands.
+ */
+export type AccountConfirming = 'checking' | 'siteUnreachable';
+
+/**
  * The connection's state.
  */
 export type AccountConnectionState = 'disconnected' | 'connected' | 'unconfirmed' | 'expired';
@@ -62,6 +67,28 @@ export type AccountConnectionState = 'disconnected' | 'connected' | 'unconfirmed
 export interface AccountHolding {
 	name: string;
 	place: AccountPlace;
+}
+
+/**
+ * The whole history of measured sessions beside the tracked figures:
+ * every session whose sealed measure covers it whole and that counts in
+ * the economy statistics.
+ */
+export interface AccountMeasuredSummary {
+	/** Tracked weapon cost beside measured ammo burned plus weapon and amplifier wear; a session whose ammo split is unsettled is left out. */
+	weapon: MeasuredSummaryPair;
+	/** Tracked healing cost beside measured healing wear. */
+	healing: MeasuredSummaryPair;
+	/** Tracked armour cost beside measured armour and plate wear; a session whose armour is not recorded yet is left out. */
+	armour: MeasuredSummaryPair;
+	/** Other equipment wear and other consumption: measured only. */
+	other: MeasuredSummaryOnly;
+	/** Tracked loot TT beside what the readings saw arrive. */
+	loot: MeasuredSummaryPair;
+	/** Sessions that went into the summary. */
+	included: number;
+	/** Sessions with readings that were left out, for every reason. */
+	leftOut: MeasuredLeftOut[];
 }
 
 /**
@@ -102,6 +129,8 @@ export interface AccountSessionMeasure {
 	/** Of the gained total, what may be strongbox contents. */
 	gainedPossiblyStrongbox: MeasuredAmount;
 	events: MeasuredEvent[];
+	/** The measure by category, as the measured sessions list carries it. */
+	totals: MeasuredTotals;
 }
 
 /**
@@ -117,6 +146,12 @@ export interface AccountStatus {
 	readingSession: boolean;
 	/** Whether the player has connected and not disconnected since. */
 	hasConnected: boolean;
+	/** While a kept session is being confirmed (`unconfirmed`), whether the site could be reached; `null` in every other state. */
+	confirming: AccountConfirming | null;
+	/** Whether the sign-in window is open. */
+	signingIn: boolean;
+	/** Whether any reading has ever been stored, connected or not: the measures stay reviewable after a disconnect. */
+	hasReadings: boolean;
 }
 
 /**
@@ -2699,6 +2734,19 @@ export interface MeasuredItemAmount {
 }
 
 /**
+ * How many sessions were left out for one reason.
+ */
+export interface MeasuredLeftOut {
+	reason: MeasuredLeftOutReason;
+	sessions: number;
+}
+
+/**
+ * Why a session with readings is left out of the summary.
+ */
+export type MeasuredLeftOutReason = 'partialCoverage' | 'excluded' | 'notSealed';
+
+/**
  * What a move between places is.
  */
 export type MeasuredMoveKind = 'listing' | 'listingReturned' | 'transfer';
@@ -2782,6 +2830,25 @@ export interface MeasuredSpan {
  * Whether an item's rows count units or hold one item each.
  */
 export type MeasuredStacking = 'stack' | 'single';
+
+/**
+ * A category only the readings measure, summed across sessions.
+ */
+export interface MeasuredSummaryOnly {
+	sessions: number;
+	measured: MeasuredAmount;
+}
+
+/**
+ * One category summed across sessions: the tracked figure beside the
+ * measured one, over the sessions where both are known.
+ */
+export interface MeasuredSummaryPair {
+	/** How many sessions went into this pair. */
+	sessions: number;
+	tracked: number;
+	measured: MeasuredAmount;
+}
 
 /**
  * A session's measure, by category.
@@ -5351,6 +5418,8 @@ export interface TrackedSessionFigures {
 	weaponCost: number;
 	healingCost: number;
 	armourCost: number;
+	/** The session has hits no armour recording covers yet: its armour cost is not recorded, and `armourCost` is not a figure to show. */
+	armourUnrecorded: boolean;
 	lootTt: number;
 	totalCycled: number;
 }
@@ -6416,6 +6485,10 @@ export async function accountSessionMeasure(sessionId: string): Promise<AccountS
 
 export async function accountMeasuredSessions(cursor: string | null, limit: number | null): Promise<MeasuredSessionPage> {
 	return invokeCommand('account_measured_sessions', { cursor, limit });
+}
+
+export async function accountMeasuredSummary(): Promise<AccountMeasuredSummary> {
+	return invokeCommand('account_measured_summary', {});
 }
 
 export async function ledgerList(cursor: string | null, limit: number | null): Promise<LedgerPage> {

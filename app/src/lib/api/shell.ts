@@ -13,6 +13,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { SaleQueueRefusal } from './commands.gen';
+import { invokeCommand } from './invoke';
 
 /** Toggle the pre-spawned tracking overlay window's visibility. */
 export async function toggleOverlay(): Promise<void> {
@@ -98,9 +99,11 @@ export async function captureSaleFromOverlay(): Promise<OverlayCaptureReply> {
 
 /** Open the window where the player signs in to their Entropia Universe
  * account, or bring it forward. The app connects once the site accepts
- * the sign-in; the window closes itself then. */
+ * the sign-in; the window closes itself then. The command refuses with the
+ * typed commands' error shape, so it rides the typed transport and a
+ * refusal arrives as an `ApiError` carrying its reason. */
 export async function signInToAccount(): Promise<void> {
-	await invoke('account_sign_in');
+	await invokeCommand<void>('account_sign_in', {});
 }
 
 /** Metadata about an available update (mirrors the Rust `UpdateInfo`). */

@@ -13,7 +13,9 @@
 use schemars::schema_for;
 use serde_json::Value;
 
-use crate::account::{AccountSessionMeasure, AccountStatus, MeasuredSessionPage};
+use crate::account::{
+    AccountMeasuredSummary, AccountSessionMeasure, AccountStatus, MeasuredSessionPage,
+};
 use crate::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use crate::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
@@ -1226,6 +1228,11 @@ pub fn manifest() -> Vec<CommandSpec> {
                 },
             ],
             returns: Some(schema(schema_for!(MeasuredSessionPage))),
+        },
+        CommandSpec {
+            name: "account_measured_summary",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountMeasuredSummary))),
         },
         CommandSpec {
             name: "ledger_list",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MeasuredEvent } from '$lib/api/commands.gen';
+import { formatDate, formatTime } from '$lib/utils/format';
 import { carried, exact, measure, SPAN, wholePec } from './__fixtures__/measure';
 import {
 	ammoLines,
@@ -7,8 +8,9 @@ import {
 	eventLines,
 	eventSentence,
 	hasDetails,
+	measureClock,
 	placeName,
-	readingMinute,
+	readingClock,
 	repairLine,
 	repairLines,
 	wearGroups,
@@ -31,7 +33,7 @@ describe('the notable events in plain words', () => {
 			settlement: 'settled',
 		};
 		expect(eventSentence(opening)).toBe(
-			'Opened 7 Halloween Strongbox: 60.00 PED ammo, Skeleton Pants Red (F)',
+			'Opened 7 Halloween Strongbox with 7 keys: 60.00 PED ammo, Skeleton Pants Red (F)',
 		);
 	});
 
@@ -58,7 +60,7 @@ describe('the notable events in plain words', () => {
 		};
 		const sentence = eventSentence(opening);
 		expect(sentence).toBe(
-			'Opened 3 Halloween Strongbox and 1 Summer Strongbox: ammo that could not be settled; possibly 2 Fireworks and Mask',
+			'Opened 3 Halloween Strongbox and 1 Summer Strongbox with 4 keys: ammo that could not be settled; possibly 2 Fireworks and Mask',
 		);
 		expect(sentence).not.toContain('20.00');
 	});
@@ -66,8 +68,13 @@ describe('the notable events in plain words', () => {
 	it('names sales, purchases, moves and the rest', () => {
 		const cases: [MeasuredEvent, string][] = [
 			[
-				{ kind: 'sale', between: SPAN, items: [], amount: wholePec(12.4) },
-				'Sold to the Trade Terminal: 12.40 PED',
+				{
+					kind: 'sale',
+					between: SPAN,
+					items: [{ item: carried('Animal Oil Residue'), units: 120, amount: wholePec(12.4) }],
+					amount: wholePec(12.4),
+				},
+				'Sold to the Trade Terminal: 12.40 PED; 120 Animal Oil Residue',
 			],
 			[
 				{
@@ -154,18 +161,50 @@ describe('the notable events in plain words', () => {
 		for (const [event, sentence] of cases) expect(eventSentence(event)).toBe(sentence);
 	});
 
-	it('lists events in time order, each at its reading minute', () => {
-		const early = { from: '2026-11-15T10:00:00Z', to: '2026-11-15T10:01:00Z' };
-		const late = { from: '2026-11-15T11:00:00Z', to: '2026-11-15T11:01:00Z' };
-		const lines = eventLines([
-			{ kind: 'sale', between: late, items: [], amount: wholePec(2) },
-			{ kind: 'sale', between: early, items: [], amount: wholePec(1) },
-		]);
+	it('lists events in time order, each at its reading time', () => {
+		const sale = (to: string, ped: number): MeasuredEvent => ({
+			kind: 'sale',
+			between: { from: to, to },
+			items: [{ item: carried('Oil'), units: 10, amount: wholePec(ped) }],
+			amount: wholePec(ped),
+		});
+		const early = '2026-11-15T10:01:00Z';
+		const late = '2026-11-15T11:01:00Z';
+		const events = [sale(late, 2), sale(early, 1)];
+		const lines = eventLines(events, readingClock([early, late]));
 		expect(lines.map((line) => line.text)).toEqual([
-			'Sold to the Trade Terminal: 1.00 PED',
-			'Sold to the Trade Terminal: 2.00 PED',
+			'Sold to the Trade Terminal: 1.00 PED; 10 Oil',
+			'Sold to the Trade Terminal: 2.00 PED; 10 Oil',
 		]);
-		expect(lines[0].at).toBe(readingMinute(early.to));
+		expect(lines[0].at).toBe(formatTime(early));
+	});
+
+	it("shows the date as well as the time once a session's times span more than one day", () => {
+		const first = '2026-11-15T12:00:00Z';
+		const next = '2026-11-16T12:30:00Z';
+		expect(readingClock([first, '2026-11-15T13:00:00Z'])(first)).toBe(formatTime(first));
+		expect(readingClock([first, next])(next)).toBe(`${formatDate(next)}, ${formatTime(next)}`);
+		const spanning = measureClock(
+			measure({
+				events: [
+					{
+						kind: 'sale',
+						between: { from: first, to: first },
+						items: [{ item: carried('Oil'), units: 1, amount: wholePec(1) }],
+						amount: wholePec(1),
+					},
+				],
+				repairs: [
+					{
+						between: { from: next, to: next },
+						items: [{ item: carried('Harness'), amount: exact(1) }],
+						restored: exact(1),
+						cost: { kind: 'unknown' },
+					},
+				],
+			}),
+		);
+		expect(spanning(first)).toBe(`${formatDate(first)}, ${formatTime(first)}`);
 	});
 
 	it('names every place', () => {
@@ -195,17 +234,17 @@ describe('the details', () => {
 			items: [{ item: carried('Harness'), amount: exact(1) }],
 			restored: exact(1),
 		};
-		expect(repairLine({ ...base, cost: { kind: 'paid', amount: wholePec(1.02) } }).cost).toBe(
-			'1.02 PED',
-		);
-		expect(repairLine({ ...base, cost: { kind: 'derived', amount: wholePec(1) } }).cost).toBe(
-			'about 1.00 PED',
-		);
-		const unknown = repairLine({ ...base, cost: { kind: 'unknown' } });
+		expect(
+			repairLine({ ...base, cost: { kind: 'paid', amount: wholePec(1.02) } }, formatTime).cost,
+		).toBe('1.02 PED');
+		expect(
+			repairLine({ ...base, cost: { kind: 'derived', amount: wholePec(1) } }, formatTime).cost,
+		).toBe('about 1.00 PED');
+		const unknown = repairLine({ ...base, cost: { kind: 'unknown' } }, formatTime);
 		expect(unknown.cost).toBe('cost unknown');
 		expect(unknown.what).toBe('Harness');
 		expect(unknown.restored).toBe('1.0000 PED');
-		expect(repairLines([])).toEqual([]);
+		expect(repairLines([], formatTime)).toEqual([]);
 	});
 
 	it('lists consumption heaviest first with its units', () => {
@@ -257,7 +296,16 @@ describe('the details', () => {
 		expect(hasDetails(measure())).toBe(false);
 		expect(
 			hasDetails(
-				measure({ events: [{ kind: 'sale', between: SPAN, items: [], amount: wholePec(1) }] }),
+				measure({
+					events: [
+						{
+							kind: 'sale',
+							between: SPAN,
+							items: [{ item: carried('Oil'), units: 10, amount: wholePec(1) }],
+							amount: wholePec(1),
+						},
+					],
+				}),
 			),
 		).toBe(true);
 	});

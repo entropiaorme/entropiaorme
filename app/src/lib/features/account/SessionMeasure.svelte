@@ -19,10 +19,13 @@
 	let {
 		sessionId,
 		tracked,
+		ended = null,
 		framed = true,
 	}: {
 		sessionId: string;
 		tracked: TrackedFigures;
+		/** Whether the session itself has ended; `null` when not known. */
+		ended?: boolean | null;
 		framed?: boolean;
 	} = $props();
 
@@ -44,12 +47,12 @@
 			onDismissError={() => model.dismissError()}
 			notice={null}
 		>
-			<MeasureBlock measure={model.measure} {tracked} />
+			<MeasureBlock measure={model.measure} {tracked} {ended} />
 		</SessionReviewBlock>
 	{/if}
 {:else if model.measure}
 	<ErrorNotice message={model.error} onDismiss={() => model.dismissError()} class="mb-3" />
-	<MeasureBlock measure={model.measure} {tracked} />
+	<MeasureBlock measure={model.measure} {tracked} {ended} />
 {:else if model.error}
 	<ErrorNotice message={model.error} />
 {:else if model.answered}

@@ -23,9 +23,10 @@ use eo_services::account::measure::{
 use eo_services::account::reading::{Container, HoldingKey};
 use eo_services::account::roles::{Role, Stacking};
 use eo_services::account::sessions::{
-    AmmoTotal, MeasureRead, MeasureTotals, MeasuredSession, TrackedFigures,
+    self, AmmoTotal, LeftOutReason, MeasureRead, MeasureTotals, MeasuredSession, SummaryPair,
+    TrackedFigures,
 };
-use eo_services::account::{AccountError, AccountRecorder, ConnectionState};
+use eo_services::account::{AccountError, AccountRecorder, Confirming, ConnectionState};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,24 @@ pub struct AccountStatus {
     pub reading_session: bool,
     /// Whether the player has connected and not disconnected since.
     pub has_connected: bool,
+    /// While a kept session is being confirmed (`unconfirmed`), whether
+    /// the site could be reached; `null` in every other state.
+    pub confirming: Nullable<AccountConfirming>,
+    /// Whether the sign-in window is open.
+    pub signing_in: bool,
+    /// Whether any reading has ever been stored, connected or not: the
+    /// measures stay reviewable after a disconnect.
+    pub has_readings: bool,
+}
+
+/// How confirming a kept session stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountConfirming {
+    /// No attempt has failed to reach the site yet.
+    Checking,
+    /// The last attempt could not reach the site; it is tried again.
+    SiteUnreachable,
 }
 
 /// How an amount was derived.
@@ -497,6 +516,8 @@ pub struct AccountSessionMeasure {
     /// Of the gained total, what may be strongbox contents.
     pub gained_possibly_strongbox: MeasuredAmount,
     pub events: Vec<MeasuredEvent>,
+    /// The measure by category, as the measured sessions list carries it.
+    pub totals: MeasuredTotals,
 }
 
 fn count(n: usize) -> i64 {
@@ -674,8 +695,10 @@ fn session_measure(
     session_id: String,
     measure: &SessionMeasure,
     sealed: bool,
-) -> AccountSessionMeasure {
-    AccountSessionMeasure {
+) -> Result<AccountSessionMeasure, ApiError> {
+    let by_category =
+        MeasureTotals::of(measure).map_err(account_error("account measure totals"))?;
+    Ok(AccountSessionMeasure {
         session_id,
         sealed,
         coverage: coverage(measure),
@@ -775,7 +798,8 @@ fn session_measure(
         gained_total: amount(measure.gained_total),
         gained_possibly_strongbox: amount(measure.gained_possibly_strongbox),
         events: measure.events.iter().map(event).collect(),
-    }
+        totals: totals(&by_category),
+    })
 }
 
 /// What the ammo across a session's types burned.
@@ -844,15 +868,19 @@ pub struct TrackedSessionFigures {
     pub weapon_cost: f64,
     pub healing_cost: f64,
     pub armour_cost: f64,
+    /// The session has hits no armour recording covers yet: its armour
+    /// cost is not recorded, and `armourCost` is not a figure to show.
+    pub armour_unrecorded: bool,
     pub loot_tt: f64,
     pub total_cycled: f64,
 }
 
-fn tracked(value: &TrackedFigures) -> TrackedSessionFigures {
+fn tracked(value: &TrackedFigures, armour_unrecorded: bool) -> TrackedSessionFigures {
     TrackedSessionFigures {
         weapon_cost: value.weapon_cost,
         healing_cost: value.heal_cost,
         armour_cost: value.armour_cost,
+        armour_unrecorded,
         loot_tt: value.loot_tt,
         total_cycled: value.cycled,
     }
@@ -888,7 +916,10 @@ pub struct MeasuredSessionPage {
     pub total: i64,
 }
 
-fn row(session: &MeasuredSession) -> Result<MeasuredSessionRow, ApiError> {
+fn row(
+    session: &MeasuredSession,
+    armour_unrecorded: &std::collections::HashSet<String>,
+) -> Result<MeasuredSessionRow, ApiError> {
     let exclusion = eo_services::tracking_reads::exclusion_json(&session.exclusion);
     Ok(MeasuredSessionRow {
         id: session.id.clone(),
@@ -902,8 +933,82 @@ fn row(session: &MeasuredSession) -> Result<MeasuredSessionRow, ApiError> {
         exclusion: serde_json::from_value(exclusion)
             .map_err(ApiError::internal("measured session exclusion"))?,
         measured: totals(&session.totals),
-        tracked: session.tracked.as_ref().map(tracked).into(),
+        tracked: session
+            .tracked
+            .as_ref()
+            .map(|figures| tracked(figures, armour_unrecorded.contains(&session.id)))
+            .into(),
     })
+}
+
+/// One category summed across sessions: the tracked figure beside the
+/// measured one, over the sessions where both are known.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredSummaryPair {
+    /// How many sessions went into this pair.
+    pub sessions: i64,
+    pub tracked: f64,
+    pub measured: MeasuredAmount,
+}
+
+/// A category only the readings measure, summed across sessions.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredSummaryOnly {
+    pub sessions: i64,
+    pub measured: MeasuredAmount,
+}
+
+/// Why a session with readings is left out of the summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredLeftOutReason {
+    PartialCoverage,
+    /// Excluded from the economy statistics.
+    Excluded,
+    /// Its measure is not sealed yet.
+    NotSealed,
+}
+
+/// How many sessions were left out for one reason.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredLeftOut {
+    pub reason: MeasuredLeftOutReason,
+    pub sessions: i64,
+}
+
+/// The whole history of measured sessions beside the tracked figures:
+/// every session whose sealed measure covers it whole and that counts in
+/// the economy statistics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountMeasuredSummary {
+    /// Tracked weapon cost beside measured ammo burned plus weapon and
+    /// amplifier wear; a session whose ammo split is unsettled is left out.
+    pub weapon: MeasuredSummaryPair,
+    /// Tracked healing cost beside measured healing wear.
+    pub healing: MeasuredSummaryPair,
+    /// Tracked armour cost beside measured armour and plate wear; a session
+    /// whose armour is not recorded yet is left out.
+    pub armour: MeasuredSummaryPair,
+    /// Other equipment wear and other consumption: measured only.
+    pub other: MeasuredSummaryOnly,
+    /// Tracked loot TT beside what the readings saw arrive.
+    pub loot: MeasuredSummaryPair,
+    /// Sessions that went into the summary.
+    pub included: i64,
+    /// Sessions with readings that were left out, for every reason.
+    pub left_out: Vec<MeasuredLeftOut>,
+}
+
+fn summary_pair(pair: &SummaryPair) -> MeasuredSummaryPair {
+    MeasuredSummaryPair {
+        sessions: count(pair.sessions),
+        tracked: pair.tracked,
+        measured: amount(pair.measured),
+    }
 }
 
 fn account_error(context: &'static str) -> impl FnOnce(AccountError) -> ApiError {
@@ -951,6 +1056,15 @@ impl Api {
             last_reading_at: status.last_reading_at.map(iso).into(),
             reading_session: status.reading_session.is_some(),
             has_connected: status.has_connected,
+            confirming: status
+                .confirming
+                .map(|confirming| match confirming {
+                    Confirming::Checking => AccountConfirming::Checking,
+                    Confirming::SiteUnreachable => AccountConfirming::SiteUnreachable,
+                })
+                .into(),
+            signing_in: status.signing_in,
+            has_readings: status.has_readings,
         })
     }
 
@@ -978,7 +1092,7 @@ impl Api {
             MeasureRead::NoReadings => Ok(Nullable(None)),
             MeasureRead::Measured { measure, sealed } => Ok(Nullable(Some(session_measure(
                 session_id, &measure, sealed,
-            )))),
+            )?))),
         }
     }
 
@@ -1002,13 +1116,83 @@ impl Api {
             .measured_sessions(seek, limit)
             .await
             .map_err(account_error("account measured sessions"))?;
+        let ids: Vec<String> = page
+            .sessions
+            .iter()
+            .map(|session| session.id.clone())
+            .collect();
+        let unrecorded = self.armour_unrecorded(ids).await?;
         Ok(MeasuredSessionPage {
-            sessions: page.sessions.iter().map(row).collect::<Result<_, _>>()?,
+            sessions: page
+                .sessions
+                .iter()
+                .map(|session| row(session, &unrecorded))
+                .collect::<Result<_, _>>()?,
             next_cursor: page
                 .next
                 .map(|key| eo_services::keyset::encode_cursor(&key))
                 .into(),
             total: page.total,
+        })
+    }
+
+    /// Which of `session_ids` have hits no armour recording covers yet: the
+    /// same reading the session detail marks "not recorded yet" from.
+    async fn armour_unrecorded(
+        &self,
+        session_ids: Vec<String>,
+    ) -> Result<std::collections::HashSet<String>, ApiError> {
+        if session_ids.is_empty() {
+            return Ok(std::collections::HashSet::new());
+        }
+        Ok(self
+            .protection_unrecorded_sessions(session_ids)
+            .await?
+            .into_iter()
+            .collect())
+    }
+
+    /// The whole history of measured sessions, by category, beside the
+    /// tracked figures (see [`AccountMeasuredSummary`]). A cross-session
+    /// statistic: an excluded session is left out exactly as the other
+    /// statistics leave it out. A read of cached measures only: it
+    /// computes and writes nothing.
+    pub async fn account_measured_summary(&self) -> Result<AccountMeasuredSummary, ApiError> {
+        let ids = self
+            .db
+            .with_reader(|conn| Ok(sessions::sessions_with_readings(conn)))
+            .await
+            .map_err(ApiError::internal("account measured summary"))?
+            .map_err(account_error("account measured summary"))?;
+        let unrecorded = self.armour_unrecorded(ids).await?;
+        let summary = self
+            .db
+            .with_reader(move |conn| Ok(sessions::measured_summary(conn, &unrecorded)))
+            .await
+            .map_err(ApiError::internal("account measured summary"))?
+            .map_err(account_error("account measured summary"))?;
+        Ok(AccountMeasuredSummary {
+            weapon: summary_pair(&summary.weapon),
+            healing: summary_pair(&summary.healing),
+            armour: summary_pair(&summary.armour),
+            other: MeasuredSummaryOnly {
+                sessions: count(summary.other.sessions),
+                measured: amount(summary.other.measured),
+            },
+            loot: summary_pair(&summary.loot),
+            included: count(summary.included),
+            left_out: summary
+                .left_out
+                .iter()
+                .map(|(reason, sessions)| MeasuredLeftOut {
+                    reason: match reason {
+                        LeftOutReason::PartialCoverage => MeasuredLeftOutReason::PartialCoverage,
+                        LeftOutReason::Excluded => MeasuredLeftOutReason::Excluded,
+                        LeftOutReason::NotSealed => MeasuredLeftOutReason::NotSealed,
+                    },
+                    sessions: count(*sessions),
+                })
+                .collect(),
         })
     }
 }

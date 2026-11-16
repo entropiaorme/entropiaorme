@@ -565,7 +565,7 @@ pub fn run() {
             }
             if let WindowEvent::Destroyed = event {
                 if window.label() == account_window::SIGN_IN_WINDOW {
-                    account_window::window_gone();
+                    account_window::window_destroyed(window.app_handle());
                 }
                 if window.label() == SCAN_OVERLAY {
                     scan_overlay_gone(window.app_handle());

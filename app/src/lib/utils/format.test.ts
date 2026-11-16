@@ -13,6 +13,7 @@ import {
 	formatPedHalfEven,
 	formatPercent,
 	formatQuantity,
+	formatTime,
 	formatTtOrCount,
 	isZeroTt,
 	listNames,
@@ -208,6 +209,13 @@ describe('formatDate / formatDateFull', () => {
 	it('returns "Invalid Date" for unparseable input (both forms)', () => {
 		expect(formatDate('not-a-date')).toBe('Invalid Date');
 		expect(formatDateFull('not-a-date')).toBe('Invalid Date');
+	});
+});
+
+describe('formatTime', () => {
+	it('renders a timestamp as its time of day (UTC)', () => {
+		expect(formatTime('2026-06-03T08:30:00Z')).toBe('8:30 AM');
+		expect(formatTime('2026-06-03T14:05:00Z')).toBe('2:05 PM');
 	});
 });
 

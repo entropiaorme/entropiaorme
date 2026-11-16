@@ -18,6 +18,8 @@
 //! summary as it stands: nothing here writes or refreshes a tracked
 //! figure.
 
+use std::collections::BTreeMap;
+
 use rusqlite::OptionalExtension;
 
 use super::amount::{Amount, Pec};
@@ -513,4 +515,184 @@ fn tracked_figures(
 /// A repair's cost as an amount: the PED Card's fall, in whole PEC.
 pub fn repair_cost(cost: Pec) -> Result<Amount, AccountError> {
     Amount::whole_pec(cost)
+}
+
+/// Why a session with readings is left out of the whole-history summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftOutReason {
+    /// Its readings do not cover it whole.
+    PartialCoverage,
+    /// It is excluded from the economy statistics.
+    Excluded,
+    /// Its measure is not sealed by the current rules yet.
+    NotSealed,
+}
+
+impl LeftOutReason {
+    pub const ALL: [LeftOutReason; 3] = [
+        LeftOutReason::PartialCoverage,
+        LeftOutReason::Excluded,
+        LeftOutReason::NotSealed,
+    ];
+}
+
+/// One category summed across sessions: the tracked figure beside the
+/// measured one, over the sessions where both are known.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SummaryPair {
+    pub sessions: usize,
+    pub tracked: f64,
+    pub measured: Amount,
+}
+
+impl Default for SummaryPair {
+    fn default() -> SummaryPair {
+        SummaryPair {
+            sessions: 0,
+            tracked: 0.0,
+            measured: Amount::NONE,
+        }
+    }
+}
+
+impl SummaryPair {
+    fn add(&mut self, tracked: f64, measured: Amount) -> Result<(), AccountError> {
+        self.sessions += 1;
+        self.tracked += tracked;
+        self.measured = self.measured.plus(measured)?;
+        Ok(())
+    }
+}
+
+/// A category only the readings measure, summed across sessions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SummaryMeasured {
+    pub sessions: usize,
+    pub measured: Amount,
+}
+
+/// The whole history of measured sessions, by category, beside the
+/// tracked figures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeasuredSummary {
+    /// Tracked weapon cost beside measured ammo burned and weapon and
+    /// amplifier wear.
+    pub weapon: SummaryPair,
+    /// Tracked healing cost beside measured healing wear.
+    pub healing: SummaryPair,
+    /// Tracked armour cost beside measured armour and plate wear.
+    pub armour: SummaryPair,
+    /// Other equipment wear and other consumption, which only the
+    /// readings measure.
+    pub other: SummaryMeasured,
+    /// Tracked loot TT beside what the readings saw arrive.
+    pub loot: SummaryPair,
+    /// Sessions that went into the summary.
+    pub included: usize,
+    /// Sessions with readings left out, by reason (every reason listed).
+    pub left_out: Vec<(LeftOutReason, usize)>,
+}
+
+/// The ids of the tracked sessions that have readings.
+pub fn sessions_with_readings(conn: &rusqlite::Connection) -> Result<Vec<String>, AccountError> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM tracking_sessions s \
+         WHERE EXISTS (SELECT 1 FROM account_readings r WHERE r.session_id = s.id)",
+    )?;
+    let ids = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ids)
+}
+
+/// Sum every session with readings whose measure is sealed by the current
+/// rules, covers it whole, and counts in the economy statistics (the same
+/// exclusion rule the cross-session statistics apply). A read: it reads
+/// cached measures only, and computes none; a session whose cached measure
+/// is missing, stale or unsealed is left out as not sealed. A category's
+/// pair takes a session only when both sides are known for it: an
+/// unsettled ammo split leaves it out of the weapon pair, and armour with
+/// hits not yet recorded (`armour_unrecorded`) out of the armour pair.
+pub fn measured_summary(
+    conn: &rusqlite::Connection,
+    armour_unrecorded: &std::collections::HashSet<String>,
+) -> Result<MeasuredSummary, AccountError> {
+    use crate::session_scope::{counts_on, StatsScope};
+    let rows: Vec<(String, bool)> = {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT s.id, {} FROM tracking_sessions s \
+             WHERE EXISTS (SELECT 1 FROM account_readings r WHERE r.session_id = s.id)",
+            counts_on(StatsScope::Economy, "s")
+        ))?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    let mut weapon = SummaryPair::default();
+    let mut healing = SummaryPair::default();
+    let mut armour = SummaryPair::default();
+    let mut other = SummaryMeasured {
+        sessions: 0,
+        measured: Amount::NONE,
+    };
+    let mut loot = SummaryPair::default();
+    let mut included = 0;
+    let mut left_out: BTreeMap<u8, usize> = BTreeMap::new();
+    let mut leave = |reason: LeftOutReason| {
+        *left_out.entry(reason as u8).or_default() += 1;
+    };
+    for (id, counts) in rows {
+        if !counts {
+            leave(LeftOutReason::Excluded);
+            continue;
+        }
+        let CachedMeasure::Current {
+            measure,
+            sealed_at: Some(_),
+        } = cached_measure(conn, &id)?
+        else {
+            leave(LeftOutReason::NotSealed);
+            continue;
+        };
+        if measure.coverage.level != CoverageLevel::Complete {
+            leave(LeftOutReason::PartialCoverage);
+            continue;
+        }
+        included += 1;
+        let totals = MeasureTotals::of(&measure)?;
+        other.sessions += 1;
+        other.measured = other
+            .measured
+            .plus(totals.other_decay)?
+            .plus(totals.other_consumption)?;
+        let Some(tracked) = tracked_figures(conn, &id)? else {
+            continue;
+        };
+        if let AmmoTotal::Settled(ammo) = totals.ammo {
+            weapon.add(tracked.weapon_cost, ammo.plus(totals.weapon_decay)?)?;
+        }
+        healing.add(tracked.heal_cost, totals.healing_decay)?;
+        if !armour_unrecorded.contains(&id) {
+            armour.add(tracked.armour_cost, totals.armour_decay)?;
+        }
+        loot.add(tracked.loot_tt, totals.gained)?;
+    }
+    Ok(MeasuredSummary {
+        weapon,
+        healing,
+        armour,
+        other,
+        loot,
+        included,
+        left_out: LeftOutReason::ALL
+            .iter()
+            .map(|reason| {
+                (
+                    *reason,
+                    left_out.get(&(*reason as u8)).copied().unwrap_or(0),
+                )
+            })
+            .collect(),
+    })
 }

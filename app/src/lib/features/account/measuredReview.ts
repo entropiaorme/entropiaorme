@@ -1,28 +1,29 @@
 /**
  * The review of measured sessions: each session's tracked figures beside
- * what its readings measured, and the same pair summed over the sessions
- * the readings cover completely.
- *
- * The sum counts a session only when its readings are complete and its
- * PED side still counts in the statistics (a session left out of the PED
- * stats is left out here as everywhere else). A category counts a session
- * only when both of its figures are known there: a session without a
- * tracked summary, or whose ammo split could not be settled, would set one
- * side's sum against a different set of sessions than the other's.
+ * what its readings measured, and the same pairs summed over the whole
+ * history, as the backend sums them: every session whose readings cover
+ * it whole and that counts in the PED stats, each pair over the sessions
+ * where both of its figures are known.
  */
 
-import type { MeasuredAmount, MeasuredSessionRow } from '$lib/api/commands.gen';
-import { countsEconomy } from '$lib/features/sessions/exclusion';
+import type {
+	AccountMeasuredSummary,
+	MeasuredAmount,
+	MeasuredLeftOutReason,
+	MeasuredSessionPage,
+	MeasuredSessionRow,
+} from '$lib/api/commands.gen';
+import { listNames } from '$lib/utils/format';
 import {
-	CATEGORIES,
+	CATEGORY_LABELS,
 	type Category,
 	type Difference,
 	difference,
 	type MeasuredFigure,
 	measuredByCategory,
-	NO_AMOUNT,
+	PAIRED,
+	type PairedCategory,
 	shareOfTracked,
-	sumAmounts,
 	type TrackedFigures,
 	trackedFromRow,
 } from './measure';
@@ -63,76 +64,124 @@ export function sessionSeconds(row: MeasuredSessionRow): number | null {
 	return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
 }
 
-/** One category's pair summed over the sessions it counts. */
-export interface CategorySum {
-	category: Category;
-	/** How many sessions the sum covers. */
+// ── The whole-history summary ───────────────────────────────────────────
+
+/** One category's pair summed over every session it counts. */
+export interface SummaryPairView {
+	category: PairedCategory;
+	label: string;
+	/** How many sessions went into the pair. */
 	sessions: number;
-	/** `null` for Other, which has no tracked counterpart. */
+	/** `null` when no session went in. */
 	tracked: number | null;
-	measured: MeasuredAmount;
+	measured: MeasuredAmount | null;
 	difference: Difference | null;
 	/** The difference as a share of the tracked sum; null when that is
-	 * nothing or there is none. */
+	 * nothing or there is no difference. */
 	share: number | null;
 }
 
-export interface MeasuredSummary {
-	/** The sessions the sum may count: complete, and in the PED stats. */
-	sessions: number;
-	categories: CategorySum[];
-}
-
-/** The pair summed per category over the listed complete sessions that
- * count in the PED stats. */
-export function summarise(rows: readonly MeasuredSessionRow[]): MeasuredSummary {
-	const counted = rows.filter((row) => isComplete(row) && countsEconomy(row.exclusion));
-	const figures = counted.map(sessionFigures);
-	const categories = CATEGORIES.map((category): CategorySum => {
-		if (category === 'other') {
-			const measured = sumAmounts(
-				figures.flatMap((figure) =>
-					figure.measured.other.kind === 'amount' ? [figure.measured.other.amount] : [],
-				),
-			);
+/** The four pairs of the summary, in order. */
+export function summaryPairs(summary: AccountMeasuredSummary): SummaryPairView[] {
+	return PAIRED.map((category) => {
+		const pair = summary[category];
+		if (pair.sessions === 0) {
 			return {
 				category,
-				sessions: figures.length,
-				tracked: null,
-				measured,
-				difference: null,
-				share: null,
-			};
-		}
-		let tracked = 0;
-		const measured: MeasuredAmount[] = [];
-		for (const figure of figures) {
-			const trackedFigure = figure.tracked[category];
-			const measuredFigure = figure.measured[category];
-			if (trackedFigure === null || measuredFigure.kind !== 'amount') continue;
-			tracked += trackedFigure;
-			measured.push(measuredFigure.amount);
-		}
-		if (measured.length === 0) {
-			return {
-				category,
+				label: CATEGORY_LABELS[category],
 				sessions: 0,
 				tracked: null,
-				measured: NO_AMOUNT,
+				measured: null,
 				difference: null,
 				share: null,
 			};
 		}
-		const total = sumAmounts(measured);
-		const delta = difference(tracked, { kind: 'amount', amount: total });
+		const delta = difference(pair.tracked, { kind: 'amount', amount: pair.measured });
 		return {
 			category,
-			sessions: measured.length,
-			tracked,
-			measured: total,
+			label: CATEGORY_LABELS[category],
+			sessions: pair.sessions,
+			tracked: pair.tracked,
+			measured: pair.measured,
 			difference: delta,
-			share: delta ? shareOfTracked(delta.amount, tracked) : null,
+			share: delta ? shareOfTracked(delta.amount, pair.tracked) : null,
 		};
 	});
-	return { sessions: counted.length, categories };
+}
+
+function sessions(count: number): string {
+	return `${count} ${count === 1 ? 'session' : 'sessions'}`;
+}
+
+/** Which sessions the summary covers, in one sentence. */
+export function includedSentence(summary: AccountMeasuredSummary): string {
+	if (summary.included === 0) {
+		return 'No session with readings is complete and in the PED stats yet, so there is nothing to sum.';
+	}
+	return `Summed over ${sessions(summary.included)} with complete readings in the PED stats.`;
+}
+
+const LEFT_OUT: Record<MeasuredLeftOutReason, string> = {
+	partialCoverage: 'with partial readings',
+	excluded: 'left out of the PED stats',
+	notSealed: 'whose closing readings are not in yet',
+};
+
+/** How many sessions with readings the summary leaves out, and why; null
+ * when it leaves none out. */
+export function leftOutSentence(summary: AccountMeasuredSummary): string | null {
+	const reasons = summary.leftOut.filter((entry) => entry.sessions > 0);
+	const total = reasons.reduce((sum, entry) => sum + entry.sessions, 0);
+	if (total === 0) return null;
+	const parts = reasons.map((entry) => `${entry.sessions} ${LEFT_OUT[entry.reason]}`);
+	return `Not in these figures: ${sessions(total)} with readings (${listNames(parts)}).`;
+}
+
+/** What the list says when the filter leaves nothing to show. */
+export function noCompleteSentence(loaded: number, hasOlder: boolean): string {
+	if (loaded === 1 && !hasOlder) return 'The one session with readings is not complete yet.';
+	return hasOlder
+		? `None of the newest ${sessions(loaded)} with readings is complete yet.`
+		: `None of the ${sessions(loaded)} with readings is complete yet.`;
+}
+
+// ── The loaded window ───────────────────────────────────────────────────
+
+function olderThan(row: MeasuredSessionRow, last: MeasuredSessionRow): boolean {
+	const a = Date.parse(row.startTime);
+	const b = Date.parse(last.startTime);
+	return a < b || (a === b && row.id < last.id);
+}
+
+/**
+ * Fold a fresh read of the newest page into the loaded window. The newest
+ * page is the truth for every session it spans, so a session deleted since
+ * the last read leaves the list; loaded rows older than the page's last
+ * row stay, with the cursor that continues after them. When the newest
+ * page holds every session, it is the whole list.
+ */
+export function foldNewest(
+	loaded: readonly MeasuredSessionRow[],
+	cursor: string | null,
+	newest: MeasuredSessionPage,
+): { rows: MeasuredSessionRow[]; cursor: string | null } {
+	const last = newest.sessions.at(-1);
+	if (newest.nextCursor === null || !last) {
+		return { rows: [...newest.sessions], cursor: newest.nextCursor };
+	}
+	const fresh = new Set(newest.sessions.map((row) => row.id));
+	const kept = loaded.filter((row) => !fresh.has(row.id) && olderThan(row, last));
+	return {
+		rows: [...newest.sessions, ...kept],
+		cursor: kept.length > 0 ? cursor : newest.nextCursor,
+	};
+}
+
+/** Append an older page to the loaded window, once each. */
+export function appendOlder(
+	loaded: readonly MeasuredSessionRow[],
+	page: MeasuredSessionPage,
+): MeasuredSessionRow[] {
+	const known = new Set(loaded.map((row) => row.id));
+	return [...loaded, ...page.sessions.filter((row) => !known.has(row.id))];
 }

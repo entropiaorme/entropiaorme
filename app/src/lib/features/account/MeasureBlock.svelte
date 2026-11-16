@@ -2,18 +2,20 @@
 	// A session's measure beside its tracked figures: how well the readings
 	// cover it, the comparison by category, and the details behind it,
 	// collapsed. Measured figures stand beside the tracked ones; nothing
-	// here sums them into a cost, a net or a return.
+	// here sums them into a cost, a net or a return. A measure of part of a
+	// session is never differenced against the whole session's figures.
 	import type { AccountSessionMeasure } from '$lib/api/commands.gen';
 	import { DataTable } from '$lib/components';
-	import { formatPed, NO_DATA } from '$lib/utils/format';
+	import { NO_DATA } from '$lib/utils/format';
 	import {
 		armourAside,
 		comparisonRows,
+		coversWhole,
 		describeCoverage,
 		formatMeasured,
 		formatSigned,
+		formatTracked,
 		lootAsides,
-		measureTotals,
 		type TrackedFigures,
 		unsettledAmmoAsides,
 	} from './measure';
@@ -22,6 +24,7 @@
 		consumptionLines,
 		eventLines,
 		hasDetails,
+		measureClock,
 		repairLines,
 		wearGroups,
 	} from './measureDetails';
@@ -29,14 +32,18 @@
 	let {
 		measure,
 		tracked,
+		ended = null,
 	}: {
 		measure: AccountSessionMeasure;
 		tracked: TrackedFigures;
+		/** Whether the session itself has ended; `null` when not known. */
+		ended?: boolean | null;
 	} = $props();
 
-	const coverage = $derived(describeCoverage(measure.coverage, measure.sealed));
+	const coverage = $derived(describeCoverage(measure.coverage, measure.sealed, ended));
+	const whole = $derived(coversWhole(measure));
 	const rows = $derived(
-		comparisonRows(measureTotals(measure), tracked).map((row) => ({
+		comparisonRows(measure.totals, tracked, whole).map((row) => ({
 			...row,
 			asides:
 				row.category === 'weapon'
@@ -51,12 +58,13 @@
 
 	let open = $state(false);
 	const detailsId = `measure-details-${crypto.randomUUID()}`;
+	const clock = $derived(measureClock(measure));
 	const ammo = $derived(ammoLines(measure.ammo));
 	const wear = $derived(wearGroups(measure.decay));
-	const repairs = $derived(repairLines(measure.repairs));
+	const repairs = $derived(repairLines(measure.repairs, clock));
 	const consumed = $derived(consumptionLines(measure.otherConsumption));
 	const departed = $derived(consumptionLines(measure.unexplainedDepartures));
-	const events = $derived(eventLines(measure.events));
+	const events = $derived(eventLines(measure.events, clock));
 
 	const PRECISION_TITLE = {
 		exact: 'Exact',
@@ -66,7 +74,7 @@
 
 <div class="space-y-3" data-testid="measure-block">
 	<p
-		class="text-xs {coverage.state === 'partial' ? 'text-warning' : 'text-text-secondary'}"
+		class="text-xs {coverage.state === 'complete' ? 'text-text-secondary' : 'text-warning'}"
 		data-testid="measure-coverage"
 	>
 		{coverage.text}
@@ -77,7 +85,12 @@
 		columns={[
 			{ key: 'label', label: 'Category' },
 			{ key: 'tracked', label: 'Tracked', align: 'right', widthClass: 'w-28' },
-			{ key: 'measured', label: 'Measured', align: 'right', widthClass: 'w-28' },
+			{
+				key: 'measured',
+				label: whole ? 'Measured' : 'Measured, part of the session',
+				align: 'right',
+				widthClass: 'w-48',
+			},
 			{ key: 'difference', label: 'Difference', align: 'right', widthClass: 'w-28' },
 		]}
 		{rows}
@@ -85,12 +98,12 @@
 		{#snippet cell({ row, column })}
 			{#if column.key === 'label'}
 				<span class="text-text">{row.label}</span>
-				{#each row.asides as aside (aside)}
-					<span class="mt-0.5 block text-[11px] leading-snug text-text-tertiary">{aside}</span>
-				{/each}
 			{:else if column.key === 'tracked'}
 				<span class="text-text-secondary">
-					{row.tracked === null ? NO_DATA : formatPed(row.tracked)}
+					{formatTracked(
+						row.tracked,
+						row.measured.kind === 'amount' ? row.measured.amount.precision : 'wholePec',
+					)}
 				</span>
 			{:else if column.key === 'measured'}
 				{#if row.measured.kind === 'amount'}
@@ -102,6 +115,9 @@
 						not settled
 					</span>
 				{/if}
+				{#each row.asides as aside, index (`${index}-${aside}`)}
+					<span class="mt-0.5 block text-[11px] leading-snug text-text-tertiary">{aside}</span>
+				{/each}
 			{:else if column.key === 'difference'}
 				{#if row.difference}
 					<span class={row.difference.negligible ? 'text-text-tertiary' : 'text-text'}>
@@ -121,7 +137,7 @@
 				class="inline-flex items-center gap-1 text-xs text-text-tertiary hover:text-text
 					transition-colors duration-[var(--duration-fast)]"
 				aria-expanded={open}
-				aria-controls={detailsId}
+				aria-controls={open ? detailsId : undefined}
 				onclick={() => (open = !open)}
 			>
 				<svg
@@ -144,7 +160,7 @@
 					{#if ammo.length > 0}
 						<div>
 							<h4 class="eyebrow mb-1.5">Ammo</h4>
-							{#each ammo as line (line.name)}
+							{#each ammo as line, index (`${index}-${line.name}`)}
 								<div class="flex items-baseline justify-between gap-4 py-0.5">
 									<span class="min-w-0 break-words text-text-secondary">
 										<span class="text-text">{line.name}</span>: {line.parts.join('; ')}
@@ -164,7 +180,7 @@
 								{#each wear as group (group.role)}
 									<div>
 										<p class="text-text-tertiary">{group.label}</p>
-										{#each group.items as item, index (`${item.name}-${index}`)}
+										{#each group.items as item, index (`${index}-${item.name}`)}
 											<div class="flex items-baseline justify-between gap-4 py-0.5">
 												<span class="min-w-0 truncate text-text-secondary" title={item.name}>{item.name}</span>
 												<span class="shrink-0 tabular-nums text-text">{formatMeasured(item.amount)}</span>
@@ -179,7 +195,7 @@
 					{#if repairs.length > 0}
 						<div>
 							<h4 class="eyebrow mb-1.5">Repairs</h4>
-							{#each repairs as repair, index (index)}
+							{#each repairs as repair, index (`${index}-${repair.what}`)}
 								<div class="flex items-baseline justify-between gap-4 py-0.5">
 									<span class="min-w-0 truncate text-text-secondary" title="{repair.what}: restored {repair.restored}">
 										<span class="tabular-nums text-text-tertiary">{repair.at}</span>
@@ -196,7 +212,7 @@
 					{#if consumed.length > 0}
 						<div>
 							<h4 class="eyebrow mb-1.5">Other consumption</h4>
-							{#each consumed as line, index (`${line.name}-${index}`)}
+							{#each consumed as line, index (`${index}-${line.name}`)}
 								<div class="flex items-baseline justify-between gap-4 py-0.5">
 									<span class="min-w-0 truncate text-text-secondary" title={line.name}>
 										{line.name} <span class="text-text-tertiary">{line.detail}</span>
@@ -210,7 +226,7 @@
 					{#if departed.length > 0}
 						<div>
 							<h4 class="eyebrow mb-1.5">Left with nothing to explain it</h4>
-							{#each departed as line, index (`${line.name}-${index}`)}
+							{#each departed as line, index (`${index}-${line.name}`)}
 								<div class="flex items-baseline justify-between gap-4 py-0.5">
 									<span class="min-w-0 truncate text-text-secondary" title={line.name}>
 										{line.name} <span class="text-text-tertiary">{line.detail}</span>
@@ -224,7 +240,7 @@
 					{#if events.length > 0}
 						<div>
 							<h4 class="eyebrow mb-1.5">Events</h4>
-							{#each events as event, index (index)}
+							{#each events as event, index (`${index}-${event.text}`)}
 								<div class="flex items-baseline gap-3 py-0.5">
 									<span class="shrink-0 tabular-nums text-text-tertiary">{event.at}</span>
 									<span class="min-w-0 break-words text-text-secondary">{event.text}</span>

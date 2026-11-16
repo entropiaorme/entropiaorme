@@ -280,6 +280,15 @@ async fn seed_extras(db: &Db) {
                    'Enhancer Shrapnel Rebate', 1.0, 'enhancer', 'x');",
     );
     run(db, sql).await;
+    // Both were read from the account site, their measures sealed whole.
+    db.with_writer(move |conn| {
+        use crate::account_facade::{seed_measured, COMPLETE};
+        seed_measured(conn, "x", DAY + 10_000.0, DAY + 14_000.0, COMPLETE);
+        seed_measured(conn, "y", today - 7_200.0, today - 3_600.0, COMPLETE);
+        Ok(())
+    })
+    .await
+    .unwrap();
 }
 
 const EXTRAS: [&str; 2] = ["x", "y"];
@@ -321,6 +330,11 @@ pub(crate) async fn aggregates(api: &Api) -> BTreeMap<&'static str, Value> {
         "character_skilling_forecast",
         api.character_skilling_forecast(&forecast_query())
     );
+    // The summary also says how many sessions it set aside, and why (an
+    // excluded one among them): the statistic is everything else.
+    let mut summary = serde_json::to_value(api.account_measured_summary().await.unwrap()).unwrap();
+    summary.as_object_mut().unwrap().remove("leftOut");
+    out.insert("account_measured_summary", summary);
     // The snapshot carries live fields (clock, listener state); the
     // statistic in it is the selected definition's lifetime aggregate.
     api.tracking_definition_select(Some(DEFINITION))
@@ -797,6 +811,7 @@ const STATS_COMMANDS: &[&str] = &[
     "tracking_snapshot",
     "tracking_definition_loot",
     "tracking_definition_rewards",
+    "account_measured_summary",
 ];
 
 /// Every other command, by why it is not a cross-session statistic.

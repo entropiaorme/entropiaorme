@@ -30,11 +30,23 @@ describe('window commands', () => {
 		['showSaleCaptureOverlay', 'show_sale_capture_overlay'],
 		['captureSaleFromOverlay', 'capture_sale_from_overlay'],
 		['hideSaleCaptureOverlay', 'hide_sale_capture_overlay'],
-		['signInToAccount', 'account_sign_in'],
 	] as const)('%s invokes %s with no arguments', async (fn, command) => {
 		const shell = await loadModule();
 		await shell[fn]();
 		expect(invokeMock).toHaveBeenCalledWith(command);
+	});
+
+	it('opens the account sign-in through the typed transport, so a refusal carries its reason', async () => {
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === 'substrate_ready') return { state: 'ready' };
+			throw { kind: 'conflict', message: 'the account connection is not available' };
+		});
+		const shell = await loadModule();
+		const { ApiError } = await import('./client');
+		const refusal = await shell.signInToAccount().catch((error: unknown) => error);
+		expect(invokeMock).toHaveBeenCalledWith('account_sign_in', {});
+		expect(refusal).toBeInstanceOf(ApiError);
+		expect(refusal).toMatchObject({ message: 'the account connection is not available' });
 	});
 
 	it('hands route-area selection to the main Maps window with typed context', async () => {

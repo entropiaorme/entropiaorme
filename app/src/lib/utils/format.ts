@@ -106,6 +106,11 @@ export function formatDate(iso: string): string {
 	return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+/** Format an ISO timestamp as its local time of day ("2:41 PM"). */
+export function formatTime(iso: string): string {
+	return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
 /** Format ISO date as full date ("Mar 24, 2026") */
 export function formatDateFull(iso: string): string {
 	return new Date(iso).toLocaleDateString('en-US', {
@@ -153,7 +158,7 @@ export function formatLedgerDate(iso: string): string {
 		d.getFullYear() === today.getFullYear();
 
 	if (isToday) {
-		return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+		return formatTime(iso);
 	}
 	return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }

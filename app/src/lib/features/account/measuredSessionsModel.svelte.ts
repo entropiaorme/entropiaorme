@@ -1,102 +1,114 @@
 /**
- * The review of measured sessions: the sessions the account readings
- * covered, newest first, each beside its tracked figures, and the pair
- * summed over the complete ones.
+ * The review of measured sessions: the whole-history summary, and the
+ * sessions the account readings covered, newest first, each beside its
+ * tracked figures.
  *
- * Paging follows the backend's keyset pages: the first page loads with
- * the view, and older sessions load a page at a time on request, growing
- * the loaded window; the list and the sum both read that window. A
- * client-side pager walks the listed rows. An account frame (a reading
- * stored, a measure sealed) re-reads the newest page in place, keeping
- * older loaded pages, the pager, and any open row.
+ * Both read through snapshot stores on the account topic: a frame (a
+ * reading stored, a measure sealed) re-reads them, overlapping frames
+ * coalesce into one follow-up read so an older answer can never overwrite
+ * a newer one, and a frame arriving during the first read is not lost. A
+ * failed read keeps what is shown and says why; the next good read clears
+ * that.
+ *
+ * Paging follows the backend's keyset pages. Each read of the newest page
+ * is folded into the loaded window (see `foldNewest`); older pages load on
+ * request. A client-side pager walks the listed rows.
  */
 
-import { listen } from '@tauri-apps/api/event';
-import { ACCOUNT_TOPIC, getMeasuredSessions } from '$lib/api/account';
-import type { MeasuredSessionRow } from '$lib/api/commands.gen';
+import { ACCOUNT_TOPIC, getMeasuredSessions, getMeasuredSummary } from '$lib/api/account';
+import type {
+	AccountMeasuredSummary,
+	MeasuredSessionPage,
+	MeasuredSessionRow,
+} from '$lib/api/commands.gen';
+import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
-import { listedRows, summarise } from './measuredReview';
+import { appendOlder, foldNewest, listedRows } from './measuredReview';
 
 export const PAGE_SIZE = 20;
 
 export function createMeasuredSessionsModel() {
 	let rows = $state<MeasuredSessionRow[]>([]);
+	let cursor = $state<string | null>(null);
 	let total = $state(0);
-	let nextCursor = $state<string | null>(null);
-	let loading = $state(true);
-	let loadingMore = $state(false);
-	let error = $state<string | null>(null);
+	let read = $state(false);
+	let listError = $state<string | null>(null);
+	let summaryError = $state<string | null>(null);
+	let olderError = $state<string | null>(null);
+	let loadingOlder = $state(false);
 	let completeOnly = $state(true);
 	let expandedId = $state<string | null>(null);
 
+	// The newest page; each answer is folded into the window as it lands
+	// (the store runs one read at a time, so answers land in order).
+	const newest = createSnapshotStore<MeasuredSessionPage>(ACCOUNT_TOPIC, async () => {
+		try {
+			const page = await getMeasuredSessions(null, null);
+			const folded = foldNewest(rows, cursor, page);
+			rows = folded.rows;
+			cursor = folded.cursor;
+			total = page.total;
+			read = true;
+			listError = null;
+			return page;
+		} catch (cause) {
+			listError = describeError(cause, 'Could not read the measured sessions.');
+			throw cause;
+		}
+	});
+
+	const summary = createSnapshotStore<AccountMeasuredSummary>(ACCOUNT_TOPIC, async () => {
+		try {
+			const answer = await getMeasuredSummary();
+			summaryError = null;
+			return answer;
+		} catch (cause) {
+			summaryError = describeError(cause, 'Could not read the summary.');
+			throw cause;
+		}
+	});
+
 	const listed = $derived(listedRows(rows, completeOnly));
 	const table = createTableModel<MeasuredSessionRow>({ rows: () => listed, pageSize: PAGE_SIZE });
-	const summary = $derived(summarise(rows));
-
-	async function load() {
-		loading = true;
-		error = null;
-		try {
-			const page = await getMeasuredSessions(null, null);
-			rows = page.sessions;
-			nextCursor = page.nextCursor;
-			total = page.total;
-		} catch (cause) {
-			error = describeError(cause, 'Could not read the measured sessions.');
-		} finally {
-			loading = false;
-		}
-	}
-
-	/** Re-read the newest page and fold it into the loaded window: a row
-	 * already loaded takes its fresh figures, a session new since the load
-	 * joins at the top. A failed re-read keeps what is shown. */
-	async function refresh() {
-		if (loading) return;
-		try {
-			const page = await getMeasuredSessions(null, null);
-			const fresh = new Map(page.sessions.map((row) => [row.id, row]));
-			const known = new Set(rows.map((row) => row.id));
-			const added = page.sessions.filter((row) => !known.has(row.id));
-			rows = [...added, ...rows.map((row) => fresh.get(row.id) ?? row)];
-			total = page.total;
-			if (rows.length === page.sessions.length) nextCursor = page.nextCursor;
-		} catch {
-			// The next frame re-reads.
-		}
-	}
 
 	async function loadOlder() {
-		if (!nextCursor || loadingMore) return;
-		loadingMore = true;
-		error = null;
+		if (!cursor || loadingOlder) return;
+		loadingOlder = true;
+		olderError = null;
 		try {
-			const page = await getMeasuredSessions(nextCursor, null);
-			const known = new Set(rows.map((row) => row.id));
-			rows = [...rows, ...page.sessions.filter((row) => !known.has(row.id))];
-			nextCursor = page.nextCursor;
+			const page = await getMeasuredSessions(cursor, null);
+			rows = appendOlder(rows, page);
+			cursor = page.nextCursor;
 			total = page.total;
 		} catch (cause) {
-			error = describeError(cause, 'Could not read older sessions.');
+			olderError = describeError(cause, 'Could not read older sessions.');
 		} finally {
-			loadingMore = false;
+			loadingOlder = false;
 		}
 	}
 
 	return {
 		table,
+		/** Whether the list has not answered yet. */
 		get loading() {
-			return loading;
+			return !read && listError === null;
 		},
-		get loadingMore() {
-			return loadingMore;
+		get loadingOlder() {
+			return loadingOlder;
 		},
 		get error() {
-			return error;
+			return listError ?? olderError;
 		},
-		set error(value: string | null) {
-			error = value;
+		dismissError() {
+			olderError = null;
+			listError = null;
+		},
+		get summary() {
+			return summary.current;
+		},
+		get summaryError() {
+			return summary.current ? null : summaryError;
 		},
 		/** Every session with readings, loaded or not. */
 		get total() {
@@ -107,7 +119,7 @@ export function createMeasuredSessionsModel() {
 			return rows.length;
 		},
 		get hasOlder() {
-			return nextCursor !== null;
+			return cursor !== null;
 		},
 		get completeOnly() {
 			return completeOnly;
@@ -119,31 +131,28 @@ export function createMeasuredSessionsModel() {
 		get listed() {
 			return listed;
 		},
-		get summary() {
-			return summary;
-		},
 		get expandedId() {
 			return expandedId;
 		},
 		toggle(id: string) {
 			expandedId = expandedId === id ? null : id;
 		},
-		load,
 		loadOlder,
-		/** Load, and re-read on every account frame; returns the detach. */
+		/** Attach both stores to the account topic, then read; returns the
+		 * detach. */
 		connect(): () => void {
-			let detach: (() => void) | undefined;
+			const detaches: Array<() => void> = [];
 			let closed = false;
-			void listen(ACCOUNT_TOPIC, () => {
-				void refresh();
-			}).then((unlisten) => {
-				if (closed) unlisten();
-				else detach = unlisten;
-			});
-			void load();
+			for (const store of [newest, summary]) {
+				void store.subscribe().then((unlisten) => {
+					if (closed) unlisten();
+					else detaches.push(unlisten);
+				});
+				void store.hydrate();
+			}
 			return () => {
 				closed = true;
-				detach?.();
+				for (const detach of detaches) detach();
 			};
 		},
 	};

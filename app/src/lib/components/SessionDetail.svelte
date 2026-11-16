@@ -499,6 +499,7 @@
 		<SessionMeasure
 			sessionId={detail.sessionId}
 			tracked={trackedFromSummary(detail.summary, unrecordedHits > 0)}
+			ended={toolSightings.ended ? true : null}
 		/>
 	{/if}
 

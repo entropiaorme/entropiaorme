@@ -25,3 +25,4 @@ export const getAccountStatus = commands.accountStatus;
 export const disconnectAccount = commands.accountDisconnect;
 export const getSessionMeasure = commands.accountSessionMeasure;
 export const getMeasuredSessions = commands.accountMeasuredSessions;
+export const getMeasuredSummary = commands.accountMeasuredSummary;

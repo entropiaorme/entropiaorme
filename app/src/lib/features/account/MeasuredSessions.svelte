@@ -1,23 +1,33 @@
 <script lang="ts">
-	// The review of measured sessions: the pair summed per category over the
-	// complete sessions, given the page's weight, then the sessions newest
-	// first, each category's tracked figure above its measured one. A row
-	// opens the same measure the session's own record shows.
-	import { ErrorNotice, Pagination, Skeleton, StatDisplay, Toggle } from '$lib/components';
+	// The review of measured sessions: tracked beside measured per category
+	// over the whole history (the figures that decide what to trust), then
+	// the sessions newest first, each category's tracked figure above its
+	// measured one. A row opens the same measure the session's own record
+	// shows.
+	import { ErrorNotice, Pagination, Skeleton, Toggle } from '$lib/components';
 	import Button from '$lib/components/Button.svelte';
 	import { exclusionMark } from '$lib/features/sessions/exclusion';
 	import { InDevelopmentMark } from '$lib/inDevelopment';
-	import { formatDate, formatDuration, formatPed, NO_DATA } from '$lib/utils/format';
+	import { formatDate, formatDuration, NO_DATA } from '$lib/utils/format';
 	import {
 		CATEGORY_LABELS,
 		formatMeasured,
 		formatShare,
 		formatSigned,
+		formatTracked,
 		type MeasuredFigure,
 		PAIRED,
 		trackedFromRow,
 	} from './measure';
-	import { coverageMark, sessionFigures, sessionSeconds } from './measuredReview';
+	import {
+		coverageMark,
+		includedSentence,
+		leftOutSentence,
+		noCompleteSentence,
+		sessionFigures,
+		sessionSeconds,
+		summaryPairs,
+	} from './measuredReview';
 	import type { MeasuredSessionsModel } from './measuredSessionsModel.svelte';
 	import SessionMeasure from './SessionMeasure.svelte';
 
@@ -29,7 +39,13 @@
 		return figure.kind === 'amount' ? formatMeasured(figure.amount) : 'not settled';
 	}
 
-	const summed = $derived(model.summary);
+	function precisionOf(figure: MeasuredFigure) {
+		return figure.kind === 'amount' ? figure.amount.precision : 'wholePec';
+	}
+
+	const pairs = $derived(model.summary ? summaryPairs(model.summary) : []);
+	const leftOut = $derived(model.summary ? leftOutSentence(model.summary) : null);
+	const empty = $derived(!model.loading && model.total === 0 && model.loaded === 0);
 </script>
 
 <div class="space-y-8" data-testid="analytics-measured-area">
@@ -50,69 +66,115 @@
 		</div>
 	</div>
 
-	<ErrorNotice message={model.error} onDismiss={() => (model.error = null)} />
+	<ErrorNotice message={model.error} onDismiss={() => model.dismissError()} />
 
 	{#if model.loading}
 		<div class="space-y-3" aria-busy="true">
-			<Skeleton class="h-10 w-full" />
+			<Skeleton class="h-24 w-full" />
 			<Skeleton class="h-40 w-full" />
 		</div>
-	{:else if model.total === 0 && model.loaded === 0}
+	{:else if empty}
 		{#if !model.error}
 			<p class="py-10 text-center text-sm text-text-tertiary">
 				Readings are taken while a session is tracked with the account connected.
 			</p>
 		{/if}
 	{:else}
-		<!-- The sum per category: the figure that decides what to trust -->
-		<section aria-label="Summed over complete sessions" data-testid="measured-summary">
-			{#if summed.sessions === 0}
-				<p class="text-sm text-text-tertiary">No complete session to sum yet.</p>
+		<!-- The whole history, per category: the figures that decide what to trust -->
+		<section aria-label="Every complete session" data-testid="measured-summary">
+			{#if model.summary}
+				{@const summary = model.summary}
+				{#if summary.included > 0}
+					<div class="overflow-x-auto">
+						<table class="w-full table-fixed tabular-nums">
+							<colgroup>
+								<col class="w-48" />
+								{#each pairs as pair (pair.category)}<col />{/each}
+							</colgroup>
+							<thead>
+								<tr>
+									<th class="pb-2"><span class="sr-only">Figure</span></th>
+									{#each pairs as pair (pair.category)}
+										<th class="eyebrow pb-2 text-right">{pair.label}</th>
+									{/each}
+								</tr>
+							</thead>
+							<tbody>
+								<tr>
+									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
+										Tracked
+									</th>
+									{#each pairs as pair (pair.category)}
+										<td class="py-1 text-right text-lg font-medium text-text" data-testid="sum-tracked-{pair.category}">
+											{pair.measured ? formatTracked(pair.tracked, pair.measured.precision) : NO_DATA}
+										</td>
+									{/each}
+								</tr>
+								<tr>
+									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
+										Measured
+									</th>
+									{#each pairs as pair (pair.category)}
+										<td class="py-1 text-right text-lg font-medium text-text" data-testid="sum-measured-{pair.category}">
+											{pair.measured ? formatMeasured(pair.measured) : NO_DATA}
+										</td>
+									{/each}
+								</tr>
+								<tr class="border-t border-border/40">
+									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
+										Measured minus tracked
+									</th>
+									{#each pairs as pair (pair.category)}
+										<td
+											class="py-1 text-right text-lg font-medium
+												{pair.difference && !pair.difference.negligible ? 'text-text' : 'text-text-tertiary'}"
+											data-testid="sum-difference-{pair.category}"
+										>
+											{pair.difference ? formatSigned(pair.difference.amount) : NO_DATA}
+										</td>
+									{/each}
+								</tr>
+								<tr>
+									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
+										Share of tracked
+									</th>
+									{#each pairs as pair (pair.category)}
+										<td class="py-1 text-right text-sm text-text-secondary" data-testid="sum-share-{pair.category}">
+											{formatShare(pair.share)}
+										</td>
+									{/each}
+								</tr>
+								<tr>
+									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
+										Sessions
+									</th>
+									{#each pairs as pair (pair.category)}
+										<td class="py-1 text-right text-xs text-text-tertiary">{pair.sessions}</td>
+									{/each}
+								</tr>
+							</tbody>
+						</table>
+					</div>
+					<p class="mt-4 text-sm text-text-secondary" data-testid="sum-other">
+						Other, measured only: <span class="tabular-nums text-text">{formatMeasured(summary.other.measured)}</span>
+						PED over {summary.other.sessions}
+						{summary.other.sessions === 1 ? 'session' : 'sessions'}
+					</p>
+				{/if}
+				<p class="mt-3 text-xs text-text-tertiary">{includedSentence(summary)}</p>
+				{#if leftOut}
+					<p class="mt-1 text-xs text-text-tertiary" data-testid="sum-left-out">{leftOut}</p>
+				{/if}
+			{:else if model.summaryError}
+				<ErrorNotice message={model.summaryError} />
 			{:else}
-				<div class="grid grid-cols-2 gap-x-8 gap-y-6 sm:grid-cols-5">
-					{#each summed.categories as sum (sum.category)}
-						<div class="min-w-0" data-testid="measured-sum-{sum.category}">
-							{#if sum.category === 'other'}
-								<StatDisplay
-									label={CATEGORY_LABELS[sum.category]}
-									value={formatMeasured(sum.measured)}
-									unit="PED"
-									comparison="measured only"
-								/>
-							{:else if sum.difference && sum.tracked !== null}
-								<StatDisplay
-									label={CATEGORY_LABELS[sum.category]}
-									value={formatSigned(sum.difference.amount)}
-									unit="PED"
-									valueClass={sum.difference.negligible ? 'text-text-secondary' : 'text-text'}
-									comparison="{formatShare(sum.share)} of tracked"
-								/>
-								<p class="mt-1.5 text-xs tabular-nums text-text-tertiary">
-									{formatPed(sum.tracked)} tracked, {formatMeasured(sum.measured)} measured
-								</p>
-							{:else}
-								<StatDisplay label={CATEGORY_LABELS[sum.category]} value={NO_DATA} />
-							{/if}
-							{#if sum.sessions !== summed.sessions}
-								<p class="mt-1 text-[11px] text-text-tertiary">
-									{sum.sessions} of {summed.sessions} sessions
-								</p>
-							{/if}
-						</div>
-					{/each}
-				</div>
+				<Skeleton class="h-24 w-full" />
 			{/if}
-			<p class="mt-4 text-xs text-text-tertiary">
-				Difference is measured minus tracked, summed over {summed.sessions} complete
-				{summed.sessions === 1 ? 'session' : 'sessions'} in the PED stats{model.hasOlder
-					? `, among the newest ${model.loaded} with readings`
-					: ''}.
-			</p>
 		</section>
 
 		{#if model.listed.length === 0}
 			<p class="py-6 text-center text-sm text-text-tertiary">
-				No session's readings are complete yet.
+				{noCompleteSentence(model.loaded, model.hasOlder)}
 			</p>
 		{:else}
 			<div>
@@ -144,29 +206,29 @@
 								{@const mark = coverageMark(row)}
 								{@const excluded = exclusionMark(row.exclusion)}
 								{@const seconds = sessionSeconds(row)}
+								{@const regionId = `measured-session-${row.id}`}
 								<tr
-									class="cursor-pointer border-b border-border/30 align-top transition-colors
+									class="border-b border-border/30 align-top transition-colors
 										duration-[var(--duration-fast)] hover:bg-surface-hover/40
-										focus-visible:outline-none focus-visible:bg-surface-hover/40
 										{expanded ? 'bg-surface-hover/30' : ''}"
-									tabindex="0"
-									aria-expanded={expanded}
 									data-testid="measured-row"
-									onclick={() => model.toggle(row.id)}
-									onkeydown={(event) => {
-										if (event.key === 'Enter' || event.key === ' ') {
-											event.preventDefault();
-											model.toggle(row.id);
-										}
-									}}
 								>
 									<td class="px-3 py-2.5">
-										<p
-											class="truncate {row.name ? 'text-text' : 'italic text-text-tertiary'}"
-											title={row.name ?? undefined}
+										<button
+											type="button"
+											class="block w-full min-w-0 cursor-pointer text-left focus-visible:outline-none
+												focus-visible:ring-1 focus-visible:ring-accent rounded-sm"
+											aria-expanded={expanded}
+											aria-controls={expanded ? regionId : undefined}
+											onclick={() => model.toggle(row.id)}
 										>
-											{row.name ?? 'Unnamed'}
-										</p>
+											<span
+												class="block truncate {row.name ? 'text-text' : 'italic text-text-tertiary'}"
+												title={row.name ?? undefined}
+											>
+												{row.name ?? 'Unnamed'}
+											</span>
+										</button>
 										<p class="flex flex-wrap gap-x-2 text-xs text-text-tertiary">
 											<span class="tabular-nums">{formatDate(row.startTime)}</span>
 											{#if mark}
@@ -185,9 +247,9 @@
 									{#each PAIRED as category (category)}
 										{@const tracked = figures.tracked[category]}
 										{@const measured = figures.measured[category]}
-										<td class="px-3 py-2.5 text-right tabular-nums">
+										<td class="px-3 py-2.5 text-right tabular-nums" data-testid="cell-{category}">
 											<p class="text-text-secondary">
-												{tracked === null ? NO_DATA : formatPed(tracked)}
+												{formatTracked(tracked, precisionOf(measured))}
 											</p>
 											<p class={measured.kind === 'amount' ? 'text-text' : 'text-xs text-text-tertiary'}>
 												{measuredText(measured)}
@@ -202,11 +264,14 @@
 								{#if expanded}
 									<tr class="border-b border-border/30">
 										<td colspan={COLUMN_COUNT} class="px-3 pb-6 pt-3">
-											<SessionMeasure
-												sessionId={row.id}
-												tracked={trackedFromRow(row.tracked)}
-												framed={false}
-											/>
+											<div id={regionId}>
+												<SessionMeasure
+													sessionId={row.id}
+													tracked={trackedFromRow(row.tracked)}
+													ended={row.endTime !== null}
+													framed={false}
+												/>
+											</div>
 										</td>
 									</tr>
 								{/if}
@@ -228,8 +293,8 @@
 				<Button
 					variant="ghost"
 					size="sm"
-					loading={model.loadingMore}
-					disabled={model.loadingMore}
+					loading={model.loadingOlder}
+					disabled={model.loadingOlder}
 					onclick={() => model.loadOlder()}
 				>
 					Load older sessions

@@ -136,6 +136,7 @@ macro_rules! app_command_surface {
             account_disconnect,
             account_session_measure,
             account_measured_sessions,
+            account_measured_summary,
             ledger_list,
             ledger_summary,
             ledger_create,
@@ -369,6 +370,7 @@ pub const ACCOUNT_COMMANDS: &[&str] = &[
     "account_disconnect",
     "account_session_measure",
     "account_measured_sessions",
+    "account_measured_summary",
     "account_sign_in",
 ];
 

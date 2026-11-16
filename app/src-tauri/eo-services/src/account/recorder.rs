@@ -104,6 +104,15 @@ pub enum ConnectionState {
     Expired,
 }
 
+/// How confirming a stored session stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confirming {
+    /// No attempt has failed to reach the site yet.
+    Checking,
+    /// The last attempt could not reach the site.
+    SiteUnreachable,
+}
+
 /// What the connection shows: nothing secret.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionStatus {
@@ -124,6 +133,12 @@ pub struct ConnectionStatus {
     /// Whether the connection has work in flight or waiting: a request,
     /// a reading being stored, a measure being sealed.
     pub working: bool,
+    /// How confirming the stored session stands; only while unconfirmed.
+    pub confirming: Option<Confirming>,
+    /// Whether the sign-in window the app opened is open.
+    pub signing_in: bool,
+    /// Whether any reading has ever been stored, connected or not.
+    pub has_readings: bool,
 }
 
 /// What a connect came to.
@@ -243,6 +258,7 @@ enum Msg {
         oneshot::Sender<ConnectOutcome>,
     ),
     Confirming,
+    SigningIn(bool),
     Disconnect(oneshot::Sender<()>),
     Shutdown(oneshot::Sender<()>),
 }
@@ -264,6 +280,9 @@ impl AccountRecorder {
             has_connected,
             readings_stored: 0,
             working: false,
+            confirming: None,
+            signing_in: false,
+            has_readings: false,
         };
         let (status, status_rx) = watch::channel(initial);
         let epoch = Arc::new(AtomicU64::new(0));
@@ -290,6 +309,8 @@ impl AccountRecorder {
             failures: 0,
             last_full_start: None,
             last_check_start: None,
+            confirming: Confirming::Checking,
+            signing_in: false,
             latest: None,
             last_reading_at: None,
             pending_seals: VecDeque::new(),
@@ -365,6 +386,12 @@ impl AccountRecorder {
     /// connection is unconfirmed until the site answers for it.
     pub fn confirming_stored_session(&self) {
         let _ = self.sender.send(Msg::Confirming);
+    }
+
+    /// The sign-in window the app opened is open, or has gone (by any
+    /// route). Shown in the status, and announced as a change.
+    pub fn set_signing_in(&self, open: bool) {
+        let _ = self.sender.send(Msg::SigningIn(open));
     }
 
     /// Drop the session and stop reading. Moves the epoch on first, so no
@@ -739,6 +766,9 @@ struct Actor {
     last_full_start: Option<Instant>,
     /// When the latest check of a session was started.
     last_check_start: Option<Instant>,
+    /// How confirming the stored session stands, while unconfirmed.
+    confirming: Confirming,
+    signing_in: bool,
     /// The latest stored reading.
     latest: Option<Reading>,
     last_reading_at: Option<f64>,
@@ -869,6 +899,10 @@ impl Actor {
                 || self.queued_connect.is_some()
                 || !self.pending_seals.is_empty()
                 || self.attempt_due.is_some(),
+            confirming: matches!(self.connection, Connection::Unconfirmed)
+                .then_some(self.confirming),
+            signing_in: self.signing_in,
+            has_readings: self.latest.is_some(),
         };
         self.status.send_if_modified(|current| {
             if *current == status {
@@ -890,6 +924,13 @@ impl Actor {
             Msg::Confirming => {
                 if matches!(self.connection, Connection::Disconnected) && self.has_connected {
                     self.connection = Connection::Unconfirmed;
+                    self.confirming = Confirming::Checking;
+                    self.mark_changed();
+                }
+            }
+            Msg::SigningIn(open) => {
+                if self.signing_in != open {
+                    self.signing_in = open;
                     self.mark_changed();
                 }
             }
@@ -1288,6 +1329,13 @@ impl Actor {
                 return;
             }
             Ok(SiteOutcome::Failed(failure)) => {
+                if source == ConnectSource::Stored
+                    && matches!(self.connection, Connection::Unconfirmed)
+                    && self.confirming != Confirming::SiteUnreachable
+                {
+                    self.confirming = Confirming::SiteUnreachable;
+                    self.mark_changed();
+                }
                 self.connect_failed();
                 let _ = reply.send(ConnectOutcome::Unreachable(failure));
                 return;

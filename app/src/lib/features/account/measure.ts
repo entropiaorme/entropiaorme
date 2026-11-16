@@ -39,9 +39,6 @@ function amountOf(microPed: number, precision: MeasuredPrecision): MeasuredAmoun
 	return { ped: microPed / MICRO_PER_PED, precision };
 }
 
-/** Nothing, exactly. */
-export const NO_AMOUNT: MeasuredAmount = { ped: 0, precision: 'exact' };
-
 /** The less exact of two precisions. */
 export function weaker(a: MeasuredPrecision, b: MeasuredPrecision): MeasuredPrecision {
 	return a === 'wholePec' || b === 'wholePec' ? 'wholePec' : 'exact';
@@ -80,49 +77,6 @@ export function formatSigned(amount: MeasuredAmount): string {
 	return `${amount.ped < 0 ? '-' : '+'}${magnitude}`;
 }
 
-// ── A measure's figures by category ─────────────────────────────────────
-
-/**
- * A measure's figures by category, as the list of measured sessions carries
- * them for each row. A single session's measure arrives without them, so
- * they are added up here by the same rules: wear by role (weapons with
- * their amplifiers, armour with its plates, everything else as other
- * equipment), the ammo burned only when every type's split settled, and a
- * repair's cost by how the PED Card shows it.
- */
-export function measureTotals(measure: AccountSessionMeasure): MeasuredTotals {
-	const wear = (roles: readonly string[]) =>
-		sumAmounts(measure.decay.filter((item) => roles.includes(item.role)).map((item) => item.decay));
-	const burned: MeasuredAmount[] = [];
-	let settled = true;
-	for (const used of measure.ammo) {
-		if (used.split.kind === 'settled') burned.push(used.split.burned);
-		else settled = false;
-	}
-	const paid: MeasuredAmount[] = [];
-	const derived: MeasuredAmount[] = [];
-	let uncosted = 0;
-	for (const repair of measure.repairs) {
-		if (repair.cost.kind === 'paid') paid.push(repair.cost.amount);
-		else if (repair.cost.kind === 'derived') derived.push(repair.cost.amount);
-		else uncosted += 1;
-	}
-	return {
-		ammo: settled ? { kind: 'settled', burned: sumAmounts(burned) } : { kind: 'unsettled' },
-		weaponDecay: wear(['weapon', 'amplifier']),
-		healingDecay: wear(['healing']),
-		armourDecay: wear(['armour', 'plating']),
-		otherEquipmentDecay: wear(['ammo', 'otherEquipment', 'material']),
-		otherConsumption: sumAmounts(measure.otherConsumption.map((item) => item.amount)),
-		unexplainedDepartures: sumAmounts(measure.unexplainedDepartures.map((item) => item.amount)),
-		repairCost: sumAmounts(paid),
-		repairCostDerived: sumAmounts(derived),
-		repairsUncosted: uncosted,
-		gained: measure.gainedTotal,
-		gainedPossiblyStrongbox: measure.gainedPossiblyStrongbox,
-	};
-}
-
 // ── The pairing ─────────────────────────────────────────────────────────
 
 export type Category = 'weapon' | 'healing' | 'armour' | 'other' | 'loot';
@@ -155,20 +109,26 @@ export const NOTHING_TRACKED: TrackedFigures = {
 	loot: null,
 };
 
+/**
+ * Armour cost is recorded at a repair, possibly sessions later. While a
+ * session holds hits no recording covers yet, its tracked armour figure is
+ * not known, whatever the cost booked so far: it is absent, in the
+ * session's own detail and in the review alike, and never summed.
+ */
+
 /** The tracked figures a measured session row carries. */
 export function trackedFromRow(tracked: TrackedSessionFigures | null): TrackedFigures {
 	if (!tracked) return NOTHING_TRACKED;
 	return {
 		weapon: tracked.weaponCost,
 		healing: tracked.healingCost,
-		armour: tracked.armourCost,
+		armour: tracked.armourUnrecorded ? null : tracked.armourCost,
 		loot: tracked.lootTt,
 	};
 }
 
-/** The tracked figures of a session's own summary. Armour cost is recorded
- * at a repair, possibly sessions later, so while the session's hits await
- * one its armour figure is not known rather than nothing. */
+/** The tracked figures of a session's own summary, given whether its hits
+ * await an armour recording. */
 export function trackedFromSummary(
 	summary: SessionSummary,
 	armourUnrecorded: boolean,
@@ -177,9 +137,17 @@ export function trackedFromSummary(
 	return {
 		weapon: costs.weaponCost,
 		healing: costs.healCost,
-		armour: armourUnrecorded && micro(costs.armourCost) === 0 ? null : costs.armourCost,
+		armour: armourUnrecorded ? null : costs.armourCost,
 		loot: summary.returns,
 	};
+}
+
+/** A tracked figure beside a measured one: to four decimals when the
+ * measured figure is exact, so the row can be checked by eye; to two
+ * otherwise, as the app shows tracked figures everywhere. */
+export function formatTracked(tracked: number | null, precision: MeasuredPrecision): string {
+	if (tracked === null) return NO_DATA;
+	return formatMeasured({ ped: tracked, precision });
 }
 
 /** A measured figure: an amount, or the ammo burned that could not be
@@ -243,9 +211,20 @@ export interface ComparisonRow {
 	difference: Difference | null;
 }
 
+/** Whether a measure covers its whole session: sealed, and complete. */
+export function coversWhole(measure: AccountSessionMeasure): boolean {
+	return measure.sealed && measure.coverage.level === 'complete';
+}
+
 /** The comparison, one row per category in order. Other has no tracked
- * figure, so no difference. */
-export function comparisonRows(totals: MeasuredTotals, tracked: TrackedFigures): ComparisonRow[] {
+ * figure, so no difference; and a measure of part of a session is never
+ * differenced against the whole session's tracked figures (`whole` false),
+ * since part beside all is not a discrepancy between two sources. */
+export function comparisonRows(
+	totals: MeasuredTotals,
+	tracked: TrackedFigures,
+	whole: boolean,
+): ComparisonRow[] {
 	const measured = measuredByCategory(totals);
 	return CATEGORIES.map((category) => {
 		const trackedFigure = category === 'other' ? null : tracked[category];
@@ -254,7 +233,7 @@ export function comparisonRows(totals: MeasuredTotals, tracked: TrackedFigures):
 			label: CATEGORY_LABELS[category],
 			tracked: trackedFigure,
 			measured: measured[category],
-			difference: difference(trackedFigure, measured[category]),
+			difference: whole ? difference(trackedFigure, measured[category]) : null,
 		};
 	});
 }
@@ -274,8 +253,7 @@ export function armourAside(tracked: number | null, measured: MeasuredFigure): s
 export function unsettledAmmoAsides(measure: AccountSessionMeasure): string[] {
 	if (measure.ammo.every((used) => used.split.kind === 'settled')) return [];
 	const lines: string[] = [];
-	const wear = measureTotals(measure).weaponDecay;
-	lines.push(`Weapon and amplifier wear ${formatMeasured(wear)} PED`);
+	lines.push(`Weapon and amplifier wear ${formatMeasured(measure.totals.weaponDecay)} PED`);
 	for (const used of measure.ammo) {
 		if (used.split.kind !== 'unsettled') continue;
 		lines.push(
@@ -318,11 +296,17 @@ export function formatUnits(units: number, signed = false): string {
 
 export type CoverageState = 'complete' | 'partial' | 'reading';
 
-/** How well the readings cover the session, in one plain line. A session
- * still being read has no closing reading yet, which is not a gap. */
+/**
+ * How well the readings cover the session, in one plain line. A session
+ * still being read has no closing reading yet, which is not a gap. `ended`
+ * says whether the session itself has ended (`null` when the surface
+ * cannot tell): an ended session whose closing readings are still being
+ * taken is said to be just that.
+ */
 export function describeCoverage(
 	coverage: MeasuredCoverage,
 	sealed: boolean,
+	ended: boolean | null,
 ): { state: CoverageState; text: string } {
 	if (sealed && coverage.level === 'complete') {
 		return { state: 'complete', text: 'Complete: the readings cover the whole session.' };
@@ -330,30 +314,20 @@ export function describeCoverage(
 	const missedStart = coverage.opening === 'unread';
 	const missedEnd = sealed && coverage.closing === 'unread';
 	const missedPart = coverage.gapCount > 0;
-	const still = sealed ? '' : ' Still being read.';
-	if (missedStart && missedEnd) {
-		return {
-			state: 'partial',
-			text: `Partial: the readings missed the start and the end of this session.${still}`,
-		};
-	}
-	if (missedStart) {
-		return {
-			state: 'partial',
-			text: `Partial: the readings missed the start of this session.${still}`,
-		};
-	}
-	if (missedEnd) {
-		return {
-			state: 'partial',
-			text: `Partial: the readings missed the end of this session.${still}`,
-		};
-	}
-	if (missedPart || sealed) {
-		return { state: 'partial', text: `Partial: the readings missed part of this session.${still}` };
-	}
-	return {
-		state: 'reading',
-		text: 'Being read: these figures grow until the session ends and its closing reading is in.',
-	};
+	const still = sealed ? '' : ` ${stillReading(ended)}`;
+	const partial = (what: string) => ({
+		state: 'partial' as const,
+		text: `Partial: the readings missed ${what} of this session.${still}`,
+	});
+	if (missedStart && missedEnd) return partial('the start and the end');
+	if (missedStart) return partial('the start');
+	if (missedEnd) return partial('the end');
+	if (missedPart || sealed) return partial('part');
+	return { state: 'reading', text: stillReading(ended) };
+}
+
+function stillReading(ended: boolean | null): string {
+	if (ended === true) return 'The session has ended; its closing readings are still being taken.';
+	if (ended === false) return 'Still being read: the session is running.';
+	return "Still being read: these figures may change until the session's closing readings are in.";
 }

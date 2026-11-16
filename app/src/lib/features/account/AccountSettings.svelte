@@ -94,9 +94,7 @@
 				{#if view.describesReading}
 					<p class="text-xs text-text-tertiary max-w-xl">{READING_NOTE}</p>
 				{/if}
-				{#if model.actionError}
-					<p class="text-xs text-negative" role="alert">{model.actionError}</p>
-				{/if}
+				<ErrorNotice message={model.actionError} onDismiss={() => model.dismissActionError()} />
 			{:else if model.error}
 				<ErrorNotice message={model.error} />
 			{:else}

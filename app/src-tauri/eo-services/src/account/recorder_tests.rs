@@ -1242,3 +1242,80 @@ async fn taking_up_the_stored_session_does_nothing_once_the_player_has_signed_in
     );
     assert_eq!(calls(&rig), 2);
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_sign_in_window_shows_in_the_status_and_is_announced() {
+    let rig = rig(script(1), false, &[]).await;
+    assert!(!rig.recorder.status().signing_in);
+    rig.recorder.set_signing_in(true);
+    rig.until(|status| status.signing_in).await;
+    rig.at(1.0).await;
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 1);
+    // Told twice, announced once.
+    rig.recorder.set_signing_in(true);
+    rig.at(2.0).await;
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 1);
+    rig.recorder.set_signing_in(false);
+    rig.until(|status| !status.signing_in).await;
+    rig.at(3.0).await;
+    assert_eq!(rig.changes.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_session_says_whether_the_site_could_be_reached() {
+    use super::recorder::Confirming;
+    let rig = rig(script(3), true, &[]).await;
+    assert_eq!(
+        rig.recorder.status().confirming,
+        None,
+        "only while unconfirmed"
+    );
+    rig.site.fail_at(0, ScriptedFault::Network);
+    rig.site.hold();
+    let confirming = tokio::spawn(super::adoption::confirm_stored_session(
+        rig.recorder.clone(),
+        store(Some(COOKIE)),
+    ));
+    rig.until(|status| status.state == ConnectionState::Unconfirmed)
+        .await;
+    assert_eq!(rig.recorder.status().confirming, Some(Confirming::Checking));
+    rig.site.release();
+    rig.until(|status| status.confirming == Some(Confirming::SiteUnreachable))
+        .await;
+    // Tried again after 30 seconds, and reached.
+    rig.at(31.0).await;
+    confirming.await.unwrap();
+    let status = rig.recorder.status();
+    assert_eq!(status.state, ConnectionState::Connected);
+    assert_eq!(status.confirming, None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn whether_any_reading_was_ever_stored_outlives_the_connection() {
+    let rig = rig(script(2), false, &[]).await;
+    assert!(!rig.recorder.status().has_readings);
+    rig.connect(COOKIE).await;
+    rig.until(|status| status.has_readings).await;
+    rig.recorder.disconnect().await;
+    assert!(rig.recorder.status().has_readings);
+    rig.recorder.shutdown().await;
+    // A later run reads it from the store.
+    let later = AccountRecorder::start(
+        &rig.bus,
+        RecorderParts {
+            db: rig.db.clone(),
+            clock: rig.clock.clone(),
+            site: rig.site.clone(),
+            flag: rig.flag.clone(),
+            game_data: None,
+            changed: None,
+        },
+        &tokio::runtime::Handle::current(),
+    );
+    let mut status = later.watch_status();
+    let seen = status
+        .wait_for(|status| status.has_readings)
+        .await
+        .map(|status| status.has_readings);
+    assert_eq!(seen.ok(), Some(true));
+}

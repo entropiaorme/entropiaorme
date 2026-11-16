@@ -241,9 +241,37 @@ fn owned_window(app: &AppHandle, number: u64) -> Option<WebviewWindow> {
     (existing(Some(identity(&window)), Some(owned.identity)) == Existing::Focus).then_some(window)
 }
 
-/// The window closed, by any route: this module owns none now.
-pub fn window_gone() {
+/// This module owns no sign-in window now: the status says so, and the
+/// change is announced.
+fn release_window(app: &AppHandle) {
     set_owned(None);
+    if let Some(recorder) = recorder(app) {
+        recorder.set_signing_in(false);
+    }
+}
+
+/// A window carrying the sign-in label was destroyed. If the window this
+/// module opened is no longer there, it is released. (While the window is
+/// still being torn down it may still be found; its watcher then notices
+/// it gone at its next check and releases it.)
+pub fn window_destroyed(app: &AppHandle) {
+    let Some(owned) = owned() else {
+        return;
+    };
+    let found = app
+        .get_webview_window(SIGN_IN_WINDOW)
+        .map(|window| identity(&window));
+    if existing(found, Some(owned.identity)) != Existing::Focus {
+        release_window(app);
+    }
+}
+
+/// A watcher found its window gone or replaced: release it if it is still
+/// the one owned.
+fn release_if_owned(app: &AppHandle, number: u64) {
+    if owned().is_some_and(|owned| owned.number == number) {
+        release_window(app);
+    }
 }
 
 /// Refuse every permission the remote page asks for.
@@ -281,15 +309,19 @@ fn refuse_permissions(window: &WebviewWindow) {
     let _ = window;
 }
 
+/// The refusal when the connection could not be set up, in the shape every
+/// typed command rejects with.
+fn not_available() -> ApiError {
+    ApiError::conflict("the account connection is not available")
+}
+
 /// Open the sign-in window, or bring forward the one this module opened.
 /// A window carrying the label that this module did not open is closed
 /// and replaced. Refused when the connection could not be set up.
 #[tauri::command]
 pub async fn account_sign_in(app: AppHandle) -> Result<(), ApiError> {
     let Some(recorder) = recorder(&app) else {
-        return Err(ApiError::conflict(
-            "the account connection is not available",
-        ));
+        return Err(not_available());
     };
     if let Some(window) = app.get_webview_window(SIGN_IN_WINDOW) {
         let opened = owned().map(|owned| owned.identity);
@@ -301,7 +333,7 @@ pub async fn account_sign_in(app: AppHandle) -> Result<(), ApiError> {
                 return Ok(());
             }
             Existing::Replace | Existing::Open => {
-                window_gone();
+                release_window(&app);
                 let _ = window.destroy();
                 // The label frees once the window is gone.
                 for _ in 0..40 {
@@ -339,6 +371,7 @@ pub async fn account_sign_in(app: AppHandle) -> Result<(), ApiError> {
         number,
         identity: identity(&window),
     }));
+    recorder.set_signing_in(true);
     tauri::async_runtime::spawn(watch_for_sign_in(app, number, recorder.epoch()));
     Ok(())
 }
@@ -398,7 +431,10 @@ async fn watch_for_sign_in(app: AppHandle, number: u64, epoch: ConnectEpoch) {
             found: found.as_ref().map(|(fingerprint, _)| *fingerprint),
         };
         match next_step(sight, &refused, now) {
-            Step::End => return,
+            Step::End => {
+                release_if_owned(&app, number);
+                return;
+            }
             Step::CloseAndEnd => {
                 close_owned(&app, number);
                 return;
@@ -427,7 +463,7 @@ async fn watch_for_sign_in(app: AppHandle, number: u64, epoch: ConnectEpoch) {
 /// Close the window this module opened as `number`, if it still is it.
 fn close_owned(app: &AppHandle, number: u64) {
     if let Some(window) = owned_window(app, number) {
-        window_gone();
+        release_window(app);
         let _ = window.close();
     }
 }
@@ -469,7 +505,7 @@ struct AppDisconnect<'a>(&'a AppHandle);
 impl DisconnectSteps for AppDisconnect<'_> {
     fn close_sign_in(&self) {
         let window = self.0.get_webview_window(SIGN_IN_WINDOW);
-        window_gone();
+        release_window(self.0);
         if let Some(window) = window {
             let _ = window.close();
         }
@@ -635,6 +671,17 @@ mod tests {
             Tried::Again
         );
         assert_eq!(after_try(ConnectOutcome::Interrupted), Tried::Again);
+    }
+
+    #[test]
+    fn the_sign_in_command_rejects_in_the_typed_commands_shape() {
+        assert_eq!(
+            serde_json::to_value(not_available()).unwrap(),
+            serde_json::json!({
+                "kind": "conflict",
+                "message": "the account connection is not available"
+            })
+        );
     }
 
     #[test]

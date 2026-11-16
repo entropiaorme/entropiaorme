@@ -201,6 +201,7 @@ describe('account wrappers dispatch typed commands', () => {
 			'account_measured_sessions',
 			{ cursor: null, limit: 20 },
 		],
+		['getMeasuredSummary', () => api.getMeasuredSummary(), 'account_measured_summary', {}],
 	] as const)('%s', async (_name, call, command, args) => {
 		await call();
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);

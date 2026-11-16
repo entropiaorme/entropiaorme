@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '$lib/api';
 import type { SessionDetail as SessionDetailType } from '$lib/types/tracking';
+import { NO_DATA } from '$lib/utils/format';
 import SessionDetail from './SessionDetail.svelte';
 
 // The in-development channel, switchable per test: a published build hides
@@ -58,6 +59,7 @@ const account = vi.hoisted(() => ({
 	disconnectAccount: vi.fn(),
 	getSessionMeasure: vi.fn(),
 	getMeasuredSessions: vi.fn(),
+	getMeasuredSummary: vi.fn(),
 }));
 vi.mock('$lib/api/account', () => account);
 
@@ -285,6 +287,7 @@ describe('the after-session reviews in a build that hides surfaces in developmen
 });
 
 describe('what the account readings measured', () => {
+	const exact = (ped: number) => ({ ped, precision: 'exact' as const });
 	const measure = {
 		sessionId: 's1',
 		sealed: true,
@@ -300,16 +303,43 @@ describe('what the account readings measured', () => {
 		repairs: [],
 		otherConsumption: [],
 		unexplainedDepartures: [],
-		gained: [],
-		gainedTotal: { ped: 11.5, precision: 'exact' },
-		gainedPossiblyStrongbox: { ped: 0, precision: 'exact' },
+		gained: [
+			{
+				item: { name: 'Animal Oil Residue', place: { kind: 'carried' } },
+				role: 'material',
+				stacking: 'stack',
+				mark: 'arrived',
+				units: 1150,
+				amount: exact(11.5),
+			},
+		],
+		gainedTotal: exact(11.5),
+		gainedPossiblyStrongbox: exact(0),
 		events: [],
+		totals: {
+			ammo: { kind: 'settled', burned: exact(0) },
+			weaponDecay: exact(0),
+			healingDecay: exact(0),
+			armourDecay: exact(0),
+			otherEquipmentDecay: exact(0),
+			otherConsumption: exact(0),
+			unexplainedDepartures: exact(0),
+			repairCost: exact(0),
+			repairCostDerived: exact(0),
+			repairsUncosted: 0,
+			gained: exact(11.5),
+			gainedPossiblyStrongbox: exact(0),
+		},
 	} as const;
 
 	it('adds nothing to the detail of a session the account never read', async () => {
 		render(SessionDetail, { props: { detail: detail() } });
 		await waitFor(() => expect(account.getSessionMeasure).toHaveBeenCalledWith('s1'));
+		// The absent answer itself has landed before asserting nothing shows.
+		await account.getSessionMeasure.mock.results[0].value;
+		await new Promise((settle) => setTimeout(settle, 0));
 		expect(screen.queryByText('Measured from the account')).toBeNull();
+		expect(screen.queryByTestId('account-measure')).toBeNull();
 	});
 
 	it('stands the measure beside the tracked figures, after the cost summary', async () => {
@@ -319,13 +349,31 @@ describe('what the account readings measured', () => {
 		expect(block.textContent).toContain('Measured from the account');
 		const loot = within(block).getByText('Loot').closest('tr');
 		if (!loot) throw new Error('no loot row');
-		expect(loot.textContent).toContain('12.00');
+		expect(loot.textContent).toContain('12.0000');
 		expect(loot.textContent).toContain('11.5000');
 		expect(loot.textContent).toContain('-0.5000');
 		// The tracked summary itself is unchanged.
 		expect(screen.getByText('Loot TT').closest('div')?.parentElement?.textContent).toContain(
 			'12.00',
 		);
+	});
+
+	it('shows no tracked armour while the session has hits awaiting a recording', async () => {
+		const standing = vi.mocked(api.getProtectionSessionStatus);
+		standing.mockImplementation(async () => ({ unrecordedHits: 3 }));
+		try {
+			account.getSessionMeasure.mockResolvedValue(measure);
+			const recorded = detail();
+			recorded.summary.costBreakdown.armourCost = 0.4;
+			render(SessionDetail, { props: { detail: recorded } });
+			const block = await screen.findByTestId('account-measure');
+			await waitFor(() => {
+				const armour = within(block).getByText('Armour').closest('tr');
+				expect(armour && within(armour).getAllByRole('cell')[1].textContent?.trim()).toBe(NO_DATA);
+			});
+		} finally {
+			standing.mockImplementation(async () => ({ unrecordedHits: 0 }));
+		}
 	});
 
 	it('is not read at all in a build that hides surfaces in development', async () => {

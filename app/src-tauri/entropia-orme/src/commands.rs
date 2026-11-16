@@ -11,7 +11,9 @@
 
 use std::sync::Arc;
 
-use eo_api::account::{AccountSessionMeasure, AccountStatus, MeasuredSessionPage};
+use eo_api::account::{
+    AccountMeasuredSummary, AccountSessionMeasure, AccountStatus, MeasuredSessionPage,
+};
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use eo_api::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
@@ -1036,6 +1038,13 @@ pub async fn account_measured_sessions(
     limit: Option<i64>,
 ) -> Result<MeasuredSessionPage, ApiError> {
     facade(&app)?.account_measured_sessions(cursor, limit).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_measured_summary(
+    app: tauri::AppHandle,
+) -> Result<AccountMeasuredSummary, ApiError> {
+    facade(&app)?.account_measured_summary().await
 }
 
 #[tauri::command(rename_all = "snake_case")]

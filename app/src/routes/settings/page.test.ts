@@ -31,10 +31,14 @@ const account = vi.hoisted(() => ({
 		lastReadingAt: null,
 		readingSession: false,
 		hasConnected: false,
+		confirming: null,
+		signingIn: false,
+		hasReadings: false,
 	})),
 	disconnectAccount: vi.fn(),
 	getSessionMeasure: vi.fn(),
 	getMeasuredSessions: vi.fn(),
+	getMeasuredSummary: vi.fn(),
 }));
 vi.mock('$lib/api/account', () => account);
 
@@ -108,9 +112,9 @@ describe('the screen-reading settings', () => {
 		expect(await screen.findByText(CREATURES)).toBeTruthy();
 		expect(screen.getByText(HELD_TOOL)).toBeTruthy();
 		// The only mark on the page is the account cluster's.
-		for (const mark of screen.queryAllByText('In development')) {
-			expect(mark.closest('[data-testid="account-settings"]')).not.toBeNull();
-		}
+		const marks = screen.getAllByText('In development');
+		expect(marks).toHaveLength(1);
+		expect(marks[0].closest('[data-testid="account-settings"]')).not.toBeNull();
 		const order = toggles();
 		expect(order.indexOf(HELD_TOOL)).toBe(order.indexOf('Enable hotbar key listener') + 1);
 		expect(order.indexOf(CREATURES)).toBe(order.indexOf(HELD_TOOL) + 1);

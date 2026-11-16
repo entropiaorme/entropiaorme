@@ -133,6 +133,7 @@ macro_rules! app_command_surface {
             strongbox_openings,
             strongbox_opening_undo,
             account_status,
+            account_signal,
             account_disconnect,
             account_session_measure,
             account_measured_sessions,

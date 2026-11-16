@@ -63,6 +63,10 @@ export function createConnectionModel() {
 	}
 
 	return {
+		/** The latest status; `null` before the first read answers. */
+		get status() {
+			return status.current;
+		},
 		get view() {
 			return view;
 		},

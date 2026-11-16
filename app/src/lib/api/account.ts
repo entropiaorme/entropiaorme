@@ -27,6 +27,9 @@ import * as commands from './commands.gen';
 export const ACCOUNT_TOPIC = 'account:updated';
 
 export const getAccountStatus = commands.accountStatus;
+/** The connection at a glance: the one account read every trusted window
+ * may make. */
+export const getAccountSignal = commands.accountSignal;
 export const disconnectAccount = commands.accountDisconnect;
 export const getSessionMeasure = commands.accountSessionMeasure;
 export const getMeasuredSessions = commands.accountMeasuredSessions;

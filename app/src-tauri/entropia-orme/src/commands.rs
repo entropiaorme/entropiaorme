@@ -12,7 +12,8 @@
 use std::sync::Arc;
 
 use eo_api::account::{
-    AccountMeasuredSummary, AccountSessionMeasure, AccountStatus, MeasuredSessionPage,
+    AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
+    MeasuredSessionPage,
 };
 use eo_api::account_proposals::{
     AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
@@ -1016,6 +1017,14 @@ pub async fn strongbox_opening_undo(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn account_status(app: tauri::AppHandle) -> Result<AccountStatus, ApiError> {
     facade(&app)?.account_status().await
+}
+
+/// The connection at a glance: unlike the rest of the account commands,
+/// every trusted window may ask it, so the overlay shows whether the
+/// account is being read.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_signal(app: tauri::AppHandle) -> Result<AccountSignal, ApiError> {
+    facade(&app)?.account_signal().await
 }
 
 /// Disconnect, completed in the shell so it always completes: the sign-in

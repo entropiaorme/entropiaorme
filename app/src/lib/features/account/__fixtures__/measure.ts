@@ -117,6 +117,7 @@ export function row(overrides: Partial<MeasuredSessionRow> = {}): MeasuredSessio
 export function status(overrides: Partial<AccountStatus> = {}): AccountStatus {
 	return {
 		state: 'disconnected',
+		signal: 'off',
 		connectedAt: null,
 		lastReadingAt: null,
 		readingSession: false,

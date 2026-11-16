@@ -50,11 +50,49 @@ pub enum AccountConnectionState {
     Expired,
 }
 
+/// The connection as the player reads it at a glance: on the dashboard
+/// and on the overlay. One answer for every surface, so they never
+/// disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountSignal {
+    /// The player has not connected, or disconnected: nothing to show
+    /// beyond the offer to sign in.
+    Off,
+    /// The player connected before and is not signed in in this run of the
+    /// app: their usual state at launch.
+    NotSignedIn,
+    /// A kept sign-in is being confirmed with the site.
+    Checking,
+    SignedIn,
+    /// The site ended the sign-in while the app was running.
+    SignedOut,
+}
+
+impl AccountSignal {
+    /// The signal of a connection's state, for a player who has or has not
+    /// connected.
+    pub fn of(state: AccountConnectionState, has_connected: bool) -> AccountSignal {
+        match state {
+            AccountConnectionState::Connected => AccountSignal::SignedIn,
+            AccountConnectionState::Expired => AccountSignal::SignedOut,
+            AccountConnectionState::Unconfirmed => AccountSignal::Checking,
+            AccountConnectionState::Disconnected if has_connected => AccountSignal::NotSignedIn,
+            AccountConnectionState::Disconnected => AccountSignal::Off,
+        }
+    }
+}
+
 /// The account connection as it stands.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountStatus {
     pub state: AccountConnectionState,
+    /// The connection at a glance; the same answer [`account_signal`]
+    /// gives every window.
+    ///
+    /// [`account_signal`]: crate::Api::account_signal
+    pub signal: AccountSignal,
     /// When the current connection was made.
     pub connected_at: Nullable<String>,
     /// When the latest reading was taken.
@@ -241,6 +279,15 @@ pub struct MeasuredCoverage {
 pub struct MeasuredSpan {
     pub from: String,
     pub to: String,
+}
+
+fn wire_state(state: ConnectionState) -> AccountConnectionState {
+    match state {
+        ConnectionState::Disconnected => AccountConnectionState::Disconnected,
+        ConnectionState::Unconfirmed => AccountConnectionState::Unconfirmed,
+        ConnectionState::Connected => AccountConnectionState::Connected,
+        ConnectionState::Expired => AccountConnectionState::Expired,
+    }
 }
 
 pub(crate) fn iso(at: f64) -> String {
@@ -1047,13 +1094,10 @@ impl Api {
     /// The connection's state. Nothing secret.
     pub async fn account_status(&self) -> Result<AccountStatus, ApiError> {
         let status = self.account()?.status();
+        let state = wire_state(status.state);
         Ok(AccountStatus {
-            state: match status.state {
-                ConnectionState::Disconnected => AccountConnectionState::Disconnected,
-                ConnectionState::Unconfirmed => AccountConnectionState::Unconfirmed,
-                ConnectionState::Connected => AccountConnectionState::Connected,
-                ConnectionState::Expired => AccountConnectionState::Expired,
-            },
+            state,
+            signal: AccountSignal::of(state, status.has_connected),
             connected_at: status.connected_at.map(iso).into(),
             last_reading_at: status.last_reading_at.map(iso).into(),
             reading_session: status.reading_session.is_some(),
@@ -1068,6 +1112,17 @@ impl Api {
             signing_in: status.signing_in,
             has_readings: status.has_readings,
         })
+    }
+
+    /// The connection at a glance, and nothing more: the one account fact
+    /// every trusted window may read, so the overlay can show whether the
+    /// account is being read.
+    pub async fn account_signal(&self) -> Result<AccountSignal, ApiError> {
+        let status = self.account()?.status();
+        Ok(AccountSignal::of(
+            wire_state(status.state),
+            status.has_connected,
+        ))
     }
 
     /// Drop the session and stop reading. The shell's disconnect closes
@@ -1196,5 +1251,26 @@ impl Api {
                 })
                 .collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccountConnectionState as State, AccountSignal as Signal};
+
+    #[test]
+    fn every_state_reads_as_one_signal() {
+        let cases = [
+            (State::Connected, true, Signal::SignedIn),
+            (State::Expired, true, Signal::SignedOut),
+            (State::Unconfirmed, true, Signal::Checking),
+            // At launch, a player who connected before is simply not
+            // signed in yet; one who never connected sees nothing.
+            (State::Disconnected, true, Signal::NotSignedIn),
+            (State::Disconnected, false, Signal::Off),
+        ];
+        for (state, has_connected, signal) in cases {
+            assert_eq!(Signal::of(state, has_connected), signal, "{state:?}");
+        }
     }
 }

@@ -290,6 +290,16 @@ fn calls(rig: &Rig) -> usize {
     rig.site.calls().len()
 }
 
+/// The full readings asked for: each ends with its item read. The
+/// keep-alive's balance checks are not readings.
+fn item_reads(rig: &Rig) -> usize {
+    rig.site
+        .calls()
+        .iter()
+        .filter(|call| **call == ScriptedRead::Items)
+        .count()
+}
+
 #[tokio::test(start_paused = true)]
 async fn connecting_checks_the_session_once_and_reads_once() {
     let rig = rig(script(3), false, &[]).await;
@@ -307,9 +317,10 @@ async fn connecting_checks_the_session_once_and_reads_once() {
         rig.site.calls(),
         vec![ScriptedRead::Balance, ScriptedRead::Items]
     );
-    // With nothing tracked, nothing more is read.
+    // With nothing tracked, nothing more is read: only the keep-alive
+    // asks for the balance.
     rig.at(3_600.0).await;
-    assert_eq!(calls(&rig), 2);
+    assert_eq!(item_reads(&rig), 1);
     assert_eq!(rig.stored().await, vec![tagged(0.0, "connect", None)]);
     assert!(rig.changes.load(Ordering::SeqCst) >= 1);
 }
@@ -729,7 +740,10 @@ async fn connect_around_a_stop(
         panic!("the session has readings");
     };
     assert!(sealed);
-    (rig.stored().await, *measure)
+    let stored = rig.stored().await;
+    // Its keep-alive would otherwise move paused time under the next rig.
+    rig.recorder.shutdown().await;
+    (stored, *measure)
 }
 
 #[tokio::test(start_paused = true)]
@@ -1362,7 +1376,7 @@ async fn a_run_reads_from_its_start_every_minute_until_done_and_never_inside_the
     assert_eq!(read_at(&rig, done), Some(115.0));
     // Then reading stops.
     rig.at(600.0).await;
-    assert_eq!(calls(&rig), 6);
+    assert_eq!(item_reads(&rig), 3);
     assert_eq!(
         rig.stored().await,
         vec![
@@ -1455,7 +1469,7 @@ async fn a_reading_whose_step_cannot_be_examined_stands_and_the_run_hears_it_unr
     assert_eq!(examined, 2);
     // And the run ended with it.
     rig.at(900.0).await;
-    assert_eq!(calls(&rig), 4);
+    assert_eq!(item_reads(&rig), 2);
 }
 
 #[tokio::test(start_paused = true)]
@@ -1466,16 +1480,16 @@ async fn a_run_closes_when_its_view_goes_and_after_thirty_minutes() {
     rig.recorder.run_begin().await;
     rig.recorder.run_cancel();
     rig.at(600.0).await;
-    assert_eq!(calls(&rig), 2, "nothing read once the view went");
+    assert_eq!(item_reads(&rig), 1, "nothing read once the view went");
 
     // Left open: read every minute for thirty minutes, then no more.
     let begun = rig.recorder.run_begin().await;
     assert_eq!(read_at(&rig, begun), Some(600.0));
     rig.at(600.0 + 30.0 * 60.0 + 5.0).await;
-    let read_for_the_run = calls(&rig);
-    assert_eq!(read_for_the_run, 2 + 2 * 31);
+    let read_for_the_run = item_reads(&rig);
+    assert_eq!(read_for_the_run, 1 + 31);
     rig.at(4_000.0).await;
-    assert_eq!(calls(&rig), read_for_the_run);
+    assert_eq!(item_reads(&rig), read_for_the_run);
 }
 
 #[tokio::test(start_paused = true)]
@@ -1488,15 +1502,15 @@ async fn a_run_request_given_up_on_ends_the_run() {
     rig.site.hold();
     let begun = rig.recorder.run_begin().await;
     assert_eq!(begun, RunReading::Unreadable);
-    let before = calls(&rig);
+    let before = item_reads(&rig);
     rig.site.release();
     // The reading the held call began completes; nothing more is read for
     // the run.
     rig.at(100.0 + RUN_WAIT.as_secs_f64() + 600.0).await;
     assert_eq!(
-        calls(&rig),
-        before + 2,
-        "the held reading's two reads, and no more"
+        item_reads(&rig),
+        before + 1,
+        "the held reading, and no more"
     );
 }
 
@@ -1564,4 +1578,115 @@ async fn the_readings_left_unexamined_are_examined_at_start_one_at_a_time() {
         })
         .collect();
     assert_eq!(counts, vec![7]);
+}
+
+/// The calls after the connect's own two, by kind.
+fn after_connect(rig: &Rig) -> Vec<ScriptedRead> {
+    rig.site.calls().into_iter().skip(2).collect()
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_idle_connection_asks_for_the_balance_every_five_minutes_and_stores_nothing() {
+    use super::recorder::KEEP_ALIVE_EVERY;
+    let rig = rig(script(3), false, &[]).await;
+    rig.connect(COOKIE).await;
+    let every = KEEP_ALIVE_EVERY.as_secs_f64();
+    rig.at(every - 1.0).await;
+    assert!(
+        after_connect(&rig).is_empty(),
+        "nothing inside the first five minutes"
+    );
+    rig.at(3.0 * every + 1.0).await;
+    assert_eq!(after_connect(&rig), vec![ScriptedRead::Balance; 3]);
+    assert_eq!(rig.stored().await, vec![tagged(0.0, "connect", None)]);
+    assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn any_request_to_the_site_puts_the_keep_alive_back_five_minutes() {
+    use super::recorder::KEEP_ALIVE_EVERY;
+    let rig = rig(script(5), false, &[]).await;
+    rig.connect(COOKIE).await;
+    // A strongbox run's reading at 200 is a request like any other.
+    rig.at(200.0).await;
+    rig.recorder.run_begin().await;
+    rig.recorder.run_cancel();
+    let every = KEEP_ALIVE_EVERY.as_secs_f64();
+    rig.at(200.0 + every - 1.0).await;
+    assert_eq!(
+        after_connect(&rig),
+        vec![ScriptedRead::Balance, ScriptedRead::Items],
+        "no keep-alive five minutes after the connect"
+    );
+    rig.at(200.0 + every + 1.0).await;
+    assert_eq!(
+        after_connect(&rig),
+        vec![
+            ScriptedRead::Balance,
+            ScriptedRead::Items,
+            ScriptedRead::Balance
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tracked_session_s_minutes_keep_the_session_without_a_keep_alive() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 60.0,
+        end: None,
+        active: true,
+    }];
+    let rig = rig(script(40), false, &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(60.0).await;
+    rig.start("hunt");
+    rig.at(60.0 + 20.0 * 60.0 + 5.0).await;
+    // Every request is a full reading: a balance and its items, in pairs.
+    let calls = rig.site.calls();
+    assert_eq!(calls.len() % 2, 0);
+    assert!(calls
+        .chunks(2)
+        .all(|pair| pair == [ScriptedRead::Balance, ScriptedRead::Items]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_keep_alive_the_site_refuses_signs_the_player_out() {
+    use super::recorder::KEEP_ALIVE_EVERY;
+    let rig = rig(script(3), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.site.fail_at(2, ScriptedFault::Unauthorised);
+    let status = rig
+        .until(|status| status.state == ConnectionState::Expired)
+        .await;
+    assert!(status.has_connected, "being signed out is not a disconnect");
+    assert!(rig.flag.is_set());
+    // Nothing more is asked of the site once it has refused.
+    rig.at(10.0 * KEEP_ALIVE_EVERY.as_secs_f64()).await;
+    assert_eq!(after_connect(&rig), vec![ScriptedRead::Balance]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_keep_alive_keeps_the_connection_and_tries_again_five_minutes_on() {
+    use super::recorder::KEEP_ALIVE_EVERY;
+    let rig = rig(script(3), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.site.fail_at(2, ScriptedFault::Network);
+    let every = KEEP_ALIVE_EVERY.as_secs_f64();
+    rig.at(every + 1.0).await;
+    assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
+    rig.at(2.0 * every + 1.0).await;
+    assert_eq!(after_connect(&rig), vec![ScriptedRead::Balance; 2]);
+    assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_disconnect_stops_the_keep_alive() {
+    use super::recorder::KEEP_ALIVE_EVERY;
+    let rig = rig(script(3), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(100.0).await;
+    rig.recorder.disconnect().await;
+    rig.at(10.0 * KEEP_ALIVE_EVERY.as_secs_f64()).await;
+    assert!(after_connect(&rig).is_empty());
 }

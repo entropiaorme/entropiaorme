@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use eo_api::account::{
-    AccountConnectionState, MeasuredAmmoSplit, MeasuredAmmoTotal, MeasuredCoverageLevel,
-    MeasuredEvent, MeasuredGainMark, MeasuredLeftOutReason, MeasuredPrecision, MeasuredRole,
-    MeasuredSettlement, MeasuredStacking,
+    AccountConnectionState, AccountSignal, MeasuredAmmoSplit, MeasuredAmmoTotal,
+    MeasuredCoverageLevel, MeasuredEvent, MeasuredGainMark, MeasuredLeftOutReason,
+    MeasuredPrecision, MeasuredRole, MeasuredSettlement, MeasuredStacking,
 };
 use eo_api::{Api, ApiError};
 use eo_services::account::recorder::{MemoryFlag, RecorderParts};
@@ -240,6 +240,13 @@ pub(crate) async fn record_the_hunt(harness: &Harness) {
         .await;
 }
 
+/// The status's signal and the one every window may ask for agree, and
+/// are `expected`.
+async fn assert_signal(harness: &Harness, expected: AccountSignal) {
+    assert_eq!(harness.api.account_status().await.unwrap().signal, expected);
+    assert_eq!(harness.api.account_signal().await.unwrap(), expected);
+}
+
 pub(crate) fn close(actual: f64, expected: f64) -> bool {
     (actual - expected).abs() < 1e-9
 }
@@ -256,6 +263,7 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
     assert_eq!(status.state, AccountConnectionState::Disconnected);
     assert!(!status.has_connected);
     assert!(status.connected_at.is_none() && status.last_reading_at.is_none());
+    assert_signal(&harness, AccountSignal::Off).await;
 
     harness.connect().await;
     harness.until(|status| status.readings_stored == 1).await;
@@ -275,6 +283,7 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
         keys,
         [
             "state",
+            "signal",
             "connectedAt",
             "lastReadingAt",
             "readingSession",
@@ -285,6 +294,8 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
         ]
     );
     assert_eq!(wire["state"], "connected");
+    assert_eq!(wire["signal"], "signedIn");
+    assert_signal(&harness, AccountSignal::SignedIn).await;
     assert_eq!(wire["confirming"], Value::Null, "only while unconfirmed");
     assert_eq!(wire["signingIn"], false);
     assert_eq!(wire["hasReadings"], true);
@@ -307,6 +318,7 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
     assert_eq!(status.state, AccountConnectionState::Expired);
     assert!(status.has_connected && !status.reading_session);
     assert!(status.connected_at.is_none());
+    assert_signal(&harness, AccountSignal::SignedOut).await;
 
     harness.api.account_disconnect().await.unwrap();
     let status = harness.api.account_status().await.unwrap();
@@ -314,6 +326,7 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
     assert!(!status.has_connected);
     // The readings stay, and so does the review of them.
     assert!(status.has_readings);
+    assert_signal(&harness, AccountSignal::Off).await;
 
     // The sign-in window opening and going away shows in the status.
     harness.recorder.set_signing_in(true);

@@ -14,7 +14,8 @@ use schemars::schema_for;
 use serde_json::Value;
 
 use crate::account::{
-    AccountMeasuredSummary, AccountSessionMeasure, AccountStatus, MeasuredSessionPage,
+    AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
+    MeasuredSessionPage,
 };
 use crate::account_proposals::{
     AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
@@ -1205,6 +1206,11 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "account_status",
             args: vec![],
             returns: Some(schema(schema_for!(AccountStatus))),
+        },
+        CommandSpec {
+            name: "account_signal",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountSignal))),
         },
         CommandSpec {
             name: "account_disconnect",

@@ -27,6 +27,11 @@
 //!   begins, every minute while it is open, and once more when the player
 //!   says it is done; then reading stops. A run left open closes after 30
 //!   minutes, and when the view that opened it goes away (see [`run`]).
+//! - **While connected**, the site is asked for the PED Card balance
+//!   whenever five minutes pass with no request to it, so it does not end
+//!   the session for being idle. A refusal there ends the connection as
+//!   expired, the way a refused reading does, and is logged with how long
+//!   the session lasted.
 //!
 //! Every reading stored is then examined for what it proposes (see
 //! [`super::proposals`]), and the readings a previous run left unexamined
@@ -92,6 +97,9 @@ pub const READ_EVERY_WHILE_FAILING: Duration = Duration::from_secs(5 * 60);
 pub const FAILURES_BEFORE_BACKING_OFF: u32 = 3;
 /// The least time between the starts of two full readings.
 pub const READING_FLOOR: Duration = Duration::from_secs(55);
+/// How long the site may go without a request from a connection before
+/// it is asked for the balance, so it keeps the session.
+pub const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(5 * 60);
 /// The least time between the starts of two checks of a session.
 pub const CHECK_FLOOR: Duration = Duration::from_secs(10);
 /// How long after a session stops its first closing reading is taken.
@@ -335,6 +343,9 @@ impl AccountRecorder {
             failures: 0,
             last_full_start: None,
             last_check_start: None,
+            last_contact: None,
+            last_answer: None,
+            keep_alive_due: false,
             confirming: Confirming::Checking,
             signing_in: false,
             latest: None,
@@ -794,6 +805,12 @@ enum Work {
     CatchUp {
         task: JoinHandle<Result<Option<Examined>, AccountError>>,
     },
+    /// A balance asked for only so the site keeps the session.
+    KeepAlive {
+        /// The connection it was asked for.
+        generation: u64,
+        task: JoinHandle<SiteOutcome<Pec>>,
+    },
 }
 
 enum Done {
@@ -803,6 +820,7 @@ enum Done {
     Sealed(Result<Result<bool, AccountError>, JoinError>),
     Examined(Result<Result<Option<Examined>, AccountError>, JoinError>),
     CaughtUp(Result<Result<Option<Examined>, AccountError>, JoinError>),
+    KeptAlive(Result<SiteOutcome<Pec>, JoinError>),
 }
 
 async fn finish(work: &mut Option<Work>) -> Done {
@@ -814,6 +832,7 @@ async fn finish(work: &mut Option<Work>) -> Done {
         Some(Work::Seal { task, .. }) => Done::Sealed(task.await),
         Some(Work::Examine { task, .. }) => Done::Examined(task.await),
         Some(Work::CatchUp { task }) => Done::CaughtUp(task.await),
+        Some(Work::KeepAlive { task, .. }) => Done::KeptAlive(task.await),
     }
 }
 
@@ -832,6 +851,7 @@ enum Event {
     Flush,
     RunDue,
     RunExpired,
+    KeepAliveDue,
 }
 
 /// Whether a reading was started through the gate.
@@ -913,6 +933,13 @@ struct Actor {
     last_full_start: Option<Instant>,
     /// When the latest check of a session was started.
     last_check_start: Option<Instant>,
+    /// When the latest request of any kind was made to the site: the
+    /// keep-alive runs from it.
+    last_contact: Option<Instant>,
+    /// When the site last answered for the session.
+    last_answer: Option<Instant>,
+    /// The keep-alive fell due and waits for the work in flight.
+    keep_alive_due: bool,
     /// How confirming the stored session stands, while unconfirmed.
     confirming: Confirming,
     signing_in: bool,
@@ -956,6 +983,7 @@ impl Actor {
             let flush_at = self.flush_at;
             let run_at = if self.run_due { None } else { self.run_next };
             let run_closes = self.run_closes();
+            let keep_alive_at = self.keep_alive_at();
             // Messages first: a disconnect that arrives with a result is
             // applied before the result is looked at.
             let event = tokio::select! {
@@ -967,6 +995,7 @@ impl Actor {
                 () = at(flush_at) => Event::Flush,
                 () = at(run_at) => Event::RunDue,
                 () = at(run_closes) => Event::RunExpired,
+                () = at(keep_alive_at) => Event::KeepAliveDue,
             };
             match event {
                 Event::Message(None) => break,
@@ -990,6 +1019,7 @@ impl Actor {
                     self.run_due = true;
                 }
                 Event::RunExpired => self.close_run(RunReading::Interrupted),
+                Event::KeepAliveDue => self.keep_alive_due = true,
             }
             self.advance();
             self.publish_status();
@@ -1251,6 +1281,7 @@ impl Actor {
                 task.abort();
                 self.work = Some(Work::Fetch { ticket, task });
             }
+            Some(Work::KeepAlive { task, .. }) => task.abort(),
             other => self.work = other,
         }
     }
@@ -1279,6 +1310,7 @@ impl Actor {
         self.connection = to;
         self.next_attempt = None;
         self.attempt_due = None;
+        self.keep_alive_due = false;
         self.baseline_for = None;
         self.failures = 0;
         if let Tracking::Grace { session, .. } = &self.tracking {
@@ -1322,6 +1354,7 @@ impl Actor {
         };
         debug_assert!(self.work.is_none(), "one request at a time");
         self.last_full_start = Some(now);
+        self.last_contact = Some(now);
         let task = tokio::spawn(read_whole(
             self.site.clone(),
             session.clone(),
@@ -1352,6 +1385,7 @@ impl Actor {
                 // Waits for the check floor; the loop wakes for it.
             } else if let Some(connect) = self.queued_connect.take() {
                 self.last_check_start = Some(now);
+                self.last_contact = Some(now);
                 let site = self.site.clone();
                 let checking = connect.session.clone();
                 let task = tokio::spawn(async move { site.read_balance(&checking).await });
@@ -1405,6 +1439,13 @@ impl Actor {
         if self.run_due {
             self.run_due = false;
             self.run_attempt();
+            if self.work.is_some() {
+                return;
+            }
+        }
+        if self.keep_alive_due {
+            self.keep_alive_due = false;
+            self.keep_alive();
             if self.work.is_some() {
                 return;
             }
@@ -1502,6 +1543,9 @@ impl Actor {
                 Done::Examined(examined),
             ) => self.examined(reading, taken_at, started, examined),
             (Work::CatchUp { .. }, Done::CaughtUp(pass)) => self.caught_up(pass),
+            (Work::KeepAlive { generation, .. }, Done::KeptAlive(answer)) => {
+                self.kept_alive(generation, answer)
+            }
             // `finish` answers for the work it was given.
             (work, _) => self.work = Some(work),
         }
@@ -1554,6 +1598,7 @@ impl Actor {
         };
         self.generation += 1;
         self.failures = 0;
+        self.last_answer = Some(Instant::now());
         self.connection = Connection::Connected {
             session: session.clone(),
             connected_at: self.now_epoch(),
@@ -1637,6 +1682,7 @@ impl Actor {
         }
         match outcome {
             SiteOutcome::Read(reading) => {
+                self.last_answer = Some(Instant::now());
                 if minute {
                     // A success ends any backing off: the next minute is
                     // a minute after this one fell due.
@@ -1662,10 +1708,7 @@ impl Actor {
                     task,
                 });
             }
-            SiteOutcome::Unauthorised => {
-                tracing::info!(target: "eo::account", "the account site no longer accepts the session");
-                self.end_connection(Connection::Expired);
-            }
+            SiteOutcome::Unauthorised => self.signed_out_by_site("a reading"),
             SiteOutcome::Failed(failure) => {
                 tracing::warn!(target: "eo::account", ?failure, "an account reading failed; the next falls due as usual");
                 self.answer_waiters(ticket.started, RunReading::Unreadable);
@@ -1744,6 +1787,78 @@ impl Actor {
             self.attempt_due = None;
             self.mark_changed();
         }
+    }
+
+    /// When the keep-alive falls due: five minutes after the latest
+    /// request to the site, while connected and not already due.
+    fn keep_alive_at(&self) -> Option<Instant> {
+        if !self.is_connected() || self.keep_alive_due {
+            return None;
+        }
+        self.last_contact.map(|contact| contact + KEEP_ALIVE_EVERY)
+    }
+
+    /// Ask for the balance, unless a request has been made since the
+    /// keep-alive fell due (the work it waited for was one).
+    fn keep_alive(&mut self) {
+        let Connection::Connected { session, .. } = &self.connection else {
+            return;
+        };
+        let now = Instant::now();
+        if self
+            .last_contact
+            .is_some_and(|contact| now < contact + KEEP_ALIVE_EVERY)
+        {
+            return;
+        }
+        let site = self.site.clone();
+        let session = session.clone();
+        self.last_contact = Some(now);
+        let task = tokio::spawn(async move { site.read_balance(&session).await });
+        self.work = Some(Work::KeepAlive {
+            generation: self.generation,
+            task,
+        });
+    }
+
+    fn kept_alive(&mut self, generation: u64, answer: Result<SiteOutcome<Pec>, JoinError>) {
+        if generation != self.generation || !self.is_connected() {
+            return;
+        }
+        match answer {
+            Ok(SiteOutcome::Read(_)) => {
+                self.last_answer = Some(Instant::now());
+                tracing::debug!(target: "eo::account", "the account session was kept alive");
+            }
+            Ok(SiteOutcome::Unauthorised) => self.signed_out_by_site("a keep-alive"),
+            Ok(SiteOutcome::Failed(failure)) => {
+                tracing::warn!(target: "eo::account", ?failure, "a keep-alive failed; the next falls due as usual");
+            }
+            Err(_) => {}
+        }
+    }
+
+    /// The site refused the session: the connection ends as expired. How
+    /// long the session lasted, and how long since the site last answered
+    /// for it, are logged: they say how long the site keeps a session.
+    fn signed_out_by_site(&mut self, refused: &'static str) {
+        let connected_minutes = match &self.connection {
+            Connection::Connected { connected_at, .. } => {
+                ((self.now_epoch() - connected_at) / 60.0).round()
+            }
+            _ => 0.0,
+        };
+        let since_answer_minutes = self
+            .last_answer
+            .map(|answer| (answer.elapsed().as_secs_f64() / 60.0).round());
+        tracing::info!(
+            target: "eo::account",
+            refused,
+            connected_minutes,
+            ?since_answer_minutes,
+            "the account site no longer accepts the session"
+        );
+        self.end_connection(Connection::Expired);
     }
 
     fn stop(&mut self) {

@@ -260,10 +260,19 @@ export interface AccountSessionMeasure {
 }
 
 /**
+ * The connection as the player reads it at a glance: on the dashboard
+ * and on the overlay. One answer for every surface, so they never
+ * disagree.
+ */
+export type AccountSignal = 'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'signedOut';
+
+/**
  * The account connection as it stands.
  */
 export interface AccountStatus {
 	state: AccountConnectionState;
+	/** The connection at a glance; the same answer [`account_signal`] gives every window.  [`account_signal`]: crate::Api::account_signal */
+	signal: AccountSignal;
 	/** When the current connection was made. */
 	connectedAt: string | null;
 	/** When the latest reading was taken. */
@@ -6599,6 +6608,10 @@ export async function strongboxOpeningUndo(input: ActivityUndoInput): Promise<vo
 
 export async function accountStatus(): Promise<AccountStatus> {
 	return invokeCommand('account_status', {});
+}
+
+export async function accountSignal(): Promise<'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'signedOut'> {
+	return invokeCommand('account_signal', {});
 }
 
 export async function accountDisconnect(): Promise<void> {

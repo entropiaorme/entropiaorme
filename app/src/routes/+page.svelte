@@ -10,6 +10,8 @@
 	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 	import { createStatsGridModel } from '$lib/features/dashboard/statsGridModel.svelte';
 	import SessionStage from '$lib/features/sessions/SessionStage.svelte';
+	import AccountSignIn from '$lib/features/account/AccountSignIn.svelte';
+	import { inDevelopment } from '$lib/inDevelopment';
 	import { createLiveDefinitionsModel } from '$lib/features/sessions/definitionsModel.svelte';
 	import { createLiveReviewModel } from '$lib/features/sessions/reviewModel.svelte';
 	import { createQuestsModel } from '$lib/features/quests/questsModel.svelte';
@@ -160,6 +162,7 @@
 			<span class="block h-px w-12 bg-gradient-to-r from-accent/60 to-transparent"></span>
 			<p class="text-sm text-text-secondary mt-0.5">Track sessions, monitor events, play your quests</p>
 		</header>
+		{#if inDevelopment.visible}<AccountSignIn />{/if}
 	</div>
 
 	<SessionIsland

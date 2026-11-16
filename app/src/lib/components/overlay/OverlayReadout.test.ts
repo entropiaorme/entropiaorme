@@ -1029,3 +1029,31 @@ describe('the width', () => {
 		);
 	});
 });
+
+describe('the account dot', () => {
+	it('is absent for a player who has not connected, or with no signal', () => {
+		const { unmount } = render(OverlayReadout, { props: { data: liveData() } });
+		expect(screen.queryByTestId('overlay-account-signal')).toBeNull();
+		unmount();
+		render(OverlayReadout, { props: { data: liveData(), accountSignal: 'off' } });
+		expect(screen.queryByTestId('overlay-account-signal')).toBeNull();
+	});
+
+	it('shows each connected state, saying what it means', () => {
+		for (const [signal, mark] of [
+			['signedIn', 'live'],
+			['signedOut', 'alert'],
+			['notSignedIn', 'absent'],
+			['checking', 'checking'],
+		] as const) {
+			const { unmount } = render(OverlayReadout, {
+				props: { data: liveData({ status: 'active' }), accountSignal: signal },
+			});
+			const dot = screen.getByTestId('overlay-account-signal');
+			expect(dot.dataset.mark).toBe(mark);
+			expect(dot.getAttribute('aria-label')).toBeTruthy();
+			expect(dot.getAttribute('title')).toBe(dot.getAttribute('aria-label'));
+			unmount();
+		}
+	});
+});

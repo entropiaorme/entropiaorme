@@ -24,7 +24,9 @@ use eo_api::strongbox::{
 use eo_api::ApiError;
 use eo_services::account::reading::Reading;
 use eo_services::account::recorder::{MemoryFlag, RecorderParts};
-use eo_services::account::scripted::{recorded_hunt_responses, responses, PacedClock};
+use eo_services::account::scripted::{
+    recorded_hunt_responses, responses, PacedClock, ScriptedRead,
+};
 use eo_services::account::store::{record_reading, Purpose};
 use eo_services::account::AccountRecorder;
 use serde_json::Value;
@@ -571,7 +573,14 @@ async fn a_run_s_readings_hold_the_minute_floor_and_need_a_connection() {
     assert_eq!(harness.site.calls().len(), 4);
     harness.api.account_run_cancel().await.unwrap();
     harness.at(400.0).await;
-    assert_eq!(harness.site.calls().len(), 4, "reading stopped once done");
+    // Only the keep-alive asks the site anything more: a balance, no items.
+    let items = harness
+        .site
+        .calls()
+        .iter()
+        .filter(|call| **call == ScriptedRead::Items)
+        .count();
+    assert_eq!(items, 2, "reading stopped once done");
 }
 
 /// The opening of five before the hunt, from readings a previous run

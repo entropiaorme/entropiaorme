@@ -9,6 +9,8 @@
 	import { getStatDef, type StatContext } from '$lib/statsRegistry';
 	import { statsScope } from '$lib/statsScope.svelte';
 	import { NO_DATA } from '$lib/utils/format';
+	import type { AccountSignal } from '$lib/api/commands.gen';
+	import { overlaySignal } from '$lib/features/account/accountSignal';
 	import SubWindowToggle from './SubWindowToggle.svelte';
 	import type { ReadoutPanel } from '$lib/windows/overlayMenu';
 	import ScreenUnreadNote from '$lib/features/tracking/ScreenUnreadNote.svelte';
@@ -72,6 +74,7 @@
 		onEquipmentTrigger = noop,
 		openPanel = null,
 		onPanelTrigger = noop,
+		accountSignal = null,
 	}: {
 		data: TrackingLive;
 		status?: TrackingStatus | null;
@@ -114,7 +117,12 @@
 		/** A line that says more was clicked: open or close its sub-window,
 		 * hung from `anchor`. */
 		onPanelTrigger?: (panel: ReadoutPanel, anchor: HTMLElement) => void | Promise<void>;
+		/** The account connection at a glance; a dot at the title row's end
+		 * shows it, and nothing does for a player who has not connected. */
+		accountSignal?: AccountSignal | null;
 	} = $props();
+
+	const accountDot = $derived(accountSignal ? overlaySignal(accountSignal) : null);
 
 	const isActive = $derived(data.status === 'active');
 	const inputAvailable = $derived(data.status === 'active' || data.status === 'idle');
@@ -380,6 +388,16 @@
 			>
 				Showing lifetime
 			</span>
+		{/if}
+		{#if accountDot}
+			<span
+				class="account-dot {accountDot.mark}"
+				role="img"
+				aria-label={accountDot.label}
+				title={accountDot.label}
+				data-testid="overlay-account-signal"
+				data-mark={accountDot.mark}
+			></span>
 		{/if}
 	</div>
 	<div class="rail">
@@ -798,6 +816,42 @@
 		font-weight: 400;
 		letter-spacing: 0;
 		color: var(--sky);
+	}
+	/* The account at a glance: steady green signed in, pulsing amber
+	   signed out by the site, an empty ring not signed in. */
+	.account-dot {
+		flex: none;
+		width: 7px;
+		height: 7px;
+		margin-left: auto;
+		border-radius: 50%;
+		box-sizing: border-box;
+	}
+	.lifetime + .account-dot {
+		margin-left: 0;
+	}
+	.account-dot.live {
+		background: var(--live);
+	}
+	.account-dot.alert {
+		background: var(--amber);
+		box-shadow: 0 0 6px var(--amber);
+		animation: account-pulse 1.6s ease-in-out infinite;
+	}
+	.account-dot.absent {
+		border: 1px solid var(--t3);
+	}
+	.account-dot.checking {
+		background: var(--t4);
+	}
+	@keyframes account-pulse {
+		0%,
+		100% {
+			opacity: 1;
+		}
+		50% {
+			opacity: 0.3;
+		}
 	}
 
 	/* ---- in hand, and the mob ---- */

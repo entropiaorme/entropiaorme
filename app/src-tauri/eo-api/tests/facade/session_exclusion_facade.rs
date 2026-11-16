@@ -928,6 +928,7 @@ const OTHER_COMMANDS: &[&str] = &[
     // statistic, and the measured list shows exclusion rather than
     // honouring it.
     "account_status",
+    "account_signal",
     "account_disconnect",
     "account_session_measure",
     "account_measured_sessions",

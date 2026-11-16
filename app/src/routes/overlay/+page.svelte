@@ -56,6 +56,8 @@
 		type ReadoutPanel
 	} from '$lib/windows/overlayMenu';
 	import OverlayReadout from '$lib/components/overlay/OverlayReadout.svelte';
+	import { createAccountSignal } from '$lib/features/account/accountSignal.svelte';
+	import { inDevelopment } from '$lib/inDevelopment';
 	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
 	import {
@@ -123,6 +125,8 @@
 	// factory). Each webview is its own JS context, so the overlay keeps its
 	// own store instance beside the dashboard's.
 	const snapshot = createSnapshotStore<TrackingSnapshot>(TRACKING_TOPIC, getTrackingSnapshot);
+	const account = inDevelopment.visible ? createAccountSignal() : null;
+	$effect(() => account?.connect());
 
 	// The stop flow (see the module). Render state comes off `flow`; the deps
 	// close over this window's snapshot.
@@ -794,6 +798,7 @@
 			? overlayMenuKind
 			: null}
 		onPanelTrigger={togglePanel}
+		accountSignal={account?.current ?? null}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>

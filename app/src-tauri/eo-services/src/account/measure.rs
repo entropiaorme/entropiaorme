@@ -52,7 +52,7 @@ use serde::{Deserialize, Serialize};
 
 use super::amount::{checked, count, Amount, Pec, MICRO_PER_PEC};
 use super::composite::{recognise, Claim, Opening, Repair, RepairCost, Settlement};
-use super::diff::{added_rows, canonical_rows, diff, exact_unit, MoveKind, Span, Step};
+use super::diff::{added_rows, canonical_rows, diff, exact_unit, MoveKind, Span, Step, StepSet};
 use super::reading::{Container, Holding, HoldingKey, Reading, Row};
 use super::roles::{Role, RoleBook, RoleSource, Stacking, SHRAPNEL, STRONGBOX_KEY, UNIVERSAL_AMMO};
 use super::AccountError;
@@ -749,64 +749,7 @@ impl Tally {
         let set = diff(before, after, &|name| book.stacking(name))?;
         let between = set.span;
 
-        // Shrapnel conversions, read from the ammo row each pays: a new
-        // Universal Ammo row of exactly what the Trade Terminal gives.
-        let mut ammo_arrived: Vec<(HoldingKey, Vec<Row>)> = Vec::new();
-        for step in &set.steps {
-            if let Step::Consumed { key, .. } | Step::Gained { key, .. } = step {
-                if key.name == UNIVERSAL_AMMO {
-                    ammo_arrived.push((
-                        key.clone(),
-                        added_rows(rows_of(before.holding(key)), rows_of(after.holding(key))),
-                    ));
-                }
-            }
-        }
-        let ammo_unit = exact_unit(
-            before
-                .holdings()
-                .iter()
-                .chain(after.holdings())
-                .filter(|(key, _)| key.name == UNIVERSAL_AMMO)
-                .flat_map(|(_, holding)| holding.rows()),
-        );
-        let mut reserved: Vec<(HoldingKey, Row)> = Vec::new();
-        let mut conversions: Vec<Conversion> = Vec::new();
-        for (index, step) in set.steps.iter().enumerate() {
-            let Step::Consumed {
-                key, units, amount, ..
-            } = step
-            else {
-                continue;
-            };
-            if key.name != SHRAPNEL || key.container == Container::Auction {
-                continue;
-            }
-            let ammo_units = checked(
-                units
-                    .checked_mul(SHRAPNEL_TO_AMMO_PERCENT)
-                    .map(|scaled| scaled / 100),
-            )?;
-            let row = ammo_arrived.iter_mut().find_map(|(ammo_key, rows)| {
-                let at = rows.iter().position(|row| row.quantity == ammo_units)?;
-                Some((ammo_key.clone(), rows.remove(at)))
-            });
-            if let Some((ammo_key, row)) = row {
-                let ammo = match ammo_unit {
-                    Some(unit) => Amount::exact_units(ammo_units, unit)?,
-                    None => Amount::whole_pec(row.value)?,
-                };
-                reserved.push((ammo_key, row));
-                conversions.push(Conversion {
-                    index,
-                    shrapnel_units: *units,
-                    shrapnel: *amount,
-                    ammo_units,
-                    ammo,
-                });
-            }
-        }
-
+        let (reserved, conversions) = conversions_of(&set, before, after)?;
         let composites = recognise(&set, before, after, &reserved)?;
         let opening = composites.opening.as_ref();
         let opening_input = |key: &HoldingKey| {
@@ -1271,6 +1214,87 @@ impl Tally {
             events: self.events,
         })
     }
+}
+
+/// Ammo rows another pattern claims, by the holding they sit in.
+type ClaimedRows = Vec<(HoldingKey, Row)>;
+
+/// Shrapnel conversions in one step, read from the ammo row each pays: a
+/// new Universal Ammo row of exactly what the Trade Terminal gives. With
+/// them, the ammo rows they claim, which an opening in the same step never
+/// reads as its payout.
+fn conversions_of(
+    set: &StepSet,
+    before: &Reading,
+    after: &Reading,
+) -> Result<(ClaimedRows, Vec<Conversion>), AccountError> {
+    let mut ammo_arrived: Vec<(HoldingKey, Vec<Row>)> = Vec::new();
+    for step in &set.steps {
+        if let Step::Consumed { key, .. } | Step::Gained { key, .. } = step {
+            if key.name == UNIVERSAL_AMMO {
+                ammo_arrived.push((
+                    key.clone(),
+                    added_rows(rows_of(before.holding(key)), rows_of(after.holding(key))),
+                ));
+            }
+        }
+    }
+    let ammo_unit = exact_unit(
+        before
+            .holdings()
+            .iter()
+            .chain(after.holdings())
+            .filter(|(key, _)| key.name == UNIVERSAL_AMMO)
+            .flat_map(|(_, holding)| holding.rows()),
+    );
+    let mut reserved: Vec<(HoldingKey, Row)> = Vec::new();
+    let mut conversions: Vec<Conversion> = Vec::new();
+    for (index, step) in set.steps.iter().enumerate() {
+        let Step::Consumed {
+            key, units, amount, ..
+        } = step
+        else {
+            continue;
+        };
+        if key.name != SHRAPNEL || key.container == Container::Auction {
+            continue;
+        }
+        let ammo_units = checked(
+            units
+                .checked_mul(SHRAPNEL_TO_AMMO_PERCENT)
+                .map(|scaled| scaled / 100),
+        )?;
+        let row = ammo_arrived.iter_mut().find_map(|(ammo_key, rows)| {
+            let at = rows.iter().position(|row| row.quantity == ammo_units)?;
+            Some((ammo_key.clone(), rows.remove(at)))
+        });
+        if let Some((ammo_key, row)) = row {
+            let ammo = match ammo_unit {
+                Some(unit) => Amount::exact_units(ammo_units, unit)?,
+                None => Amount::whole_pec(row.value)?,
+            };
+            reserved.push((ammo_key, row));
+            conversions.push(Conversion {
+                index,
+                shrapnel_units: *units,
+                shrapnel: *amount,
+                ammo_units,
+                ammo,
+            });
+        }
+    }
+
+    Ok((reserved, conversions))
+}
+
+/// The ammo rows one step's Shrapnel conversions claim: rows an opening in
+/// the same step never reads as its payout.
+pub(crate) fn conversion_rows(
+    set: &StepSet,
+    before: &Reading,
+    after: &Reading,
+) -> Result<ClaimedRows, AccountError> {
+    Ok(conversions_of(set, before, after)?.0)
 }
 
 /// How an arrival counts given an opening's claim on it: not at all when

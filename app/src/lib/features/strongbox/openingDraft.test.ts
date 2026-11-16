@@ -6,7 +6,9 @@ import type {
 	StockPosition,
 	StrongboxExportRead,
 } from '$lib/api/commands.gen';
+import { five, seven, unsettled } from './__fixtures__/proposals';
 import {
+	ammoNote,
 	balanceRefusal,
 	boxCost,
 	boxHoldings,
@@ -22,11 +24,15 @@ import {
 	manualRefusal,
 	openingInput,
 	orderLines,
+	paidAloneSentence,
 	planRefusal,
+	proposalRefusal,
 	resultFromExport,
 	resultFromManual,
+	resultFromProposals,
 	summarise,
 	untrackedBoxes,
+	withPossible,
 } from './openingDraft';
 
 function stock(itemName: string, quantity: number): StockPosition {
@@ -297,5 +303,147 @@ describe('where the boxes came from', () => {
 		expect(input.contents.find((row) => row.itemName === 'Red Heart Fireworks')?.recycle).toBe(
 			true,
 		);
+	});
+});
+
+describe('a result read from the account', () => {
+	it('fills the review as an export would: the boxes, keys, ammo and items', () => {
+		const result = resultFromProposals([seven()], 'Halloween Strongbox', context);
+		expect(result.boxes).toBe(7);
+		expect(result.keyUnitTt).toBe(10);
+		expect(result.ammoPed).toBe(60);
+		expect(result.lines.map((line) => [line.itemName, line.quantity, line.ttValue])).toEqual([
+			['Skeleton Pants Red (F)', 1, 10],
+		]);
+		expect(result.intake).toBe('export');
+		expect(result.ammoFromKeys).toBe(true);
+		expect(result.notes).toEqual([]);
+		expect(balanceRefusal(result)).toBeNull();
+		expect(paidAloneSentence(result)).toBe('6 of 7 paid ammo alone');
+		const input = openingInput(result, defaultPlan(7, null), '2026-11-14');
+		expect(input.intake).toBe('export');
+		expect(input.ammoPed).toBe(60);
+		expect(input.contents).toEqual([
+			{ itemName: 'Skeleton Pants Red (F)', quantity: 1, ttValue: 10, recycle: false },
+		]);
+	});
+
+	it("keeps an unsettled opening's doubt in the notes and what may be its own apart", () => {
+		const result = resultFromProposals([unsettled()], 'Halloween Strongbox', context);
+		expect(result.lines).toEqual([]);
+		expect(result.possible.map((line) => [line.itemName, line.included])).toEqual([
+			['Skeleton Pants Red (F)', false],
+			['Mayhem Token', false],
+		]);
+		expect(result.notes[0]).toBe('6 keys were used for 7 boxes.');
+		expect(result.notes[1]).toMatch(/2 items arrived at the same time/);
+		// The ammo is what the keys did not pay back in items, and moves as
+		// the player adds one.
+		expect(result.ammoFromKeys).toBe(true);
+		expect(result.ammoPed).toBeCloseTo(70);
+		expect(paidAloneSentence(result)).toBeNull();
+		const added = withPossible(result, 'Skeleton Pants Red (F)', true);
+		expect(added.ammoPed).toBeCloseTo(60);
+		expect(summarise(added).keptTt).toBe(10);
+		const input = openingInput(added, defaultPlan(7, null), null);
+		expect(input.contents.map((row) => row.itemName)).toEqual(['Skeleton Pants Red (F)']);
+		expect(withPossible(added, 'Skeleton Pants Red (F)', false).ammoPed).toBeCloseTo(70);
+	});
+
+	it('takes the ammo as the keys less what else came out, noting a read figure that differs', () => {
+		const result = resultFromProposals([five()], 'Halloween Strongbox', context);
+		expect(result.ammoPed).toBe(50);
+		expect(ammoNote(result)).toBe(
+			'Your account shows 49.95 PED of ammo; the keys less what else came out are 50.00 PED, and that is the figure recorded.',
+		);
+		expect(balanceRefusal(result)).toBeNull();
+		expect(result.possible.map((line) => [line.itemName, line.ttValue, line.included])).toEqual([
+			['Halloween Fireworks', 0, false],
+		]);
+		expect(paidAloneSentence(result)).toBe('4 of 5 paid ammo alone');
+		const input = openingInput(result, defaultPlan(5, null), null);
+		expect(input.ammoPed).toBe(50);
+		expect(input.contents).toEqual([]);
+		// Added, the fireworks change nothing: they have no TT.
+		expect(withPossible(result, 'Halloween Fireworks', true).ammoPed).toBe(50);
+	});
+
+	it('says what the readings showed of the ammo as the figures stand', () => {
+		// The rows read 60.00 PED beside trousers that may be the boxes'.
+		const proposal = seven({
+			contents: [],
+			possibleContents: [
+				{
+					item: { name: 'Skeleton Pants Red (F)', place: { kind: 'carried' } },
+					units: 1,
+					amount: { ped: 10, precision: 'wholePec' },
+				},
+			],
+		});
+		const left = resultFromProposals([proposal], 'Halloween Strongbox', context);
+		expect(left.ammoPed).toBe(70);
+		expect(ammoNote(left)).toMatch(/shows 60\.00 PED of ammo; .* are 70\.00 PED/);
+		const added = withPossible(left, 'Skeleton Pants Red (F)', true);
+		expect(added.ammoPed).toBe(60);
+		expect(ammoNote(added)).toBeNull();
+		expect(ammoNote(withPossible(added, 'Skeleton Pants Red (F)', false))).toBe(ammoNote(left));
+	});
+
+	it('adds up a run read across two minutes into one opening', () => {
+		const first = seven({
+			boxes: [{ name: 'Halloween Strongbox', count: 3 }],
+			keysUsed: 3,
+			keys: { ped: 30, precision: 'wholePec' },
+			ammo: { units: 300_000, amount: { ped: 30, precision: 'exact' } },
+			contents: [],
+			paidAmmoAlone: 3,
+		});
+		const second = seven({
+			boxes: [{ name: 'Halloween Strongbox', count: 4 }],
+			keysUsed: 4,
+			keys: { ped: 40, precision: 'wholePec' },
+			ammo: { units: 300_000, amount: { ped: 30, precision: 'exact' } },
+			paidAmmoAlone: 3,
+		});
+		const result = resultFromProposals([first, second], 'Halloween Strongbox', context);
+		expect(result.boxes).toBe(7);
+		expect(result.ammoPed).toBe(60);
+		expect(result.lines).toHaveLength(1);
+		expect(paidAloneSentence(result)).toBe('6 of 7 paid ammo alone');
+	});
+
+	it('refuses an opening of more than one kind of box, or of another box', () => {
+		const two = seven({
+			boxes: [
+				{ name: 'Halloween Strongbox', count: 3 },
+				{ name: 'Easter Strongbox', count: 4 },
+			],
+		});
+		expect(proposalRefusal([two], 'Halloween Strongbox')).toMatch(/more than one kind of box/);
+		expect(proposalRefusal([seven()], 'Easter Strongbox')).toBe(
+			'Your account shows Halloween Strongbox opened, not Easter Strongbox. Choose that box instead.',
+		);
+		expect(proposalRefusal([seven()], 'halloween strongbox')).toBeNull();
+	});
+
+	it('says nothing of how the boxes paid unless the readings show it', () => {
+		const result = resultFromProposals(
+			[seven({ paidAmmoAlone: null })],
+			'Halloween Strongbox',
+			context,
+		);
+		expect(paidAloneSentence(result)).toBeNull();
+		const all = resultFromProposals(
+			[
+				seven({
+					paidAmmoAlone: 7,
+					contents: [],
+					ammo: { units: 700_000, amount: { ped: 70, precision: 'exact' } },
+				}),
+			],
+			'Halloween Strongbox',
+			context,
+		);
+		expect(paidAloneSentence(all)).toBe('All 7 paid ammo alone');
 	});
 });

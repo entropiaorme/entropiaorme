@@ -9,6 +9,7 @@
 	import AdjustStockModal from '$lib/features/analytics/AdjustStockModal.svelte';
 	import AuctionListings from '$lib/features/analytics/AuctionListings.svelte';
 	import ConvertStockModal from '$lib/features/analytics/ConvertStockModal.svelte';
+	import { createListingProposals } from '$lib/features/analytics/listingProposals.svelte';
 	import SellStockModal from '$lib/features/analytics/SellStockModal.svelte';
 	import AssetPurchaseModal from '$lib/features/inventory/AssetPurchaseModal.svelte';
 	import ConvertItemsModal from '$lib/features/inventory/ConvertItemsModal.svelte';
@@ -27,6 +28,7 @@
 	} from '$lib/features/analytics/treeCuttingModel.svelte';
 
 	const model = createInventoryModel();
+	const listingProposals = createListingProposals();
 	let createListingOpen = $state(false);
 	let equipmentFormOpen = $state(false);
 	let equipmentToEdit = $state<InventoryItem | null>(null);
@@ -60,9 +62,12 @@
 			if (disposed) unlisten();
 			else stop = unlisten;
 		});
+		// What the account readings show became of open listings.
+		const detachProposals = listingProposals.connect();
 		return () => {
 			disposed = true;
 			stop?.();
+			detachProposals();
 		};
 	});
 
@@ -165,6 +170,7 @@
 			open={model.openListings}
 			resolved={model.resolvedListings}
 			onresolve={model.resolveListing}
+			proposals={listingProposals}
 			central
 			embedded
 			/>

@@ -23,6 +23,16 @@
 //!   it, at most three in all; then the session's measure is sealed. A new
 //!   session starting meanwhile seals the old one with what it has.
 //!
+//! - **A strongbox run** (outside a tracked session) is read when it
+//!   begins, every minute while it is open, and once more when the player
+//!   says it is done; then reading stops. A run left open closes after 30
+//!   minutes, and when the view that opened it goes away (see [`run`]).
+//!
+//! Every reading stored is then examined for what it proposes (see
+//! [`super::proposals`]), and the readings a previous run left unexamined
+//! are examined once the task starts. A failed examination is logged and
+//! never fails the reading.
+//!
 //! Every full reading passes through one gate, which keeps any two at
 //! least 55 seconds apart: a reading asked for inside that floor is
 //! answered by the latest stored reading (taken at its own time), and a
@@ -54,10 +64,11 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio::time::Instant;
 
 use super::amount::Pec;
+use super::proposals::{self, Decided, Examined, Proposal, ProposalId, ProposalKind};
 use super::reading::{Holding, HoldingKey, Reading, SiteResponse};
 use super::sessions::{self, MeasureRead, MeasuredPage, ToSeal};
 use super::site::{SessionSecret, SharedSite, SiteFailure, SiteOutcome};
-use super::store::{self, Purpose, ReadingHeader};
+use super::store::{self, Purpose, ReadingHeader, ReadingId};
 use super::AccountError;
 use crate::bus_events::BusEvent;
 use crate::clock::Clock;
@@ -66,6 +77,11 @@ use crate::db::Db;
 use crate::event_bus::{EventBus, Registration, Topic};
 use crate::game_data_store::GameDataStore;
 use crate::time::naive_to_epoch;
+
+mod run;
+
+use run::{Run, Waiter};
+pub use run::{RunReading, RUN_OPEN_FOR, RUN_READ_EVERY, RUN_WAIT};
 
 /// How often a running session is read.
 pub const READ_EVERY: Duration = Duration::from_secs(60);
@@ -131,7 +147,8 @@ pub struct ConnectionStatus {
     /// How many readings this connection task has stored.
     pub readings_stored: u64,
     /// Whether the connection has work in flight or waiting: a request,
-    /// a reading being stored, a measure being sealed.
+    /// a reading being stored or examined, a measure being sealed, or the
+    /// task's own start.
     pub working: bool,
     /// How confirming the stored session stands; only while unconfirmed.
     pub confirming: Option<Confirming>,
@@ -261,6 +278,13 @@ enum Msg {
     SigningIn(bool),
     Disconnect(oneshot::Sender<()>),
     Shutdown(oneshot::Sender<()>),
+    /// A strongbox run begins, or is done: answered once its reading is in.
+    RunBegin(oneshot::Sender<RunReading>),
+    RunDone(oneshot::Sender<RunReading>),
+    /// The run's view went away: reading for it stops.
+    RunCancel,
+    /// A proposal was decided: announce it.
+    ProposalsChanged,
 }
 
 impl AccountRecorder {
@@ -279,7 +303,9 @@ impl AccountRecorder {
             tracked_session: None,
             has_connected,
             readings_stored: 0,
-            working: false,
+            // Its start is ahead of it: reading the last state, and
+            // examining what a previous run left unexamined.
+            working: true,
             confirming: None,
             signing_in: false,
             has_readings: false,
@@ -317,6 +343,12 @@ impl AccountRecorder {
             queued_connect: None,
             flush_at: None,
             readings_stored: 0,
+            latest_id: None,
+            catch_up: true,
+            run: None,
+            run_next: None,
+            run_due: false,
+            waiters: Vec::new(),
         };
         runtime.spawn(actor.run(inbox));
         Arc::new(AccountRecorder {
@@ -462,6 +494,98 @@ impl AccountRecorder {
         Ok(page)
     }
 
+    /// Every pending proposal, of one kind or all, the latest seen first.
+    pub async fn proposals(
+        &self,
+        kind: Option<ProposalKind>,
+    ) -> Result<Vec<Proposal>, AccountError> {
+        joined(on_reader(&self.db, move |conn| proposals::pending(conn, kind)).await)
+    }
+
+    /// Decide proposals on the writer, and announce a decision made.
+    async fn decide(
+        &self,
+        job: impl FnOnce(&mut rusqlite::Connection, f64) -> Result<Decided, AccountError>
+            + Send
+            + 'static,
+    ) -> Result<Decided, AccountError> {
+        let now = naive_to_epoch(self.clock.now());
+        let decided = joined(on_writer(&self.db, move |conn| job(conn, now)).await)?;
+        if decided == Decided::Done {
+            let _ = self.sender.send(Msg::ProposalsChanged);
+        }
+        Ok(decided)
+    }
+
+    /// Claim proposals before the opening they show is recorded; `retake`
+    /// names those whose earlier claim, never linked, is taken over.
+    pub async fn claim_proposals(
+        &self,
+        ids: Vec<ProposalId>,
+        retake: Vec<ProposalId>,
+    ) -> Result<Decided, AccountError> {
+        self.decide(move |conn, now| proposals::claim(conn, &ids, &retake, now))
+            .await
+    }
+
+    /// Release proposals claimed for a recording that did not happen.
+    pub async fn release_proposals(&self, ids: Vec<ProposalId>) -> Result<Decided, AccountError> {
+        self.decide(move |conn, _| proposals::release(conn, &ids))
+            .await
+    }
+
+    /// Link proposals to the record they became, as one.
+    pub async fn link_proposals(
+        &self,
+        ids: Vec<ProposalId>,
+        record: String,
+    ) -> Result<Decided, AccountError> {
+        self.decide(move |conn, now| proposals::link(conn, &ids, &record, now))
+            .await
+    }
+
+    /// Dismiss a proposal, and announce it.
+    pub async fn dismiss_proposal(&self, id: ProposalId) -> Result<Decided, AccountError> {
+        self.decide(move |conn, now| proposals::dismiss(conn, id, now))
+            .await
+    }
+
+    /// A strongbox run begins: answered with a reading from before the
+    /// boxes are opened, once it is stored and examined (the latest one,
+    /// when it was taken inside the floor), waiting at most [`RUN_WAIT`].
+    /// Reading goes on every minute until the run is done or closed.
+    pub async fn run_begin(&self) -> RunReading {
+        self.run_request(Msg::RunBegin).await
+    }
+
+    /// A strongbox run is done: answered with a reading started after
+    /// this was asked, once it is stored and examined, waiting at most
+    /// [`RUN_WAIT`]. Then reading for the run stops.
+    pub async fn run_done(&self) -> RunReading {
+        self.run_request(Msg::RunDone).await
+    }
+
+    /// Close the run without another reading: its view went away.
+    pub fn run_cancel(&self) {
+        let _ = self.sender.send(Msg::RunCancel);
+    }
+
+    async fn run_request(&self, message: fn(oneshot::Sender<RunReading>) -> Msg) -> RunReading {
+        let (reply, answer) = oneshot::channel();
+        if self.sender.send(message(reply)).is_err() {
+            return RunReading::Interrupted;
+        }
+        match tokio::time::timeout(RUN_WAIT, answer).await {
+            Ok(Ok(reading)) => reading,
+            Ok(Err(_)) => RunReading::Interrupted,
+            Err(_) => {
+                // Given up on: the run ends with its consumer.
+                let _ = self.sender.send(Msg::RunCancel);
+                RunReading::Unreadable
+            }
+        }
+    }
+
     async fn cache(&self, sealed: Vec<ToSeal>, now: f64) -> Result<(), AccountError> {
         joined(
             on_writer(&self.db, move |conn| {
@@ -587,12 +711,14 @@ enum ReadingFor {
     Baseline(String),
     Session(String),
     Closing(String),
+    /// For a strongbox run, outside a tracked session.
+    Run,
 }
 
 impl ReadingFor {
     fn session(&self) -> Option<&str> {
         match self {
-            ReadingFor::Connect => None,
+            ReadingFor::Connect | ReadingFor::Run => None,
             ReadingFor::Baseline(session)
             | ReadingFor::Session(session)
             | ReadingFor::Closing(session) => Some(session),
@@ -604,6 +730,7 @@ impl ReadingFor {
             ReadingFor::Connect => Purpose::Connect,
             ReadingFor::Baseline(_) => Purpose::Baseline,
             ReadingFor::Session(_) | ReadingFor::Closing(_) => Purpose::Session,
+            ReadingFor::Run => Purpose::Run,
         }
     }
 }
@@ -620,6 +747,8 @@ struct Ticket {
     tag: Option<String>,
     /// When the attempt fell due, for a scheduled one.
     due: Option<Instant>,
+    /// When the request started.
+    started: Instant,
 }
 
 /// A connect waiting for its check.
@@ -653,6 +782,18 @@ enum Work {
         session: String,
         task: JoinHandle<Result<bool, AccountError>>,
     },
+    /// A reading just stored, examined for what it proposes.
+    Examine {
+        reading: ReadingId,
+        taken_at: f64,
+        /// When its request started.
+        started: Instant,
+        task: JoinHandle<Result<Option<Examined>, AccountError>>,
+    },
+    /// Readings a previous run left unexamined.
+    CatchUp {
+        task: JoinHandle<Result<Option<Examined>, AccountError>>,
+    },
 }
 
 enum Done {
@@ -660,6 +801,8 @@ enum Done {
     Fetched(Result<SiteOutcome<Reading>, JoinError>),
     Stored(Result<Result<Option<(ReadingHeader, Reading)>, AccountError>, JoinError>),
     Sealed(Result<Result<bool, AccountError>, JoinError>),
+    Examined(Result<Result<Option<Examined>, AccountError>, JoinError>),
+    CaughtUp(Result<Result<Option<Examined>, AccountError>, JoinError>),
 }
 
 async fn finish(work: &mut Option<Work>) -> Done {
@@ -669,6 +812,8 @@ async fn finish(work: &mut Option<Work>) -> Done {
         Some(Work::Fetch { task, .. }) => Done::Fetched(task.await),
         Some(Work::Store { task, .. }) => Done::Stored(task.await),
         Some(Work::Seal { task, .. }) => Done::Sealed(task.await),
+        Some(Work::Examine { task, .. }) => Done::Examined(task.await),
+        Some(Work::CatchUp { task }) => Done::CaughtUp(task.await),
     }
 }
 
@@ -685,6 +830,8 @@ enum Event {
     Attempt,
     CheckFloorPassed,
     Flush,
+    RunDue,
+    RunExpired,
 }
 
 /// Whether a reading was started through the gate.
@@ -776,11 +923,24 @@ struct Actor {
     queued_connect: Option<PendingConnect>,
     flush_at: Option<Instant>,
     readings_stored: u64,
+    /// The latest stored reading's id.
+    latest_id: Option<ReadingId>,
+    /// Readings a previous run left unexamined are still to be examined.
+    catch_up: bool,
+    /// The strongbox run being read, if one is open.
+    run: Option<Run>,
+    /// When the run's next reading falls due.
+    run_next: Option<Instant>,
+    /// A run reading fell due and waits for the work in flight.
+    run_due: bool,
+    /// Run requests waiting for their reading.
+    waiters: Vec<Waiter>,
 }
 
 impl Actor {
     async fn run(mut self, mut inbox: mpsc::UnboundedReceiver<Msg>) {
         self.seed().await;
+        self.advance();
         self.publish_status();
         loop {
             let attempt_at = if self.attempt_due.is_some() {
@@ -794,6 +954,8 @@ impl Actor {
                 .and(self.check_floor_end())
                 .filter(|end| *end > Instant::now());
             let flush_at = self.flush_at;
+            let run_at = if self.run_due { None } else { self.run_next };
+            let run_closes = self.run_closes();
             // Messages first: a disconnect that arrives with a result is
             // applied before the result is looked at.
             let event = tokio::select! {
@@ -803,6 +965,8 @@ impl Actor {
                 () = at(attempt_at) => Event::Attempt,
                 () = at(check_at) => Event::CheckFloorPassed,
                 () = at(flush_at) => Event::Flush,
+                () = at(run_at) => Event::RunDue,
+                () = at(run_closes) => Event::RunExpired,
             };
             match event {
                 Event::Message(None) => break,
@@ -821,6 +985,11 @@ impl Actor {
                         changed();
                     }
                 }
+                Event::RunDue => {
+                    self.run_next = None;
+                    self.run_due = true;
+                }
+                Event::RunExpired => self.close_run(RunReading::Interrupted),
             }
             self.advance();
             self.publish_status();
@@ -855,6 +1024,7 @@ impl Actor {
                 self.last_full_start = Instant::now().checked_sub(Duration::from_secs_f64(age));
             }
             self.last_reading_at = Some(taken_at);
+            self.latest_id = Some(stored.header.id);
             self.latest = Some(stored.reading);
         }
         if let Some(session) = active {
@@ -898,7 +1068,8 @@ impl Actor {
             working: self.work.is_some()
                 || self.queued_connect.is_some()
                 || !self.pending_seals.is_empty()
-                || self.attempt_due.is_some(),
+                || self.attempt_due.is_some()
+                || self.catch_up,
             confirming: matches!(self.connection, Connection::Unconfirmed)
                 .then_some(self.confirming),
             signing_in: self.signing_in,
@@ -938,6 +1109,10 @@ impl Actor {
                 self.disconnect().await;
                 let _ = reply.send(());
             }
+            Msg::RunBegin(reply) => self.run_begin(reply),
+            Msg::RunDone(reply) => self.run_done(reply),
+            Msg::RunCancel => self.close_run(RunReading::Interrupted),
+            Msg::ProposalsChanged => self.mark_changed(),
             // Handled by the loop itself.
             Msg::Shutdown(_) => {}
         }
@@ -1096,6 +1271,10 @@ impl Actor {
     /// read, and a session waiting for its closing readings is sealed with
     /// what it has.
     fn end_connection(&mut self, to: Connection) {
+        self.close_run(match to {
+            Connection::Expired => RunReading::SignedOut,
+            _ => RunReading::NotConnected,
+        });
         self.generation += 1;
         self.connection = to;
         self.next_attempt = None;
@@ -1155,6 +1334,7 @@ impl Actor {
                 purpose,
                 tag,
                 due,
+                started: now,
             },
             task,
         });
@@ -1218,6 +1398,22 @@ impl Actor {
         }
         if let Some(due) = self.attempt_due.take() {
             self.attempt(due);
+            if self.work.is_some() {
+                return;
+            }
+        }
+        if self.run_due {
+            self.run_due = false;
+            self.run_attempt();
+            if self.work.is_some() {
+                return;
+            }
+        }
+        // Readings a previous run left unexamined, a batch at a time,
+        // whenever nothing else is due.
+        if self.catch_up {
+            self.catch_up = false;
+            self.start_catch_up();
         }
     }
 
@@ -1296,6 +1492,16 @@ impl Actor {
                     tracing::error!(target: "eo::account", %error, "sealing a session's measure stopped");
                 }
             },
+            (
+                Work::Examine {
+                    reading,
+                    taken_at,
+                    started,
+                    ..
+                },
+                Done::Examined(examined),
+            ) => self.examined(reading, taken_at, started, examined),
+            (Work::CatchUp { .. }, Done::CaughtUp(pass)) => self.caught_up(pass),
             // `finish` answers for the work it was given.
             (work, _) => self.work = Some(work),
         }
@@ -1368,6 +1574,7 @@ impl Actor {
                     purpose: ReadingFor::Connect,
                     tag,
                     due: None,
+                    started,
                 },
                 task,
             });
@@ -1418,6 +1625,9 @@ impl Actor {
                 if closing && current && for_this {
                     self.closing_done(None);
                 }
+                if current {
+                    self.answer_waiters(ticket.started, RunReading::Unreadable);
+                }
                 return;
             }
         };
@@ -1458,6 +1668,7 @@ impl Actor {
             }
             SiteOutcome::Failed(failure) => {
                 tracing::warn!(target: "eo::account", ?failure, "an account reading failed; the next falls due as usual");
+                self.answer_waiters(ticket.started, RunReading::Unreadable);
                 if closing {
                     self.closing_done(None);
                 }
@@ -1489,21 +1700,25 @@ impl Actor {
             }
             Ok(Ok(Some((header, reading)))) => {
                 self.last_reading_at = Some(header.taken_at);
+                self.latest_id = Some(header.id);
                 self.latest = Some(reading);
                 self.readings_stored += 1;
                 self.mark_changed();
                 if closing {
                     self.closing_done(Some(identical));
                 }
+                self.start_examine(header.id, header.taken_at, ticket.started);
             }
             Ok(Err(error)) => {
                 tracing::error!(target: "eo::account", %error, "an account reading could not be stored");
+                self.answer_waiters(ticket.started, RunReading::Unreadable);
                 if closing {
                     self.closing_done(None);
                 }
             }
             Err(error) => {
                 tracing::error!(target: "eo::account", %error, "storing an account reading stopped");
+                self.answer_waiters(ticket.started, RunReading::Unreadable);
                 if closing {
                     self.closing_done(None);
                 }
@@ -1535,6 +1750,7 @@ impl Actor {
         if let Some(connect) = self.queued_connect.take() {
             let _ = connect.reply.send(ConnectOutcome::Interrupted);
         }
+        self.close_run(RunReading::Interrupted);
         self.abandon_request();
         self.connection = Connection::Disconnected;
         for (topic, registration) in self.subscriptions.drain(..) {

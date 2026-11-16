@@ -14,7 +14,14 @@
 	 * Confirming asks for the price the auction actually fetched and the
 	 * additional fee charged at the point of sale, because neither is knowable
 	 * at listing time.
+	 *
+	 * With the account connected, the readings may show a listing's outcome:
+	 * it left the auction (sold), or came back. That proposal leads the
+	 * listing's pane in one sentence with the window it happened in, and
+	 * fills the matching action; it is recorded only through the listing's
+	 * own command, and marked recorded after.
 	 */
+	import { tick, untrack } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import InfoTip from '$lib/components/InfoTip.svelte';
@@ -29,8 +36,14 @@
 		formatPercent,
 		formatQuantity,
 		isZeroTt,
+		localDateOf,
 	} from '$lib/utils/format';
 	import { hasRunOut } from './listingLifecycle';
+	import {
+		type ListingProposal,
+		type ListingProposals,
+		proposalSentence,
+	} from './listingProposals.svelte';
 
 	let {
 		open,
@@ -47,6 +60,7 @@
 			'and the price you asked, not the harvesting that produced the stock.',
 		embedded = false,
 		central = false,
+		proposals = null,
 	}: {
 		open: AuctionListing[];
 		resolved: AuctionListing[];
@@ -63,6 +77,9 @@
 		expiredChargeNote?: string;
 		embedded?: boolean;
 		central?: boolean;
+		/** What the account readings propose for open listings, when the
+		 * account feeds this surface. */
+		proposals?: ListingProposals | null;
 	} = $props();
 
 	const signedPed = (value: number) => `${value >= 0 ? '+' : ''}${formatPed(value)}`;
@@ -130,15 +147,42 @@
 			: `${formatQuantity(listing.quantity)} \u00d7 ${listing.itemName}`;
 
 	let confirming = $state(false);
-	let finalPrice = $state(0);
+	let finalPrice = $state<number | null>(0);
 	let saleFee = $state(0);
 	let resolvedAt = $state('');
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 
+	const proposalOf = (listing: AuctionListing): ListingProposal | null =>
+		listing.status === 'pending' ? (proposals?.forListing(listing.id) ?? null) : null;
+	const proposal = $derived(selected ? proposalOf(selected) : null);
+	const nowDate = new Date(now);
+	const PRICE_INPUT = 'auction-listing-sold-for';
+	const priceKnown = $derived(finalPrice !== null && Number.isFinite(finalPrice) && finalPrice >= 0);
+
+	/** A proposed sale opens the confirmation, the price filled when the
+	 * PED Card showed it and the field focused when it did not. Once per
+	 * proposal, so the player's own edits are never overwritten. */
+	let prefilled = $state<number | null>(null);
+	$effect(() => {
+		const shown = proposal;
+		if (!shown || untrack(() => prefilled) === shown.id) return;
+		prefilled = shown.id;
+		if (shown.outcome.kind !== 'listingSold') return;
+		finalPrice = shown.outcome.proceeds?.ped ?? null;
+		saleFee = 0;
+		resolvedAt = localDateOf(shown.between.to);
+		error = null;
+		confirming = true;
+		if (finalPrice === null) {
+			void tick().then(() => document.getElementById(PRICE_INPUT)?.focus());
+		}
+	});
+
 	function select(listing: AuctionListing) {
 		selectedId = listing.id;
 		confirming = false;
+		prefilled = null;
 		error = null;
 	}
 
@@ -159,6 +203,9 @@
 			| { sold: false; resolvedAt?: string },
 	) {
 		if (!selected || busy) return;
+		// The proposal as it stood when the player chose: marked only when
+		// the outcome they recorded is the one it proposed.
+		const shown = proposal;
 		busy = true;
 		error = null;
 		try {
@@ -166,6 +213,29 @@
 			confirming = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to resolve the listing';
+			busy = false;
+			return;
+		}
+		try {
+			if (shown && proposals) {
+				const matches = outcome.sold === (shown.outcome.kind === 'listingSold');
+				await (matches ? proposals.markRecorded(shown) : proposals.refresh());
+			}
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function notThisListing() {
+		const shown = proposal;
+		if (!shown || !proposals || busy) return;
+		busy = true;
+		error = null;
+		try {
+			await proposals.dismiss(shown);
+			confirming = false;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to dismiss it';
 		} finally {
 			busy = false;
 		}
@@ -195,6 +265,10 @@
 					{listing.status === 'pending' ? 'text-text' : 'text-text-tertiary'}"
 				title={listing.itemName}
 			>
+				{#if proposalOf(listing)}
+					<span class="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle" aria-hidden="true"></span>
+					<span class="sr-only">Your account shows what became of it:</span>
+				{/if}
 				{listing.itemName}
 			</span>
 			<span class="{COL_QTY} truncate text-right text-xs tabular-nums text-text-secondary">
@@ -440,12 +514,17 @@
 							</p>
 						{/if}
 						<div class="mt-5 border-t border-border/40 pt-4">
+							{#if proposal}
+								<p class="mb-3 text-xs leading-relaxed text-text-secondary" role="status">
+									{proposalSentence(proposal, nowDate)}
+								</p>
+							{/if}
 							{#if confirming}
 								<div class="space-y-3">
 									<div class="grid grid-cols-3 gap-3">
 										<label class="block space-y-1">
 											<span class="eyebrow text-text-tertiary">Sold for (PED)</span>
-											<Input type="number" min="0" step="0.01" bind:value={finalPrice} />
+											<Input id={PRICE_INPUT} type="number" min="0" step="0.01" bind:value={finalPrice} />
 										</label>
 										<label class="block space-y-1">
 											<span class="eyebrow text-text-tertiary">Extra fee (PED)</span>
@@ -462,16 +541,22 @@
 										there was none.
 									</p>
 									<div class="flex items-center justify-end gap-2">
+										{#if proposal}
+											<Button variant="ghost" size="sm" class="mr-auto" disabled={busy} onclick={notThisListing}>
+												Not this listing
+											</Button>
+										{/if}
 										<Button variant="ghost" size="sm" onclick={() => (confirming = false)}>
 											Cancel
 										</Button>
 										<Button
 											size="sm"
 											loading={busy}
+											disabled={!priceKnown}
 											onclick={() =>
 												resolve({
 													sold: true,
-													finalPrice,
+													finalPrice: finalPrice ?? 0,
 													saleFee,
 													resolvedAt: resolvedAt || undefined,
 												})}
@@ -482,17 +567,38 @@
 								</div>
 							{:else}
 								<div class="flex items-center justify-end gap-3">
-									<div class="flex shrink-0 items-center gap-2">
-										<Button size="sm" onclick={startConfirm}>It sold</Button>
-										<Button
-											size="sm"
-											variant="ghost"
-											loading={busy}
-											onclick={() => resolve({ sold: false })}
-										>
-											It expired
+									{#if proposal}
+										<Button variant="ghost" size="sm" class="mr-auto" disabled={busy} onclick={notThisListing}>
+											Not this listing
 										</Button>
-									</div>
+									{/if}
+									{#if proposal?.outcome.kind === 'listingReturned'}
+										{@const returnedOn = localDateOf(proposal.between.to)}
+										<div class="flex shrink-0 items-center gap-2">
+											<Button
+												size="sm"
+												loading={busy}
+												onclick={() => resolve({ sold: false, resolvedAt: returnedOn })}
+											>
+												It expired
+											</Button>
+											<Button size="sm" variant="ghost" disabled={busy} onclick={startConfirm}>
+												It sold
+											</Button>
+										</div>
+									{:else}
+										<div class="flex shrink-0 items-center gap-2">
+											<Button size="sm" onclick={startConfirm}>It sold</Button>
+											<Button
+												size="sm"
+												variant="ghost"
+												loading={busy}
+												onclick={() => resolve({ sold: false })}
+											>
+												It expired
+											</Button>
+										</div>
+									{/if}
 								</div>
 							{/if}
 						</div>

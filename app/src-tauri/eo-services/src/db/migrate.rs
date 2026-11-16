@@ -493,6 +493,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "counted kills",
         sql: include_str!("../../migrations/0091_counted_kills.sql"),
     },
+    Migration {
+        version: 92,
+        description: "account proposals",
+        sql: include_str!("../../migrations/0092_account_proposals.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -591,6 +596,7 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "25264B102360470EC811B7FEA6BD93BA7453AA1686E563ABA086F773AFBEB3853DDB4147D876CDEB4CF5AC462F3112FA",
     "019C311629BE9CEBBE7A60B9F48E3679F5DFE50313C3255DFA2AEC78C818EFF27C328AA1CEBDA20F7E2AAEB05097501A",
     "F557B841622CA46037A12CD5DCD9DDF84325EEF9FE87915BB257D4A38CAD443FF93C8D93E46B282D589D57C3BE1E8AF4",
+    "974A08EC7086DD34005227982F003EDA8D376B98539AA6255D2D175406BBE75147A0806976A20E51C74D94E3B949E631",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -2902,6 +2908,122 @@ mod tests {
               '[]', 1)",
             "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'partial', 2, 0, 0, \
               '{}', 1)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    /// Proposals join additively: a version-91 database keeps its readings,
+    /// every one of them marked examined so its history is never offered,
+    /// with no proposals, and holds one proposal per kind, reading and
+    /// subject. The kind and the status are left to the app to refuse when
+    /// read; only the structure is refused here.
+    #[test]
+    fn account_proposals_upgrade_adds_empty_tables_that_hold_one_proposal_per_subject() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..91] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+                   row_count) VALUES (10, 'run', 100, 1, 0); \
+                 INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+                   prev_reading_id, row_count) VALUES (70, 'run', 100, 0, 1, 0);",
+            )
+            .expect("v91 rows");
+
+        run(&mut connection).expect("v92 upgrade");
+
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count(&connection, "account_readings"), 2);
+        assert_eq!(count(&connection, "account_proposals"), 0);
+        assert_eq!(count(&connection, "account_readings_examined"), 2);
+        let unexamined: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM account_readings r WHERE NOT EXISTS \
+                 (SELECT 1 FROM account_readings_examined e WHERE e.reading_id = r.id)",
+                [],
+                |row| row.get(0),
+            )
+            .expect("unexamined");
+        assert_eq!(unexamined, 0);
+
+        for kept in [
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, session_id, subject, payload_version, payload_json, status, \
+              detected_at) VALUES ('opening', 2, 1, 10, 70, 's', 'Halloween Strongbox', 1, \
+              '{}', 'pending', 71)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              claimed_at) VALUES ('opening', 1, 2, 10, 70, 'Halloween Strongbox', 1, '{}', \
+              'pending', 71, 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              decided_at, record_id) VALUES ('listing_sold', 2, 1, 10, 70, 'listing-1', 1, \
+              '{}', 'recorded', 71, 80, 'listing-1')",
+            // An unknown kind or status is the app's to refuse when read.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('later', 2, 1, 10, 70, 'x', 1, '{}', 'later', 71)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // The same kind, reading and subject twice.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, 'Halloween Strongbox', 1, '{}', 'pending', 72)",
+            // A step from a reading to itself, a blank subject, a payload that
+            // is not an object, or no version.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 2, 10, 70, 'y', 1, '{}', 'pending', 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, ' ', 1, '{}', 'pending', 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, 'y', 1, '[]', 'pending', 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, 'y', 0, '{}', 'pending', 72)",
+            // A record named with no decision, or a blank record.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              record_id) VALUES ('opening', 2, 1, 10, 70, 'y', 1, '{}', 'recorded', 72, 'r')",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              decided_at, record_id) VALUES ('opening', 2, 1, 10, 70, 'y', 1, '{}', \
+              'recorded', 72, 73, ' ')",
+            // A reading examined twice.
+            "INSERT INTO account_readings_examined VALUES (2, 72)",
         ] {
             assert!(
                 connection.execute(refused, []).is_err(),

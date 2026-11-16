@@ -9,6 +9,7 @@
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import { formatPed, formatQuantity } from '$lib/utils/format';
 	import BoxPicker from './BoxPicker.svelte';
+	import DetectedOpenings from './DetectedOpenings.svelte';
 	import OpeningIntake from './OpeningIntake.svelte';
 	import OpeningReview from './OpeningReview.svelte';
 	import OpeningsLog from './OpeningsLog.svelte';
@@ -65,6 +66,7 @@
 			<div class="stage">
 				{#if model.stage === 'choose'}
 					<div class="max-w-2xl space-y-6">
+						<DetectedOpenings {model} />
 						{#if model.tracking}
 							<p class="flex items-start gap-2.5 text-sm text-text-secondary" role="status">
 								<span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warning" aria-hidden="true"></span>
@@ -92,7 +94,7 @@
 					</div>
 				{:else if model.stage === 'review' && model.result}
 					<OpeningReview {model} />
-				{:else if model.stage === 'done' && recorded}
+				{:else if model.stage === 'done'}
 					<section aria-label="Recorded" class="max-w-2xl space-y-5">
 						<p class="flex items-center gap-3">
 							<span class="flex h-8 w-8 items-center justify-center rounded-full bg-positive/15 text-positive" aria-hidden="true">
@@ -100,14 +102,16 @@
 							</span>
 							<span class="text-xl font-light text-text">Opening recorded</span>
 						</p>
-						<p class="text-sm leading-relaxed text-text-secondary">
-							{formatQuantity(recorded.boxCount)}
-							{recorded.boxItem} came to
-							{#if keptCount > 0}{keptCount} {keptCount === 1 ? 'item' : 'items'} kept,{/if}
-							{#if cubeCount > 0}{formatQuantity(cubeCount)} Nanocubes,{/if}
-							and {formatPed(recorded.ammoPed)} PED of ammo. They are in your loot now, carrying the
-							boxes' origin: whatever they sell for above TT credits the play that looted the boxes.
-						</p>
+						{#if recorded}
+							<p class="text-sm leading-relaxed text-text-secondary">
+								{formatQuantity(recorded.boxCount)}
+								{recorded.boxItem} came to
+								{#if keptCount > 0}{keptCount} {keptCount === 1 ? 'item' : 'items'} kept,{/if}
+								{#if cubeCount > 0}{formatQuantity(cubeCount)} Nanocubes,{/if}
+								and {formatPed(recorded.ammoPed)} PED of ammo. They are in your loot now, carrying the
+								boxes' origin: whatever they sell for above TT credits the play that looted the boxes.
+							</p>
+						{/if}
 						<div class="flex gap-2">
 							<Button onclick={model.startOver}>Open another box type</Button>
 							<Button variant="secondary" onclick={() => goto('/inventory')}>Back to Inventory</Button>

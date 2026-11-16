@@ -14,6 +14,10 @@ use std::sync::Arc;
 use eo_api::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountStatus, MeasuredSessionPage,
 };
+use eo_api::account_proposals::{
+    AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
+    AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading,
+};
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use eo_api::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
@@ -1045,6 +1049,61 @@ pub async fn account_measured_summary(
     app: tauri::AppHandle,
 ) -> Result<AccountMeasuredSummary, ApiError> {
     facade(&app)?.account_measured_summary().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals(
+    app: tauri::AppHandle,
+    kind: Option<AccountProposalKind>,
+) -> Result<Vec<AccountProposal>, ApiError> {
+    facade(&app)?.account_proposals(kind).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals_claim(
+    app: tauri::AppHandle,
+    input: AccountProposalsClaimInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposals_claim(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals_release(
+    app: tauri::AppHandle,
+    input: AccountProposalsInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposals_release(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals_link(
+    app: tauri::AppHandle,
+    input: AccountProposalsLinkInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposals_link(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposal_dismiss(
+    app: tauri::AppHandle,
+    input: AccountProposalDismissInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposal_dismiss(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_begin(app: tauri::AppHandle) -> Result<AccountRunReading, ApiError> {
+    facade(&app)?.account_run_begin().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_done(app: tauri::AppHandle) -> Result<AccountRunReading, ApiError> {
+    facade(&app)?.account_run_done().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_cancel(app: tauri::AppHandle) -> Result<(), ApiError> {
+    facade(&app)?.account_run_cancel().await
 }
 
 #[tauri::command(rename_all = "snake_case")]

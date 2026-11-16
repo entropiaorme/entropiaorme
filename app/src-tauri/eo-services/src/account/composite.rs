@@ -315,6 +315,39 @@ fn canonical_ammo(
     Ok(reading)
 }
 
+/// One row of Universal Ammo new in a step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NewAmmoRow {
+    pub units: i64,
+    pub amount: Amount,
+}
+
+/// The Universal Ammo rows new in the step as the canonical reading reads
+/// them, each with what it holds; `reserved` rows are another pattern's and
+/// left out. When an opening settled on the canonical reading these are its
+/// payout rows, one for each box that paid ammo.
+pub fn new_ammo_rows(
+    set: &StepSet,
+    before: &Reading,
+    after: &Reading,
+    reserved: &Reserved,
+) -> Result<Vec<NewAmmoRow>, AccountError> {
+    let mut found = Vec::new();
+    for key in ammo_keys(set) {
+        let was = rows_of(before.holding(key));
+        let now = unreserved(key, rows_of(after.holding(key)), reserved);
+        let unit = exact_unit(was.iter().chain(&now));
+        for row in canonical_new_rows(was, &now) {
+            let read = NewRows::of(vec![row], unit)?;
+            found.push(NewAmmoRow {
+                units: read.units,
+                amount: read.amount,
+            });
+        }
+    }
+    Ok(found)
+}
+
 type Claims = BTreeMap<usize, Claim>;
 
 /// What weighing every way of closing the balance found.

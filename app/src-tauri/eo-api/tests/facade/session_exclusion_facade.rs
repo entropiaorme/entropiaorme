@@ -931,6 +931,18 @@ const OTHER_COMMANDS: &[&str] = &[
     "account_disconnect",
     "account_session_measure",
     "account_measured_sessions",
+    // What the readings propose, and the readings a strongbox run asks
+    // for: a proposal is a guess until the player records it through the
+    // strongbox and listing commands (classified above), and a run's
+    // reading only feeds those proposals. Neither is a statistic.
+    "account_proposals",
+    "account_proposals_claim",
+    "account_proposals_release",
+    "account_proposals_link",
+    "account_proposal_dismiss",
+    "account_run_begin",
+    "account_run_done",
+    "account_run_cancel",
     "ledger_list",
     "ledger_create",
     "ledger_delete",

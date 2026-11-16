@@ -10,13 +10,17 @@
 //!
 //! Measured figures stand beside the figures the chat log tracks; they
 //! never replace or adjust them. The accounting surfaces may not reference
-//! this module (the `measured-isolation` guard), and nothing here reads or
-//! writes an accounting table. Role resolution reads the equipment library
-//! and the protection sets, never writing them.
+//! this module (the `measured-isolation` guard), and nothing here writes an
+//! accounting table. Role resolution reads the equipment library and the
+//! protection sets; [`proposals`] reads the strongbox openings and the
+//! auction listings, to match what the readings saw to a listing and to
+//! tell whether a proposal's record still stands. None is ever written.
 //!
 //! The connection that takes the readings is [`recorder`]: one task that
 //! holds the signed-in session and reads the site through [`site`] while a
-//! tracked session needs it. [`sessions`] serves the measures it leads to.
+//! tracked session or a strongbox run needs it. [`sessions`] serves the
+//! measures it leads to; [`proposals`] what its steps propose (a strongbox
+//! opening, a listing sold or returned) for the player to record.
 //!
 //! Money here is integer throughout: whole PEC as the site reports it, and
 //! micro-PED amounts that carry whether they are exact or rest on the
@@ -27,6 +31,7 @@ pub mod amount;
 pub mod composite;
 pub mod diff;
 pub mod measure;
+pub mod proposals;
 pub mod reading;
 pub mod recorder;
 pub mod roles;
@@ -36,6 +41,8 @@ pub mod sessions;
 pub mod site;
 pub mod store;
 
+#[cfg(test)]
+mod proposals_tests;
 #[cfg(test)]
 mod recorder_tests;
 #[cfg(test)]

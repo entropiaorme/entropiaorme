@@ -1980,10 +1980,11 @@ mod tests {
         // + strongbox openings' 2 tables and opened-on index
         // + account readings' 3 tables and 2 reading indexes
         // + the counted-kills view
+        // + account proposals' 2 tables and status index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 264);
+        assert_eq!(master.len(), 267);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

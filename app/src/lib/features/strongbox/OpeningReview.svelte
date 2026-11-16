@@ -10,14 +10,24 @@
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
-	import { formatPed, formatPercent, formatQuantity } from '$lib/utils/format';
+	import {
+		formatPed,
+		formatPercent,
+		formatQuantity,
+		formatTt,
+		formatTtOrCount,
+		isZeroTt,
+		NO_TT_TITLE,
+	} from '$lib/utils/format';
 	import CompositionBar from './CompositionBar.svelte';
 	import {
 		boxCost,
 		type ContentLine,
 		isHit,
 		lineMarkup,
+		ammoNote,
 		NANOCUBE_UNIT_TT,
+		paidAloneSentence,
 		planTotal,
 		summarise,
 		UNEXPECTED_LABEL,
@@ -29,6 +39,8 @@
 
 	const result = $derived(model.result!);
 	const summary = $derived(summarise(result));
+	const paidAlone = $derived(paidAloneSentence(result));
+	const readAmmo = $derived(ammoNote(result));
 	const cost = $derived(boxCost(model.plan));
 	const untracked = $derived(untrackedBoxes(model.plan, model.holding));
 	const blocking = $derived(model.balanceRefusal ?? model.planRefusal);
@@ -143,6 +155,9 @@
 			keptTt={summary.keptTt}
 			nanocubes={summary.nanocubes}
 		/>
+		{#if paidAlone}
+			<p class="text-xs text-text-tertiary">{paidAlone}</p>
+		{/if}
 	</section>
 
 	<!-- The items -->
@@ -167,7 +182,13 @@
 		</div>
 
 		{#if result.lines.length === 0}
-			<p class="py-4 text-sm text-text-tertiary">Only ammo this run: every key came back as Universal Ammo.</p>
+			<p class="py-4 text-sm text-text-tertiary">
+				{#if result.possible.length > 0}
+					Nothing besides ammo for certain: what else arrived is below.
+				{:else}
+					Only ammo this run: every key came back as Universal Ammo.
+				{/if}
+			</p>
 		{:else}
 			<ul class="divide-y divide-border/50 border-y border-border/50">
 				{#each result.lines as line, index (line.itemName)}
@@ -224,11 +245,60 @@
 		{/if}
 	</section>
 
-	{#if result.notes.length > 0 || result.unexpected.length > 0 || result.skipped.length > 0}
+	{#if result.possible.length > 0}
+		<section aria-label="Arrived at the same time" class="space-y-3">
+			<span class="eyebrow">Arrived at the same time, maybe not from the boxes</span>
+			<ul class="divide-y divide-border/50 border-y border-border/50">
+				{#each result.possible as line, index (line.itemName)}
+					<li class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5">
+						<input
+							id={`possible-${index}`}
+							type="checkbox"
+							class="h-4 w-4 accent-[var(--color-accent)]"
+							checked={line.included}
+							onchange={(event) => model.setPossible(line.itemName, event.currentTarget.checked)}
+						/>
+						<label for={`possible-${index}`} class="flex min-w-0 items-baseline gap-3">
+							<span class="truncate text-sm {line.included ? 'text-text' : 'text-text-secondary'}" title={line.itemName}>
+								Add {line.itemName}
+							</span>
+							{#if isZeroTt(line.ttValue)}
+								<span class="shrink-0 text-xs tabular-nums text-text-tertiary" title={NO_TT_TITLE}>
+									{formatTtOrCount(line.ttValue, line.quantity)}
+								</span>
+							{:else}
+								<span class="shrink-0 text-xs tabular-nums text-text-tertiary">
+									&times;{formatQuantity(line.quantity)}, {formatTt(line.ttValue)} TT
+								</span>
+							{/if}
+						</label>
+						{#if line.included}
+							<SegmentedControl
+								options={decisions.map((option) => ({
+									...option,
+									disabled: option.id === 'cube' && line.ttValue < NANOCUBE_UNIT_TT,
+								}))}
+								active={line.recycle ? 'cube' : 'keep'}
+								label={`What to do with ${line.itemName}`}
+								onchange={(id) => model.setRecycle(line.itemName, id === 'cube')}
+							/>
+						{:else}
+							<span></span>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		</section>
+	{/if}
+
+	{#if readAmmo || result.notes.length > 0 || result.unexpected.length > 0 || result.skipped.length > 0}
 		<section aria-label="Left out" class="space-y-1.5 text-xs text-text-tertiary">
 			{#each result.notes as note (note)}
 				<p class="text-warning">{note}</p>
 			{/each}
+			{#if readAmmo}
+				<p class="text-warning">{readAmmo}</p>
+			{/if}
 			{#if result.unexpected.length > 0}
 				<p>
 					Left out of the opening:

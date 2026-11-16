@@ -137,6 +137,14 @@ macro_rules! app_command_surface {
             account_session_measure,
             account_measured_sessions,
             account_measured_summary,
+            account_proposals,
+            account_proposals_claim,
+            account_proposals_release,
+            account_proposals_link,
+            account_proposal_dismiss,
+            account_run_begin,
+            account_run_done,
+            account_run_cancel,
             ledger_list,
             ledger_summary,
             ledger_create,
@@ -364,13 +372,22 @@ pub const NAVIGATION_COMMANDS: &[&str] = &[
 
 /// The account connection's commands: the main window's alone. They are
 /// kept out of the permission every trusted window gets, so no overlay can
-/// open the sign-in window, disconnect, or read measured figures.
+/// open the sign-in window, disconnect, read measured figures or
+/// proposals, or ask for a reading.
 pub const ACCOUNT_COMMANDS: &[&str] = &[
     "account_status",
     "account_disconnect",
     "account_session_measure",
     "account_measured_sessions",
     "account_measured_summary",
+    "account_proposals",
+    "account_proposals_claim",
+    "account_proposals_release",
+    "account_proposals_link",
+    "account_proposal_dismiss",
+    "account_run_begin",
+    "account_run_done",
+    "account_run_cancel",
     "account_sign_in",
 ];
 

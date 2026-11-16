@@ -16,6 +16,10 @@ use serde_json::Value;
 use crate::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountStatus, MeasuredSessionPage,
 };
+use crate::account_proposals::{
+    AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
+    AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading,
+};
 use crate::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use crate::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
@@ -1233,6 +1237,61 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "account_measured_summary",
             args: vec![],
             returns: Some(schema(schema_for!(AccountMeasuredSummary))),
+        },
+        CommandSpec {
+            name: "account_proposals",
+            args: vec![ArgSpec {
+                name: "kind",
+                schema: schema(schema_for!(Option<AccountProposalKind>)),
+            }],
+            returns: Some(schema(schema_for!(Vec<AccountProposal>))),
+        },
+        CommandSpec {
+            name: "account_proposals_claim",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalsClaimInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_proposals_release",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalsInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_proposals_link",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalsLinkInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_proposal_dismiss",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalDismissInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_run_begin",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountRunReading))),
+        },
+        CommandSpec {
+            name: "account_run_done",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountRunReading))),
+        },
+        CommandSpec {
+            name: "account_run_cancel",
+            args: vec![],
+            returns: None,
         },
         CommandSpec {
             name: "ledger_list",

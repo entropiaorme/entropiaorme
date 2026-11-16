@@ -103,11 +103,15 @@ pub fn active_session(conn: &rusqlite::Connection) -> Result<Option<String>, Acc
 
 /// Let go of a session about to be deleted: its cached measure goes, and
 /// its readings stay, no longer tagged with it (a later reading may be
-/// stored as the changes against one of them). Run inside the deletion's
-/// own transaction.
+/// stored as the changes against one of them), as do the proposals seen
+/// during it. Run inside the deletion's own transaction.
 pub fn release_session(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<()> {
     conn.execute(
         "DELETE FROM account_session_measures WHERE session_id = ?1",
+        [session_id],
+    )?;
+    conn.execute(
+        "UPDATE account_proposals SET session_id = NULL WHERE session_id = ?1",
         [session_id],
     )?;
     conn.execute(

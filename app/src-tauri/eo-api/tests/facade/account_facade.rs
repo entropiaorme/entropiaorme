@@ -33,28 +33,42 @@ use serde_json::Value;
 
 use crate::common;
 
-const COOKIE: &str = "signed-in";
+pub(crate) const COOKIE: &str = "signed-in";
 
-struct Planned<'a> {
-    id: &'a str,
-    start: f64,
-    end: Option<f64>,
+pub(crate) struct Planned<'a> {
+    pub id: &'a str,
+    pub start: f64,
+    pub end: Option<f64>,
 }
 
-struct Harness {
+pub(crate) struct Harness {
     _dir: tempfile::TempDir,
-    api: Api,
-    db: Db,
-    bus: Arc<EventBus>,
-    site: Arc<ScriptedSite>,
-    clock: Arc<PacedClock>,
-    recorder: Arc<AccountRecorder>,
+    pub api: Api,
+    pub db: Db,
+    pub bus: Arc<EventBus>,
+    pub site: Arc<ScriptedSite>,
+    pub clock: Arc<PacedClock>,
+    pub recorder: Arc<AccountRecorder>,
+    pub game_data: Arc<GameDataStore>,
 }
+
+/// Rows written before the connection starts: readings a previous run
+/// stored, listings, anything a test needs in place. Given the paced clock.
+pub(crate) type Seed = Box<dyn FnOnce(&mut rusqlite::Connection, &PacedClock) + Send>;
 
 /// The facade over a fresh database, with the account connection attached
 /// on its own bus, the bundled game data, and the player's own gear as the
 /// recorded hunt was played.
 async fn harness(readings: Vec<(Value, Value)>, plan: &[Planned<'_>]) -> Harness {
+    harness_with(readings, plan, Box::new(|_, _| {})).await
+}
+
+/// [`harness`], with `seed` written before the connection starts.
+pub(crate) async fn harness_with(
+    readings: Vec<(Value, Value)>,
+    plan: &[Planned<'_>],
+    seed: Seed,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let data_dir = dir.path().join("data");
     std::fs::create_dir_all(&data_dir).unwrap();
@@ -75,6 +89,7 @@ async fn harness(readings: Vec<(Value, Value)>, plan: &[Planned<'_>]) -> Harness
             )
         })
         .collect();
+    let seeding = clock.clone();
     db.with_writer(move |conn| {
         for (id, started, ended) in rows {
             conn.execute(
@@ -97,6 +112,7 @@ async fn harness(readings: Vec<(Value, Value)>, plan: &[Planned<'_>]) -> Harness
              VALUES ('armour', 'Pegasus', 'unlimited', 0)",
             [],
         )?;
+        seed(conn, &seeding);
         Ok(())
     })
     .await
@@ -121,7 +137,7 @@ async fn harness(readings: Vec<(Value, Value)>, plan: &[Planned<'_>]) -> Harness
     );
     let api = Api::new(
         db.clone(),
-        game_data,
+        game_data.clone(),
         clock.clone(),
         data_dir,
         handles.config_service,
@@ -147,11 +163,12 @@ async fn harness(readings: Vec<(Value, Value)>, plan: &[Planned<'_>]) -> Harness
         site,
         clock,
         recorder,
+        game_data,
     }
 }
 
 impl Harness {
-    async fn connect(&self) -> ConnectOutcome {
+    pub(crate) async fn connect(&self) -> ConnectOutcome {
         let recorder = self
             .api
             .account_recorder()
@@ -167,7 +184,7 @@ impl Harness {
     /// Move on to `seconds` after the start, once the connection has
     /// finished what it is doing (paused time would otherwise leap there
     /// while the database works).
-    async fn at(&self, seconds: f64) {
+    pub(crate) async fn at(&self, seconds: f64) {
         let _ = self
             .recorder
             .watch_status()
@@ -176,7 +193,7 @@ impl Harness {
         tokio::time::sleep_until(self.clock.instant_at(seconds)).await;
     }
 
-    async fn until(&self, condition: impl Fn(&ConnectionStatus) -> bool) {
+    pub(crate) async fn until(&self, condition: impl Fn(&ConnectionStatus) -> bool) {
         let _ = self
             .recorder
             .watch_status()
@@ -185,7 +202,7 @@ impl Harness {
             .expect("the connection task is running");
     }
 
-    fn publish(&self, started: bool, id: &str) {
+    pub(crate) fn publish(&self, started: bool, id: &str) {
         let payload = SessionLifecyclePayload {
             session_id: id.to_string(),
         };
@@ -198,13 +215,13 @@ impl Harness {
 }
 
 /// The recorded hunt from the reading taken just before the session began.
-fn the_hunt_from_its_opening_reading() -> Vec<(Value, Value)> {
+pub(crate) fn the_hunt_from_its_opening_reading() -> Vec<(Value, Value)> {
     recorded_hunt_responses().split_off(2)
 }
 
 /// The hunt's span, in seconds after its opening reading: it ran from
 /// three seconds after that reading to 713 seconds after it.
-const HUNT: Planned = Planned {
+pub(crate) const HUNT: Planned = Planned {
     id: "hunt",
     start: 3.0,
     end: Some(713.0),
@@ -212,7 +229,7 @@ const HUNT: Planned = Planned {
 
 /// Record the hunt end to end: connect (the opening reading), start, a
 /// reading every minute, stop, closing readings, sealed.
-async fn record_the_hunt(harness: &Harness) {
+pub(crate) async fn record_the_hunt(harness: &Harness) {
     assert_eq!(harness.connect().await, ConnectOutcome::Connected);
     harness.at(3.0).await;
     harness.publish(true, "hunt");
@@ -223,7 +240,7 @@ async fn record_the_hunt(harness: &Harness) {
         .await;
 }
 
-fn close(actual: f64, expected: f64) -> bool {
+pub(crate) fn close(actual: f64, expected: f64) -> bool {
     (actual - expected).abs() < 1e-9
 }
 

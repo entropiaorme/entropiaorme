@@ -1,10 +1,13 @@
 <script lang="ts">
 	/**
 	 * The opening itself happens in game; this is where its result comes in.
-	 * The account site's Inventory Changes page is the one record the game
-	 * gives of what a run of boxes produced, so the default is pasting its
-	 * export. Entering the result by hand is the fallback, and asks only for
-	 * the items: the ammo is whatever the keys did not pay back in them.
+	 * With the account connected, the account is read before and after the
+	 * boxes are opened, and the opening the readings show is the result.
+	 * Otherwise the account site's Inventory Changes page is the one record
+	 * the game gives of what a run of boxes produced, so the default is
+	 * pasting its export. Entering the result by hand is the fallback, and
+	 * asks only for the items: the ammo is whatever the keys did not pay
+	 * back in them.
 	 */
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -16,10 +19,13 @@
 	let { model }: { model: OpeningModel } = $props();
 
 	const CHANGES_URL = 'account.entropiauniverse.com/account/inventory/changes';
-	const modes = [
+	const modes = $derived([
+		...(model.accountConnected || model.intake === 'account'
+			? [{ id: 'account', label: 'Read from your account' }]
+			: []),
 		{ id: 'export', label: 'Paste the export' },
 		{ id: 'manual', label: 'Enter by hand' },
-	];
+	]);
 
 	let text = $state('');
 	let copied = $state(false);
@@ -59,7 +65,49 @@
 		onchange={(id) => (model.intake = id as IntakeMode)}
 	/>
 
-	{#if model.intake === 'export'}
+	{#if model.intake === 'account'}
+		{@const run = model.run}
+		<div class="max-w-3xl space-y-5">
+			{#if run.phase === 'starting'}
+				<p class="text-sm text-text-secondary" role="status">Reading your account before you start...</p>
+			{:else if run.phase === 'open'}
+				<ol class="grid gap-5 sm:grid-cols-2">
+					<li class="space-y-1.5">
+						<span class="block text-3xl font-light tabular-nums text-text-tertiary">1</span>
+						<p class="text-sm text-text">Open your {model.boxItem} in game.</p>
+					</li>
+					<li class="space-y-1.5">
+						<span class="block text-3xl font-light tabular-nums text-text-tertiary">2</span>
+						<p class="text-sm text-text">Then press Done.</p>
+						<p class="text-xs text-text-tertiary">Your account is read once more, which can take up to a minute.</p>
+					</li>
+				</ol>
+				<div class="flex justify-end">
+					<Button onclick={() => void model.finishRun()}>Done</Button>
+				</div>
+			{:else if run.phase === 'reading'}
+				<p class="text-sm text-text-secondary" role="status">
+					Reading your account, which can take up to a minute...
+				</p>
+			{:else if run.phase === 'nothing' || run.phase === 'failed'}
+				<div class="flex flex-wrap items-start justify-between gap-4" role="status">
+					{#if run.phase === 'nothing'}
+						<p class="text-sm text-text-secondary">
+							Your account shows no {model.boxItem} opened. Paste the export or enter the result
+							by hand instead.
+						</p>
+					{:else}
+						<p class="text-sm text-error">
+							{run.message} Paste the export or enter the result by hand instead.
+						</p>
+					{/if}
+					<Button size="sm" variant="ghost" onclick={() => void model.readAccountAgain()}>
+						Start again
+					</Button>
+				</div>
+			{/if}
+		</div>
+	{:else if model.intake === 'export'}
 		<ol class="grid max-w-3xl gap-5 sm:grid-cols-3">
 			<li class="space-y-1.5">
 				<span class="block text-3xl font-light tabular-nums text-text-tertiary">1</span>

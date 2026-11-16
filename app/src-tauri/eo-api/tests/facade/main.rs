@@ -13,6 +13,7 @@
 mod common;
 
 mod account_facade;
+mod account_proposals_facade;
 mod analytics_facade;
 mod character_facade;
 mod codex_facade;

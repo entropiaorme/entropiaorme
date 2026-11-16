@@ -92,6 +92,11 @@ export interface AccountMeasuredSummary {
 }
 
 /**
+ * Why an opening did not settle.
+ */
+export type AccountOpeningDoubt = 'severalKinds' | 'noKeys' | 'countsDiffer' | 'unbalanced';
+
+/**
  * Where a holding sits.
  */
 export type AccountPlace = {
@@ -107,6 +112,127 @@ export type AccountPlace = {
 	} | {
 		name: string;
 		kind: 'other';
+	};
+
+/**
+ * A pending proposal.
+ */
+export interface AccountProposal {
+	id: number;
+	/** The reading it was seen in, and the reading before it. */
+	readingId: number;
+	previousReadingId: number;
+	/** When those two readings were taken: it happened in between. */
+	between: MeasuredSpan;
+	/** The tracked session it fell in; `null` outside one. */
+	sessionId: string | null;
+	/** Claimed for a recording that was never linked (the app closed between the two, or the link failed): it may be recorded already. */
+	possiblyRecorded: boolean;
+	outcome: AccountProposalOutcome;
+}
+
+/**
+ * A proposal the player says is not what happened.
+ */
+export interface AccountProposalDismissInput {
+	id: number;
+}
+
+/**
+ * What a proposal is of.
+ */
+export type AccountProposalKind = 'opening' | 'listingSold' | 'listingReturned';
+
+/**
+ * What a proposal says happened.
+ */
+export type AccountProposalOutcome = {
+		/** The boxes that left, one entry for each kind. */
+		boxes: MeasuredBoxes[];
+		keysUsed: number;
+		/** The keys' TT. */
+		keys: MeasuredAmount;
+		/** The ammo it paid back; `null` unless it settled. */
+		ammo: AccountProposedAmmo | null;
+		/** What every reading of the step takes as its contents. */
+		contents: MeasuredEventItem[];
+		/** What arrived that may be its contents, and may not. */
+		possibleContents: MeasuredEventItem[];
+		settlement: MeasuredSettlement;
+		/** Why it did not settle; `null` when it did. */
+		doubt: AccountOpeningDoubt | null;
+		/** How many boxes paid ammo alone; `null` unless the ammo arrived one row a box and the rows show it exactly. */
+		paidAmmoAlone: number | null;
+		kind: 'opening';
+	} | {
+		listingId: string;
+		/** The item, as the account site names it. */
+		itemName: string;
+		units: number;
+		/** The TT the readings showed leaving. */
+		tt: MeasuredAmount;
+		/** The PED Card's rise in the same step, offered as the price only when nothing else could have moved the Card and the readings were at most three minutes apart; `null` otherwise. */
+		proceeds: MeasuredAmount | null;
+		kind: 'listingSold';
+	} | {
+		listingId: string;
+		itemName: string;
+		units: number;
+		tt: MeasuredAmount;
+		returnedTo: AccountPlace;
+		kind: 'listingReturned';
+	};
+
+/**
+ * Proposals to claim before the opening they show is recorded. `retake`
+ * names those among them whose earlier claim, never linked, the player
+ * has checked and takes over; every other must not be claimed already.
+ */
+export interface AccountProposalsClaimInput {
+	ids: number[];
+	retake?: number[];
+}
+
+/**
+ * Proposals to claim before the opening they show is recorded, or to
+ * release when it was not.
+ */
+export interface AccountProposalsInput {
+	ids: number[];
+}
+
+/**
+ * Proposals linked, as one, to the record they became: the strongbox
+ * opening's id, or the listing's.
+ */
+export interface AccountProposalsLinkInput {
+	ids: number[];
+	recordId: string;
+}
+
+/**
+ * The ammo an opening paid back.
+ */
+export interface AccountProposedAmmo {
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * What a reading a strongbox run asked for came to.
+ */
+export type AccountRunReading = {
+		readingId: number;
+		takenAt: string;
+		outcome: 'read';
+	} | {
+		outcome: 'notConnected';
+	} | {
+		outcome: 'signedOut';
+	} | {
+		outcome: 'unreadable';
+	} | {
+		outcome: 'interrupted';
 	};
 
 /**
@@ -6489,6 +6615,62 @@ export async function accountMeasuredSessions(cursor: string | null, limit: numb
 
 export async function accountMeasuredSummary(): Promise<AccountMeasuredSummary> {
 	return invokeCommand('account_measured_summary', {});
+}
+
+export async function accountProposals(kind: AccountProposalKind | null): Promise<AccountProposal[]> {
+	return invokeCommand('account_proposals', { kind });
+}
+
+export async function accountProposalsClaim(input: AccountProposalsClaimInput): Promise<void> {
+	return invokeCommand('account_proposals_claim', { input });
+}
+
+export async function accountProposalsRelease(input: AccountProposalsInput): Promise<void> {
+	return invokeCommand('account_proposals_release', { input });
+}
+
+export async function accountProposalsLink(input: AccountProposalsLinkInput): Promise<void> {
+	return invokeCommand('account_proposals_link', { input });
+}
+
+export async function accountProposalDismiss(input: AccountProposalDismissInput): Promise<void> {
+	return invokeCommand('account_proposal_dismiss', { input });
+}
+
+export async function accountRunBegin(): Promise<{
+		readingId: number;
+		takenAt: string;
+		outcome: 'read';
+	} | {
+		outcome: 'notConnected';
+	} | {
+		outcome: 'signedOut';
+	} | {
+		outcome: 'unreadable';
+	} | {
+		outcome: 'interrupted';
+	}> {
+	return invokeCommand('account_run_begin', {});
+}
+
+export async function accountRunDone(): Promise<{
+		readingId: number;
+		takenAt: string;
+		outcome: 'read';
+	} | {
+		outcome: 'notConnected';
+	} | {
+		outcome: 'signedOut';
+	} | {
+		outcome: 'unreadable';
+	} | {
+		outcome: 'interrupted';
+	}> {
+	return invokeCommand('account_run_done', {});
+}
+
+export async function accountRunCancel(): Promise<void> {
+	return invokeCommand('account_run_cancel', {});
 }
 
 export async function ledgerList(cursor: string | null, limit: number | null): Promise<LedgerPage> {

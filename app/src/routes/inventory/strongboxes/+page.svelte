@@ -8,7 +8,7 @@
 	onMount(() => {
 		void model.load();
 		// The tracking gate follows the live session, so it lifts the moment
-		// tracking stops.
+		// tracking stops; what the account proposes follows the account.
 		let stop: (() => void) | undefined;
 		let disposed = false;
 		void model.subscribe().then((unlisten) => {
@@ -18,6 +18,8 @@
 		return () => {
 			disposed = true;
 			stop?.();
+			// A run read from the account stops with the view.
+			model.dispose();
 		};
 	});
 </script>

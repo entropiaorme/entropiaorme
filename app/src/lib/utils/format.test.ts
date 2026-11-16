@@ -13,11 +13,13 @@ import {
 	formatPedHalfEven,
 	formatPercent,
 	formatQuantity,
+	formatSeenAt,
 	formatTime,
 	formatTt,
 	formatTtOrCount,
 	isZeroTt,
 	listNames,
+	localDateOf,
 	todayDate,
 } from '$lib/utils/format';
 
@@ -307,5 +309,19 @@ describe('items with no TT', () => {
 		expect(formatTtOrCount(1.5, 12)).toBe('1.50');
 		// Thirty Shrapnel hold TT, so they read in PED, not by count.
 		expect(formatTtOrCount(0.003, 30)).toBe('0.0030');
+	});
+});
+
+describe('the day and time something was seen', () => {
+	it('gives the local day of an instant for a date field', () => {
+		const at = new Date(2026, 10, 14, 23, 30);
+		expect(localDateOf(at.toISOString())).toBe('2026-11-14');
+		expect(localDateOf('not a time')).toBe(todayDate());
+	});
+
+	it('says today for today, and the date otherwise', () => {
+		const at = new Date(2026, 10, 14, 15, 4);
+		expect(formatSeenAt(at.toISOString(), new Date(2026, 10, 14, 20, 0))).toMatch(/^today, /);
+		expect(formatSeenAt(at.toISOString(), new Date(2026, 10, 16, 9, 0))).toMatch(/^Nov 14, /);
 	});
 });

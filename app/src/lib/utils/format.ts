@@ -147,6 +147,26 @@ export function todayDate(): string {
 	return `${now.getFullYear()}-${month}-${day}`;
 }
 
+/** The local calendar day of an instant as `YYYY-MM-DD`, for prefilling a
+ * date input with the day something was seen (see `todayDate`). */
+export function localDateOf(iso: string): string {
+	const at = new Date(iso);
+	if (Number.isNaN(at.getTime())) return todayDate();
+	const month = `${at.getMonth() + 1}`.padStart(2, '0');
+	const day = `${at.getDate()}`.padStart(2, '0');
+	return `${at.getFullYear()}-${month}-${day}`;
+}
+
+/** An instant as its day and time ("today, 2:41 PM", "Mar 24, 2:41 PM"). */
+export function formatSeenAt(iso: string, now: Date = new Date()): string {
+	const at = new Date(iso);
+	const today =
+		at.getDate() === now.getDate() &&
+		at.getMonth() === now.getMonth() &&
+		at.getFullYear() === now.getFullYear();
+	return `${today ? 'today' : formatDate(iso)}, ${formatTime(iso)}`;
+}
+
 /** Format ledger date (today: "HH:MM AM/PM", older: "Mar 24")
  *
  * Ledger dates come in two shapes: a full timestamp, and a bare `YYYY-MM-DD`

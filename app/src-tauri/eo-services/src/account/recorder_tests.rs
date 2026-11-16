@@ -69,6 +69,16 @@ struct Planned<'a> {
 }
 
 async fn rig(readings: Vec<(Value, Value)>, connected_before: bool, plan: &[Planned<'_>]) -> Rig {
+    rig_seeded(readings, connected_before, plan, |_| {}).await
+}
+
+/// [`rig`], with `seed` written before the connection starts.
+async fn rig_seeded(
+    readings: Vec<(Value, Value)>,
+    connected_before: bool,
+    plan: &[Planned<'_>],
+    seed: impl FnOnce(&mut rusqlite::Connection) + Send + 'static,
+) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("account.db")).await.unwrap();
     let clock = Arc::new(PacedClock::new(
@@ -96,6 +106,7 @@ async fn rig(readings: Vec<(Value, Value)>, connected_before: bool, plan: &[Plan
                 rusqlite::params![id, started, ended, i64::from(active)],
             )?;
         }
+        seed(conn);
         Ok(())
     })
     .await
@@ -1318,4 +1329,239 @@ async fn whether_any_reading_was_ever_stored_outlives_the_connection() {
         .await
         .map(|status| status.has_readings);
     assert_eq!(seen.ok(), Some(true));
+}
+
+fn read_at(rig: &Rig, reading: super::recorder::RunReading) -> Option<f64> {
+    match reading {
+        super::recorder::RunReading::Read { taken_at, .. } => Some(rig.clock.since_start(taken_at)),
+        _ => None,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_reads_from_its_start_every_minute_until_done_and_never_inside_the_floor() {
+    let rig = rig(script(10), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(10.0).await;
+    // The connect reading, ten seconds old, is from before the boxes.
+    let begun = rig.recorder.run_begin().await;
+    assert_eq!(read_at(&rig, begun), Some(0.0));
+    assert_eq!(calls(&rig), 2, "no reading inside the floor");
+    rig.at(59.0).await;
+    assert_eq!(calls(&rig), 2);
+    rig.at(61.0).await;
+    assert_eq!(calls(&rig), 4, "a minute after the last");
+    // Done at 70: the floor holds it until 115.
+    rig.at(70.0).await;
+    let recorder = rig.recorder.clone();
+    let done = tokio::spawn(async move { recorder.run_done().await });
+    rig.at(114.0).await;
+    assert_eq!(calls(&rig), 4);
+    rig.at(116.0).await;
+    let done = done.await.unwrap();
+    assert_eq!(read_at(&rig, done), Some(115.0));
+    // Then reading stops.
+    rig.at(600.0).await;
+    assert_eq!(calls(&rig), 6);
+    assert_eq!(
+        rig.stored().await,
+        vec![
+            tagged(0.0, "connect", None),
+            tagged(60.0, "run", None),
+            tagged(115.0, "run", None),
+        ]
+    );
+    // Every stored reading was examined.
+    let examined: i64 = read(&rig.db, |conn| {
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM account_readings_examined",
+            [],
+            |row| row.get(0),
+        )?)
+    })
+    .await;
+    assert_eq!(examined, 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_needs_a_connection_and_ends_with_it() {
+    use super::recorder::RunReading;
+    let rig = rig(script(10), false, &[]).await;
+    assert_eq!(rig.recorder.run_begin().await, RunReading::NotConnected);
+    assert_eq!(rig.recorder.run_done().await, RunReading::NotConnected);
+    assert_eq!(calls(&rig), 0);
+
+    rig.connect(COOKIE).await;
+    // A minute on, the start of a run reads at once; the site refuses it.
+    rig.at(100.0).await;
+    rig.site.fail_at(calls(&rig), ScriptedFault::Unauthorised);
+    assert_eq!(rig.recorder.run_begin().await, RunReading::SignedOut);
+    assert_eq!(rig.recorder.status().state, ConnectionState::Expired);
+    assert_eq!(rig.recorder.run_done().await, RunReading::SignedOut);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_reading_ends_the_run_and_a_disconnect_ends_it() {
+    use super::recorder::RunReading;
+    let rig = rig(script(10), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(100.0).await;
+    rig.site.fail_at(calls(&rig), ScriptedFault::Network);
+    assert_eq!(rig.recorder.run_begin().await, RunReading::Unreadable);
+    // The run ended with the failure: nothing more is read for it.
+    rig.at(161.0).await;
+    assert_eq!(calls(&rig), 3);
+    // Begun again, then done; a disconnect answers the wait.
+    let begun = rig.recorder.run_begin().await;
+    assert_eq!(read_at(&rig, begun), Some(161.0));
+    let recorder = rig.recorder.clone();
+    let done = tokio::spawn(async move { recorder.run_done().await });
+    rig.at(170.0).await;
+    rig.recorder.disconnect().await;
+    assert_eq!(done.await.unwrap(), RunReading::NotConnected);
+    rig.at(600.0).await;
+    assert_eq!(calls(&rig), 5);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reading_whose_step_cannot_be_examined_stands_and_the_run_hears_it_unread() {
+    use super::recorder::RunReading;
+    let rig = rig(script(10), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.until(|status| status.readings_stored == 1).await;
+    // The reading before the next one no longer decodes.
+    write(&rig.db, |conn| {
+        conn.execute(
+            "UPDATE account_reading_holdings SET quantity = quantity + 1 \
+             WHERE row_count > 0",
+            [],
+        )?;
+        Ok(())
+    })
+    .await;
+    rig.at(700.0).await;
+    assert_eq!(rig.recorder.run_begin().await, RunReading::Unreadable);
+    // The reading itself was stored, and is marked examined.
+    let status = rig.until(|status| !status.working).await;
+    assert_eq!(status.readings_stored, 2);
+    let examined: i64 = read(&rig.db, |conn| {
+        Ok(conn.query_row(
+            "SELECT COUNT(*) FROM account_readings_examined",
+            [],
+            |row| row.get(0),
+        )?)
+    })
+    .await;
+    assert_eq!(examined, 2);
+    // And the run ended with it.
+    rig.at(900.0).await;
+    assert_eq!(calls(&rig), 4);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_closes_when_its_view_goes_and_after_thirty_minutes() {
+    let rig = rig(script(80), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(10.0).await;
+    rig.recorder.run_begin().await;
+    rig.recorder.run_cancel();
+    rig.at(600.0).await;
+    assert_eq!(calls(&rig), 2, "nothing read once the view went");
+
+    // Left open: read every minute for thirty minutes, then no more.
+    let begun = rig.recorder.run_begin().await;
+    assert_eq!(read_at(&rig, begun), Some(600.0));
+    rig.at(600.0 + 30.0 * 60.0 + 5.0).await;
+    let read_for_the_run = calls(&rig);
+    assert_eq!(read_for_the_run, 2 + 2 * 31);
+    rig.at(4_000.0).await;
+    assert_eq!(calls(&rig), read_for_the_run);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_run_request_given_up_on_ends_the_run() {
+    use super::recorder::{RunReading, RUN_WAIT};
+    let rig = rig(script(10), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(100.0).await;
+    // The site stops answering: the start of the run waits, then gives up.
+    rig.site.hold();
+    let begun = rig.recorder.run_begin().await;
+    assert_eq!(begun, RunReading::Unreadable);
+    let before = calls(&rig);
+    rig.site.release();
+    // The reading the held call began completes; nothing more is read for
+    // the run.
+    rig.at(100.0 + RUN_WAIT.as_secs_f64() + 600.0).await;
+    assert_eq!(
+        calls(&rig),
+        before + 2,
+        "the held reading's two reads, and no more"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_readings_left_unexamined_are_examined_at_start_one_at_a_time() {
+    use super::recorder::RunReading;
+    use super::store::{record_reading, Purpose};
+    use super::test_support::recorded_hunt;
+    let rig = rig_seeded(script(10), false, &[], |conn| {
+        let readings = recorded_hunt();
+        record_reading(conn, &readings[0], Purpose::Run, None).unwrap();
+        let bad = record_reading(conn, &readings[1], Purpose::Connect, None)
+            .unwrap()
+            .id;
+        conn.execute(
+            "UPDATE account_reading_holdings SET quantity = quantity + 1 \
+             WHERE reading_id = ?1 AND row_count > 0",
+            [bad.0],
+        )
+        .unwrap();
+        // A fresh keyframe, then the hunt's readings up to its opening of
+        // seven and on.
+        record_reading(conn, &readings[2], Purpose::Connect, None).unwrap();
+        for reading in &readings[3..] {
+            record_reading(conn, reading, Purpose::Run, None).unwrap();
+        }
+    })
+    .await;
+    let unexamined = |rig: &Rig| {
+        let db = rig.db.clone();
+        async move {
+            read(&db, |conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM account_readings r WHERE NOT EXISTS \
+                     (SELECT 1 FROM account_readings_examined e WHERE e.reading_id = r.id)",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            })
+            .await
+        }
+    };
+    // A run begun while the start's examining is under way is answered
+    // after one reading's examination, not all of them.
+    rig.connect(COOKIE).await;
+    let begun = rig.recorder.run_begin().await;
+    assert!(matches!(begun, RunReading::Read { .. }), "{begun:?}");
+    assert!(unexamined(&rig).await >= 10, "the rest still wait");
+    // In time every one is examined: the unreadable one passed, and the
+    // good one's opening proposed.
+    rig.until(|status| !status.working).await;
+    assert_eq!(unexamined(&rig).await, 0);
+    // Of the readings left from before: the opening of seven, and not the
+    // five whose step could not be read.
+    let counts: Vec<i64> = rig
+        .recorder
+        .proposals(None)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|proposal| proposal.reading.0 <= 15)
+        .filter_map(|proposal| match &proposal.detail {
+            super::proposals::Detail::Opening(opening) => Some(opening.boxes[0].count),
+            super::proposals::Detail::Listing(_) => None,
+        })
+        .collect();
+    assert_eq!(counts, vec![7]);
 }

@@ -202,6 +202,34 @@ describe('account wrappers dispatch typed commands', () => {
 			{ cursor: null, limit: 20 },
 		],
 		['getMeasuredSummary', () => api.getMeasuredSummary(), 'account_measured_summary', {}],
+		['getProposals', () => api.getProposals('opening'), 'account_proposals', { kind: 'opening' }],
+		[
+			'claimProposals',
+			() => api.claimProposals({ ids: [3, 4] }),
+			'account_proposals_claim',
+			{ input: { ids: [3, 4] } },
+		],
+		[
+			'releaseProposals',
+			() => api.releaseProposals({ ids: [3] }),
+			'account_proposals_release',
+			{ input: { ids: [3] } },
+		],
+		[
+			'linkProposals',
+			() => api.linkProposals({ ids: [3, 4], recordId: 'run-1' }),
+			'account_proposals_link',
+			{ input: { ids: [3, 4], recordId: 'run-1' } },
+		],
+		[
+			'dismissProposal',
+			() => api.dismissProposal({ id: 3 }),
+			'account_proposal_dismiss',
+			{ input: { id: 3 } },
+		],
+		['beginAccountRun', () => api.beginAccountRun(), 'account_run_begin', {}],
+		['finishAccountRun', () => api.finishAccountRun(), 'account_run_done', {}],
+		['cancelAccountRun', () => api.cancelAccountRun(), 'account_run_cancel', {}],
 	] as const)('%s', async (_name, call, command, args) => {
 		await call();
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);

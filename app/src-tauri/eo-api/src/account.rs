@@ -1,5 +1,7 @@
 //! The account connection family: the connection's state, disconnecting,
-//! and what the account readings measure of tracked sessions.
+//! and what the account readings measure of tracked sessions. What the
+//! readings propose, and the readings a strongbox run asks for, are in
+//! [`crate::account_proposals`].
 //!
 //! Signing in happens in a window the shell opens, and the session it
 //! yields moves from the shell to the connection in Rust alone: no command
@@ -98,7 +100,7 @@ pub struct MeasuredAmount {
     pub precision: MeasuredPrecision,
 }
 
-fn amount(value: Amount) -> MeasuredAmount {
+pub(crate) fn amount(value: Amount) -> MeasuredAmount {
     MeasuredAmount {
         ped: value.micro_ped() as f64 / MICRO_PER_PED as f64,
         precision: match value.precision() {
@@ -109,7 +111,7 @@ fn amount(value: Amount) -> MeasuredAmount {
 }
 
 /// A PED Card figure: whole PEC.
-fn card(value: Pec) -> MeasuredAmount {
+pub(crate) fn card(value: Pec) -> MeasuredAmount {
     MeasuredAmount {
         ped: value.0 as f64 / 100.0,
         precision: MeasuredPrecision::WholePec,
@@ -134,7 +136,7 @@ pub enum AccountPlace {
     },
 }
 
-fn place(container: &Container) -> AccountPlace {
+pub(crate) fn place(container: &Container) -> AccountPlace {
     match container {
         Container::Carried => AccountPlace::Carried,
         Container::Auction => AccountPlace::Auction,
@@ -156,7 +158,7 @@ pub struct AccountHolding {
     pub place: AccountPlace,
 }
 
-fn holding(key: &HoldingKey) -> AccountHolding {
+pub(crate) fn holding(key: &HoldingKey) -> AccountHolding {
     AccountHolding {
         name: key.name.clone(),
         place: place(&key.container),
@@ -241,14 +243,14 @@ pub struct MeasuredSpan {
     pub to: String,
 }
 
-fn iso(at: f64) -> String {
+pub(crate) fn iso(at: f64) -> String {
     match eo_services::tracking_reads::list_ts_to_iso(Some(at)) {
         serde_json::Value::String(text) => text,
         other => other.to_string(),
     }
 }
 
-fn span(value: &Span) -> MeasuredSpan {
+pub(crate) fn span(value: &Span) -> MeasuredSpan {
     MeasuredSpan {
         from: iso(value.from),
         to: iso(value.to),
@@ -535,7 +537,7 @@ fn coverage(measure: &SessionMeasure) -> MeasuredCoverage {
     }
 }
 
-fn opened(content: &OpenedContent) -> MeasuredEventItem {
+pub(crate) fn opened(content: &OpenedContent) -> MeasuredEventItem {
     MeasuredEventItem {
         item: holding(&content.key),
         units: content.units,
@@ -1011,7 +1013,7 @@ fn summary_pair(pair: &SummaryPair) -> MeasuredSummaryPair {
     }
 }
 
-fn account_error(context: &'static str) -> impl FnOnce(AccountError) -> ApiError {
+pub(crate) fn account_error(context: &'static str) -> impl FnOnce(AccountError) -> ApiError {
     ApiError::internal(context)
 }
 
@@ -1022,7 +1024,7 @@ impl Api {
         self
     }
 
-    fn account(&self) -> Result<&Arc<AccountRecorder>, ApiError> {
+    pub(crate) fn account(&self) -> Result<&Arc<AccountRecorder>, ApiError> {
         self.account
             .as_ref()
             .ok_or_else(|| ApiError::invalid_state("the account connection was not composed"))

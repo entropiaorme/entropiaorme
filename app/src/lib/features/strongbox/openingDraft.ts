@@ -10,6 +10,7 @@
  * here where it can be tested on its own.
  */
 import type {
+	AccountProposal,
 	InventoryItem,
 	MarketHarvestData,
 	StockPosition,
@@ -224,6 +225,12 @@ export interface Unexpected {
 	reason: StrongboxUnexpectedReason;
 }
 
+/** Something that arrived beside an opening and may or may not be from
+ * the boxes: left out unless the player adds it. */
+export interface PossibleLine extends ContentLine {
+	included: boolean;
+}
+
 /** A run's result, ready to review. */
 export interface OpeningResult {
 	boxItem: string;
@@ -231,6 +238,17 @@ export interface OpeningResult {
 	keyUnitTt: number;
 	ammoPed: number;
 	lines: ContentLine[];
+	/** Arrivals that may be the boxes' too, off until the player adds them. */
+	possible: PossibleLine[];
+	/** The ammo is whatever the keys did not pay back in items, so it moves
+	 * as possible items are added; otherwise it was read as it is. */
+	ammoFromKeys: boolean;
+	/** The ammo the account's readings showed, when they settled it; the
+	 * review says so when it differs from the ammo recorded. */
+	readAmmoPed: number | null;
+	/** How many of the boxes paid ammo alone, when the readings show it
+	 * exactly. */
+	paidAmmoAlone: number | null;
 	intake: StrongboxIntake;
 	/** Export rows left out of the opening, with why. */
 	unexpected: Unexpected[];
@@ -238,6 +256,12 @@ export interface OpeningResult {
 	skipped: { line: number; text: string; reason: string }[];
 	/** Something about the result the player should look at; nothing blocks. */
 	notes: string[];
+}
+
+/** Every line the run records: what came out, and the possible items the
+ * player added. */
+export function contentLines(result: OpeningResult): ContentLine[] {
+	return [...result.lines, ...result.possible.filter((line) => line.included)];
 }
 
 export const UNEXPECTED_LABEL: Record<StrongboxUnexpectedReason, string> = {
@@ -287,6 +311,10 @@ export function resultFromExport(
 		lines: orderLines(
 			read.contents.map((row) => contentLine(row.itemName, row.quantity, row.valuePed, context)),
 		),
+		possible: [],
+		ammoFromKeys: false,
+		readAmmoPed: null,
+		paidAmmoAlone: null,
 		intake: 'export',
 		unexpected: read.unexpected.map(({ row, reason }) => ({
 			itemName: row.itemName,
@@ -364,11 +392,209 @@ export function resultFromManual(
 				contentLine(line.itemName, line.quantity ?? 0, line.ttValue ?? 0, context),
 			),
 		),
+		possible: [],
+		ammoFromKeys: false,
+		readAmmoPed: null,
+		paidAmmoAlone: null,
 		intake: 'manual',
 		unexpected: [],
 		skipped: [],
 		notes: [],
 	};
+}
+
+// ── A result read from the account ──────────────────────────────────
+
+/** An opening the account readings propose. */
+export type OpeningProposal = AccountProposal & {
+	outcome: Extract<AccountProposal['outcome'], { kind: 'opening' }>;
+};
+
+export function isOpeningProposal(proposal: AccountProposal): proposal is OpeningProposal {
+	return proposal.outcome.kind === 'opening';
+}
+
+/** The one box type a proposal opened, or null when it was more than one. */
+export function proposedBox(proposal: OpeningProposal): string | null {
+	return proposal.outcome.boxes.length === 1 ? proposal.outcome.boxes[0].name : null;
+}
+
+/** Why proposals cannot be reviewed as an opening of this box, or null. */
+export function proposalRefusal(proposals: OpeningProposal[], boxItem: string): string | null {
+	if (proposals.length === 0) return `Nothing was read from your account for ${boxItem}.`;
+	for (const proposal of proposals) {
+		const box = proposedBox(proposal);
+		if (box === null) {
+			return 'Your account shows more than one kind of box opened together. Paste the export or enter it by hand.';
+		}
+		if (box.toLocaleLowerCase() !== boxItem.trim().toLocaleLowerCase()) {
+			return `Your account shows ${box} opened, not ${boxItem}. Choose that box instead.`;
+		}
+	}
+	return null;
+}
+
+interface ProposedItem {
+	name: string;
+	units: number;
+	ped: number;
+}
+
+/** One line per item name: the readings may see the same item arrive in two
+ * steps of one run. */
+function mergeItems(items: ProposedItem[]): ProposedItem[] {
+	const merged = new Map<string, ProposedItem>();
+	for (const item of items) {
+		const key = item.name.trim().toLocaleLowerCase();
+		const held = merged.get(key);
+		if (held) {
+			held.units += item.units;
+			held.ped += item.ped;
+		} else {
+			merged.set(key, { ...item });
+		}
+	}
+	return [...merged.values()];
+}
+
+function itemsTt(lines: ContentLine[]): number {
+	return lines.reduce((sum, line) => sum + line.ttValue, 0);
+}
+
+type Doubt = NonNullable<OpeningProposal['outcome']['doubt']>;
+
+/** What each doubt means, in words; more than one kind of box is refused
+ * before a result is built. */
+const DOUBT_NOTE: Record<Doubt, ((keys: number, boxes: number) => string) | null> = {
+	severalKinds: null,
+	noKeys: () => `Your account shows no keys used; each is taken at ${formatPed(KEY_UNIT_TT)} PED.`,
+	countsDiffer: (keys, boxes) =>
+		`${formatQuantity(keys)} keys were used for ${formatQuantity(boxes)} boxes.`,
+	unbalanced: () =>
+		'What arrived does not pay the keys back in one clear way, so the ammo is taken as what the keys did not pay back in items.',
+};
+
+/**
+ * The result the account readings propose for a run, built as a pasted
+ * export would be: one box type, its keys, what came out, and the ammo.
+ * Several proposals (a run read across more than one minute) add up to one
+ * result. The ammo is what the keys did not pay back in items, as an
+ * entry by hand takes it (a settled reading's own figure, when it differs,
+ * is noted beside it). An opening that did not
+ * settle keeps its doubt in the notes; what arrived that
+ * may or may not be the boxes' is listed apart, left out until the player
+ * adds it. Call only once `proposalRefusal` has passed.
+ */
+export function resultFromProposals(
+	proposals: OpeningProposal[],
+	boxItem: string,
+	context: MarketContext,
+): OpeningResult {
+	const outcomes = proposals.map((proposal) => proposal.outcome);
+	const boxes = outcomes.reduce((sum, outcome) => sum + outcome.boxes[0].count, 0);
+	const keysUsed = outcomes.reduce((sum, outcome) => sum + outcome.keysUsed, 0);
+	const keysTt = outcomes.reduce((sum, outcome) => sum + outcome.keys.ped, 0);
+	const settled = outcomes.every((outcome) => outcome.ammo !== null);
+	const notes: string[] = [];
+	for (const outcome of outcomes) {
+		const note = outcome.doubt ? DOUBT_NOTE[outcome.doubt] : null;
+		if (note) {
+			const text = note(outcome.keysUsed, outcome.boxes[0].count);
+			if (!notes.includes(text)) notes.push(text);
+		}
+	}
+	const keyUnitTt = keysUsed > 0 ? keysTt / keysUsed : KEY_UNIT_TT;
+	const items = (
+		pick: (outcome: OpeningProposal['outcome']) => OpeningProposal['outcome']['contents'],
+	) =>
+		mergeItems(
+			outcomes.flatMap((outcome) =>
+				pick(outcome).map((item) => ({
+					name: item.item.name,
+					units: item.units,
+					ped: item.amount.ped,
+				})),
+			),
+		);
+	const lines = orderLines(
+		items((outcome) => outcome.contents).map((item) =>
+			contentLine(item.name, item.units, item.ped, context),
+		),
+	);
+	const possible: PossibleLine[] = items((outcome) => outcome.possibleContents).map((item) => ({
+		...contentLine(item.name, item.units, item.ped, context),
+		recycle: false,
+		included: false,
+	}));
+	if (possible.length > 0) {
+		notes.push(
+			possible.length === 1
+				? `${possible[0].itemName} arrived at the same time and may not be from the boxes, so it is left out unless you add it.`
+				: `${possible.length} items arrived at the same time and may not be from the boxes, so they are left out unless you add them.`,
+		);
+	}
+	const paid = outcomes.map((outcome) => outcome.paidAmmoAlone);
+	// The ammo is the keys less what else came out, settled or not: a
+	// settled reading already showed the rows agree with that within the
+	// site's truncation, and the keys are what the boxes pay back whole.
+	const ammoPed = Math.max(0, boxes * keyUnitTt - itemsTt(lines));
+	const readAmmoPed = settled
+		? outcomes.reduce((sum, outcome) => sum + (outcome.ammo?.amount.ped ?? 0), 0)
+		: null;
+	return {
+		boxItem,
+		boxes,
+		keyUnitTt,
+		ammoPed,
+		lines,
+		possible,
+		ammoFromKeys: true,
+		readAmmoPed,
+		paidAmmoAlone: paid.every((count) => count !== null)
+			? paid.reduce((sum: number, count) => sum + (count ?? 0), 0)
+			: null,
+		// Read from the site's own change list: the same delta the export
+		// carries.
+		intake: 'export',
+		unexpected: [],
+		skipped: [],
+		notes,
+	};
+}
+
+/** Add a possible item to the run, or leave it out again. An ammo figure
+ * that is what the keys did not pay back in items moves with it. */
+export function withPossible(
+	result: OpeningResult,
+	itemName: string,
+	included: boolean,
+): OpeningResult {
+	const possible = result.possible.map((line) =>
+		line.itemName === itemName ? { ...line, included } : line,
+	);
+	const next = { ...result, possible };
+	if (result.ammoFromKeys) {
+		next.ammoPed = Math.max(0, result.boxes * result.keyUnitTt - itemsTt(contentLines(next)));
+	}
+	return next;
+}
+
+/** What the review says of the ammo when the account's readings showed a
+ * figure other than the one recorded (the keys less what else came out).
+ * Worked out from the result as it stands, so it follows the possible items
+ * the player adds or leaves out. */
+export function ammoNote(result: OpeningResult): string | null {
+	const read = result.readAmmoPed;
+	if (read === null || Math.abs(read - result.ammoPed) <= 1e-6) return null;
+	return `Your account shows ${formatPed(read)} PED of ammo; the keys less what else came out are ${formatPed(result.ammoPed)} PED, and that is the figure recorded.`;
+}
+
+/** The quiet line on how the boxes paid, when the readings show it. */
+export function paidAloneSentence(result: OpeningResult): string | null {
+	const alone = result.paidAmmoAlone;
+	if (alone === null || alone <= 0 || alone > result.boxes) return null;
+	if (alone === result.boxes) return `All ${formatQuantity(result.boxes)} paid ammo alone`;
+	return `${formatQuantity(alone)} of ${formatQuantity(result.boxes)} paid ammo alone`;
 }
 
 // ── The run's figures ───────────────────────────────────────────────
@@ -395,7 +621,7 @@ export function summarise(result: OpeningResult): OpeningSummary {
 	let estimatedMarkup = 0;
 	let unvalued = 0;
 	let hits = 0;
-	for (const line of result.lines) {
+	for (const line of contentLines(result)) {
 		if (line.recycle) cubedTt += line.ttValue;
 		else keptTt += line.ttValue;
 		const markup = lineMarkup(line);
@@ -419,7 +645,7 @@ export function summarise(result: OpeningResult): OpeningSummary {
 /** Why the run cannot be recorded as it stands, or null. */
 export function balanceRefusal(result: OpeningResult): string | null {
 	const { gap, keysTt } = summarise(result);
-	const tolerance = PEC_PER_ROW * (result.lines.length + 1) + 1e-9;
+	const tolerance = PEC_PER_ROW * (contentLines(result).length + 1) + 1e-9;
 	if (Math.abs(gap) <= tolerance) return null;
 	return `What came out comes to ${formatPed(keysTt + gap)} PED TT, but the keys are ${formatPed(keysTt)} PED. A key always pays back its TT, so something is missing from the result.`;
 }
@@ -535,7 +761,7 @@ export function openingInput(
 		sources,
 		keyUnitTt: result.keyUnitTt,
 		keyMarkupPaid: null,
-		contents: result.lines.map((line) => ({
+		contents: contentLines(result).map((line) => ({
 			itemName: line.itemName,
 			quantity: line.quantity,
 			ttValue: line.ttValue,

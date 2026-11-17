@@ -61,9 +61,11 @@ pub enum StockReconciliationExclusion {
     Strongbox,
     /// One item to a row that the app has never held as stock.
     SingleItem,
-    /// The account's TT per unit is not the item's, or two items share the
-    /// name.
+    /// Two of the app's items share the name, and both are held.
     SharedName,
+    /// The account's TT for it does not fit the item's TT per unit: another
+    /// item of the same name, or one whose TT has changed.
+    TtDiffers,
     /// More is missing than the loose stock holds: the rest is an asset,
     /// which only its own records move.
     HeldAsAsset,
@@ -132,6 +134,9 @@ pub struct StockReconciliationLine {
     /// no reconciliation has settled the item since: why it is left as it
     /// is unless the player says otherwise.
     pub taken_back: bool,
+    /// When a standing reconciliation accepted this same difference, if
+    /// one did.
+    pub accepted_at: Nullable<String>,
 }
 
 /// One conversion group's figures: the TT that went in and came out.
@@ -176,6 +181,9 @@ pub struct StockReconciliationDraft {
     pub groups: Vec<StockReconciliationGroup>,
     /// `null` when there is nothing to say.
     pub caution: Nullable<StockReconciliationCaution>,
+    /// Lines whose difference a standing reconciliation accepted, standing
+    /// as they were: left as they are unless brought back into review.
+    pub previously_accepted: Vec<StockReconciliationLine>,
 }
 
 /// A line a bulk choice did not fit, and why.
@@ -225,6 +233,8 @@ pub enum StockReconciliationRevision {
     ShrapnelSoldAtTt { quantity: Option<f64> },
     /// Make these lines one conversion: one surplus and its shortfalls.
     Group { items: Vec<String> },
+    /// Bring previously accepted lines back into review.
+    Reconsider { items: Vec<String> },
 }
 
 /// A revision of the draft `draftId`.
@@ -268,8 +278,8 @@ pub struct StockReconciliationRefused {
 #[serde(tag = "outcome", rename_all = "camelCase")]
 pub enum StockReconciliationApplied {
     /// Applied: the reconciliation's id (`null` when nothing was recorded:
-    /// every line refused or left as it is, and no record kept), what was
-    /// settled or left as it is, and what was refused.
+    /// every line refused, and no record kept), what was settled or left as
+    /// it is, and what was refused.
     #[serde(rename_all = "camelCase")]
     Applied {
         reconciliation_id: Nullable<String>,
@@ -305,6 +315,7 @@ fn exclusion(value: Exclusion) -> StockReconciliationExclusion {
         Exclusion::Strongbox => StockReconciliationExclusion::Strongbox,
         Exclusion::SingleItem => StockReconciliationExclusion::SingleItem,
         Exclusion::SharedName => StockReconciliationExclusion::SharedName,
+        Exclusion::TtDiffers => StockReconciliationExclusion::TtDiffers,
         Exclusion::Ammo => StockReconciliationExclusion::Ammo,
         Exclusion::AuctionWithoutListing => StockReconciliationExclusion::AuctionWithoutListing,
         Exclusion::HeldAsAsset => StockReconciliationExclusion::HeldAsAsset,
@@ -353,6 +364,7 @@ fn line(value: &ReconciliationLine) -> StockReconciliationLine {
         disposition: disposition(&value.disposition),
         taken_back: !value.taken_back.is_empty(),
         asset_quantity: value.asset_quantity,
+        accepted_at: value.accepted_at.map(iso).into(),
     }
 }
 
@@ -362,6 +374,7 @@ fn draft(value: &ReconciliationDraft) -> StockReconciliationDraft {
         source: source(&value.source),
         observed_at: iso(value.observed_at),
         lines: value.lines.iter().map(line).collect(),
+        previously_accepted: value.previously_accepted.iter().map(line).collect(),
         excluded: value.excluded.iter().map(excluded).collect(),
         groups: value
             .groups
@@ -403,6 +416,7 @@ fn revision(value: StockReconciliationRevision) -> Revision {
             Revision::ShrapnelSoldAtTt { quantity }
         }
         StockReconciliationRevision::Group { items } => Revision::Group { items },
+        StockReconciliationRevision::Reconsider { items } => Revision::Reconsider { items },
     }
 }
 

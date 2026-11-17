@@ -147,7 +147,7 @@
 		{:else}
 			<span class="flex items-center gap-1.5" bind:this={choiceControl}>
 				{#if isSurplus(line) && !hasExactTt(line)}
-					<InfoTip label="Why it can only be left as it is" align="right">
+					<InfoTip label="How its TT is valued" align="right">
 						<span class="block text-xs leading-relaxed text-text-secondary">{INEXACT_TT_REASON}</span>
 					</InfoTip>
 				{/if}

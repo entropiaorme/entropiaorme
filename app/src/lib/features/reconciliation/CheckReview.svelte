@@ -3,16 +3,20 @@
 	 * The review: one line per item whose quantity differs, the largest
 	 * difference by TT first, each set to what the app proposes until the
 	 * player says otherwise. A filter and a selection settle many lines at
-	 * once, or make several into one conversion. Items the comparison
-	 * leaves out are listed apart, each with why.
+	 * once, or make several into one conversion. Differences a standing
+	 * check accepted, and which stand as they were, are filed apart and
+	 * can be brought back into review. Items the comparison leaves out are
+	 * listed apart, each with why.
 	 */
 	import Button from '$lib/components/Button.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { formatQuantity, formatSeenAt, listNames } from '$lib/utils/format';
 	import CheckLine from './CheckLine.svelte';
 	import {
+		acceptedWhen,
 		applySummary,
 		type Choice,
+		signedQuantity,
 		EXCLUSION_LABEL,
 		hasExactTt,
 		isShrapnel,
@@ -38,6 +42,8 @@
 	);
 
 	let showExcluded = $state(false);
+	let showAccepted = $state(false);
+	const accepted = $derived(draft.previouslyAccepted ?? []);
 	let list = $state<HTMLUListElement | null>(null);
 
 	/** The selection bar goes once the selection is spent; the focus moves
@@ -102,8 +108,17 @@
 
 		{#if draft.lines.length === 0}
 			<div class="space-y-1.5 py-8">
-				<p class="text-lg font-light text-text">Your inventory matches your account.</p>
-				<p class="text-sm text-text-tertiary">Every item compared holds the same quantity in both.</p>
+				{#if accepted.length > 0}
+					<p class="text-lg font-light text-text">Nothing new differs.</p>
+					<p class="text-sm text-text-tertiary">
+						{accepted.length === 1
+							? 'The one difference you accepted before stands as it was.'
+							: `The ${formatQuantity(accepted.length)} differences you accepted before stand as they were.`}
+					</p>
+				{:else}
+					<p class="text-lg font-light text-text">Your inventory matches your account.</p>
+					<p class="text-sm text-text-tertiary">Every item compared holds the same quantity in both.</p>
+				{/if}
 			</div>
 		{:else}
 			<section aria-label="Items that differ" class="space-y-3">
@@ -208,6 +223,48 @@
 								onsetapart={() => model.setApart(line)}
 								onshrapnelsold={(quantity) => void model.setShrapnelSold(quantity)}
 							/>
+						{/each}
+					</ul>
+				{/if}
+			</section>
+		{/if}
+
+		{#if accepted.length > 0}
+			<section aria-label="Previously accepted differences" class="space-y-2">
+				<button
+					type="button"
+					class="flex items-center gap-2 text-xs text-text-secondary hover:text-text"
+					aria-expanded={showAccepted}
+					aria-controls="check-accepted"
+					onclick={() => (showAccepted = !showAccepted)}
+				>
+					<span class="inline-block transition-transform {showAccepted ? 'rotate-90' : ''}" aria-hidden="true">&rsaquo;</span>
+					Previously accepted differences ({formatQuantity(accepted.length)})
+				</button>
+				{#if showAccepted}
+					<p class="text-xs text-text-tertiary">
+						Left as they are: each differs exactly as it did when you accepted it. One that moves comes back for review.
+					</p>
+					<ul id="check-accepted" class="divide-y divide-border/40 border-y border-border/40">
+						{#each accepted as row (row.itemName)}
+							<li class="grid grid-cols-[minmax(0,1fr)_5.5rem_auto] items-center gap-x-4 py-2 sm:grid-cols-[minmax(0,1fr)_5.5rem_5.5rem_5.5rem_minmax(0,9rem)_auto]">
+								<span class="truncate text-sm text-text-secondary" title={row.itemName}>{row.itemName}</span>
+								<span class="hidden text-right text-xs tabular-nums text-text-tertiary sm:block">{formatQuantity(row.appQuantity)}</span>
+								<span class="hidden text-right text-xs tabular-nums text-text-tertiary sm:block">{formatQuantity(row.observedQuantity)}</span>
+								<span class="text-right text-xs tabular-nums text-text-secondary">{signedQuantity(row.difference)}</span>
+								<span class="hidden truncate text-xs text-text-tertiary sm:block">{acceptedWhen(row)}</span>
+								<button
+									type="button"
+									class="text-xs font-medium text-accent hover:text-text disabled:opacity-50"
+									disabled={model.revising}
+									onclick={() => void model.reconsider(row.itemName)}
+								>
+									Review again
+								</button>
+								{#if lineErrorFor(row.itemName)}
+									<p class="col-span-full text-xs text-error" role="alert">{lineErrorFor(row.itemName)}</p>
+								{/if}
+							</li>
 						{/each}
 					</ul>
 				{/if}

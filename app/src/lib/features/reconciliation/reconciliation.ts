@@ -17,7 +17,7 @@ import type {
 	StockReconciliationRefusal,
 	StockReconciliationUnchanged,
 } from '$lib/api/commands.gen';
-import { formatQuantity, formatTt } from '$lib/utils/format';
+import { formatQuantity, formatSeenAt, formatTt } from '$lib/utils/format';
 
 export type Line = StockReconciliationLine;
 export type Draft = StockReconciliationDraft;
@@ -92,6 +92,12 @@ const UNKNOWN_ORIGIN: ChoiceOption = {
 	label: 'Unknown origin',
 	title: 'The extra units are held as stock no activity looted: their TT is never income',
 };
+const UNKNOWN_ORIGIN_AT_ACCOUNT_TT: ChoiceOption = {
+	id: 'unknownOrigin',
+	label: 'Unknown origin',
+	title:
+		"The extra units are held as stock no activity looted, at your account's TT for them (at most a PEC a row low): their TT is never income",
+};
 const LEFT_AS_IS: ChoiceOption = {
 	id: 'leftAsIs',
 	label: 'Left as is',
@@ -104,16 +110,27 @@ export function hasExactTt(line: Line): boolean {
 	return line.unitTt.kind === 'exact';
 }
 
-/** Why a line cannot be held as of unknown origin or join a conversion. */
+/** Whether the line's TT per unit is known at all: exactly, or as the
+ * account shows it. */
+export function hasKnownTt(line: Line): boolean {
+	return line.unitTt.kind !== 'unknown';
+}
+
+/** How a surplus whose TT per unit is not exact is valued, and why it
+ * cannot join a conversion. */
 export const INEXACT_TT_REASON =
-	'Its TT per unit is not known exactly, so its extra units cannot be valued as stock or balanced in a conversion.';
+	"Its TT per unit is not known exactly: as stock of unknown origin it is valued at your account's TT for it (at most a PEC a row low), and it cannot balance a conversion.";
 
 /** What a line can be set to on its own: a shortfall is removed (missing
  * Shrapnel may instead have been converted), a surplus is of unknown origin
- * when its TT per unit is exact, and either may be left as it is. Joining a
- * conversion is done from a selection. */
+ * when its TT per unit is known (at the account's own TT when not exact),
+ * and either may be left as it is. Joining a conversion is done from a
+ * selection. */
 export function choicesFor(line: Line): ChoiceOption[] {
-	if (isSurplus(line)) return hasExactTt(line) ? [UNKNOWN_ORIGIN, LEFT_AS_IS] : [LEFT_AS_IS];
+	if (isSurplus(line)) {
+		if (!hasKnownTt(line)) return [LEFT_AS_IS];
+		return [hasExactTt(line) ? UNKNOWN_ORIGIN : UNKNOWN_ORIGIN_AT_ACCOUNT_TT, LEFT_AS_IS];
+	}
 	if (isShrapnel(line)) return [CONVERTED, REMOVED, LEFT_AS_IS];
 	return [REMOVED, LEFT_AS_IS];
 }
@@ -126,7 +143,7 @@ export function choiceOf(disposition: StockReconciliationDisposition): Choice | 
 /** What a line taken out of a conversion goes back to. */
 export function standaloneChoice(line: Line): Choice {
 	if (line.takenBack) return 'leftAsIs';
-	if (isSurplus(line)) return hasExactTt(line) ? 'unknownOrigin' : 'leftAsIs';
+	if (isSurplus(line)) return hasKnownTt(line) ? 'unknownOrigin' : 'leftAsIs';
 	return isShrapnel(line) ? 'shrapnelConverted' : 'removed';
 }
 
@@ -261,9 +278,15 @@ export const EXCLUSION_LABEL: Record<StockReconciliationExclusion, string> = {
 	consumable: 'Used up as a cost, and not held as stock',
 	strongbox: 'Opened in the strongbox view',
 	singleItem: 'A single item the app has never held as stock',
-	sharedName: 'Its TT per unit does not fit: two items may share the name',
+	sharedName: 'Two items in the app share the name',
+	ttDiffers: "Its TT does not fit the item's: another item of the name, or its TT has changed",
 	heldAsAsset: 'More is missing than the loose stock holds: the rest is an asset',
 };
+
+/** When a difference was accepted, in a few words. */
+export function acceptedWhen(line: Line): string {
+	return line.acceptedAt ? `Accepted ${formatSeenAt(line.acceptedAt)}` : 'Accepted before';
+}
 
 /** Why a line was not applied, in the player's terms. */
 export const REFUSAL_LABEL: Record<StockReconciliationRefusal, string> = {

@@ -243,6 +243,11 @@ export function createReconciliationModel() {
 		if (revisionError === null) selected = new Set();
 	}
 
+	/** Bring a previously accepted line back into review. */
+	function reconsider(item: string): Promise<void> {
+		return revise({ kind: 'reconsider', items: [item] }, { kind: 'line', item });
+	}
+
 	function setShrapnelSold(quantity: number | null): Promise<void> {
 		return revise(
 			{ kind: 'shrapnelSoldAtTt', quantity: quantity !== null && quantity > 0 ? quantity : null },
@@ -434,6 +439,7 @@ export function createReconciliationModel() {
 		setApart,
 		setSelection,
 		groupSelection,
+		reconsider,
 		setShrapnelSold,
 		toggle,
 		toggleVisible,

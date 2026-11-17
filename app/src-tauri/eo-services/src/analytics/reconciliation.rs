@@ -16,7 +16,9 @@
 //!   only the asset's own records move: the item is held back.
 //! - **A surplus is unattributed stock**, of unknown origin: its TT is never
 //!   income, and a later sale above TT books only the markup, credited to no
-//!   activity. It needs the item's exact TT per unit.
+//!   activity. It is valued at the item's exact TT per unit where one is
+//!   known, and at the account's own TT otherwise (at most a PEC a row low,
+//!   which is never income either).
 //! - **Several shortfalls and a surplus may be one conversion**, recycling
 //!   into Nanocubes included, as long as the TT that went in is the TT that
 //!   came out: a recycling makes no more Nanocubes than its inputs' TT pays
@@ -24,6 +26,18 @@
 //!   conversion balances to the PEC per row.
 //! - **An item whose record from the account the player took back** is left
 //!   as it is by default until a reconciliation settles a line of it.
+//! - **A difference the player accepted is remembered.** A line left as it
+//!   is in a standing reconciliation is the player's word on that item's
+//!   difference: while a later plan finds the same difference, the line is
+//!   filed apart as previously accepted rather than asked about again, and
+//!   it can be brought back into review. A difference that has moved since
+//!   is a live line, and undoing the reconciliation forgets what it
+//!   accepted.
+//! - **The TT tells two items of one name apart.** The account's TT for an
+//!   item must fit its TT per unit: a constant of the game where the game
+//!   (or the game data) gives one, or the app's own from recorded loot,
+//!   allowing for the chat log rounding each loot line to the PEC. An item
+//!   that does not fit is left out as another item of the name.
 //!
 //! The comparison is of quantities, never of values. What the account shows
 //! arrives as plain observed stacks and the items held back with a reason;
@@ -59,6 +73,9 @@ use crate::db::DbError;
 const SHRAPNEL: &str = "Shrapnel";
 const UNIVERSAL_AMMO: &str = "Universal Ammo";
 const NANOCUBE: &str = "Nanocube";
+
+/// Shrapnel's TT per unit, a constant of the game.
+const SHRAPNEL_UNIT_TT: f64 = 0.0001;
 
 /// A PEC, in PED: what the account site truncates each row's value to.
 const PEC: f64 = 0.01;
@@ -159,9 +176,11 @@ pub enum Exclusion {
     Strongbox,
     /// One item to a row that the app has never held as stock.
     SingleItem,
-    /// The TT per unit the account shows is not the item's, or two of the
-    /// app's items share the name: two items may share it.
+    /// Two of the app's items share the name, and both are held.
     SharedName,
+    /// The account's TT for it does not fit the item's TT per unit: it may
+    /// be another item of the same name, or one whose TT has changed.
+    TtDiffers,
     /// More is missing than the loose stock holds: the rest is an asset,
     /// which only its own records move.
     HeldAsAsset,
@@ -285,6 +304,10 @@ pub struct ReconciliationLine {
     /// took back and no reconciliation has settled since: why it is left as
     /// it is by default.
     pub taken_back: Vec<String>,
+    /// When a standing reconciliation accepted this same difference (left
+    /// it as it is), if one did.
+    #[serde(default)]
+    pub accepted_at: Option<f64>,
 }
 
 impl ReconciliationLine {
@@ -317,16 +340,16 @@ impl ReconciliationLine {
 
     /// What a line starts as: an item taken back is left as it is; missing
     /// Shrapnel was converted, anything else missing was removed; anything
-    /// extra is of unknown origin when its TT per unit is exact, and is
-    /// left as it is otherwise.
+    /// extra is of unknown origin when its TT per unit is known (exactly,
+    /// or as the account shows it), and is left as it is otherwise.
     fn default_disposition(&self) -> Disposition {
         if !self.taken_back.is_empty() {
             Disposition::LeftAsIs
         } else if self.is_surplus() {
-            if self.unit_tt.exact().is_some() {
-                Disposition::UnknownOrigin
-            } else {
+            if self.unit_tt == UnitTt::Unknown {
                 Disposition::LeftAsIs
+            } else {
+                Disposition::UnknownOrigin
             }
         } else if self.is_shrapnel() {
             Disposition::ShrapnelConverted { sold_at_tt: None }
@@ -376,10 +399,10 @@ impl ReconciliationLine {
                         "{name} has no extra units to hold as of unknown origin"
                     ));
                 }
-                if self.unit_tt.exact().is_none() {
+                if self.unit_tt == UnitTt::Unknown {
                     return Err(format!(
-                        "{name}'s TT per unit is not known exactly, so its extra units \
-                         cannot be valued as stock"
+                        "{name}'s TT per unit is not known, so its extra units cannot be \
+                         valued as stock"
                     ));
                 }
                 Ok(())
@@ -438,6 +461,11 @@ pub struct ReconciliationDraft {
     /// Each conversion group's figures, by group.
     pub groups: Vec<GroupFigures>,
     pub caution: Option<Caution>,
+    /// Lines whose difference a standing reconciliation accepted and which
+    /// stand as they were: left as they are, and not applied, unless brought
+    /// back into review.
+    #[serde(default)]
+    pub previously_accepted: Vec<ReconciliationLine>,
 }
 
 /// A disposition a line can be set to on its own.
@@ -467,6 +495,9 @@ pub enum Revision {
     /// Make these lines one conversion: one surplus, and the shortfalls that
     /// went into it, balanced in TT.
     Group { items: Vec<String> },
+    /// Bring these previously accepted lines back into review, each as it
+    /// starts.
+    Reconsider { items: Vec<String> },
 }
 
 /// A draft revised, and the lines a bulk choice did not fit, each with why.
@@ -607,11 +638,79 @@ fn acknowledged(conn: &rusqlite::Connection) -> rusqlite::Result<BTreeSet<String
     Ok(ids)
 }
 
+/// The difference each item's latest line in a standing reconciliation
+/// accepted, and when, by compared name: only where that line was left as
+/// it is (a later line settled another way ends the acceptance).
+fn accepted_differences(
+    conn: &rusqlite::Connection,
+) -> rusqlite::Result<HashMap<String, (f64, f64)>> {
+    let mut stmt = conn.prepare(
+        // id-order: insertion (a later line of the same check after an earlier)
+        "SELECT l.item_name, l.observed_quantity - l.app_quantity, l.disposition, r.applied_at \
+         FROM stock_reconciliation_lines l \
+         JOIN stock_reconciliations r ON r.id = l.reconciliation_id \
+         WHERE r.undone_at IS NULL ORDER BY r.applied_at, l.id",
+    )?;
+    let mut latest: HashMap<String, (f64, f64, bool)> = HashMap::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(0)?;
+        let disposition: String = row.get(2)?;
+        latest.insert(
+            reconciliation_key(&name),
+            (row.get(1)?, row.get(3)?, disposition == "left_as_is"),
+        );
+    }
+    Ok(latest
+        .into_iter()
+        .filter(|(_, (_, _, left))| *left)
+        .map(|(key, (difference, at, _))| (key, (difference, at)))
+        .collect())
+}
+
+/// How far the app's TT per unit of an item may lie from the true one,
+/// because each loot line it is averaged from was rounded to the PEC by the
+/// chat log: half a PEC a line, over every unit looted.
+fn loot_rounding(conn: &rusqlite::Connection, name: &str) -> rusqlite::Result<f64> {
+    let (lines, units): (f64, f64) = conn.query_row(
+        // every-kill: spend (every loot line the unit TT is averaged from)
+        "SELECT \
+             (SELECT COUNT(*) FROM kill_loot_items \
+              WHERE item_name = ?1 AND deactivated_at IS NULL) \
+           + (SELECT COUNT(*) FROM harvest_loot_items \
+              WHERE item_name = ?1 AND deactivated_at IS NULL), \
+             (SELECT COALESCE(SUM(quantity), 0) FROM kill_loot_items \
+              WHERE item_name = ?1 AND deactivated_at IS NULL) \
+           + (SELECT COALESCE(SUM(quantity), 0) FROM harvest_loot_items \
+              WHERE item_name = ?1 AND deactivated_at IS NULL)",
+        [name],
+        |row| Ok((row.get::<_, i64>(0)? as f64, row.get::<_, f64>(1)?)),
+    )?;
+    Ok(if units > STOCK_EPSILON {
+        lines * PEC / 2.0 / units
+    } else {
+        0.0
+    })
+}
+
+/// The TT per unit of an item that is a constant of the game: what a
+/// conversion produces (Nanocubes, Universal Ammo), Shrapnel, or what the
+/// game data lists for it.
+fn constant_unit_tt(name: &str, stack: Option<&ObservedStack>) -> Option<f64> {
+    if reconciliation_key(name) == SHRAPNEL {
+        return Some(SHRAPNEL_UNIT_TT);
+    }
+    produced_unit_tt(name).or_else(|| stack.and_then(|stack| stack.catalogue_unit_tt))
+}
+
 /// What the app holds loose of one name, and its TT per unit.
 struct Held {
     name: String,
     quantity: f64,
     unit_tt: f64,
+    /// How far `unit_tt` may lie from the true figure (see
+    /// [`loot_rounding`]).
+    rounding: f64,
 }
 
 /// The app's loose stock under one compared name.
@@ -638,6 +737,7 @@ fn app_stock(conn: &rusqlite::Connection, names: &[String]) -> rusqlite::Result<
                 .filter(|quantity| *quantity > STOCK_EPSILON)
                 .sum(),
             unit_tt,
+            rounding: loot_rounding(conn, name)?,
         });
     }
     let holding = found
@@ -659,14 +759,16 @@ fn app_stock(conn: &rusqlite::Connection, names: &[String]) -> rusqlite::Result<
     })
 }
 
-/// Whether the account's TT for `quantity` units fits the app's TT per
-/// unit: the true figure lies between the truncated sum and a PEC a row
-/// above it.
-fn tt_fits(stack: &ObservedStack, unit_tt: f64) -> bool {
-    let expected = stack.quantity as f64 * unit_tt;
+/// Whether the account's TT for its units fits a TT per unit known to
+/// within `allowance` either way: the true figure lies between the
+/// truncated sum and a PEC a row above it, and some unit TT within the
+/// allowance reaches it.
+fn tt_fits(stack: &ObservedStack, unit_tt: f64, allowance: f64) -> bool {
+    let quantity = stack.quantity as f64;
+    let lowest = quantity * (unit_tt - allowance);
+    let highest = quantity * (unit_tt + allowance);
     let slack = 1e-6;
-    expected >= stack.tt_value - slack
-        && expected <= stack.tt_value + stack.rows as f64 * PEC + slack
+    highest >= stack.tt_value - slack && lowest <= stack.tt_value + stack.rows as f64 * PEC + slack
 }
 
 // ── Planning ─────────────────────────────────────────────────────────
@@ -759,6 +861,8 @@ fn plan_within(
         }
     }
 
+    let accepted = accepted_differences(conn)?;
+    let mut previously_accepted: Vec<ReconciliationLine> = Vec::new();
     let keys: BTreeSet<String> = observed
         .keys()
         .chain(held_somewhere.iter())
@@ -786,9 +890,11 @@ fn plan_within(
                 });
                 continue;
             }
-            AppStock::One(held) => (held.name, held.quantity, held.unit_tt),
-            AppStock::Never => (shown_name(), 0.0, 0.0),
+            AppStock::One(held) => (held.name, held.quantity, (held.unit_tt, held.rounding)),
+            AppStock::Never => (shown_name(), 0.0, (0.0, 0.0)),
         };
+        let (app_unit, app_rounding) = app_unit;
+        let constant = constant_unit_tt(&item_name, stack);
         let asset_quantity = assets.get(&key).copied().unwrap_or(0.0);
         let app_quantity = loose + asset_quantity;
         if let Some(stack) = stack {
@@ -810,11 +916,18 @@ fn plan_within(
                     continue;
                 }
             }
-            if app_unit > STOCK_EPSILON && stack.quantity > 0 && !tt_fits(stack, app_unit) {
+            // The game's constant where there is one; the app's own TT per
+            // unit, allowing for the loot lines' rounding, otherwise.
+            let fits = match constant {
+                Some(unit) => tt_fits(stack, unit, 0.0),
+                None if app_unit > STOCK_EPSILON => tt_fits(stack, app_unit, app_rounding),
+                None => true,
+            };
+            if stack.quantity > 0 && !fits {
                 excluded.push(ExcludedItem {
                     item_name: stack.item_name.clone(),
                     quantity: observed_quantity,
-                    reason: Exclusion::SharedName,
+                    reason: Exclusion::TtDiffers,
                 });
                 continue;
             }
@@ -831,12 +944,10 @@ fn plan_within(
             });
             continue;
         }
-        let unit_tt = if app_unit > STOCK_EPSILON {
-            UnitTt::Exact { ped: app_unit }
-        } else if let Some(unit) =
-            produced_unit_tt(&item_name).or_else(|| stack.and_then(|stack| stack.catalogue_unit_tt))
-        {
+        let unit_tt = if let Some(unit) = constant {
             UnitTt::Exact { ped: unit }
+        } else if app_unit > STOCK_EPSILON {
+            UnitTt::Exact { ped: app_unit }
         } else {
             match stack {
                 Some(stack) if stack.quantity > 0 => UnitTt::Truncated {
@@ -854,17 +965,22 @@ fn plan_within(
             observed_rows: stack.map_or(0, |stack| stack.rows),
             unit_tt,
             disposition: Disposition::LeftAsIs,
+            accepted_at: None,
         };
+        // The same difference a standing reconciliation accepted stays
+        // accepted, filed apart.
+        if let Some((difference, at)) = accepted.get(&key) {
+            if (difference - line.difference()).abs() <= STOCK_EPSILON {
+                line.accepted_at = Some(*at);
+                previously_accepted.push(line);
+                continue;
+            }
+        }
         line.disposition = line.default_disposition();
         lines.push(line);
     }
-    // The largest difference by TT first, so a large shortfall is the first
-    // thing read, never buried.
-    lines.sort_by(|a, b| {
-        b.difference_tt()
-            .total_cmp(&a.difference_tt())
-            .then_with(|| a.item_name.cmp(&b.item_name))
-    });
+    previously_accepted.sort_by(|a, b| a.item_name.cmp(&b.item_name));
+    sort_lines(&mut lines);
     excluded.sort_by(|a, b| {
         a.reason
             .cmp(&b.reason)
@@ -892,9 +1008,20 @@ fn plan_within(
         excluded,
         groups: Vec::new(),
         caution,
+        previously_accepted,
     };
     write_draft(conn, &draft, now)?;
     Ok(draft)
+}
+
+/// The largest difference by TT first, so a large shortfall is the first
+/// thing read, never buried.
+fn sort_lines(lines: &mut [ReconciliationLine]) {
+    lines.sort_by(|a, b| {
+        b.difference_tt()
+            .total_cmp(&a.difference_tt())
+            .then_with(|| a.item_name.cmp(&b.item_name))
+    });
 }
 
 // ── Revising ─────────────────────────────────────────────────────────
@@ -1080,6 +1207,27 @@ fn revise_draft(
                 draft.lines[index].disposition = Disposition::ConversionGroup { group };
             }
         }
+        Revision::Reconsider { items } => {
+            let mut brought = 0usize;
+            for name in &items {
+                let key = reconciliation_key(name);
+                let Some(at) = draft
+                    .previously_accepted
+                    .iter()
+                    .position(|line| reconciliation_key(&line.item_name) == key)
+                else {
+                    return Err(format!("{} is not among the accepted lines", name.trim()));
+                };
+                let mut line = draft.previously_accepted.remove(at);
+                line.disposition = line.default_disposition();
+                draft.lines.push(line);
+                brought += 1;
+            }
+            if brought == 0 {
+                return Err("no line is selected".to_string());
+            }
+            sort_lines(&mut draft.lines);
+        }
     }
     draft.groups = validate(draft)?;
     Ok(unchanged)
@@ -1123,7 +1271,7 @@ struct Made {
 }
 
 /// Hold `quantity` of a line's item as stock of unknown origin, at its
-/// exact TT per unit.
+/// TT per unit: exact where known, the account's own otherwise.
 fn write_surplus(
     tx: &rusqlite::Transaction<'_>,
     line: &ReconciliationLine,
@@ -1132,12 +1280,10 @@ fn write_surplus(
     now: f64,
     made: &mut Vec<Made>,
 ) -> Result<Result<(), String>, DbError> {
-    let Some(unit) = line.unit_tt.exact() else {
-        return Ok(Err(format!(
-            "{}'s TT per unit is not known exactly",
-            line.item_name
-        )));
-    };
+    if line.unit_tt == UnitTt::Unknown {
+        return Ok(Err(format!("{}'s TT per unit is not known", line.item_name)));
+    }
+    let unit = line.unit_tt.ped();
     let id = Uuid::new_v4().to_string();
     write_unknown_origin(
         tx,
@@ -1383,11 +1529,10 @@ fn apply_within(
         }
     }
 
-    // A check that records nothing (every line left as it is, or every
-    // other line refused) keeps no record: there is nothing to undo.
-    let records_anything = settled
-        .iter()
-        .any(|line| line.disposition != Disposition::LeftAsIs);
+    // A check that settles or accepts anything keeps its record: a line
+    // left as it is is the player's word on that difference, remembered
+    // until the check is undone. One with every line refused keeps none.
+    let records_anything = !settled.is_empty();
     let reconciliation_id = if !records_anything {
         None
     } else {
@@ -1938,11 +2083,59 @@ mod tests {
             catalogue_unit_tt: None,
         };
         // 30 at 0.13 is 3.90; truncated per row it may read 3.89 over two.
-        assert!(tt_fits(&stack(30, 3.90, 1), 0.13));
-        assert!(tt_fits(&stack(30, 3.89, 2), 0.13));
+        assert!(tt_fits(&stack(30, 3.90, 1), 0.13, 0.0));
+        assert!(tt_fits(&stack(30, 3.89, 2), 0.13, 0.0));
         // Another item of the same name at another TT does not fit.
-        assert!(!tt_fits(&stack(30, 1.50, 1), 0.13));
-        assert!(!tt_fits(&stack(30, 3.95, 1), 0.13));
+        assert!(!tt_fits(&stack(30, 1.50, 1), 0.13, 0.0));
+        assert!(!tt_fits(&stack(30, 3.95, 1), 0.13, 0.0));
+    }
+
+    #[test]
+    fn shrapnel_fits_the_game_s_constant_where_the_loot_average_falls_short() {
+        let shrapnel = ObservedStack {
+            item_name: "Shrapnel".to_string(),
+            quantity: 31_731_376,
+            tt_value: 3173.13,
+            rows: 1,
+            single: false,
+            unless_held: None,
+            catalogue_unit_tt: None,
+        };
+        // The loot lines, each rounded to the PEC, average a little low.
+        let averaged = 104_438.6114 / 1_045_010_067.0;
+        assert!(!tt_fits(&shrapnel, averaged, 0.0));
+        assert_eq!(constant_unit_tt("Shrapnel", Some(&shrapnel)), Some(0.0001));
+        assert!(tt_fits(&shrapnel, 0.0001, 0.0));
+    }
+
+    #[test]
+    fn the_loot_lines_rounding_is_allowed_for_and_a_real_difference_is_not() {
+        let stack = |quantity, tt_value: f64| ObservedStack {
+            item_name: "Robot Filter".to_string(),
+            quantity,
+            tt_value,
+            rows: 2,
+            single: false,
+            unless_held: None,
+            catalogue_unit_tt: None,
+        };
+        // 32,727 looted over 8,470 lines at 1,177.366 PED: 0.035975 a
+        // unit, where the account shows 0.036.
+        let unit = 1177.366 / 32_727.0;
+        let rounding = 8470.0 * PEC / 2.0 / 32_727.0;
+        assert!(!tt_fits(&stack(378, 13.60), unit, 0.0));
+        assert!(tt_fits(&stack(378, 13.60), unit, rounding));
+        // One loot line at a PEC against ten PED held: not rounding.
+        let trophy = ObservedStack {
+            item_name: "Carabok Trophy Head".to_string(),
+            quantity: 1,
+            tt_value: 10.0,
+            rows: 1,
+            single: true,
+            unless_held: None,
+            catalogue_unit_tt: None,
+        };
+        assert!(!tt_fits(&trophy, 0.01, PEC / 2.0));
     }
 
     #[tokio::test]

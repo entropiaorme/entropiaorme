@@ -173,6 +173,10 @@ pub struct DefinitionLifetimeStats {
     /// picked those up yet, so the family total is legitimately the
     /// more complete of the two.
     pub cycled: f64,
+    /// Summed overhead: what the instances cost beyond performing their
+    /// activity, measured from the account readings. In the family's Net,
+    /// never in its Cycled.
+    pub overhead: f64,
     pub loot_tt: f64,
     /// Summed skill TT on the raw `SUM(ped_value)` basis, matching the
     /// live readout's own PES figure rather than the summary's
@@ -474,7 +478,7 @@ impl SessionDefinitionService {
                                 {mean}, {mean_low}, {mean_high}, \
                                 {animal}, {animal_low}, {animal_high}, \
                                 {mutant}, {mutant_low}, {mutant_high}, \
-                                {robot}, {robot_low}, {robot_high} \
+                                {robot}, {robot_low}, {robot_high}, {overhead} \
                          FROM session_summaries ss \
                          JOIN tracking_sessions s ON s.id = ss.session_id \
                          WHERE s.definition_id = ?",
@@ -507,6 +511,7 @@ impl SessionDefinitionService {
                         robot = sum(&economy, "expected_tt_robot"),
                         robot_low = sum(&economy, "expected_tt_robot_low"),
                         robot_high = sum(&economy, "expected_tt_robot_high"),
+                        overhead = sum(&economy, "overhead_cost"),
                     ),
                     rusqlite::params![definition_id],
                     |row| {
@@ -536,6 +541,7 @@ impl SessionDefinitionService {
                         Ok(DefinitionLifetimeStats {
                             instance_count: row.get(0)?,
                             cycled: row.get(1)?,
+                            overhead: row.get(33)?,
                             loot_tt: row.get(2)?,
                             pes: row.get(3)?,
                             ratio_pes: row.get(4)?,

@@ -27,16 +27,27 @@
 //!   begins, every minute while it is open, and once more when the player
 //!   says it is done; then reading stops. A run left open closes after 30
 //!   minutes, and when the view that opened it goes away (see [`run`]).
-//! - **While connected**, the site is asked for the PED Card balance
-//!   whenever five minutes pass with no request to it, so it does not end
-//!   the session for being idle. A refusal there ends the connection as
-//!   expired, the way a refused reading does, and is logged with how long
-//!   the session lasted.
+//! - **While connected and nothing else is being read**, what happens
+//!   depends on the [`ReadingMode`] the connection was built with. Built
+//!   with [`ReadingMode::Always`] (the installed app), it reads the account
+//!   in full every five minutes, and a minute after any reading that
+//!   differs from the one stored before it, until two in a row agree: the
+//!   inventory is followed between sessions, and the site keeps the
+//!   session. Built with [`ReadingMode::OnDemand`] (a development build),
+//!   it only asks the site for the PED Card balance whenever five minutes
+//!   pass with no request to it, so the site does not end the session for
+//!   being idle. A tracked session or a strongbox run takes over from
+//!   either the moment it starts, and hands back when it is done. A refusal
+//!   ends the connection as expired, the way a refused reading does, and is
+//!   logged with how long the session lasted.
 //!
 //! Every reading stored is then examined for what it proposes (see
 //! [`super::proposals`]), and the readings a previous run left unexamined
 //! are examined once the task starts. A failed examination is logged and
-//! never fails the reading.
+//! never fails the reading. Then what each step did to the stock is
+//! recorded (see [`super::follow`]), whenever no strongbox run is open
+//! (the run's own flow records what it reads); a failure there is logged
+//! and tried again after the next reading.
 //!
 //! Every full reading passes through one gate, which keeps any two at
 //! least 55 seconds apart: a reading asked for inside that floor is
@@ -69,13 +80,19 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio::time::Instant;
 
 use super::amount::Pec;
+use super::costs::{self, SessionCosts};
+use super::follow::{FollowFailure, FollowPass};
+use super::minutes::{self, SessionMinutes};
+use super::placement::{self, Placement, Placements};
 use super::proposals::{self, Decided, Examined, Proposal, ProposalId, ProposalKind};
 use super::reading::{Holding, HoldingKey, Reading, SiteResponse};
 use super::sessions::{self, MeasureRead, MeasuredPage, ToSeal};
 use super::site::{SessionSecret, SharedSite, SiteFailure, SiteOutcome};
 use super::store::{self, Purpose, ReadingHeader, ReadingId};
 use super::AccountError;
+use crate::analytics::AnalyticsService;
 use crate::bus_events::BusEvent;
+use crate::chatlog_span::ChatLogSource;
 use crate::clock::Clock;
 use crate::config_service::ConfigService;
 use crate::db::Db;
@@ -100,6 +117,12 @@ pub const READING_FLOOR: Duration = Duration::from_secs(55);
 /// How long the site may go without a request from a connection before
 /// it is asked for the balance, so it keeps the session.
 pub const KEEP_ALIVE_EVERY: Duration = Duration::from_secs(5 * 60);
+/// How many passes in a row may fail on the same step before it is passed
+/// over with nothing recorded (see [`super::follow`]).
+pub const FOLLOW_FAILURES_BEFORE_PASSING: u32 = 3;
+/// How often the account is read while signed in and nothing else is
+/// being read, once two readings in a row agree (see [`ReadingMode`]).
+pub const IDLE_READ_EVERY: Duration = Duration::from_secs(5 * 60);
 /// The least time between the starts of two checks of a session.
 pub const CHECK_FLOOR: Duration = Duration::from_secs(10);
 /// How long after a session stops its first closing reading is taken.
@@ -114,6 +137,21 @@ pub const SHUTDOWN_WAIT: Duration = Duration::from_millis(1500);
 
 /// Announces that the connection or its readings changed.
 pub type ChangedSink = Arc<dyn Fn() + Send + Sync>;
+
+/// Whether the account is read while signed in and nothing else asks for
+/// a reading. Decided by the build that runs the connection, never by a
+/// setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadingMode {
+    /// Only a tracked session or a strongbox run is read; in between, the
+    /// balance alone keeps the session. How a development build reads, so
+    /// that one running beside the installed app neither reads the account
+    /// twice nor records it into its own database.
+    OnDemand,
+    /// Read in full every [`IDLE_READ_EVERY`] while nothing else is read,
+    /// and every [`READ_EVERY`] while the readings keep changing.
+    Always,
+}
 
 /// The connection's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,7 +285,12 @@ pub struct RecorderParts {
     pub site: SharedSite,
     pub flag: Arc<dyn ConnectionFlag>,
     pub game_data: Option<Arc<GameDataStore>>,
+    /// The game's chat log, read after the fact to show clean the gap a
+    /// session's readings leave at an end; without it no gap is billed.
+    pub chat_log: Option<ChatLogSource>,
     pub changed: Option<ChangedSink>,
+    /// Whether the account is read while nothing else asks for a reading.
+    pub mode: ReadingMode,
 }
 
 /// Where a session handed to the connection comes from.
@@ -263,6 +306,22 @@ pub enum ConnectSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnectEpoch(u64);
 
+/// What recording an arrival as stock of unknown origin came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArrivalRecording {
+    /// Recorded, with the record's own id; the proposal is linked to it.
+    Recorded { record_id: String },
+    /// Recorded, but the proposal could not be linked to it: it stays
+    /// claimed, shown as possibly recorded already.
+    Unlinked { record_id: String },
+    /// No open arrival proposal has that id.
+    NotOpen,
+    /// It cannot be claimed: why, in words for the player.
+    Refused(&'static str),
+    /// The stock write was refused; the claim is released.
+    WriteRefused,
+}
+
 /// The handle to the account connection.
 pub struct AccountRecorder {
     sender: mpsc::UnboundedSender<Msg>,
@@ -271,6 +330,7 @@ pub struct AccountRecorder {
     db: Db,
     clock: Arc<dyn Clock>,
     game_data: Option<Arc<GameDataStore>>,
+    chat_log: Option<ChatLogSource>,
 }
 
 enum Msg {
@@ -329,7 +389,9 @@ impl AccountRecorder {
             site: parts.site,
             flag: parts.flag,
             game_data: parts.game_data.clone(),
+            chat_log: parts.chat_log.clone(),
             changed: parts.changed,
+            mode: parts.mode,
             status,
             epoch: epoch.clone(),
             connection,
@@ -346,9 +408,14 @@ impl AccountRecorder {
             last_contact: None,
             last_answer: None,
             keep_alive_due: false,
+            idle_due: false,
+            idle_failures: 0,
+            floor_from_idle: false,
             confirming: Confirming::Checking,
             signing_in: false,
             latest: None,
+            latest_changed: false,
+            latest_tagged: false,
             last_reading_at: None,
             pending_seals: VecDeque::new(),
             queued_connect: None,
@@ -360,6 +427,12 @@ impl AccountRecorder {
             run_next: None,
             run_due: false,
             waiters: Vec::new(),
+            heal_due: false,
+            live_due: None,
+            // Steps a previous run left are followed once the task starts.
+            follow_due: true,
+            follow_failing: None,
+            follow_pass_over: None,
         };
         runtime.spawn(actor.run(inbox));
         Arc::new(AccountRecorder {
@@ -369,6 +442,7 @@ impl AccountRecorder {
             db: parts.db,
             clock: parts.clock,
             game_data: parts.game_data,
+            chat_log: parts.chat_log,
         })
     }
 
@@ -462,11 +536,19 @@ impl AccountRecorder {
     pub async fn session_measure(&self, session_id: String) -> Result<MeasureRead, AccountError> {
         let being_read = self.status().reading_session;
         let game_data = self.game_data.clone();
+        let chat_log = self.chat_log.clone();
         let now = naive_to_epoch(self.clock.now());
         let (read, to_seal) = joined(
             on_reader(&self.db, move |conn| {
                 let roles = super::roles::KnownRoles::read(conn, game_data.as_deref())?;
-                sessions::session_measure(conn, &session_id, &roles, now, being_read.as_deref())
+                sessions::session_measure(
+                    conn,
+                    &session_id,
+                    &roles,
+                    chat_log.as_ref(),
+                    now,
+                    being_read.as_deref(),
+                )
             })
             .await,
         )?;
@@ -474,6 +556,93 @@ impl AccountRecorder {
             self.cache(vec![seal], now).await?;
         }
         Ok(read)
+    }
+
+    /// One tracked session's costs as its readings measure them: the stored
+    /// ones when current, or computed now on a reader, and what that leaves
+    /// to store (a seal, or costs derived again) written in a short guarded
+    /// write of its own. `None` for a session that does not exist.
+    pub async fn session_costs(
+        &self,
+        session_id: String,
+    ) -> Result<Option<SessionCosts>, AccountError> {
+        let being_read = self.status().reading_session;
+        let game_data = self.game_data.clone();
+        let chat_log = self.chat_log.clone();
+        let now = naive_to_epoch(self.clock.now());
+        let (costs, write) = joined(
+            on_reader(&self.db, move |conn| {
+                let roles = super::roles::KnownRoles::read(conn, game_data.as_deref())?;
+                costs::read_session_costs(
+                    conn,
+                    &session_id,
+                    &roles,
+                    chat_log.as_ref(),
+                    now,
+                    being_read.as_deref(),
+                )
+            })
+            .await,
+        )?;
+        if let Some(write) = write {
+            joined(on_writer(&self.db, move |conn| costs::write_costs(conn, write, now)).await)?;
+        }
+        Ok(costs)
+    }
+
+    /// Rebuild every session's costs that a change to what places their
+    /// items (the library, the protection sets, a set's pieces) left stale,
+    /// and every figure derived from them, leaving alone the session the
+    /// connection is still reading. A failure is logged, never raised: the
+    /// next read of a session rebuilds it anyway.
+    pub async fn heal_costs(&self) {
+        let being_read = self.status().reading_session;
+        let db = self.db.clone();
+        let game_data = self.game_data.clone();
+        let chat_log = self.chat_log.clone();
+        let now = naive_to_epoch(self.clock.now());
+        let _ = tokio::task::spawn_blocking(move || {
+            heal_costs(&db, game_data, chat_log, now, being_read)
+        })
+        .await;
+    }
+
+    /// The items the measured sessions could not place, and the player's
+    /// placements.
+    pub async fn cost_placements(&self) -> Result<Placements, AccountError> {
+        joined(on_reader(&self.db, |conn| placement::placements(conn)).await)
+    }
+
+    /// Place an item once for every session, then rebuild every session's
+    /// costs it left stale and the figures derived from them. Answers with
+    /// the sessions whose costs are still to be rebuilt (none, once the
+    /// rebuild has caught every one).
+    pub async fn place_cost_item(&self, placed: Placement) -> Result<Vec<String>, AccountError> {
+        let now = naive_to_epoch(self.clock.now());
+        joined(on_writer(&self.db, move |conn| placement::place(conn, &placed, now)).await)?;
+        self.rebuild_after_placement().await
+    }
+
+    /// Clear an item's placement, so what the app knows places it again,
+    /// then rebuild as [`Self::place_cost_item`] does.
+    pub async fn clear_cost_placement(&self, item: String) -> Result<Vec<String>, AccountError> {
+        joined(on_writer(&self.db, move |conn| placement::clear(conn, &item)).await)?;
+        self.rebuild_after_placement().await
+    }
+
+    /// Rebuild the costs a placement left stale, and name the sessions
+    /// whose costs are still not current: those the rebuild could not
+    /// write (one changed meanwhile, or a failure, which is logged).
+    async fn rebuild_after_placement(&self) -> Result<Vec<String>, AccountError> {
+        self.heal_costs().await;
+        let game_data = self.game_data.clone();
+        joined(
+            on_reader(&self.db, move |conn| {
+                let roles = super::roles::KnownRoles::read(conn, game_data.as_deref())?;
+                costs::sessions_with_stale_costs(conn, roles.fingerprint())
+            })
+            .await,
+        )
     }
 
     /// One page of the sessions with readings, newest first, computed on a
@@ -485,6 +654,7 @@ impl AccountRecorder {
     ) -> Result<MeasuredPage, AccountError> {
         let being_read = self.status().reading_session;
         let game_data = self.game_data.clone();
+        let chat_log = self.chat_log.clone();
         let now = naive_to_epoch(self.clock.now());
         let (page, to_seal) = joined(
             on_reader(&self.db, move |conn| {
@@ -493,6 +663,7 @@ impl AccountRecorder {
                     seek.as_ref(),
                     limit,
                     game_data.as_deref(),
+                    chat_log.as_ref(),
                     now,
                     being_read.as_deref(),
                 )
@@ -561,6 +732,159 @@ impl AccountRecorder {
             .await
     }
 
+    /// One tracked session minute by minute (see [`super::minutes`]), read
+    /// on a reader. The arrivals it offers that are not proposed yet are
+    /// stored as proposals, and the pending ones whose flag is gone
+    /// withdrawn, in a short write of their own, announced, and read back,
+    /// so each carries its handle. `None` for a session that does not
+    /// exist.
+    pub async fn session_minutes(
+        &self,
+        session_id: String,
+    ) -> Result<Option<SessionMinutes>, AccountError> {
+        let game_data = self.game_data.clone();
+        let id = session_id.clone();
+        let read = joined(
+            on_reader(&self.db, move |conn| {
+                let roles = super::roles::KnownRoles::read(conn, game_data.as_deref())?;
+                minutes::read_minutes(conn, &id, &roles)
+            })
+            .await,
+        )?;
+        let Some(read) = read else {
+            return Ok(None);
+        };
+        let seen = read.to_propose();
+        let withdraw = read.withdraw.clone();
+        if seen.is_empty() && withdraw.is_empty() {
+            return Ok(Some(read));
+        }
+        let now = naive_to_epoch(self.clock.now());
+        let writing = session_id.clone();
+        let changed = joined(
+            on_writer(&self.db, move |conn| {
+                proposals::sync_arrivals(conn, &writing, &seen, &withdraw, now)
+            })
+            .await,
+        )?;
+        if changed > 0 {
+            let _ = self.sender.send(Msg::ProposalsChanged);
+        }
+        let stored = joined(
+            on_reader(&self.db, move |conn| {
+                proposals::session_arrivals(conn, &session_id)
+            })
+            .await,
+        )?;
+        Ok(Some(read.with_stored(&stored)))
+    }
+
+    /// Offer a dismissed arrival again, and announce it.
+    pub async fn restore_arrival(&self, id: ProposalId) -> Result<Decided, AccountError> {
+        self.decide(move |conn, _| proposals::restore_arrival(conn, id))
+            .await
+    }
+
+    /// Record an arrival proposal as stock of unknown origin: claimed (an
+    /// earlier claim never linked only when `retake`), written through the
+    /// analytics service as unattributed stock, then linked to that record.
+    /// A write that fails releases the claim; a link that fails leaves the
+    /// claim, shown as possibly recorded already, and its record standing,
+    /// which a retake links rather than writing a second.
+    pub async fn record_arrival_unknown_origin(
+        &self,
+        id: ProposalId,
+        retake: bool,
+    ) -> Result<ArrivalRecording, AccountError> {
+        let now = naive_to_epoch(self.clock.now());
+        let claimed = joined(
+            on_writer(&self.db, move |conn| {
+                let Some(arrival) = proposals::open_arrival(conn, id)? else {
+                    return Ok(Err(ArrivalRecording::NotOpen));
+                };
+                let retaking: Vec<ProposalId> = if retake { vec![id] } else { Vec::new() };
+                match proposals::claim(conn, &[id], &retaking, now)? {
+                    Decided::Done => Ok(Ok(arrival)),
+                    Decided::NotFound => Ok(Err(ArrivalRecording::NotOpen)),
+                    Decided::Refused(reason) => Ok(Err(ArrivalRecording::Refused(reason))),
+                }
+            })
+            .await,
+        )?;
+        let (arrival, seen_to) = match claimed {
+            Ok(claimed) => claimed,
+            Err(outcome) => return Ok(outcome),
+        };
+        let analytics = AnalyticsService::new(self.db.clone(), self.clock.clone());
+        let written = analytics
+            .record_unknown_origin(
+                &arrival.key.name,
+                arrival.units as f64,
+                arrival.amount.micro_ped() as f64 / super::amount::MICRO_PER_PED as f64,
+                seen_to,
+                Some(id.0),
+            )
+            .await;
+        // A record from this arrival that still stands (recorded, never
+        // linked) is handed back, never written twice.
+        let record_id = match written {
+            Ok(recorded) => recorded.record_id,
+            Err(error) => {
+                let _ = self.release_proposals(vec![id]).await;
+                tracing::warn!(target: "eo::account", %error, proposal = id.0, "an arrival could not be recorded as stock of unknown origin");
+                return Ok(ArrivalRecording::WriteRefused);
+            }
+        };
+        let record = record_id.clone();
+        let linked = self
+            .decide(move |conn, now| proposals::link(conn, &[id], &record, now))
+            .await?;
+        Ok(match linked {
+            Decided::Done => ArrivalRecording::Recorded { record_id },
+            // The stock stands; the arrival stays claimed, shown as possibly
+            // recorded, until the player takes it over.
+            Decided::NotFound | Decided::Refused(_) => ArrivalRecording::Unlinked { record_id },
+        })
+    }
+
+    /// Take back stock of unknown origin recorded from an arrival (by the
+    /// record's own id): its stock goes, and the arrival is open to record
+    /// again. `false` when no such record stands. Announced.
+    pub async fn undo_arrival_unknown_origin(
+        &self,
+        record_id: String,
+    ) -> Result<bool, crate::analytics::AnalyticsError> {
+        let analytics = AnalyticsService::new(self.db.clone(), self.clock.clone());
+        let undone = analytics.undo_unknown_origin(&record_id).await?
+            == crate::analytics::UnknownOriginUndo::Undone;
+        if undone {
+            let _ = self.sender.send(Msg::ProposalsChanged);
+        }
+        Ok(undone)
+    }
+
+    /// Plan a stock reconciliation from the latest stored reading, kept as
+    /// the draft being reviewed (see [`super::reconcile`]).
+    pub async fn reconciliation_from_reading(
+        &self,
+    ) -> Result<crate::analytics::ReconciliationDraft, super::reconcile::PlanError> {
+        let analytics = AnalyticsService::new(self.db.clone(), self.clock.clone());
+        super::reconcile::plan_from_reading(&self.db, &analytics, self.game_data.clone()).await
+    }
+
+    /// Plan a stock reconciliation from an inventory pasted from the
+    /// account site, observed now, kept as the draft being reviewed. Needs
+    /// no connection.
+    pub async fn reconciliation_from_paste(
+        &self,
+        text: String,
+    ) -> Result<crate::analytics::ReconciliationDraft, super::reconcile::PlanError> {
+        let analytics = AnalyticsService::new(self.db.clone(), self.clock.clone());
+        let now = naive_to_epoch(self.clock.now());
+        super::reconcile::plan_from_paste(&self.db, &analytics, self.game_data.clone(), &text, now)
+            .await
+    }
+
     /// A strongbox run begins: answered with a reading from before the
     /// boxes are opened, once it is stored and examined (the latest one,
     /// when it was taken inside the floor), waiting at most [`RUN_WAIT`].
@@ -605,6 +929,24 @@ impl AccountRecorder {
             .await,
         )
         .map(|_| ())
+    }
+}
+
+/// Rebuild every stale cost projection (see [`costs::heal_session_costs`]),
+/// logging a failure: it never fails the work it follows. Blocking.
+fn heal_costs(
+    db: &Db,
+    game_data: Option<Arc<GameDataStore>>,
+    chat_log: Option<ChatLogSource>,
+    now: f64,
+    being_read: Option<String>,
+) -> usize {
+    match costs::heal_session_costs(db, game_data, chat_log, now, being_read) {
+        Ok(written) => written,
+        Err(error) => {
+            tracing::error!(target: "eo::account", %error, "stale session costs could not be rebuilt");
+            0
+        }
     }
 }
 
@@ -724,12 +1066,14 @@ enum ReadingFor {
     Closing(String),
     /// For a strongbox run, outside a tracked session.
     Run,
+    /// While signed in and nothing else is read.
+    Idle,
 }
 
 impl ReadingFor {
     fn session(&self) -> Option<&str> {
         match self {
-            ReadingFor::Connect | ReadingFor::Run => None,
+            ReadingFor::Connect | ReadingFor::Run | ReadingFor::Idle => None,
             ReadingFor::Baseline(session)
             | ReadingFor::Session(session)
             | ReadingFor::Closing(session) => Some(session),
@@ -742,6 +1086,7 @@ impl ReadingFor {
             ReadingFor::Baseline(_) => Purpose::Baseline,
             ReadingFor::Session(_) | ReadingFor::Closing(_) => Purpose::Session,
             ReadingFor::Run => Purpose::Run,
+            ReadingFor::Idle => Purpose::Ambient,
         }
     }
 }
@@ -760,6 +1105,18 @@ struct Ticket {
     due: Option<Instant>,
     /// When the request started.
     started: Instant,
+    /// The floor as it stood before the request began, restored when an
+    /// idle reading is abandoned for a session's baseline.
+    floor_before: FloorStart,
+}
+
+/// Where the reading floor runs from: when the latest full reading began,
+/// and whether that was a reading while idle (whose floor a session's
+/// baseline does not wait for).
+#[derive(Debug, Clone, Copy)]
+struct FloorStart {
+    at: Option<Instant>,
+    idle: bool,
 }
 
 /// A connect waiting for its check.
@@ -793,17 +1150,32 @@ enum Work {
         session: String,
         task: JoinHandle<Result<bool, AccountError>>,
     },
+    /// Stale session costs rebuilt: how many were written.
+    Heal { task: JoinHandle<usize> },
+    /// A running session's costs so far published: whether anything was
+    /// written.
+    Publish {
+        session: String,
+        task: JoinHandle<Result<bool, AccountError>>,
+    },
     /// A reading just stored, examined for what it proposes.
     Examine {
         reading: ReadingId,
         taken_at: f64,
         /// When its request started.
         started: Instant,
+        /// Taken while idle: a strongbox run waiting is told only of a
+        /// reading it can use, and otherwise takes its own.
+        idle: bool,
         task: JoinHandle<Result<Option<Examined>, AccountError>>,
     },
     /// Readings a previous run left unexamined.
     CatchUp {
         task: JoinHandle<Result<Option<Examined>, AccountError>>,
+    },
+    /// What the steps waiting did to the stock, recorded.
+    Follow {
+        task: JoinHandle<Result<FollowPass, FollowFailure>>,
     },
     /// A balance asked for only so the site keeps the session.
     KeepAlive {
@@ -818,8 +1190,11 @@ enum Done {
     Fetched(Result<SiteOutcome<Reading>, JoinError>),
     Stored(Result<Result<Option<(ReadingHeader, Reading)>, AccountError>, JoinError>),
     Sealed(Result<Result<bool, AccountError>, JoinError>),
+    Healed(Result<usize, JoinError>),
+    Published(Result<Result<bool, AccountError>, JoinError>),
     Examined(Result<Result<Option<Examined>, AccountError>, JoinError>),
     CaughtUp(Result<Result<Option<Examined>, AccountError>, JoinError>),
+    Followed(Result<Result<FollowPass, FollowFailure>, JoinError>),
     KeptAlive(Result<SiteOutcome<Pec>, JoinError>),
 }
 
@@ -830,8 +1205,11 @@ async fn finish(work: &mut Option<Work>) -> Done {
         Some(Work::Fetch { task, .. }) => Done::Fetched(task.await),
         Some(Work::Store { task, .. }) => Done::Stored(task.await),
         Some(Work::Seal { task, .. }) => Done::Sealed(task.await),
+        Some(Work::Heal { task }) => Done::Healed(task.await),
+        Some(Work::Publish { task, .. }) => Done::Published(task.await),
         Some(Work::Examine { task, .. }) => Done::Examined(task.await),
         Some(Work::CatchUp { task }) => Done::CaughtUp(task.await),
+        Some(Work::Follow { task }) => Done::Followed(task.await),
         Some(Work::KeepAlive { task, .. }) => Done::KeptAlive(task.await),
     }
 }
@@ -852,6 +1230,7 @@ enum Event {
     RunDue,
     RunExpired,
     KeepAliveDue,
+    IdleReadingDue,
 }
 
 /// Whether a reading was started through the gate.
@@ -910,7 +1289,9 @@ struct Actor {
     site: SharedSite,
     flag: Arc<dyn ConnectionFlag>,
     game_data: Option<Arc<GameDataStore>>,
+    chat_log: Option<ChatLogSource>,
     changed: Option<ChangedSink>,
+    mode: ReadingMode,
     status: watch::Sender<ConnectionStatus>,
     /// Moved on by every disconnect (in the handle, before the message).
     epoch: Arc<AtomicU64>,
@@ -940,11 +1321,23 @@ struct Actor {
     last_answer: Option<Instant>,
     /// The keep-alive fell due and waits for the work in flight.
     keep_alive_due: bool,
+    /// A reading while idle fell due and waits for the work in flight.
+    idle_due: bool,
+    /// Failed readings while idle in a row.
+    idle_failures: u32,
+    /// Whether the latest full reading began while idle: a session's
+    /// baseline is never held back by its floor.
+    floor_from_idle: bool,
     /// How confirming the stored session stands, while unconfirmed.
     confirming: Confirming,
     signing_in: bool,
     /// The latest stored reading.
     latest: Option<Reading>,
+    /// Whether the latest stored reading differed from the one stored
+    /// before it.
+    latest_changed: bool,
+    /// Whether the latest stored reading is tagged with a session.
+    latest_tagged: bool,
     last_reading_at: Option<f64>,
     pending_seals: VecDeque<String>,
     queued_connect: Option<PendingConnect>,
@@ -954,6 +1347,19 @@ struct Actor {
     latest_id: Option<ReadingId>,
     /// Readings a previous run left unexamined are still to be examined.
     catch_up: bool,
+    /// A reading was stored outside any session: it may be the one a
+    /// sealed session's gap ends at, so stale costs are rebuilt.
+    heal_due: bool,
+    /// A reading of the running session was stored: what it has cost so
+    /// far is published for the live figures.
+    live_due: Option<String>,
+    /// Steps may wait to have what they did to the stock recorded.
+    follow_due: bool,
+    /// The step the last passes failed on, and how many in a row.
+    follow_failing: Option<(ReadingId, u32)>,
+    /// A step failed [`FOLLOW_FAILURES_BEFORE_PASSING`] passes in a row:
+    /// the next pass marks it with nothing recorded.
+    follow_pass_over: Option<ReadingId>,
     /// The strongbox run being read, if one is open.
     run: Option<Run>,
     /// When the run's next reading falls due.
@@ -984,6 +1390,11 @@ impl Actor {
             let run_at = if self.run_due { None } else { self.run_next };
             let run_closes = self.run_closes();
             let keep_alive_at = self.keep_alive_at();
+            let idle_at = if self.idle_due {
+                None
+            } else {
+                self.idle_reading_at()
+            };
             // Messages first: a disconnect that arrives with a result is
             // applied before the result is looked at.
             let event = tokio::select! {
@@ -996,6 +1407,7 @@ impl Actor {
                 () = at(run_at) => Event::RunDue,
                 () = at(run_closes) => Event::RunExpired,
                 () = at(keep_alive_at) => Event::KeepAliveDue,
+                () = at(idle_at) => Event::IdleReadingDue,
             };
             match event {
                 Event::Message(None) => break,
@@ -1020,6 +1432,7 @@ impl Actor {
                 }
                 Event::RunExpired => self.close_run(RunReading::Interrupted),
                 Event::KeepAliveDue => self.keep_alive_due = true,
+                Event::IdleReadingDue => self.idle_due = true,
             }
             self.advance();
             self.publish_status();
@@ -1052,18 +1465,36 @@ impl Actor {
             let age = self.now_epoch() - taken_at;
             if (0.0..READING_FLOOR.as_secs_f64()).contains(&age) {
                 self.last_full_start = Instant::now().checked_sub(Duration::from_secs_f64(age));
+                self.floor_from_idle = stored.header.purpose == Purpose::Ambient;
             }
             self.last_reading_at = Some(taken_at);
             self.latest_id = Some(stored.header.id);
+            self.latest_tagged = stored.header.session_id.is_some();
             self.latest = Some(stored.reading);
         }
         if let Some(session) = active {
             self.tracking = Tracking::Running(session);
         }
+        // Costs a change made while the app was closed (a new build's
+        // rules, an item placed differently) left stale are rebuilt now.
+        let db = self.db.clone();
+        let game_data = self.game_data.clone();
+        let chat_log = self.chat_log.clone();
+        let now = self.now_epoch();
+        let _ =
+            tokio::task::spawn_blocking(move || heal_costs(&db, game_data, chat_log, now, None))
+                .await;
     }
 
     fn now_epoch(&self) -> f64 {
         naive_to_epoch(self.clock.now())
+    }
+
+    /// The session the connection is reading now, if any.
+    fn reading_session(&self) -> Option<String> {
+        self.is_connected()
+            .then(|| self.tracking.session().map(str::to_string))
+            .flatten()
     }
 
     fn is_connected(&self) -> bool {
@@ -1085,10 +1516,7 @@ impl Actor {
             state: self.connection.state(),
             connected_at,
             last_reading_at: self.last_reading_at,
-            reading_session: self
-                .is_connected()
-                .then(|| self.tracking.session().map(str::to_string))
-                .flatten(),
+            reading_session: self.reading_session(),
             tracked_session: match &self.tracking {
                 Tracking::Running(session) => Some(session.clone()),
                 Tracking::Idle | Tracking::Grace { .. } => None,
@@ -1098,6 +1526,7 @@ impl Actor {
             working: self.work.is_some()
                 || self.queued_connect.is_some()
                 || !self.pending_seals.is_empty()
+                || self.live_due.is_some()
                 || self.attempt_due.is_some()
                 || self.catch_up,
             confirming: matches!(self.connection, Connection::Unconfirmed)
@@ -1163,6 +1592,20 @@ impl Actor {
         self.tracking = Tracking::Running(session.clone());
         self.failures = 0;
         self.next_attempt = None;
+        // A reading while idle still on its way is abandoned (its answer is
+        // dropped when it comes), and its floor with it: the session's
+        // baseline is taken at once.
+        let abandoned = match &self.work {
+            Some(Work::Fetch { ticket, task }) if ticket.purpose == ReadingFor::Idle => {
+                task.abort();
+                Some(ticket.floor_before)
+            }
+            _ => None,
+        };
+        if let Some(floor) = abandoned {
+            self.last_full_start = floor.at;
+            self.floor_from_idle = floor.idle;
+        }
         // The baseline, at once. Only a connection that was there when the
         // session started takes one.
         if self.is_connected() {
@@ -1311,6 +1754,8 @@ impl Actor {
         self.next_attempt = None;
         self.attempt_due = None;
         self.keep_alive_due = false;
+        self.idle_due = false;
+        self.idle_failures = 0;
         self.baseline_for = None;
         self.failures = 0;
         if let Tracking::Grace { session, .. } = &self.tracking {
@@ -1346,14 +1791,25 @@ impl Actor {
     /// starts.)
     fn begin_reading(&mut self, purpose: ReadingFor, due: Option<Instant>) -> Began {
         let now = Instant::now();
-        if let Some(end) = self.floor_end().filter(|end| now < *end) {
+        // A session's baseline is never answered by a reading taken while
+        // idle: it would stand untagged for the session's start.
+        let past_idle_floor = matches!(purpose, ReadingFor::Baseline(_)) && self.floor_from_idle;
+        if let Some(end) = self
+            .floor_end()
+            .filter(|end| now < *end && !past_idle_floor)
+        {
             return Began::Floor(end);
         }
         let Connection::Connected { session, .. } = &self.connection else {
             return Began::NotConnected;
         };
         debug_assert!(self.work.is_none(), "one request at a time");
+        let floor_before = FloorStart {
+            at: self.last_full_start,
+            idle: self.floor_from_idle,
+        };
         self.last_full_start = Some(now);
+        self.floor_from_idle = purpose == ReadingFor::Idle;
         self.last_contact = Some(now);
         let task = tokio::spawn(read_whole(
             self.site.clone(),
@@ -1368,6 +1824,7 @@ impl Actor {
                 tag,
                 due,
                 started: now,
+                floor_before,
             },
             task,
         });
@@ -1401,7 +1858,11 @@ impl Actor {
         if let Some(session) = self.pending_seals.pop_front() {
             let db = self.db.clone();
             let game_data = self.game_data.clone();
+            let healing_with = self.game_data.clone();
+            let chat_log = self.chat_log.clone();
+            let sealing_with = self.chat_log.clone();
             let now = self.now_epoch();
+            let being_read = self.reading_session();
             let sealing = session.clone();
             let task = tokio::task::spawn_blocking(move || {
                 // Computed on a reader; only the result is written.
@@ -1411,23 +1872,39 @@ impl Actor {
                             conn,
                             &sealing,
                             game_data.as_deref(),
+                            sealing_with.as_ref(),
                             now,
                         ))
                     })
                     .map_err(AccountError::from)
                     .and_then(|seal| seal)?;
-                let Some(seal) = seal else {
-                    return Ok(false);
+                let written = match seal {
+                    Some(seal) => db
+                        .with_writer_blocking(move |conn| {
+                            Ok(sessions::cache_sealed(conn, &[seal], now))
+                        })
+                        .map_err(AccountError::from)
+                        .and_then(|cached| cached)?,
+                    None => 0,
                 };
-                let written = db
-                    .with_writer_blocking(move |conn| {
-                        Ok(sessions::cache_sealed(conn, &[seal], now))
-                    })
-                    .map_err(AccountError::from)
-                    .and_then(|cached| cached)?;
+                // Then any other session's costs a change has left stale.
+                heal_costs(&db, healing_with, chat_log, now, being_read);
                 Ok(written > 0)
             });
             self.work = Some(Work::Seal { session, task });
+            return;
+        }
+        // What the running session has cost so far, computed on a reader
+        // and published before the next reading is asked for.
+        if let Some(session) = self.live_due.take() {
+            let db = self.db.clone();
+            let game_data = self.game_data.clone();
+            let now = self.now_epoch();
+            let publishing = session.clone();
+            let task = tokio::task::spawn_blocking(move || {
+                super::live::publish_so_far(&db, game_data, publishing, now)
+            });
+            self.work = Some(Work::Publish { session, task });
             return;
         }
         if let Some(due) = self.attempt_due.take() {
@@ -1443,12 +1920,50 @@ impl Actor {
                 return;
             }
         }
+        if self.idle_due {
+            self.idle_due = false;
+            self.idle_reading();
+            if self.work.is_some() {
+                return;
+            }
+        }
         if self.keep_alive_due {
             self.keep_alive_due = false;
             self.keep_alive();
             if self.work.is_some() {
                 return;
             }
+        }
+        // Costs a reading outside any session may have let a sealed
+        // session's gap be weighed, rebuilt whenever nothing else is due.
+        if self.heal_due {
+            self.heal_due = false;
+            let db = self.db.clone();
+            let game_data = self.game_data.clone();
+            let chat_log = self.chat_log.clone();
+            let now = self.now_epoch();
+            let being_read = self.reading_session();
+            let task = tokio::task::spawn_blocking(move || {
+                heal_costs(&db, game_data, chat_log, now, being_read)
+            });
+            self.work = Some(Work::Heal { task });
+            return;
+        }
+        // What the steps waiting did to the stock, whenever nothing else is
+        // due and no strongbox run is reading: the run's flow records what
+        // its readings show.
+        if self.follow_due && self.run.is_none() {
+            self.follow_due = false;
+            let db = self.db.clone();
+            let analytics = AnalyticsService::new(self.db.clone(), self.clock.clone());
+            let game_data = self.game_data.clone();
+            let now = self.now_epoch();
+            let pass_over = self.follow_pass_over;
+            let task = tokio::task::spawn_blocking(move || {
+                super::follow::follow(&db, &analytics, game_data, now, pass_over)
+            });
+            self.work = Some(Work::Follow { task });
+            return;
         }
         // Readings a previous run left unexamined, a batch at a time,
         // whenever nothing else is due.
@@ -1533,16 +2048,67 @@ impl Actor {
                     tracing::error!(target: "eo::account", %error, "sealing a session's measure stopped");
                 }
             },
+            (Work::Publish { session, .. }, Done::Published(published)) => match published {
+                Ok(Ok(true)) => self.mark_changed(),
+                Ok(Ok(false)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(target: "eo::account", %error, session_id = %session, "a running session's costs so far could not be published");
+                }
+                Err(error) => {
+                    tracing::warn!(target: "eo::account", %error, "publishing a running session's costs so far stopped");
+                }
+            },
+            (Work::Heal { .. }, Done::Healed(healed)) => match healed {
+                Ok(0) => {}
+                Ok(_) => self.mark_changed(),
+                Err(error) => {
+                    tracing::error!(target: "eo::account", %error, "rebuilding stale session costs stopped");
+                }
+            },
             (
                 Work::Examine {
                     reading,
                     taken_at,
                     started,
+                    idle,
                     ..
                 },
                 Done::Examined(examined),
-            ) => self.examined(reading, taken_at, started, examined),
+            ) => self.examined(reading, taken_at, started, idle, examined),
             (Work::CatchUp { .. }, Done::CaughtUp(pass)) => self.caught_up(pass),
+            (Work::Follow { .. }, Done::Followed(pass)) => match pass {
+                Ok(Ok(pass)) => {
+                    if pass.recorded > 0 {
+                        self.mark_changed();
+                    }
+                    self.follow_failing = None;
+                    self.follow_pass_over = None;
+                    // The rest, once whatever else is due has gone.
+                    self.follow_due |= pass.more;
+                }
+                Ok(Err(failure)) => {
+                    // Left for the pass after the next reading, unless the
+                    // same step has failed too often: then it is passed
+                    // over, so it never holds the steps after it.
+                    tracing::error!(target: "eo::account", error = %failure.error, "what the readings did to the stock could not be recorded");
+                    if let Some(reading) = failure.reading {
+                        let failures = match self.follow_failing {
+                            Some((failing, count)) if failing == reading => count + 1,
+                            _ => 1,
+                        };
+                        if failures >= FOLLOW_FAILURES_BEFORE_PASSING {
+                            self.follow_failing = None;
+                            self.follow_pass_over = Some(reading);
+                            self.follow_due = true;
+                        } else {
+                            self.follow_failing = Some((reading, failures));
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::error!(target: "eo::account", %error, "recording what the readings did to the stock stopped");
+                }
+            },
             (Work::KeepAlive { generation, .. }, Done::KeptAlive(answer)) => {
                 self.kept_alive(generation, answer)
             }
@@ -1598,6 +2164,7 @@ impl Actor {
         };
         self.generation += 1;
         self.failures = 0;
+        self.idle_failures = 0;
         self.last_answer = Some(Instant::now());
         self.connection = Connection::Connected {
             session: session.clone(),
@@ -1606,7 +2173,12 @@ impl Actor {
         // The check's balance is the connect reading's: one item read
         // completes it, unless a reading started inside the floor stands.
         if self.floor_end().is_none_or(|end| started >= end) {
+            let floor_before = FloorStart {
+                at: self.last_full_start,
+                idle: self.floor_from_idle,
+            };
             self.last_full_start = Some(started);
+            self.floor_from_idle = false;
             let task = tokio::spawn(read_items_beside(
                 self.site.clone(),
                 session,
@@ -1620,6 +2192,7 @@ impl Actor {
                     tag,
                     due: None,
                     started,
+                    floor_before,
                 },
                 task,
             });
@@ -1659,6 +2232,10 @@ impl Actor {
                     || self.pending_seals.iter().any(|pending| pending == session)
             }
         };
+        // A reading while idle is kept only while no tracked session has
+        // taken over (the session abandoned it).
+        let idle = ticket.purpose == ReadingFor::Idle;
+        let for_this = for_this && (!idle || matches!(self.tracking, Tracking::Idle));
         let closing = matches!(ticket.purpose, ReadingFor::Closing(_));
         let minute = matches!(
             ticket.purpose,
@@ -1671,7 +2248,7 @@ impl Actor {
                     self.closing_done(None);
                 }
                 if current {
-                    self.answer_waiters(ticket.started, RunReading::Unreadable);
+                    self.unreadable(&ticket);
                 }
                 return;
             }
@@ -1683,6 +2260,9 @@ impl Actor {
         match outcome {
             SiteOutcome::Read(reading) => {
                 self.last_answer = Some(Instant::now());
+                if idle {
+                    self.idle_failures = 0;
+                }
                 if minute {
                     // A success ends any backing off: the next minute is
                     // a minute after this one fell due.
@@ -1711,7 +2291,13 @@ impl Actor {
             SiteOutcome::Unauthorised => self.signed_out_by_site("a reading"),
             SiteOutcome::Failed(failure) => {
                 tracing::warn!(target: "eo::account", ?failure, "an account reading failed; the next falls due as usual");
-                self.answer_waiters(ticket.started, RunReading::Unreadable);
+                self.unreadable(&ticket);
+                if idle {
+                    // Read again no sooner than if nothing had changed,
+                    // and less often once failures run on.
+                    self.idle_failures += 1;
+                    self.latest_changed = false;
+                }
                 if closing {
                     self.closing_done(None);
                 }
@@ -1742,26 +2328,51 @@ impl Actor {
                 }
             }
             Ok(Ok(Some((header, reading)))) => {
+                // A reading outside any session may end a sealed session's
+                // gap. One taken while idle that changes nothing after
+                // another outside any session cannot.
+                let ends_nothing =
+                    header.purpose == Purpose::Ambient && identical && !self.latest_tagged;
+                if header.session_id.is_none() && !ends_nothing {
+                    self.heal_due = true;
+                }
+                // A reading of the session still running moves what it has
+                // cost so far.
+                if let (Some(session), Tracking::Running(running)) =
+                    (header.session_id.as_deref(), &self.tracking)
+                {
+                    if session == running {
+                        self.live_due = Some(running.clone());
+                    }
+                }
                 self.last_reading_at = Some(header.taken_at);
                 self.latest_id = Some(header.id);
+                self.latest_changed = !identical;
+                self.latest_tagged = header.session_id.is_some();
                 self.latest = Some(reading);
                 self.readings_stored += 1;
+                self.follow_due = true;
                 self.mark_changed();
                 if closing {
                     self.closing_done(Some(identical));
                 }
-                self.start_examine(header.id, header.taken_at, ticket.started);
+                self.start_examine(
+                    header.id,
+                    header.taken_at,
+                    ticket.started,
+                    ticket.purpose == ReadingFor::Idle,
+                );
             }
             Ok(Err(error)) => {
                 tracing::error!(target: "eo::account", %error, "an account reading could not be stored");
-                self.answer_waiters(ticket.started, RunReading::Unreadable);
+                self.unreadable(&ticket);
                 if closing {
                     self.closing_done(None);
                 }
             }
             Err(error) => {
                 tracing::error!(target: "eo::account", %error, "storing an account reading stopped");
-                self.answer_waiters(ticket.started, RunReading::Unreadable);
+                self.unreadable(&ticket);
                 if closing {
                     self.closing_done(None);
                 }
@@ -1789,18 +2400,74 @@ impl Actor {
         }
     }
 
+    /// A reading came to nothing: the strongbox run waiting for it is told,
+    /// unless it was taken while idle, when the run takes its own instead.
+    fn unreadable(&mut self, ticket: &Ticket) {
+        if ticket.purpose != ReadingFor::Idle {
+            self.answer_waiters(ticket.started, RunReading::Unreadable);
+        }
+    }
+
+    /// Whether the account is read in full now that nothing else is read:
+    /// built to read always, connected, no session being read or closed,
+    /// and no strongbox run open.
+    fn reads_while_idle(&self) -> bool {
+        self.mode == ReadingMode::Always
+            && self.is_connected()
+            && matches!(self.tracking, Tracking::Idle)
+            && self.run.is_none()
+    }
+
+    /// When the next reading while idle falls due: a minute after the
+    /// latest full reading began when that reading changed something,
+    /// five minutes after it otherwise, and never inside the floor.
+    fn idle_reading_at(&self) -> Option<Instant> {
+        if !self.reads_while_idle() {
+            return None;
+        }
+        let every = if self.idle_failures >= FAILURES_BEFORE_BACKING_OFF {
+            READ_EVERY_WHILE_FAILING.max(IDLE_READ_EVERY)
+        } else if self.latest_changed {
+            READ_EVERY
+        } else {
+            IDLE_READ_EVERY
+        };
+        let due = self
+            .last_full_start
+            .map_or_else(Instant::now, |start| start + every);
+        Some(due.max(self.floor_end().unwrap_or(due)))
+    }
+
+    /// Read the account in full while idle, unless something read it since
+    /// the reading fell due (the work it waited for), or a session or run
+    /// has taken over.
+    fn idle_reading(&mut self) {
+        if self
+            .idle_reading_at()
+            .is_some_and(|due| due <= Instant::now())
+        {
+            let _ = self.begin_reading(ReadingFor::Idle, None);
+        }
+    }
+
     /// When the keep-alive falls due: five minutes after the latest
-    /// request to the site, while connected and not already due.
+    /// request to the site, while connected, not already due, and the
+    /// account is not being read while idle (those readings keep the
+    /// session themselves).
     fn keep_alive_at(&self) -> Option<Instant> {
-        if !self.is_connected() || self.keep_alive_due {
+        if !self.is_connected() || self.keep_alive_due || self.reads_while_idle() {
             return None;
         }
         self.last_contact.map(|contact| contact + KEEP_ALIVE_EVERY)
     }
 
     /// Ask for the balance, unless a request has been made since the
-    /// keep-alive fell due (the work it waited for was one).
+    /// keep-alive fell due (the work it waited for was one), or the
+    /// account is now read while idle.
     fn keep_alive(&mut self) {
+        if self.reads_while_idle() {
+            return;
+        }
         let Connection::Connected { session, .. } = &self.connection else {
             return;
         };

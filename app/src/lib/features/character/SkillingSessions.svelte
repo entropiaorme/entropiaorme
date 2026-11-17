@@ -37,6 +37,12 @@
 	const isHp = $derived(hub.target.kind === 'hp');
 	const source = $derived(hub.selectedSource);
 	const rows = $derived(sessionRows(hub.sources));
+	// What the sessions cost beyond their activity (travel, field logistics,
+	// what the app cannot place) is in the loss after markup: its own column
+	// says so, wherever a session carries any.
+	const showsOverhead = $derived(
+		rows.some(({ source: row }) => row.status === 'ready' && row.overhead > 0),
+	);
 	const skills = $derived(
 		(source?.skills ?? [])
 			.filter((skill) => skill.levelGain > 0)
@@ -97,6 +103,9 @@
 						<th class="px-3 py-2 text-right eyebrow">Cycled</th>
 						<th class="px-3 py-2 text-right eyebrow">Expected loss</th>
 						<th class="px-3 py-2 text-right eyebrow">Recorded loss</th>
+						{#if showsOverhead}
+							<th class="px-3 py-2 text-right eyebrow">Overhead</th>
+						{/if}
 						<th class="px-3 py-2 text-right eyebrow">After markup</th>
 						<th class="px-3 py-2 text-right eyebrow">Time</th>
 						<th class="px-3 py-2 text-right eyebrow">Kills</th>
@@ -119,7 +128,7 @@
 								{/if}
 							</td>
 							{#if row.status !== 'ready'}
-								<td colspan="7" class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
+								<td colspan={showsOverhead ? 8 : 7} class="py-2.5 pl-3 text-right text-xs text-text-tertiary">
 									{statusMessage(row.status, row.name, name)}
 								</td>
 							{:else}
@@ -128,6 +137,11 @@
 									{row.expected !== null ? formatRoutePed(row.expected.ttCost) : NO_DATA}
 								</td>
 								<td class="{COL_FIGURE} text-text-secondary">{formatRoutePed(row.ttCost)}</td>
+								{#if showsOverhead}
+									<td class="{COL_FIGURE} text-text-secondary" data-testid="forecast-overhead">
+										{formatRoutePed(row.overhead)}
+									</td>
+								{/if}
 								<td class="{COL_FIGURE} text-text-secondary">
 									{row.netCost !== null ? formatRoutePed(row.netCost) : NO_DATA}
 								</td>

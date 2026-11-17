@@ -24,13 +24,14 @@ use rusqlite::OptionalExtension;
 
 use super::amount::{Amount, Pec};
 use super::composite::RepairCost;
-use super::measure::{AmmoSplit, CoverageLevel, SessionMeasure, SessionWindow};
+use super::costs::{self, SessionCosts};
+use super::measure::{AmmoSplit, CoverageLevel, NotableEvent, SessionMeasure, SessionWindow};
 use super::roles::{KnownRoles, Role};
 use super::store::{
-    cache_session_measure_if_current, cached_measure, compute_session_measure, CachedMeasure,
-    ComputedMeasure,
+    cache_if_current_in, cached_measure, compute_session_measure, CachedMeasure, ComputedMeasure,
 };
 use super::AccountError;
+use crate::chatlog_span::ChatLogSource;
 use crate::game_data_store::GameDataStore;
 use crate::session_scope::SessionExclusion;
 
@@ -101,11 +102,19 @@ pub fn active_session(conn: &rusqlite::Connection) -> Result<Option<String>, Acc
         .optional()?)
 }
 
-/// Let go of a session about to be deleted: its cached measure goes, and
-/// its readings stay, no longer tagged with it (a later reading may be
-/// stored as the changes against one of them), as do the proposals seen
-/// during it. Run inside the deletion's own transaction.
+/// Let go of a session about to be deleted: its cached measure, the costs
+/// stored from it, what was published of its costs while it ran and the
+/// chat log's verdict on its gap go, and its readings stay, no longer
+/// tagged with it (a later reading may be stored as the changes against
+/// one of them), as do the proposals seen during it. Run inside the deletion's own
+/// transaction.
 pub fn release_session(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<()> {
+    costs::clear(conn, session_id)?;
+    super::live::forget(conn, session_id)?;
+    conn.execute(
+        "DELETE FROM account_session_gap_verdicts WHERE session_id = ?1",
+        [session_id],
+    )?;
     conn.execute(
         "DELETE FROM account_session_measures WHERE session_id = ?1",
         [session_id],
@@ -135,22 +144,26 @@ pub enum MeasureRead {
     },
 }
 
-/// A measure sealed on a read, for the caller to cache.
+/// A measure sealed on a read, with the costs it measures, for the caller
+/// to cache together.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToSeal {
     pub session_id: String,
     pub computed: ComputedMeasure,
+    pub costs: SessionCosts,
     pub sealed_at: f64,
 }
 
 /// Read one session's measure on a reader. `being_read` names the session
 /// the connection is reading now, which is never sealed here. A measure
-/// sealed by this read comes back in the second place, to be cached with
-/// [`cache_sealed`].
+/// sealed by this read comes back in the second place, with its costs
+/// (weighed against the chat log `chat_log` where its readings leave an
+/// end unread), to be cached with [`cache_sealed`].
 pub fn session_measure(
     conn: &rusqlite::Connection,
     session_id: &str,
     roles: &KnownRoles,
+    chat_log: Option<&ChatLogSource>,
     now: f64,
     being_read: Option<&str>,
 ) -> Result<(MeasureRead, Option<ToSeal>), AccountError> {
@@ -161,7 +174,7 @@ pub fn session_measure(
         return Ok((MeasureRead::NoReadings, None));
     }
     let (measure, sealed, to_seal) =
-        measure_of(conn, session_id, &session, roles, now, being_read)?;
+        measure_of(conn, session_id, &session, roles, chat_log, now, being_read)?;
     Ok((
         MeasureRead::Measured {
             measure: Box::new(measure),
@@ -171,10 +184,11 @@ pub fn session_measure(
     ))
 }
 
-/// Cache the measures a read sealed, each only while it is still the
-/// truth (see [`cache_session_measure_if_current`]): a short write. Returns
-/// how many were written; one that no longer holds is left for the next
-/// read to compute again.
+/// Cache the measures a read sealed, each with its costs in one short
+/// transaction, and only while it is still the truth (see
+/// [`super::store::cache_session_measure_if_current`]). Returns how many
+/// were written; one that no longer holds is left for the next read to
+/// compute again.
 pub fn cache_sealed(
     conn: &mut rusqlite::Connection,
     sealed: &[ToSeal],
@@ -182,15 +196,30 @@ pub fn cache_sealed(
 ) -> Result<usize, AccountError> {
     let mut written = 0;
     for seal in sealed {
-        if cache_session_measure_if_current(
-            conn,
+        let tx = conn.transaction()?;
+        let mut stored = false;
+        if cache_if_current_in(
+            &tx,
             &seal.session_id,
             &seal.computed,
             Some(seal.sealed_at),
             computed_at,
         )? {
+            stored =
+                costs::store_costs(&tx, &seal.session_id, &seal.costs, computed_at, computed_at)?;
             written += 1;
         }
+        // Once the session is sealed, by this write or one before it, what
+        // was published of it while it ran is over, whatever its sealed
+        // costs came to (stored, unmeasured, or waiting on a gap).
+        let dropped =
+            is_sealed(&tx, &seal.session_id)? && super::live::forget(&tx, &seal.session_id)?;
+        if stored || dropped {
+            // The stored costs, or none, are now the session's: every
+            // figure derived from them follows in the same write.
+            crate::session_costs::refresh_derived(&tx, &seal.session_id)?;
+        }
+        tx.commit()?;
     }
     Ok(written)
 }
@@ -200,6 +229,7 @@ fn measure_of(
     session_id: &str,
     session: &TrackedSession,
     roles: &KnownRoles,
+    chat_log: Option<&ChatLogSource>,
     now: f64,
     being_read: Option<&str>,
 ) -> Result<(SessionMeasure, bool, Option<ToSeal>), AccountError> {
@@ -207,6 +237,7 @@ fn measure_of(
         CachedMeasure::Current {
             measure,
             sealed_at: Some(_),
+            ..
         } => return Ok((*measure, true, None)),
         CachedMeasure::Current { sealed_at, .. } | CachedMeasure::Stale { sealed_at } => sealed_at,
         CachedMeasure::Missing => None,
@@ -218,23 +249,28 @@ fn measure_of(
         return Ok((computed.measure, false, None));
     }
     let measure = computed.measure.clone();
+    let costs = costs::sealed_costs(conn, session_id, &session.window, &measure, roles, chat_log)?;
     Ok((
         measure,
         true,
         Some(ToSeal {
             session_id: session_id.to_string(),
             computed,
+            costs,
             sealed_at: sealed_before.unwrap_or(now),
         }),
     ))
 }
 
-/// Compute the sealed measure of a session that has ended, on a reader.
-/// `None` for a session that is gone, still runs, or has no readings.
+/// Compute the sealed measure of a session that has ended, with its costs
+/// (weighed against the chat log `chat_log` where its readings leave an end
+/// unread), on a reader. `None` for a session that is gone, still runs, or
+/// has no readings.
 pub fn measure_to_seal(
     conn: &rusqlite::Connection,
     session_id: &str,
     game_data: Option<&GameDataStore>,
+    chat_log: Option<&ChatLogSource>,
     now: f64,
 ) -> Result<Option<ToSeal>, AccountError> {
     let Some(session) = tracked_session(conn, session_id)? else {
@@ -244,9 +280,19 @@ pub fn measure_to_seal(
         return Ok(None);
     }
     let roles = KnownRoles::read(conn, game_data)?;
+    let computed = compute_session_measure(conn, session_id, &session.window, &roles)?;
+    let costs = costs::sealed_costs(
+        conn,
+        session_id,
+        &session.window,
+        &computed.measure,
+        &roles,
+        chat_log,
+    )?;
     Ok(Some(ToSeal {
         session_id: session_id.to_string(),
-        computed: compute_session_measure(conn, session_id, &session.window, &roles)?,
+        computed,
+        costs,
         sealed_at: now,
     }))
 }
@@ -256,6 +302,10 @@ pub fn measure_to_seal(
 pub enum AmmoTotal {
     /// What every type burned.
     Settled(Amount),
+    /// What every type burned outside the steps Universal Ammo was topped
+    /// up in (`steps` of them), whose burn the readings do not know: no
+    /// figure for the whole session to set beside the tracked one.
+    ToppedUp { burned: Amount, steps: usize },
     /// A type's split into burned and paid back by an opening is not
     /// known, so neither is the total burned.
     Unsettled,
@@ -296,6 +346,11 @@ pub struct MeasureTotals {
 
 impl MeasureTotals {
     pub fn of(measure: &SessionMeasure) -> Result<MeasureTotals, AccountError> {
+        let topped_up = measure
+            .events
+            .iter()
+            .filter(|event| matches!(event, NotableEvent::AmmoToppedUp { .. }))
+            .count();
         let mut ammo = Some(Amount::NONE);
         for used in &measure.ammo {
             ammo = match (&used.split, ammo) {
@@ -324,7 +379,14 @@ impl MeasureTotals {
             }
         }
         Ok(MeasureTotals {
-            ammo: ammo.map_or(AmmoTotal::Unsettled, AmmoTotal::Settled),
+            ammo: match ammo {
+                None => AmmoTotal::Unsettled,
+                Some(burned) if topped_up > 0 => AmmoTotal::ToppedUp {
+                    burned,
+                    steps: topped_up,
+                },
+                Some(burned) => AmmoTotal::Settled(burned),
+            },
             weapon_decay: decay_of(&[Role::Weapon, Role::Amplifier])?,
             healing_decay: decay_of(&[Role::Healing])?,
             armour_decay: decay_of(&[Role::Armour, Role::Plating])?,
@@ -349,9 +411,12 @@ impl MeasureTotals {
     }
 }
 
-/// A session's tracked figures, as its summary holds them.
+/// A session's tracked figures: what the chat log recorded, whatever the
+/// readings measured, read only for a session with a summary.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TrackedFigures {
+    /// Every shot fired: the kills' and those after the last kill, as the
+    /// measured weapon counts them.
     pub weapon_cost: f64,
     pub heal_cost: f64,
     pub armour_cost: f64,
@@ -398,6 +463,7 @@ pub fn measured_sessions(
     seek: Option<&(f64, String)>,
     limit: Option<i64>,
     game_data: Option<&GameDataStore>,
+    chat_log: Option<&ChatLogSource>,
     now: f64,
     being_read: Option<&str>,
 ) -> Result<(MeasuredPage, Vec<ToSeal>), AccountError> {
@@ -464,7 +530,8 @@ pub fn measured_sessions(
             },
             active: *active,
         };
-        let (measure, sealed, to_seal) = measure_of(conn, id, &session, &roles, now, being_read)?;
+        let (measure, sealed, to_seal) =
+            measure_of(conn, id, &session, &roles, chat_log, now, being_read)?;
         sealed_now.extend(to_seal);
         sessions.push(MeasuredSession {
             id: id.clone(),
@@ -498,22 +565,28 @@ fn tracked_figures(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<Option<TrackedFigures>, AccountError> {
-    Ok(conn
+    let loot_tt: Option<f64> = conn
         .query_row(
-            "SELECT weapon_cost, heal_cost, armour_cost, loot_tt, cycled_ped \
-             FROM session_summaries WHERE session_id = ?1",
+            "SELECT loot_tt FROM session_summaries WHERE session_id = ?1",
             [session_id],
-            |row| {
-                Ok(TrackedFigures {
-                    weapon_cost: row.get(0)?,
-                    heal_cost: row.get(1)?,
-                    armour_cost: row.get(2)?,
-                    loot_tt: row.get(3)?,
-                    cycled: row.get(4)?,
-                })
-            },
+            |row| row.get(0),
         )
-        .optional()?)
+        .optional()?;
+    let Some(loot_tt) = loot_tt else {
+        return Ok(None);
+    };
+    // The summary holds the resolved costs; the comparison wants what the
+    // chat log tracked.
+    let tracked = crate::session_costs::tracked(conn, session_id)?;
+    Ok(Some(TrackedFigures {
+        // What the measured weapon answers: every shot fired, those after
+        // the last kill included.
+        weapon_cost: tracked.of(crate::session_costs::Bucket::Weapon),
+        heal_cost: tracked.heal,
+        armour_cost: tracked.armour,
+        loot_tt,
+        cycled: eo_wire::normalizer::round_half_even(tracked.cycled(), 4),
+    }))
 }
 
 /// A repair's cost as an amount: the PED Card's fall, in whole PEC.
@@ -654,6 +727,7 @@ pub fn measured_summary(
         let CachedMeasure::Current {
             measure,
             sealed_at: Some(_),
+            ..
         } = cached_measure(conn, &id)?
         else {
             leave(LeftOutReason::NotSealed);
@@ -673,6 +747,8 @@ pub fn measured_summary(
         let Some(tracked) = tracked_figures(conn, &id)? else {
             continue;
         };
+        // A weapon whose ammo was topped up has no whole-session figure
+        // to set beside the tracked one, as one whose ammo did not settle.
         if let AmmoTotal::Settled(ammo) = totals.ammo {
             weapon.add(tracked.weapon_cost, ammo.plus(totals.weapon_decay)?)?;
         }

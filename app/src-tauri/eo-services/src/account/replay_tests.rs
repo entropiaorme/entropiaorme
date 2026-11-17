@@ -36,7 +36,11 @@ fn roles() -> KnownRoles {
             "{}".to_string(),
         ),
     ];
-    let sets = vec![("armour".to_string(), "Pegasus".to_string())];
+    let sets = vec![(
+        "armour".to_string(),
+        "Pegasus".to_string(),
+        "limited".to_string(),
+    )];
     KnownRoles::from_parts(&library, &sets, Some(&game_data))
 }
 

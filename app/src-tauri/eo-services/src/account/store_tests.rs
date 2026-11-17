@@ -5,12 +5,13 @@ use proptest::prelude::*;
 
 use super::measure::{SessionWindow, MEASURE_VERSION};
 use super::reading::Container;
-use super::roles::{Role, RoleSource};
+use super::roles::{CostCategory, RoleSource};
 use super::store::{
     cached_measure, last_stored, load_reading, readings_for_session, readings_for_window, record,
     record_reading, refresh_session_measure, session_measure, CachedMeasure, Frame, Purpose,
-    ReadingId,
+    ReadingId, KEYFRAME_EVERY,
 };
+use super::store::{record_reading_within, ChainLimits, CHAIN_CAP};
 use super::test_support::{reading, recorded_hunt, ReadingSpec};
 use super::AccountError;
 use crate::db::migrated_in_memory;
@@ -19,13 +20,13 @@ use crate::db::migrated_in_memory;
 struct Nothing;
 
 impl RoleSource for Nothing {
-    fn library_role(&self, _: &str) -> Option<Role> {
+    fn library_category(&self, _: &str) -> Option<CostCategory> {
         None
     }
-    fn catalogue_role(&self, _: &str) -> Option<Role> {
+    fn catalogue_category(&self, _: &str) -> Option<CostCategory> {
         None
     }
-    fn protection_role(&self, _: &str) -> Option<Role> {
+    fn protection_category(&self, _: &str) -> Option<CostCategory> {
         None
     }
 }
@@ -137,7 +138,14 @@ fn a_connect_reading_a_long_pause_and_a_session_s_first_reading_are_keyframes() 
         Frame::Delta,
         "ten minutes is not more"
     );
-    assert_eq!(frame(&mut conn, 1_320.5, Purpose::Run, None), Frame::Key);
+    // A pause of more than ten minutes before a reading that changes
+    // something starts a keyframe.
+    assert_eq!(
+        record_reading(&mut conn, &ammo(1_320.5, 899_000), Purpose::Run, None)
+            .unwrap()
+            .frame,
+        Frame::Key
+    );
     assert_eq!(
         frame(&mut conn, 1_380.0, Purpose::Session, Some("s1")),
         Frame::Key
@@ -154,6 +162,139 @@ fn a_connect_reading_a_long_pause_and_a_session_s_first_reading_are_keyframes() 
     assert_eq!(latest.session_id.as_deref(), Some("s2"));
     assert_eq!(latest.purpose, Purpose::Session);
     assert_eq!(latest.row_count, 3);
+}
+
+#[test]
+fn readings_that_change_nothing_store_no_holdings_however_long_the_pause() {
+    let mut conn = migrated_in_memory().unwrap();
+    let holdings =
+        |conn: &rusqlite::Connection| count(conn, "SELECT COUNT(*) FROM account_reading_holdings");
+    let first = record_reading(&mut conn, &ammo(0.0, 900_000), Purpose::Ambient, None).unwrap();
+    assert_eq!(first.frame, Frame::Key);
+    let kept = holdings(&conn);
+    assert_eq!(kept, 3);
+    // Far more readings than a keyframe allows, five minutes apart, then
+    // one after an hour's pause: every one a row of its own, with its own
+    // balance, and no holding stored.
+    let mut last = first;
+    for index in 1..=(2 * KEYFRAME_EVERY as i64) {
+        let mut same = ammo(300.0 * index as f64, 900_000);
+        if index % 7 == 0 {
+            same = reading(
+                300.0 * index as f64,
+                24_000,
+                &[
+                    ("Universal Ammo", Container::Carried, 900_000, 9_000),
+                    ("Opalo", Container::Carried, 1, 500),
+                    (
+                        "Common Dung",
+                        Container::Storage {
+                            planet: "The Hub".into(),
+                        },
+                        29,
+                        0,
+                    ),
+                ],
+            );
+        }
+        last = record_reading(&mut conn, &same, Purpose::Ambient, None).unwrap();
+        assert_eq!(last.frame, Frame::Delta);
+        assert_eq!(last.prev.map(|prev| prev.0), Some(last.id.0 - 1));
+    }
+    let paused = record_reading(
+        &mut conn,
+        &ammo(300.0 * (2 * KEYFRAME_EVERY) as f64 + 3_600.0, 900_000),
+        Purpose::Ambient,
+        None,
+    )
+    .unwrap();
+    assert_eq!(paused.frame, Frame::Delta, "nothing changed in the pause");
+    assert_eq!(holdings(&conn), kept, "the holdings did not grow");
+    assert_eq!(
+        count(&conn, "SELECT COUNT(*) FROM account_readings"),
+        2 * KEYFRAME_EVERY as i64 + 2
+    );
+    // Each rebuilds whole, the Card as it was read.
+    assert_eq!(
+        load_reading(&conn, paused.id).unwrap().unwrap().reading,
+        ammo(300.0 * (2 * KEYFRAME_EVERY) as f64 + 3_600.0, 900_000)
+    );
+    assert_eq!(
+        load_reading(&conn, ReadingId(8))
+            .unwrap()
+            .unwrap()
+            .reading
+            .balance(),
+        super::Pec(24_000)
+    );
+    assert_eq!(load_reading(&conn, last.id).unwrap().unwrap().header, last);
+    // A change after the long chain starts a keyframe again.
+    let changed = record_reading(
+        &mut conn,
+        &ammo(300.0 * (2 * KEYFRAME_EVERY) as f64 + 3_660.0, 899_000),
+        Purpose::Ambient,
+        None,
+    )
+    .unwrap();
+    assert_eq!(changed.frame, Frame::Key);
+}
+
+#[test]
+fn readings_that_change_nothing_are_stored_whole_once_the_chain_reaches_its_cap() {
+    assert_eq!(CHAIN_CAP, 10 * KEYFRAME_EVERY);
+    let mut conn = migrated_in_memory().unwrap();
+    let limits = ChainLimits { every: 2, cap: 4 };
+    let frames: Vec<Frame> = (0..11)
+        .map(|index| {
+            record_reading_within(
+                &mut conn,
+                &ammo(60.0 * f64::from(index), 900_000),
+                Purpose::Ambient,
+                None,
+                limits,
+            )
+            .unwrap()
+            .frame
+        })
+        .collect();
+    // A keyframe, four readings of nothing, a keyframe, and so on.
+    let keyframes: Vec<usize> = frames
+        .iter()
+        .enumerate()
+        .filter(|(_, frame)| **frame == Frame::Key)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(keyframes, vec![0, 5, 10]);
+    // With the stored limits a change after the cap's worth of nothing is
+    // a keyframe, and so is the reading of nothing that reaches the cap.
+    let mut conn = migrated_in_memory().unwrap();
+    let mut last = Frame::Key;
+    for index in 0..=CHAIN_CAP {
+        last = record_reading(
+            &mut conn,
+            &ammo(300.0 * index as f64, 900_000),
+            Purpose::Ambient,
+            None,
+        )
+        .unwrap()
+        .frame;
+    }
+    assert_eq!(
+        last,
+        Frame::Delta,
+        "the cap's own reading follows the chain"
+    );
+    assert_eq!(
+        record_reading(
+            &mut conn,
+            &ammo(300.0 * (CHAIN_CAP + 1) as f64, 900_000),
+            Purpose::Ambient,
+            None,
+        )
+        .unwrap()
+        .frame,
+        Frame::Key
+    );
 }
 
 #[test]
@@ -370,24 +511,44 @@ fn emptied_database() -> std::sync::MutexGuard<'static, rusqlite::Connection> {
 }
 
 proptest! {
-    /// Any sequence of readings, keyframes and changes mixed, loads back as
-    /// the same readings, each on its own and as a session's run.
+    /// Any sequence of readings, keyframes and changes mixed (readings
+    /// that repeat the one before them among them, under chain limits low
+    /// enough to be reached), loads back as the same readings, each on its
+    /// own and as a session's run.
     #[test]
     fn stored_readings_load_back_as_the_same_states(
         sequence in prop::collection::vec(
-            (spec_strategy(), 1.0f64..900.0, prop::bool::weighted(0.2), 0usize..4),
-            1..12,
+            (
+                spec_strategy(),
+                1.0f64..900.0,
+                prop::sample::select(vec![Purpose::Connect, Purpose::Session, Purpose::Ambient]),
+                0usize..4,
+                prop::bool::weighted(0.4),
+            ),
+            1..16,
         ),
+        every in 1usize..4,
+        beyond in 0usize..6,
     ) {
         let mut conn = emptied_database();
+        let limits = ChainLimits { every, cap: every + beyond };
         let mut at = 1_000.0;
-        let mut written = Vec::new();
-        for (spec, pause, connect, session) in &sequence {
+        let mut written: Vec<(ReadingId, super::Reading)> = Vec::new();
+        for (spec, pause, purpose, session, repeat) in &sequence {
             at += pause;
-            let purpose = if *connect { Purpose::Connect } else { Purpose::Session };
             let session = ["a", "b", "c"].get(*session).copied();
-            let original = spec.reading(at);
-            let header = record_reading(&mut conn, &original, purpose, session).unwrap();
+            // The holdings of the reading before, read again.
+            let original = match written.last() {
+                Some((_, before)) if *repeat => super::Reading::new(
+                    at,
+                    super::Pec(spec.balance),
+                    before.holdings().clone(),
+                )
+                .unwrap(),
+                _ => spec.reading(at),
+            };
+            let header =
+                record_reading_within(&mut conn, &original, *purpose, session, limits).unwrap();
             written.push((header.id, original));
         }
         for (id, original) in &written {
@@ -471,7 +632,8 @@ fn a_session_measure_is_cached_with_its_readings_and_version() {
         cached_measure(&conn, "hunt").unwrap(),
         CachedMeasure::Current {
             measure: Box::new(measure),
-            sealed_at: Some(1_794_755_400.0)
+            sealed_at: Some(1_794_755_400.0),
+            computed_at: 1.0,
         }
     );
     assert_eq!(

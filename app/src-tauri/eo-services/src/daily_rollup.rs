@@ -41,15 +41,22 @@ use chrono::NaiveDate;
 use rusqlite::OptionalExtension as _;
 
 use crate::db::DbError;
+use crate::session_costs::{self, Bucket};
 
 /// Bump when a rollup column's meaning changes: below-version rows heal
 /// on the next read.
 // Bumped to 3 when confirmed non-ammo quest-item TT joined the projection;
 // to 4 when protection costs were re-attributed by hit count; to 5 when
 // consumed doses gained their own cost bucket; to 6 when sessions excluded from
-// a stats scope left that scope's families (`crate::session_scope`).
+// a stats scope left that scope's families (`crate::session_scope`); to 7
+// when a bucket the account readings measured became the session's cost,
+// shared over its tracked events (`crate::session_costs`); to 8 when an
+// enhancer break became a cost, a break after a session's last kill at the
+// session's grain (`crate::enhancer_breaks`); to 9 when a session's measured
+// overhead (travel, field logistics, unclassified) joined the day of its
+// start, by category, beside Cycled and never in it.
 // Below-version rows heal on the next read.
-pub const ROLLUP_VERSION: i64 = 6;
+pub const ROLLUP_VERSION: i64 = 9;
 
 /// The UTC day of an epoch second, rendered as SQLite's
 /// `date(epoch, 'unixepoch')` renders it (`YYYY-MM-DD`).
@@ -117,7 +124,7 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
     use crate::session_scope::{counts, counts_on, StatsScope};
 
     let mut has_rows = false;
-    let mut families: [Option<f64>; 13] = [None; 13];
+    let mut families: [Option<f64>; 16] = [None; 16];
 
     if let Some(date) = canonical_day(day) {
         let (start, end) = day_bounds(date);
@@ -130,8 +137,9 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             // every-kill: spend (loot and enhancer sums; the count only says
             // whether the day has rows).
             &format!(
-                "SELECT COUNT(*), SUM(loot_total_ped), SUM(enhancer_cost) \
+                "SELECT COUNT(*), SUM(loot_total_ped), SUM({}) \
                  FROM kills WHERE timestamp >= ? AND timestamp < ? AND {}",
+                session_costs::scaled("enhancer_cost", Bucket::Enhancer, "kills.session_id"),
                 counts(StatsScope::Economy, "kills.session_id")
             ),
             start,
@@ -142,9 +150,14 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             conn,
             // every-kill: spend (weapon spend over every shot fired).
             &format!(
-                "SELECT COUNT(*), SUM(ts.cost_per_shot * ts.shots_fired) \
+                "SELECT COUNT(*), SUM({}) \
                  FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
                  WHERE k.timestamp >= ? AND k.timestamp < ? AND {}",
+                session_costs::scaled(
+                    "ts.cost_per_shot * ts.shots_fired",
+                    Bucket::Weapon,
+                    "k.session_id"
+                ),
                 counts(StatsScope::Economy, "k.session_id")
             ),
             start,
@@ -153,15 +166,18 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         )?;
         let (session_count, session_sums) = window_sums(
             conn,
+            // Each session's own-grain costs, as resolved, and its
+            // overhead land on its start day.
             &format!(
-                "SELECT COUNT(*), SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost), \
-                 SUM(consumable_cost) \
+                "SELECT COUNT(*), {}, {} \
                  FROM tracking_sessions WHERE started_at >= ? AND started_at < ? AND {}",
+                session_costs::session_sums_sql("tracking_sessions"),
+                session_costs::overhead_sums_sql("tracking_sessions"),
                 counts_on(StatsScope::Economy, "tracking_sessions")
             ),
             start,
             end,
-            4,
+            10,
         )?;
         let (skill_count, skill_sums) = window_sums(
             conn,
@@ -193,8 +209,9 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         let (harvest_count, harvest_sums) = window_sums(
             conn,
             &format!(
-                "SELECT COUNT(*), SUM(loot_total_ped), SUM(cost_ped) \
+                "SELECT COUNT(*), SUM(loot_total_ped), SUM({}) \
                  FROM harvest_events WHERE timestamp >= ? AND timestamp < ? AND {}",
+                session_costs::scaled("cost_ped", Bucket::Harvesting, "harvest_events.session_id"),
                 counts(StatsScope::Economy, "harvest_events.session_id")
             ),
             start,
@@ -219,20 +236,26 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             1,
         )?;
 
+        // A measured bucket no tracked event carries sits on the session's
+        // start day with its other own-grain costs.
+        let grain = session_costs::with_session_grain;
         families = [
-            kill_sums[0],   // loot_tt
-            weapon_sums[0], // weapon_cost
-            kill_sums[1],   // enhancer_cost
+            kill_sums[0],                           // loot_tt
+            grain(weapon_sums[0], session_sums[4]), // weapon_cost
+            grain(kill_sums[1], session_sums[5]),   // enhancer_cost
             session_sums[0],
             session_sums[1],
             session_sums[2],
             skill_sums[0],
             codex_sums[0],
             quest_sums[0],
-            harvest_sums[0], // harvest_loot_tt
-            harvest_sums[1], // harvest_cost
+            harvest_sums[0],                         // harvest_loot_tt
+            grain(harvest_sums[1], session_sums[6]), // harvest_cost
             quest_item_sums[0],
             session_sums[3], // consumable_cost
+            session_sums[7], // overhead_travel
+            session_sums[8], // overhead_field_logistics
+            session_sums[9], // overhead_unclassified
         ];
         has_rows = kill_count > 0
             || weapon_count > 0
@@ -282,8 +305,8 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
          day, rollup_version, dirty, has_rows, loot_tt, weapon_cost, \
          enhancer_cost, armour_cost, heal_cost, dangling_cost, skill_tt, \
          codex_pes, quest_pes, harvest_loot_tt, harvest_cost, quest_item_tt, consumable_cost, \
-         computed_at) \
-         VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
+         overhead_travel, overhead_field_logistics, overhead_unclassified, computed_at) \
+         VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             day,
             ROLLUP_VERSION,
@@ -301,6 +324,9 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             families[10],
             families[11],
             families[12],
+            families[13],
+            families[14],
+            families[15],
         ],
     )?;
     Ok(())
@@ -426,6 +452,9 @@ fn earliest_data_day(conn: &rusqlite::Connection) -> Result<Option<NaiveDate>, D
 /// reader serves rollups up to. Runs as one transaction; idempotent.
 pub fn heal_rollups(conn: &mut rusqlite::Connection, now: f64) -> Result<String, DbError> {
     let tx = conn.transaction()?;
+    // A session whose measured costs moved since its days were written
+    // refreshes them first.
+    session_costs::heal(&tx)?;
 
     let today = canonical_day(&epoch_day(now)).expect("epoch_day is canonical");
     let yesterday = today - chrono::Duration::days(1);

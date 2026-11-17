@@ -147,6 +147,28 @@ describe('SkillingSessions', () => {
 		expect(screen.getByText('+1.8% markup realised from sales')).toBeTruthy();
 	});
 
+	it('shows the overhead the loss after markup carries, only where a session has any', async () => {
+		await renderWith({
+			sources: [
+				TREES({
+					sample: { ...TREES().sample, realisedMarkup: 12.5, markupLift: 0.0181 },
+					markup: 3.82,
+					overhead: 1.25,
+					netCost: 38.81,
+				}),
+			],
+		});
+		expect(screen.getByRole('columnheader', { name: 'Overhead' })).toBeTruthy();
+		expect(screen.getByTestId('forecast-overhead').textContent?.trim()).toBe('1.25');
+		expect(screen.getByText('38.81')).toBeTruthy();
+	});
+
+	it('adds no overhead column where no session carries any', async () => {
+		await renderWith({ sources: [TREES()] });
+		expect(screen.queryByRole('columnheader', { name: 'Overhead' })).toBeNull();
+		expect(screen.queryByTestId('forecast-overhead')).toBeNull();
+	});
+
 	it('says why a session cannot answer, and flags a thin sample', async () => {
 		await renderWith({
 			sources: [

@@ -8,19 +8,36 @@
 //! readings they add up to the session's measured account: ammo burned,
 //! wear per item, repairs, other consumption, and what arrived.
 //!
-//! Measured figures stand beside the figures the chat log tracks; they
-//! never replace or adjust them. The accounting surfaces may not reference
-//! this module (the `measured-isolation` guard), and nothing here writes an
-//! accounting table. Role resolution reads the equipment library and the
-//! protection sets; [`proposals`] reads the strongbox openings and the
-//! auction listings, to match what the readings saw to a listing and to
-//! tell whether a proposal's record still stands. None is ever written.
+//! Where the readings measure a session's cost bucket, the measured amount
+//! is the session's cost; the tracked figures share it out below the
+//! session and stand in where nothing was measured. [`costs`] reads a
+//! sealed session's measure as what the session cost, per bucket and per
+//! item, and stores it in plain rows of its own beside the seal. The
+//! accounting surfaces read those rows through one resolver
+//! ([`crate::session_costs`]) and nothing else of this module: they may
+//! not reference it, its readings or its measures (the
+//! `measured-isolation` guard). Nothing here writes an accounting table
+//! itself: once a session's costs are stored, the resolver brings the
+//! figures derived from them up to date in the same write, and what a step
+//! did to the stock ([`recognition`]: a Shrapnel conversion, a recycling, a
+//! sale to the Trade Terminal) is recorded through the analytics service's
+//! own commands ([`follow`]), as the player's entry would be. Role
+//! resolution reads the equipment library, the protection sets and the
+//! player's own placements of items the app cannot place ([`placement`],
+//! which this module keeps);
+//! [`proposals`] reads the strongbox openings, the auction listings and the
+//! assets, to match what the readings saw to a listing and to tell whether
+//! a proposal's record still stands. None is ever written here. What the
+//! recogniser cannot place is left to a reconciliation ([`reconcile`]),
+//! which hands the analytics service what the latest reading, or an
+//! inventory pasted from the account site ([`paste`]), shows of the stock.
 //!
 //! The connection that takes the readings is [`recorder`]: one task that
 //! holds the signed-in session and reads the site through [`site`] while a
 //! tracked session or a strongbox run needs it. [`sessions`] serves the
 //! measures it leads to; [`proposals`] what its steps propose (a strongbox
-//! opening, a listing sold or returned) for the player to record.
+//! opening, a listing sold or returned, a purchase at auction) for the
+//! player to record.
 //!
 //! Money here is integer throughout: whole PEC as the site reports it, and
 //! micro-PED amounts that carry whether they are exact or rest on the
@@ -29,20 +46,44 @@
 pub mod adoption;
 pub mod amount;
 pub mod composite;
+pub mod costs;
 pub mod diff;
+pub mod follow;
+pub mod gap;
+pub mod live;
 pub mod measure;
+pub mod minutes;
+pub mod paste;
+pub mod placement;
 pub mod proposals;
 pub mod reading;
+pub mod recognition;
+pub mod reconcile;
 pub mod recorder;
 pub mod roles;
 #[cfg(any(test, feature = "test-support"))]
 pub mod scripted;
 pub mod sessions;
+pub mod settlement;
 pub mod site;
 pub mod store;
 
 #[cfg(test)]
+mod costs_tests;
+#[cfg(test)]
+mod follow_tests;
+#[cfg(test)]
+mod gap_tests;
+#[cfg(test)]
+mod live_tests;
+#[cfg(test)]
+mod minutes_tests;
+#[cfg(test)]
 mod proposals_tests;
+#[cfg(test)]
+mod recognition_tests;
+#[cfg(test)]
+mod reconcile_tests;
 #[cfg(test)]
 mod recorder_tests;
 #[cfg(test)]
@@ -60,7 +101,7 @@ pub use measure::{measure_session, SessionMeasure, SessionWindow};
 pub use reading::{Container, Holding, HoldingKey, Reading, Row};
 pub use recorder::{
     AccountRecorder, Confirming, ConnectEpoch, ConnectOutcome, ConnectSource, ConnectionFlag,
-    ConnectionState, ConnectionStatus, RecorderParts,
+    ConnectionState, ConnectionStatus, ReadingMode, RecorderParts,
 };
 pub use roles::{KnownRoles, Role, RoleBook, RoleSource};
 pub use site::{AccountSite, HttpAccountSite, SessionSecret, SiteFailure, SiteOutcome};

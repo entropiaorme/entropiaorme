@@ -139,6 +139,9 @@ pub(super) enum TrackerMsg {
     ToolPulse(crate::tool_watch::ToolPulse, u64),
     /// The held-tool watcher's watch for this session ended by itself.
     ToolWatchEnded(String, u64),
+    /// What the account readings measured of a session so far, read off
+    /// the loop after the account announced a change: no reply.
+    MeasuredSoFar(String, Option<crate::session_costs::MeasuredSoFar>),
     /// Where the tool in hand comes from, and what the screen showed of it.
     ToolSource(oneshot::Sender<super::held_tool::ToolSource>),
     /// A tool the player declared by hand, resolved as a press resolves it.
@@ -275,6 +278,9 @@ impl TrackerActor {
             // No session is live after recovery, so no dose runs either.
             actor.settle_stray_doses().await;
             actor.restore_doses().await;
+            // Kept enhancer breaks follow the game data and the library as
+            // they stand now.
+            actor.heal_break_prices().await;
         }
         let _ = ready.send(recovered);
         if failed {
@@ -385,6 +391,9 @@ impl TrackerActor {
             TrackerMsg::ToolWatchEnded(session_id, generation) => {
                 self.on_tool_watch_ended(&session_id, generation).await;
             }
+            TrackerMsg::MeasuredSoFar(session_id, so_far) => {
+                self.on_measured_so_far(session_id, so_far);
+            }
             TrackerMsg::ToolSource(reply) => {
                 let _ = reply.send(self.tool_source());
             }
@@ -417,6 +426,7 @@ impl TrackerActor {
             BusEvent::TickFlushed(_) => self.on_tick_flushed(event),
             BusEvent::HealingUpdated(_) => self.on_healing_updated().await,
             BusEvent::ProtectionUpdated(_) => self.on_protection_updated().await,
+            BusEvent::AccountUpdated(_) => self.on_account_updated(),
             _ => {}
         }
     }
@@ -452,6 +462,7 @@ impl TrackerActor {
             Topic::TickFlushed,
             Topic::HealingUpdated,
             Topic::ProtectionUpdated,
+            Topic::AccountUpdated,
         ] {
             let sender = self.sender.clone();
             let registration = self.bus.subscribe(topic, move |event| {

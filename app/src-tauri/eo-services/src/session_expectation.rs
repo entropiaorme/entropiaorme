@@ -57,7 +57,8 @@ pub struct SessionExpectation {
     pub robot: ExpectedSpan,
 }
 
-/// The session's expectation over `cycled`, its whole Cycled; `None` when it
+/// The session's expectation over `cycled`, its whole tracked Cycled (what
+/// the readings measured never moves an expected figure); `None` when it
 /// recorded no weapon evidence.
 pub fn compute(
     conn: &rusqlite::Connection,

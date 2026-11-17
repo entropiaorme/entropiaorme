@@ -1,12 +1,14 @@
 /**
- * What the account readings measured of a session, set beside what the
- * session tracked.
+ * What the account readings measured of a session, and how it compares
+ * with what the session tracked.
  *
- * Measured figures stand beside the tracked ones and are never added into
- * them: nothing here forms a measured cost, a measured net, or a measured
- * return. Each category pairs one tracked figure with the measured figures
- * that answer it, and the difference between the two is a discrepancy
- * between two sources, never a result.
+ * Where the readings cover a session's cost, the measured amount is the
+ * session's cost; the app resolves that elsewhere and every surface shows
+ * the result. What this module serves is the comparison the review of
+ * measured sessions draws: each category pairs the chat log's tracked
+ * estimate with the measured figures that answer it, and the difference
+ * says how far the estimate was off. Nothing here forms a cost, a net or
+ * a return of its own.
  *
  * Every measured amount carries how exactly it is known: an exact amount
  * (from a quantity and an exact unit value) shows four decimals, one read
@@ -22,7 +24,6 @@ import type {
 	MeasuredCoverage,
 	MeasuredPrecision,
 	MeasuredTotals,
-	SessionSummary,
 	TrackedSessionFigures,
 } from '$lib/api/commands.gen';
 import { formatPed, formatPercent, formatQuantity, NO_DATA } from '$lib/utils/format';
@@ -33,6 +34,11 @@ const NEGLIGIBLE_MICRO = 10_000;
 
 function micro(ped: number): number {
 	return Math.round(ped * MICRO_PER_PED);
+}
+
+/** Whether two figures agree to within a PEC. */
+export function withinPec(a: number, b: number): boolean {
+	return Math.abs(micro(a) - micro(b)) <= NEGLIGIBLE_MICRO;
 }
 
 function amountOf(microPed: number, precision: MeasuredPrecision): MeasuredAmount {
@@ -92,10 +98,10 @@ export const CATEGORY_LABELS: Record<Category, string> = {
 	loot: 'Loot',
 };
 
-/** A category with a tracked figure to stand beside. */
+/** A category with a tracked estimate to compare with. */
 export type PairedCategory = Exclude<Category, 'other'>;
 
-/** The categories with a tracked figure to stand beside, in order. */
+/** The categories with a tracked estimate to compare with, in order. */
 export const PAIRED: readonly PairedCategory[] = ['weapon', 'healing', 'armour', 'loot'];
 
 /** A session's tracked figures, by category; `null` where the session has
@@ -112,8 +118,8 @@ export const NOTHING_TRACKED: TrackedFigures = {
 /**
  * Armour cost is recorded at a repair, possibly sessions later. While a
  * session holds hits no recording covers yet, its tracked armour figure is
- * not known, whatever the cost booked so far: it is absent, in the
- * session's own detail and in the review alike, and never summed.
+ * not known, whatever the cost booked so far: it is absent in the review,
+ * and never summed.
  */
 
 /** The tracked figures a measured session row carries. */
@@ -127,41 +133,36 @@ export function trackedFromRow(tracked: TrackedSessionFigures | null): TrackedFi
 	};
 }
 
-/** The tracked figures of a session's own summary, given whether its hits
- * await an armour recording. */
-export function trackedFromSummary(
-	summary: SessionSummary,
-	armourUnrecorded: boolean,
-): TrackedFigures {
-	const costs = summary.costBreakdown;
-	return {
-		weapon: costs.weaponCost,
-		healing: costs.healCost,
-		armour: armourUnrecorded ? null : costs.armourCost,
-		loot: summary.returns,
-	};
-}
-
-/** A tracked figure beside a measured one: to four decimals when the
- * measured figure is exact, so the row can be checked by eye; to two
- * otherwise, as the app shows tracked figures everywhere. */
+/** A tracked estimate compared with a measured figure: to four decimals
+ * when the measured figure is exact, so the row can be checked by eye; to
+ * two otherwise, as the app shows tracked figures everywhere. */
 export function formatTracked(tracked: number | null, precision: MeasuredPrecision): string {
 	if (tracked === null) return NO_DATA;
 	return formatMeasured({ ped: tracked, precision });
 }
 
 /** A measured figure: an amount, or the ammo burned that could not be
- * settled (so neither is the weapon figure it is part of). */
-export type MeasuredFigure = { kind: 'amount'; amount: MeasuredAmount } | { kind: 'unsettled' };
+ * settled (so neither is the weapon figure it is part of). An amount that
+ * leaves out the span the ammo was topped up in is `partial`: it is not the
+ * whole session's, so no tracked figure is set against it. */
+export type MeasuredFigure =
+	| { kind: 'amount'; amount: MeasuredAmount; partial?: boolean }
+	| { kind: 'unsettled' };
 
 /** Which measured figures answer each tracked one. */
 export function measuredByCategory(totals: MeasuredTotals): Record<Category, MeasuredFigure> {
 	const amount = (value: MeasuredAmount): MeasuredFigure => ({ kind: 'amount', amount: value });
 	return {
 		weapon:
-			totals.ammo.kind === 'settled'
-				? amount(sumAmounts([totals.ammo.burned, totals.weaponDecay]))
-				: { kind: 'unsettled' },
+			totals.ammo.kind === 'unsettled'
+				? { kind: 'unsettled' }
+				: totals.ammo.kind === 'toppedUp'
+					? {
+							kind: 'amount',
+							amount: sumAmounts([totals.ammo.burned, totals.weaponDecay]),
+							partial: true,
+						}
+					: amount(sumAmounts([totals.ammo.burned, totals.weaponDecay])),
 		healing: amount(totals.healingDecay),
 		armour: amount(totals.armourDecay),
 		other: amount(sumAmounts([totals.otherEquipmentDecay, totals.otherConsumption])),
@@ -177,13 +178,13 @@ export interface Difference {
 }
 
 /** The difference between a measured and a tracked figure; `null` when
- * either is not known. */
+ * either is not known, or the measured one is not the whole session's. */
 export function difference(tracked: number | null, measured: MeasuredFigure): Difference | null {
-	if (tracked === null || measured.kind !== 'amount') return null;
+	if (tracked === null || measured.kind !== 'amount' || measured.partial) return null;
 	const delta = micro(measured.amount.ped) - micro(tracked);
 	return {
 		amount: amountOf(delta, measured.amount.precision),
-		negligible: Math.abs(delta) <= NEGLIGIBLE_MICRO,
+		negligible: withinPec(measured.amount.ped, tracked),
 	};
 }
 
@@ -219,7 +220,7 @@ export function coversWhole(measure: AccountSessionMeasure): boolean {
 /** The comparison, one row per category in order. Other has no tracked
  * figure, so no difference; and a measure of part of a session is never
  * differenced against the whole session's tracked figures (`whole` false),
- * since part beside all is not a discrepancy between two sources. */
+ * since part of a session against all of it says nothing of the estimate. */
 export function comparisonRows(
 	totals: MeasuredTotals,
 	tracked: TrackedFigures,
@@ -263,23 +264,21 @@ export function unsettledAmmoAsides(measure: AccountSessionMeasure): string[] {
 	return lines;
 }
 
+/** The weapon row's aside when the ammo was topped up mid-session: the
+ * figure leaves out what was fired in that span. */
+export function toppedUpAmmoAsides(measure: AccountSessionMeasure): string[] {
+	return measure.totals.ammo.kind === 'toppedUp'
+		? ['the ammo fired in the span it was topped up in is not measured']
+		: [];
+}
+
 /** The loot row's "of which" lines: what arrived that may be a strongbox's
- * contents, and what arrived in a minute the PED Card moved unexplained. */
+ * contents. */
 export function lootAsides(measure: AccountSessionMeasure): string[] {
 	const lines: string[] = [];
 	if (!isNothing(measure.gainedPossiblyStrongbox)) {
 		lines.push(
 			`of which ${formatMeasured(measure.gainedPossiblyStrongbox)} PED may be a strongbox's contents`,
-		);
-	}
-	const unexplained = sumAmounts(
-		measure.gained
-			.filter((gain) => gain.mark === 'cardMovedUnexplained')
-			.map((gain) => gain.amount),
-	);
-	if (!isNothing(unexplained)) {
-		lines.push(
-			`of which ${formatMeasured(unexplained)} PED arrived in a minute the PED Card moved unexplained`,
 		);
 	}
 	return lines;
@@ -307,9 +306,20 @@ export function describeCoverage(
 	coverage: MeasuredCoverage,
 	sealed: boolean,
 	ended: boolean | null,
+	acrossGapMinutes: number | null = null,
 ): { state: CoverageState; text: string } {
 	if (sealed && coverage.level === 'complete') {
 		return { state: 'complete', text: 'Complete: the readings cover the whole session.' };
+	}
+	// An end the readings missed, read across a gap the chat log shows held
+	// the session's own play alone: the costs were measured across it, so
+	// the missed end is no shortfall and is never said to be one. The gap
+	// itself is described once, with the costs.
+	if (sealed && acrossGapMinutes !== null) {
+		return {
+			state: 'complete',
+			text: 'Complete: measured across the gap noted with the costs.',
+		};
 	}
 	const missedStart = coverage.opening === 'unread';
 	const missedEnd = sealed && coverage.closing === 'unread';
@@ -324,6 +334,13 @@ export function describeCoverage(
 	if (missedEnd) return partial('the end');
 	if (missedPart || sealed) return partial('part');
 	return { state: 'reading', text: stillReading(ended) };
+}
+
+/** The line a session measured across a gap in its readings carries: how
+ * long the gap was, and that the chat log shows no other play in it. */
+export function acrossGapNote(minutes: number): string {
+	const span = `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
+	return `Measured across a gap of ${span}; the chat log shows no other play in it`;
 }
 
 function stillReading(ended: boolean | null): string {

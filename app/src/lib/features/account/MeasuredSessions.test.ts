@@ -139,7 +139,7 @@ describe('the review of measured sessions', () => {
 	it('heads the page with the whole-history pairs, each shown as tracked and measured beside the difference', async () => {
 		mount();
 		const sums = await screen.findByTestId('measured-summary');
-		expect(within(sums).getByText('Measured minus tracked')).toBeTruthy();
+		expect(within(sums).getByText('Measured minus tracked estimate')).toBeTruthy();
 		expect(within(sums).getByTestId('sum-tracked-weapon').textContent?.trim()).toBe('10.0000');
 		expect(within(sums).getByTestId('sum-measured-weapon').textContent?.trim()).toBe('10.5000');
 		expect(within(sums).getByTestId('sum-difference-weapon').textContent?.trim()).toBe('+0.5000');
@@ -163,7 +163,7 @@ describe('the review of measured sessions', () => {
 		const sums = await screen.findByTestId('measured-summary');
 		await waitFor(() => expect(sums.textContent).toMatch(/nothing to sum/));
 		expect(sums.textContent).not.toMatch(/over 0/);
-		expect(within(sums).queryByText('Measured minus tracked')).toBeNull();
+		expect(within(sums).queryByText('Measured minus tracked estimate')).toBeNull();
 	});
 
 	it('shows no tracked armour for a session whose armour is not recorded, in its row and opened', async () => {

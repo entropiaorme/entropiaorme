@@ -52,6 +52,33 @@ export interface AcceptResult {
 }
 
 /**
+ * An arrival proposal, by its id.
+ */
+export interface AccountArrivalId {
+	id: number;
+}
+
+/**
+ * An arrival proposal to record as stock of unknown origin. `retake`
+ * takes over an earlier recording of it that was begun and never linked,
+ * once the player has checked.
+ */
+export interface AccountArrivalInput {
+	id: number;
+	retake?: boolean;
+}
+
+/**
+ * Stock of unknown origin recorded from an arrival.
+ */
+export interface AccountArrivalRecorded {
+	/** The record's own id: what taking it back names. */
+	recordId: string;
+	/** Whether the arrival was marked recorded. When not, the stock stands and the arrival shows as possibly recorded already, to take over with `retake` or take back by its undo. */
+	linked: boolean;
+}
+
+/**
  * How confirming a kept session stands.
  */
 export type AccountConfirming = 'checking' | 'siteUnreachable';
@@ -141,7 +168,7 @@ export interface AccountProposalDismissInput {
 /**
  * What a proposal is of.
  */
-export type AccountProposalKind = 'opening' | 'listingSold' | 'listingReturned';
+export type AccountProposalKind = 'opening' | 'listingSold' | 'listingReturned' | 'purchase' | 'arrival';
 
 /**
  * What a proposal says happened.
@@ -181,6 +208,30 @@ export type AccountProposalOutcome = {
 		tt: MeasuredAmount;
 		returnedTo: AccountPlace;
 		kind: 'listingReturned';
+	} | {
+		/** The item, as the account site names it. */
+		itemName: string;
+		units: number;
+		/** Its TT, as the readings show it. */
+		tt: MeasuredAmount;
+		/** The PED Card's fall. */
+		paid: MeasuredAmount;
+		/** What it cost above its TT. */
+		markup: MeasuredAmount;
+		/** Where it arrived. */
+		arrivedIn: AccountPlace;
+		kind: 'purchase';
+	} | {
+		/** The item, as the account site names it. */
+		itemName: string;
+		units: number;
+		/** Its TT, as the readings show it. */
+		tt: MeasuredAmount;
+		/** The PED Card fell by its TT in the same step: bought at the Trade Terminal, at no markup. */
+		boughtAtTt: boolean;
+		/** Where it arrived. */
+		arrivedIn: AccountPlace;
+		kind: 'arrival';
 	};
 
 /**
@@ -203,7 +254,9 @@ export interface AccountProposalsInput {
 
 /**
  * Proposals linked, as one, to the record they became: the strongbox
- * opening's id, or the listing's.
+ * opening's id, the listing's, or for a purchase the asset purchase's id
+ * (the highest purchase id on the asset `inventory_create` or
+ * `inventory_purchase_add` returns).
  */
 export interface AccountProposalsLinkInput {
 	ids: number[];
@@ -257,6 +310,20 @@ export interface AccountSessionMeasure {
 	events: MeasuredEvent[];
 	/** The measure by category, as the measured sessions list carries it. */
 	totals: MeasuredTotals;
+}
+
+/**
+ * A measured session, minute by minute.
+ */
+export interface AccountSessionMinutes {
+	sessionId: string;
+	running: boolean;
+	coverage: MinutesCoverage;
+	steps: SessionMinute[];
+	weaponStretches: MinuteStretch[];
+	healingStretches: MinuteStretch[];
+	/** The TT of loot lines no step can confirm: timed after the last reading, or in the last step with none after it. */
+	lootUnconfirmed: number;
 }
 
 /**
@@ -316,11 +383,11 @@ export interface ActivityHistoryEntry {
 	id: string;
 	/** The holding family this outcome acted on: `loot` or `equipment`. */
 	subjectKind: string;
-	/** The operational path: `auction`, `trade`, `conversion`, or `removal`. */
+	/** The operational path: `auction`, `trade`, `conversion`, `removal`, or `unknownOrigin` (stock held without knowing where it came from, shown in the Inventory's history only). */
 	channel: string;
-	/** `listing`, `trade`, `conversion`, or `removal`. */
+	/** `listing`, `trade`, `conversion`, `removal`, or `unknownOrigin` (undone with `account_arrival_unknown_origin_undo`). */
 	kind: string;
-	/** `pending`, `sold`, `expired`, `converted`, or `removed`. */
+	/** `pending`, `sold`, `expired`, `converted`, `removed`, or `held`. */
 	status: string;
 	itemName: string;
 	/** What a conversion produced; `null` for other outcomes. */
@@ -348,6 +415,10 @@ export interface ActivityHistoryEntry {
 	itemised: boolean;
 	/** What the sold stock descends from, when a conversion produced it. */
 	derivedFrom: DerivedSource[];
+	/** Recorded on its own from the account readings, and the step it was seen in; `null` for an entry the player made. */
+	recordedFromAccount: RecordedFromAccount | null;
+	/** The standing stock reconciliation that recorded it: undone only with it (`account_reconciliation_undo`), never on its own. `null` otherwise. */
+	reconciliationId: string | null;
 }
 
 /**
@@ -461,6 +532,10 @@ export interface ActivityUndoInput {
  */
 export interface AnalyticsHarvest {
 	tierComparisons: HarvestTierComparison[];
+	/** The overhead of the sessions that swung in the period, shared to their harvesting: a cost beside Cycled, never in it. The tiers' overhead and `unassignedOverhead` add up to it. */
+	overhead: number;
+	/** The part of `overhead` on no tier shown: a session that swung but cycled nothing to share it by. */
+	unassignedOverhead: number;
 }
 
 /**
@@ -547,6 +622,40 @@ export interface ArmourCostResult {
 	sessionId: string;
 	armourCost: number;
 }
+
+/**
+ * What the player decided of an arrival.
+ */
+export type ArrivalDisposition = {
+		reason: ArrivalNotProposed;
+		state: 'notProposed';
+	} | {
+		proposalId: number;
+		possiblyRecorded: boolean;
+		/** Stock of unknown origin recorded from it that stands though the arrival was never marked recorded: what `account_arrival_unknown_origin_undo` takes back. A retake links it rather than recording a second. */
+		unlinkedRecordId?: string | null;
+		state: 'open';
+	} | {
+		proposalId: number;
+		recordId: string;
+		as: ArrivalRecordedAs;
+		/** For a purchase, the name of the asset it bought into. */
+		assetName?: string | null;
+		state: 'recorded';
+	} | {
+		proposalId: number;
+		state: 'ignored';
+	};
+
+/**
+ * Why an arrival carries no handle.
+ */
+export type ArrivalNotProposed = 'beforeRecognition' | 'outsideSession' | 'settling' | 'awaiting';
+
+/**
+ * What an arrival was recorded as.
+ */
+export type ArrivalRecordedAs = 'purchase' | 'unknownOrigin';
 
 /**
  * One acquisition of an asset: a purchase, or the output of a conversion.
@@ -1190,7 +1299,16 @@ export type CoordScanResult = {
 export type CoordValueRefusal = 'offScreen' | 'covered' | 'notFound' | 'unclear' | 'outOfBounds';
 
 /**
- * The session-detail cost split.
+ * What a cost figure rests on: the account readings' measurement, the
+ * chat log's tracking, or, for a figure summed from several, both.
+ */
+export type CostBasis = 'measured' | 'tracked' | 'mixed';
+
+/**
+ * The session-detail cost split. A bucket the account readings measured
+ * is the measured amount (the weapon's whole, shots after the last kill
+ * included); the rest are tracked. The buckets add up to Cycled; the
+ * session's overhead is beside them, in its Net and never in Cycled.
  */
 export interface CostBreakdown {
 	weaponCost: number;
@@ -1201,6 +1319,33 @@ export interface CostBreakdown {
 	armourCost: number;
 	/** Harvesting (tree cutting) swing decay. */
 	harvestCost: number;
+	/** The same buckets as the chat log tracked them, whatever the readings measured: what a measured figure is compared with. */
+	tracked: TrackedCostBreakdown;
+	/** What each bucket above rests on. */
+	basis: CostBreakdownBasis;
+	/** When the measured buckets were measured across a gap in the session's readings (a sign-in dropped, the app closed), shown clean by the chat log: how long the gap was, in whole minutes (at least one). Absent for any other session. */
+	measuredAcrossGapMinutes?: number | null;
+	/** Why each bucket above is not measured. */
+	reasons: CostBreakdownReasons;
+	/** The session's overhead, every category added up. */
+	overheadCost: number;
+	overhead: SessionOverhead;
+	/** The measured lines behind the figures; `null` unless the readings measured the session. */
+	measured: MeasuredCostDetail | null;
+	/** The session has hits no armour recording covers: its tracked armour figure is not a figure to show. */
+	armourUnrecorded: boolean;
+}
+
+/**
+ * What each bucket of a session's cost split rests on.
+ */
+export interface CostBreakdownBasis {
+	weaponCost: CostBasis;
+	healCost: CostBasis;
+	consumableCost: CostBasis;
+	enhancerCost: CostBasis;
+	armourCost: CostBasis;
+	harvestCost: CostBasis;
 }
 
 /**
@@ -1212,6 +1357,80 @@ export interface CostBreakdownLine {
 	markupMultiplier: number;
 	effectiveCostPec: number;
 }
+
+/**
+ * Why each bucket of a session's cost split is not measured; `null` for a
+ * measured bucket.
+ */
+export interface CostBreakdownReasons {
+	weaponCost: CostReason | null;
+	healCost: CostReason | null;
+	consumableCost: CostReason | null;
+	enhancerCost: CostReason | null;
+	armourCost: CostReason | null;
+	harvestCost: CostReason | null;
+}
+
+/**
+ * An item the measured sessions could not place, awaiting the player's
+ * placement: one that wore, or a stack whose units left.
+ */
+export interface CostPlacementAwaiting {
+	item: string;
+	/** How many measured sessions it wore or left in. */
+	sessions: number;
+	/** The TT it lost wearing across them, billed as unclassified overhead until it is placed; `null` when it never wore. */
+	lost: MeasuredAmount | null;
+	/** The units of it that left across them, billed nothing until it is placed as used up; `null` when none left. */
+	units: number | null;
+}
+
+/**
+ * A category the player may place an item in: what its use costs as in
+ * every session.
+ */
+export type CostPlacementCategory = 'weapon' | 'amplifier' | 'mindforceImplant' | 'harvestingTool' | 'healingTool' | 'unlimitedArmour' | 'unlimitedPlate' | 'attachment' | 'healingConsumable' | 'consumable' | 'travel' | 'fieldLogistics' | 'notACost';
+
+/**
+ * An item the player placed.
+ */
+export interface CostPlacementEntry {
+	item: string;
+	category: CostPlacementCategory;
+	placedAt: string;
+}
+
+/**
+ * Place an item, by its exact name, in a category for every session.
+ */
+export interface CostPlacementInput {
+	item: string;
+	category: CostPlacementCategory;
+}
+
+/**
+ * A placement made or cleared, once the measured sessions' costs have
+ * been rebuilt by it.
+ */
+export interface CostPlacementResult {
+	placements: CostPlacements;
+	/** The sessions whose costs are still to be rebuilt (one changed meanwhile, or the rebuild failed); empty once every one follows the placement. They are rebuilt on their next read. */
+	pendingSessions: string[];
+}
+
+/**
+ * The items awaiting a placement (most TT lost first) and the placements
+ * made (the latest first).
+ */
+export interface CostPlacements {
+	awaiting: CostPlacementAwaiting[];
+	placed: CostPlacementEntry[];
+}
+
+/**
+ * Why a cost bucket's figure is not what the account readings measured.
+ */
+export type CostReason = 'noMeasuredCosts' | 'partialCoverage' | 'gap' | 'ammoUnsettled' | 'ammoToppedUp' | 'limitedSetUnconfirmed' | 'trackedOnly' | 'playInGap' | 'chatLogMissesGap' | 'chatLogUnchecked' | 'gapUnaccounted' | 'overheadInGap';
 
 /**
  * The crash-reporting opt-in state, a one-key body.
@@ -1350,6 +1569,11 @@ export interface DraftName {
 }
 
 /**
+ * How far an enhancer break's cost is known.
+ */
+export type EnhancerBreakPricing = 'priced' | 'markupNotSet' | 'ttUnknown' | 'returnAboveTt';
+
+/**
  * One configured component of a stored weapon setup.
  */
 export interface EquipmentComponent {
@@ -1387,6 +1611,8 @@ export interface EquipmentDetail {
 	attackRate: WeaponAttackRate | null;
 	/** A consumable's dose; null for every other kind. */
 	consumable: ConsumableSettings | null;
+	/** The markup of the enhancers fitted to a weapon, in percent of TT, as the player set it: what an enhancer break consumes beyond its TT. Null when it is not set, and for every other kind. */
+	enhancerMarkupPercent: number | null;
 }
 
 export interface EquipmentEffectiveEfficiency {
@@ -1487,6 +1713,8 @@ export interface EquipmentRequest {
 	damage_enhancers?: number;
 	implant_catalog_id?: string | null;
 	implant_markup?: number;
+	/** A weapon's enhancer markup, in percent of TT; absent when the player has not set one. */
+	enhancer_markup?: number | null;
 	healing_mode?: HealingMode;
 	heal_min?: number | null;
 	heal_max?: number | null;
@@ -1681,6 +1909,8 @@ export interface HarvestTierComparison {
 	cycled: number;
 	returns: number;
 	lootRate: number;
+	/** The overhead shared to this tier by what it cycled: a cost beside `cycled`, never in it. */
+	overhead: number;
 	lootItems: HarvestLootItem[];
 }
 
@@ -1912,6 +2142,9 @@ export interface HuntingActivityComparison {
 	rewardItems: HarvestLootItem[];
 	/** Historical wire name for total realised returns at this activity grain: ordinary loot TT, confirmed reward TT, and later confirmed markup from both ordinary loot and reward stock. */
 	rewardedReturns: number;
+	/** The sessions' overhead shared to this activity by what it cycled: a cost beside `cycled`, never in it. Realised Net is `rewardedReturns` less `cycled` and this. */
+	overhead: number;
+	/** `rewardedReturns` over `cycled` and `overhead`: realised returns over costs. */
 	rewardedRate: number;
 	rewardStatus: HuntingRewardStatus;
 	lootItems: HarvestLootItem[];
@@ -1928,6 +2161,8 @@ export interface HuntingActivityOverall {
 	returns: number;
 	lootRate: number;
 	expected: ExpectedHuntingEconomics | null;
+	/** The overhead of these same sessions shared to their hunting: a cost beside `cycled`, never in it. Realised Net takes it off; the Realised Rate's denominator is `cycled` and it. */
+	overhead: number;
 }
 
 /**
@@ -1942,6 +2177,8 @@ export interface HuntingDefinitionComparison {
 	returns: number;
 	lootRate: number;
 	expected: ExpectedHuntingEconomics | null;
+	/** The overhead of these same instances shared to their hunting (on the unassigned bucket, that of sessions recorded outside any definition): a cost beside `cycled`, never in it. Realised Net takes it off; the Realised Rate's denominator is `cycled` and it. */
+	overhead: number;
 	lootItems: HarvestLootItem[];
 	activities: HuntingActivityComparison[];
 }
@@ -1996,7 +2233,7 @@ export interface InventoryItem {
 	quantity: number;
 	/** Whether part of it can be sold, listed, or converted, rather than only the whole. Not for an asset carrying activity origins. */
 	divisible: boolean;
-	/** The acquisitions that built it, oldest first. */
+	/** The acquisitions that built it, oldest first by date. Ids rise in the order purchases are recorded, so the purchase `inventory_create` or `inventory_purchase_add` just recorded is the one with the highest id: the id a purchase proposal is linked to. */
 	purchases: AssetPurchase[];
 	/** The activities a sale of this asset would credit. Empty for an asset that did not come out of a conversion. */
 	origins: HoldingOrigin[];
@@ -2246,6 +2483,7 @@ export interface LifetimeStats {
 	instanceCount: number;
 	cycled: number;
 	lootTt: number;
+	/** Loot less Cycled and the instances' overhead. */
 	net: number;
 	returnRate: number;
 	pes: number;
@@ -2363,12 +2601,15 @@ export interface LootItemEditResult {
 }
 
 /**
- * The losses breakdown: tracking cost, its cycled split, and the ledger
- * expenses.
+ * The losses breakdown: tracking cost (Cycled), its cycled split, the
+ * sessions' overhead, and the ledger expenses. The total losses are all
+ * three.
  */
 export interface LossesBreakdown {
 	trackingCost: number;
 	cycledBreakdown: CycledBreakdown;
+	/** In the losses, never in `trackingCost`. */
+	overhead: OverheadBreakdown;
 	ledger: Record<string, number>;
 }
 
@@ -2704,6 +2945,10 @@ export type MeasuredAmmoTotal = {
 		kind: 'settled';
 	} | {
 		kind: 'unsettled';
+	} | {
+		burned: MeasuredAmount;
+		steps: number;
+		kind: 'toppedUp';
 	};
 
 /**
@@ -2713,6 +2958,28 @@ export interface MeasuredAmount {
 	ped: number;
 	precision: MeasuredPrecision;
 }
+
+/**
+ * One part of a session's measured armour, and what it billed.
+ */
+export interface MeasuredArmourPart {
+	part: MeasuredArmourPartKind;
+	/** The limited set, for a set's part. */
+	setId: number | null;
+	setName: string | null;
+	markupPercent: number | null;
+	/** The TT the part's pieces lost. */
+	lost: number;
+	lostPrecision: MeasuredCostPrecision;
+	/** What the part billed; `null` while unpriced. */
+	cost: number | null;
+	costPrecision: MeasuredCostPrecision | null;
+}
+
+/**
+ * One part of a session's measured armour.
+ */
+export type MeasuredArmourPartKind = 'unlimited' | 'limitedSet' | 'unconfirmed';
 
 /**
  * Boxes of one kind an opening used.
@@ -2731,6 +2998,69 @@ export interface MeasuredConsumption {
 	units: number;
 	amount: MeasuredAmount;
 }
+
+/**
+ * A group of measured cost lines: one of Cycled's buckets, or one of the
+ * overhead categories.
+ */
+export type MeasuredCostBucket = 'weapon' | 'enhancer' | 'harvesting' | 'healing' | 'armour' | 'consumables' | 'travel' | 'fieldLogistics' | 'unclassified';
+
+/**
+ * A session's measured costs, item by item, as the account readings
+ * measured them.
+ */
+export interface MeasuredCostDetail {
+	/** Cycled's buckets, then the overhead categories; only those holding a line. */
+	buckets: MeasuredCostGroup[];
+	/** Unlimited first, then each confirmed set by id, then what no confirmed set holds. */
+	armourParts: MeasuredArmourPart[];
+}
+
+/**
+ * The measured lines of one bucket.
+ */
+export interface MeasuredCostGroup {
+	bucket: MeasuredCostBucket;
+	lines: MeasuredCostLine[];
+}
+
+/**
+ * One item's measured use within a bucket.
+ */
+export interface MeasuredCostLine {
+	kind: MeasuredCostLineKind;
+	item: string;
+	/** The units, for ammo burned and a consumable used up. */
+	units: number | null;
+	/** What the line measured, PED: its cost, except for a limited piece, whose amount is the TT it lost (its set's markup prices it). `null` for a line charged nothing. */
+	amount: number | null;
+	precision: MeasuredCostPrecision | null;
+	/** The markup applied, percent of TT: the acquisition markup recorded for a consumable, or a limited piece's set markup. */
+	markupPercent: number | null;
+	/** Units used up of an item bought at markup, billed at TT: the markup paid for them is not included. */
+	markupNotIncluded: boolean;
+	/** Why the line is no cost of the session's; `null` when it is one. */
+	unpriced: MeasuredCostUnpriced | null;
+	/** For an overhead line, a ledger expense pegged to the session whose description names the item: it may repeat this measured cost. Neither figure is adjusted. */
+	peggedLedgerEntryId: string | null;
+	/** That entry's description, as the player wrote it. */
+	peggedLedgerEntryDescription: string | null;
+}
+
+/**
+ * What a measured cost line measures.
+ */
+export type MeasuredCostLineKind = 'ammoBurned' | 'decay' | 'limitedDecay' | 'consumed';
+
+/**
+ * How exactly a measured amount is known.
+ */
+export type MeasuredCostPrecision = 'exact' | 'wholePec';
+
+/**
+ * Why a measured line is no cost of the session's.
+ */
+export type MeasuredCostUnpriced = 'boughtThroughLedger' | 'limitedSetUnconfirmed' | 'notPlaced';
 
 /**
  * How well the readings cover the session.
@@ -2829,9 +3159,8 @@ export type MeasuredEvent = {
 		kind: 'listingSold';
 	} | {
 		between: MeasuredSpan;
-		from: MeasuredAmount;
-		to: MeasuredAmount;
-		kind: 'cardChanged';
+		name: string;
+		kind: 'ammoToppedUp';
 	};
 
 /**
@@ -2858,7 +3187,7 @@ export interface MeasuredGain {
 /**
  * Whether something gained may be a strongbox's contents.
  */
-export type MeasuredGainMark = 'arrived' | 'possiblyStrongbox' | 'cardMovedUnexplained';
+export type MeasuredGainMark = 'arrived' | 'possiblyStrongbox';
 
 /**
  * One item's share of a figure.
@@ -3031,6 +3360,118 @@ export interface MetricsSnapshot {
 	tool_read_latency: HistogramSnapshot;
 	rss_bytes: number;
 	handle_count: number;
+}
+
+/**
+ * Something that arrived in a step that no loot line, recorded quest
+ * reward, conversion or opening explains.
+ */
+export interface MinuteArrival {
+	itemName: string;
+	arrivedIn: AccountPlace;
+	units: number;
+	tt: MeasuredAmount;
+	/** The PED Card fell by its TT in the step: bought at the Trade Terminal, at no markup. */
+	boughtAtTt: boolean;
+	disposition: ArrivalDisposition;
+}
+
+/**
+ * A step's measured figure for a bucket.
+ */
+export type MinuteFigure = {
+		amount: MeasuredAmount;
+		kind: 'measured';
+	} | {
+		reason: MinuteUnmeasured;
+		kind: 'unmeasured';
+	};
+
+/**
+ * A bucket with a tracked counterpart, in one step.
+ */
+export interface MinuteLane {
+	measured: MinuteFigure;
+	/** What the tracked events timed in the step cost, in PED: kills by when they ended, heals by when they were seen. */
+	tracked: number;
+}
+
+/**
+ * What correcting loot that never arrived takes.
+ */
+export type MinuteLootCorrection = {
+		sessionId: string;
+		itemName: string;
+		kind: 'offered';
+	} | {
+		reason: MinuteNoCorrection;
+		kind: 'notOffered';
+	};
+
+/**
+ * One loot line, by where it was recorded and its own row.
+ */
+export interface MinuteLootLine {
+	source: MinuteLootSource;
+	id: number;
+}
+
+/**
+ * Where a loot line was recorded.
+ */
+export type MinuteLootSource = 'kill' | 'harvest';
+
+/**
+ * Loot the chat log recorded that the readings never showed arriving, a
+ * step after it was looted.
+ */
+export interface MinuteMissingLoot {
+	itemName: string;
+	units: number;
+	/** The TT of the units that never arrived, from the chat log. */
+	tt: number;
+	/** The step it was looted in. */
+	lootedIn: MeasuredSpan;
+	lines: MinuteLootLine[];
+	correction: MinuteLootCorrection;
+}
+
+/**
+ * Why the loot correction is not offered.
+ */
+export type MinuteNoCorrection = 'harvestLoot' | 'otherLinesArrived';
+
+/**
+ * A stretch of steps where a lane's measured spend moved away from the
+ * tracked spend's usual slope.
+ */
+export interface MinuteStretch {
+	/** The steps it covers, by their position in `steps`. */
+	firstStep: number;
+	lastStep: number;
+	between: MeasuredSpan;
+	measured: MeasuredAmount;
+	tracked: number;
+	/** How far the gap moved beyond the session's usual slope, in PED: positive when the readings measured more than was tracked. */
+	drift: number;
+}
+
+/**
+ * Why a step's bucket has no measured figure: the step's own reasons,
+ * then each of the session costs' reasons by its own name.
+ */
+export type MinuteUnmeasured = 'noReadings' | 'partialCoverage' | 'stillRunning' | 'trackedOnly' | 'playInGap' | 'chatLogMissesGap' | 'chatLogUnchecked' | 'gapUnaccounted' | 'overheadInGap' | 'gapCheckPending' | 'awaitingGapReading' | 'chatLogNotPastGap' | 'gap' | 'ammoToppedUp' | 'ammoUnsettled' | 'limitedSetUnconfirmed';
+
+/**
+ * How well the readings cover the session.
+ */
+export interface MinutesCoverage {
+	/** Both ends read, at least two readings, no gap. */
+	complete: boolean;
+	opening: MeasuredEdge;
+	closing: MeasuredEdge;
+	readingCount: number;
+	gapCount: number;
 }
 
 /**
@@ -3210,6 +3651,8 @@ export interface MonthlyEntry {
 	questPes: number;
 	ledgerGains: Record<string, number>;
 	trackingCost: number;
+	/** The overhead of the sessions started in it: in its losses, never in `trackingCost`. */
+	overheadCost: number;
 	ledgerLosses: Record<string, number>;
 }
 
@@ -3321,6 +3764,20 @@ export interface OptimizerAttribute {
 	weight: number;
 	currentLevel: number;
 	contributionFactor: number;
+}
+
+/**
+ * The sessions' overhead by category: what they cost beyond performing
+ * their activities, as the account readings measured it.
+ */
+export interface OverheadBreakdown {
+	total: number;
+	/** Teleport chips, Mind Essence, vehicles and their fuel. */
+	travel: number;
+	/** Portable repair and Trade Terminal units, and their like. */
+	fieldLogistics: number;
+	/** What was used up that the app cannot place yet. */
+	unclassified: number;
 }
 
 /**
@@ -3535,6 +3992,11 @@ export interface ProtectionBacklog {
 }
 
 /**
+ * Where a limited set's baseline comes from.
+ */
+export type ProtectionBaselineSource = 'tradeTerminal' | 'account';
+
+/**
  * One session a recording could be spread over.
  */
 export interface ProtectionCandidateSession {
@@ -3551,6 +4013,14 @@ export interface ProtectionCandidateSession {
 	covered: boolean;
 	/** No recording of any stream covers it yet. */
 	unrecorded: boolean;
+}
+
+/**
+ * One item confirmed as a piece of a limited set.
+ */
+export interface ProtectionConfirmedPiece {
+	name: string;
+	confirmedAt: number;
 }
 
 /**
@@ -3603,7 +4073,7 @@ export interface ProtectionObservation {
 	id: string;
 	setId: string;
 	ttValuePed: number;
-	source: ProtectionObservationSource;
+	source: ProtectionReadingSource;
 	rawText: string | null;
 	observedAt: number;
 	resetReason: string | null;
@@ -3640,6 +4110,12 @@ export interface ProtectionOverview {
 }
 
 /**
+ * Where a stored reading of a limited set came from: the player's two
+ * ways of entering one, or the set's pieces in an account reading.
+ */
+export type ProtectionReadingSource = 'ocr' | 'manual' | 'account';
+
+/**
  * What a recording of one stream would look back over.
  */
 export interface ProtectionRecordingCandidates {
@@ -3647,6 +4123,16 @@ export interface ProtectionRecordingCandidates {
 	/** When the stream was last recorded (a limited set's baseline reading); absent before the first. */
 	since: number | null;
 	baselineTtPed: number | null;
+	/** Where that baseline comes from. */
+	baselineSource: ProtectionBaselineSource | null;
+	/** An account reading passed over as the set's baseline because it does not hold every confirmed piece: when it was taken. */
+	incompleteAccountReadingAt: number | null;
+	/** What the account readings already billed of what this recording measures, in PED of TT, taken off before anything is spread: the unlimited decay of measured sessions no repair has restored since, or what a limited set's pieces lost in measured sessions since its baseline. */
+	billedFromAccountPed: number;
+	/** How far a figure read from the account may stray: a PEC per piece. */
+	accountTolerancePed: number;
+	/** Sessions since the previous recording whose armour the account readings measured, left out of this recording. */
+	measuredSessions: number;
 	/** Sessions with hits since the previous recording, oldest first. */
 	sessions: ProtectionCandidateSession[];
 	/** Unlimited only: recent sessions from before the previous recording, which may be re-included. Oldest first. */
@@ -3685,6 +4171,8 @@ export interface ProtectionSet {
 	basisLocked: boolean;
 	/** Play since the set's latest reading; empty before its first. */
 	backlog: ProtectionBacklog;
+	/** The item names confirmed as the set's pieces, which the account readings bill the set by. */
+	pieces: string[];
 }
 
 export interface ProtectionSetInput {
@@ -3694,6 +4182,21 @@ export interface ProtectionSetInput {
 }
 
 export type ProtectionSetKind = 'armour' | 'plates';
+
+/**
+ * A limited set's pieces: those confirmed, and what the latest account
+ * reading suggests.
+ */
+export interface ProtectionSetPieces {
+	setId: string;
+	confirmed: ProtectionConfirmedPiece[];
+	/** Limited armour or plates in the latest account reading that the set's name names, not yet confirmed. */
+	suggested: string[];
+	/** The reading's other limited armour and plates no set in use holds. */
+	others: string[];
+	/** When that reading was taken; absent before any. */
+	readingTakenAt: number | null;
+}
 
 export interface ProtectionSetUpdateInput {
 	name: string;
@@ -4111,7 +4614,10 @@ export interface ReadFigure {
 
 export interface RealisedDefinitionMarkup {
 	definitionId: number;
+	/** Net markup from confirmed sales; zero when nothing sold. */
 	netMarkup: number;
+	/** The overhead of the definition's sessions shared to their hunting parts: a cost, never markup. Realised Net takes it off, and the Realised Rate's denominator is Cycled and it. */
+	overhead: number;
 }
 
 /**
@@ -4140,7 +4646,10 @@ export interface RealisedSpeciesMarkup {
  */
 export interface RealisedTierMarkup {
 	yieldTier: HarvestYieldTier;
+	/** Net markup from confirmed sales; zero when nothing sold. */
 	netMarkup: number;
+	/** The overhead of the sessions that swung this tier, shared to it by what it cycled: a cost, never markup. Realised Net takes it off, and the Realised Rate's denominator is Cycled and it. */
+	overhead: number;
 }
 
 /**
@@ -4194,6 +4703,15 @@ export interface RecommenderContribution {
  * unrepresentable rather than validated.
  */
 export type RecommenderTargetKind = 'hp' | 'profession';
+
+/**
+ * The step between two account readings a record was seen in: it happened
+ * between `from` and `to`.
+ */
+export interface RecordedFromAccount {
+	from: string;
+	to: string;
+}
 
 /**
  * The reject verb's result: `{ok: true}` on success; on a refusal, why
@@ -4383,6 +4901,28 @@ export interface SessionDetail {
 	skillGains: SkillGain[];
 	weaponAttribution: WeaponAttributionSummary;
 	healing: HealingSessionSummary;
+	/** Each enhancer break the session kept, in the order they broke. A priced break's cost is inside the enhancer bucket; an unpriced one is in no figure, and says why. */
+	enhancerBreaks: SessionEnhancerBreak[];
+}
+
+/**
+ * One enhancer break a session kept, and what it cost.
+ */
+export interface SessionEnhancerBreak {
+	enhancerName: string;
+	/** The weapon the enhancer was fitted to. */
+	weaponName: string;
+	/** When it broke, epoch seconds. */
+	observedAt: number;
+	/** The Shrapnel the game returned for it, PED. */
+	returnedPed: number;
+	pricing: EnhancerBreakPricing;
+	/** The enhancer's TT, PED, where the game data lists it. */
+	ttPed: number | null;
+	/** The markup it consumed, PED, where the player set one. */
+	markupPed: number | null;
+	/** What it cost, PED: its TT and markup less the return. Null when it is unpriced. */
+	costPed: number | null;
 }
 
 /**
@@ -4445,6 +4985,58 @@ export interface SessionIntervalRow {
 export interface SessionIntervals {
 	sessionId: string;
 	intervals: SessionIntervalRow[];
+}
+
+/**
+ * One step between two consecutive readings.
+ */
+export interface SessionMinute {
+	/** The later reading of the step, and the one before it. */
+	readingId: number;
+	previousReadingId: number;
+	between: MeasuredSpan;
+	/** The readings are further apart than 150 seconds: one step across the gap. */
+	gap: boolean;
+	/** False for the last step of a running session: what arrived in it is not flagged yet. */
+	settled: boolean;
+	/** The TT of the loot lines timed in the step, in PED. */
+	looted: number;
+	/** The TT of what arrived in the step, Universal Ammo aside. */
+	arrived: MeasuredAmount;
+	arrivedNotLooted: MinuteArrival[];
+	lootedNeverArrived: MinuteMissingLoot[];
+	weapon: MinuteLane;
+	healing: MinuteLane;
+	/** Measured only: armour has no tracked counterpart. */
+	armour: MinuteFigure;
+}
+
+/**
+ * A session's overhead by category, PED: what it cost beyond performing
+ * its activity, as the account readings measured it. Zero where nothing
+ * was measured: overhead has no tracked figure.
+ */
+export interface SessionOverhead {
+	/** Teleport chips, Mind Essence, vehicles and their fuel. */
+	travel: number;
+	/** Portable repair and Trade Terminal units, and their like. */
+	fieldLogistics: number;
+	/** What was used up that the app cannot place yet. */
+	unclassified: number;
+	/** Why each category is withheld from the figures above, where it is. */
+	reasons: SessionOverheadReasons;
+}
+
+/**
+ * Why each overhead category of a session the readings measured is not
+ * billed: `null` for a category measured (its figure above is the
+ * measurement, zero included), and for every category of a session the
+ * readings never measured, which has no overhead.
+ */
+export interface SessionOverheadReasons {
+	travel: CostReason | null;
+	fieldLogistics: CostReason | null;
+	unclassified: CostReason | null;
 }
 
 /**
@@ -4538,6 +5130,8 @@ export interface SessionSummary {
 	returnRate: number;
 	kills: number;
 	duration: number;
+	/** What the session's cost rests on. */
+	costBasis: CostBasis;
 	costBreakdown: CostBreakdown;
 }
 
@@ -4888,7 +5482,9 @@ export interface SkillingForecastSource {
 	markup: number | null;
 	/** Cycled minus loot TT. */
 	ttCost: number;
-	/** TT cost less realised markup; null with the markup. */
+	/** The overhead the forecast cycling carries (travel, field logistics, what the app cannot place), at the recorded overhead per PED cycled. */
+	overhead: number;
+	/** TT cost and overhead, less realised markup; null with the markup. */
 	netCost: number | null;
 	/** The TT cost under Community Model v1 at the planning looter basis; null when the model prices none of the definition's weapon spend. */
 	expected: SkillingExpectedLoss | null;
@@ -5005,6 +5601,28 @@ export interface StatProfession {
 }
 
 /**
+ * A conversion of an item the account readings recorded within the last
+ * hour, shown beside the conversion form's amount so the same conversion
+ * is not entered twice.
+ */
+export interface StockConversionFromAccount {
+	/** The conversion's id, as its history entry carries it. */
+	id: string;
+	/** How much of the item it took, and that amount's TT. */
+	quantity: number;
+	ttValue: number;
+	/** When the step it was seen in ended. */
+	recordedAt: string;
+}
+
+/**
+ * The item a conversion form is about to convert.
+ */
+export interface StockConversionFromAccountInput {
+	itemName: string;
+}
+
+/**
  * A stock-conversion payload (recycling into Nanocubes at 1:1 TT). The
  * profession stamps which activity's History owns the conversion.
  */
@@ -5039,6 +5657,205 @@ export interface StockPosition {
 }
 
 /**
+ * What applying a draft came to.
+ */
+export type StockReconciliationApplied = {
+		reconciliationId: string | null;
+		settled: string[];
+		refused: StockReconciliationRefused[];
+		outcome: 'applied';
+	} | {
+		reconciliationId: string;
+		outcome: 'alreadyApplied';
+	} | {
+		outcome: 'sessionTracked';
+	};
+
+/**
+ * The draft to apply.
+ */
+export interface StockReconciliationApplyInput {
+	draftId: string;
+}
+
+/**
+ * Something to know before applying a draft.
+ */
+export type StockReconciliationCaution = {
+		sessionEndedAt: string;
+		kind: 'pasteSoonAfterSession';
+	};
+
+/**
+ * A disposition a line can be set to on its own.
+ */
+export type StockReconciliationChoice = 'removed' | 'shrapnelConverted' | 'unknownOrigin' | 'leftAsIs';
+
+/**
+ * What to do about one item's difference.
+ */
+export type StockReconciliationDisposition = {
+		kind: 'removed';
+	} | {
+		soldAtTt: number | null;
+		kind: 'shrapnelConverted';
+	} | {
+		group: number;
+		kind: 'conversionGroup';
+	} | {
+		kind: 'unknownOrigin';
+	} | {
+		kind: 'leftAsIs';
+	};
+
+/**
+ * A reconciliation being reviewed.
+ */
+export interface StockReconciliationDraft {
+	id: string;
+	source: StockReconciliationSource;
+	/** When the account was observed. */
+	observedAt: string;
+	/** The largest difference by TT first. */
+	lines: StockReconciliationLine[];
+	excluded: StockReconciliationExcluded[];
+	/** Each conversion group's figures. */
+	groups: StockReconciliationGroup[];
+	/** `null` when there is nothing to say. */
+	caution: StockReconciliationCaution | null;
+}
+
+/**
+ * An item, or some of its rows, left out, with why.
+ */
+export interface StockReconciliationExcluded {
+	itemName: string;
+	/** What the account shows of it under this reason. */
+	quantity: number;
+	reason: StockReconciliationExclusion;
+}
+
+/**
+ * Why an item is left out of a reconciliation.
+ */
+export type StockReconciliationExclusion = 'equipment' | 'armour' | 'plate' | 'universalAmmo' | 'ammo' | 'attached' | 'auction' | 'auctionWithoutListing' | 'pendingProposal' | 'consumable' | 'strongbox' | 'singleItem' | 'sharedName' | 'heldAsAsset';
+
+/**
+ * One conversion group's figures: the TT that went in and came out.
+ */
+export interface StockReconciliationGroup {
+	group: number;
+	/** The TT of the missing items that went in. */
+	ttIn: number;
+	/** The TT of what came out. */
+	ttOut: number;
+	/** The item that came out, how much of it the conversion produced, and how much more arrived, held as of unknown origin (a recycling makes no more Nanocubes than its inputs' TT pays for). */
+	outputItem: string;
+	outputQuantity: number;
+	remainderQuantity: number;
+}
+
+/**
+ * One item whose quantity in the app differs from the account's.
+ */
+export interface StockReconciliationLine {
+	itemName: string;
+	/** Everything the app holds of it, its assets included. */
+	appQuantity: number;
+	/** The part of `appQuantity` held as assets, which a reconciliation never moves: a shortfall leaves the loose stock alone. */
+	assetQuantity: number;
+	observedQuantity: number;
+	/** The account's quantity less the app's: below zero when units are missing. */
+	difference: number;
+	unitTt: StockReconciliationUnitTt;
+	disposition: StockReconciliationDisposition;
+	/** A record the account readings made of this item was taken back and no reconciliation has settled the item since: why it is left as it is unless the player says otherwise. */
+	takenBack: boolean;
+}
+
+/**
+ * An inventory pasted from the account site's Copy CSV.
+ */
+export interface StockReconciliationPasteInput {
+	text: string;
+}
+
+/**
+ * Why a line was not applied.
+ */
+export type StockReconciliationRefusal = 'stockMovedSince' | 'changedSincePlanned' | 'groupRefused';
+
+/**
+ * A line left for the next plan.
+ */
+export interface StockReconciliationRefused {
+	itemName: string;
+	reason: StockReconciliationRefusal;
+}
+
+/**
+ * A revision of the draft `draftId`.
+ */
+export interface StockReconciliationReviseInput {
+	draftId: string;
+	revision: StockReconciliationRevision;
+}
+
+/**
+ * A revised draft, and the lines a bulk choice was not set on.
+ */
+export interface StockReconciliationRevised {
+	draft: StockReconciliationDraft;
+	unchanged: StockReconciliationUnchanged[];
+}
+
+/**
+ * One change to the draft.
+ */
+export type StockReconciliationRevision = {
+		items: string[];
+		choice: StockReconciliationChoice;
+		kind: 'set';
+	} | {
+		quantity?: number | null;
+		kind: 'shrapnelSoldAtTt';
+	} | {
+		items: string[];
+		kind: 'group';
+	};
+
+/**
+ * What a reconciliation was observed from.
+ */
+export type StockReconciliationSource = {
+		readingId: number;
+		kind: 'reading';
+	} | {
+		kind: 'paste';
+	};
+
+/**
+ * A line a bulk choice did not fit, and why.
+ */
+export interface StockReconciliationUnchanged {
+	itemName: string;
+	reason: string;
+}
+
+/**
+ * An item's TT per unit, and how far it can be trusted.
+ */
+export type StockReconciliationUnitTt = {
+		ped: number;
+		kind: 'exact';
+	} | {
+		ped: number;
+		kind: 'truncated';
+	} | {
+		kind: 'unknown';
+	};
+
+/**
  * Stock whose later fate is unknown. This changes holdings only and never
  * rewrites the loot or ledger history that established its TT.
  */
@@ -5047,6 +5864,28 @@ export interface StockRemovalInput {
 	itemName: string;
 	quantity: number;
 	removedAt?: string | null;
+}
+
+/**
+ * A sale of an item to the Trade Terminal the account readings recorded
+ * within the last hour, shown beside the trade form's amount so the same
+ * sale is not entered twice.
+ */
+export interface StockSaleFromAccount {
+	/** The sale's id, as its history entry carries it. */
+	id: string;
+	/** How much of the item it sold, and that amount's TT. */
+	quantity: number;
+	ttValue: number;
+	/** When the step it was seen in ended. */
+	recordedAt: string;
+}
+
+/**
+ * The item a trade form is about to sell.
+ */
+export interface StockSaleFromAccountInput {
+	itemName: string;
 }
 
 /**
@@ -5251,6 +6090,8 @@ export interface TimelineDay {
 	questPes: number;
 	ledgerGains: Record<string, number>;
 	trackingCost: number;
+	/** The overhead of the sessions started in it: in its losses, never in `trackingCost`. */
+	overheadCost: number;
 	ledgerLosses: Record<string, number>;
 }
 
@@ -5547,6 +6388,20 @@ export type ToolUse = 'shot' | 'heal' | 'swing';
 export type ToolUsesCosting = 'withoutAttachments' | 'asBooked' | 'notCosted';
 
 /**
+ * A session's cost buckets as the chat log tracked them. The weapon's is
+ * every shot fired: its kills' spend and the shots after the last kill,
+ * as the measured weapon counts them.
+ */
+export interface TrackedCostBreakdown {
+	weaponCost: number;
+	healCost: number;
+	consumableCost: number;
+	enhancerCost: number;
+	armourCost: number;
+	harvestCost: number;
+}
+
+/**
  * A session's tracked figures, as its summary holds them.
  */
 export interface TrackedSessionFigures {
@@ -5569,8 +6424,10 @@ export interface TrackingSession {
 	duration: number;
 	primaryMobs: string[];
 	primaryWeapons: string[];
+	/** Cycled. */
 	cost: number;
 	returns: number;
+	/** Returns less Cycled and the session's overhead. */
 	net: number;
 	returnRate: number;
 	globals: number;
@@ -5625,10 +6482,14 @@ export interface TrackingSnapshot {
 	damageDealtTotal?: number | null;
 	weaponDamageDealt?: number | null;
 	weaponCost?: number | null;
-	/** Armour and plate cost recorded against the session so far; part of `cost`. It arrives when a repair or Trade Terminal reading is recorded, not per hit. */
+	/** Armour and plate cost against the session so far; part of `cost`. What the account readings measured up to their latest reading when they measured it; otherwise it arrives when a repair or Trade Terminal reading is recorded, not per hit. */
 	armourCost?: number | null;
 	/** `cost` split by what it was spent on, one line per weapon, healing tool, armour stream, consumable, or harvesting tool; the lines sum to `cost`. */
 	cycledBreakdown?: CycledLine[] | null;
+	/** What the session cost beyond performing its activity (travel, field logistics, what the app cannot place yet), as the account readings measured it so far: in `net`, never in `cost`. Absent while none of the costs rests on the readings. */
+	overheadCost?: number | null;
+	/** When the costs the account readings measured run to: where they measured a bucket, `cost` holds what they measured up to then and the tracked cost of the play since. Absent while none of the costs rests on the readings (the player is not signed in, or no reading after the session's first has measured it yet). */
+	costsMeasuredThrough?: string | null;
 	/** Expected loot over the whole `cost` at every looter basis; absent until a modelled shot. */
 	expectedCycle?: LiveExpectedCycle | null;
 	expectedTtRate?: number | null;
@@ -6180,6 +7041,14 @@ export async function protectionRepairConfirm(input: ProtectionRepairInput): Pro
 	return invokeCommand('protection_repair_confirm', { input });
 }
 
+export async function protectionSetPieces(setId: number): Promise<ProtectionSetPieces> {
+	return invokeCommand('protection_set_pieces', { set_id: setId });
+}
+
+export async function protectionSetPiecesConfirm(setId: number, names: string[]): Promise<ProtectionSetPieces> {
+	return invokeCommand('protection_set_pieces_confirm', { set_id: setId, names });
+}
+
 export async function protectionTradeTerminalScan(): Promise<{
 		/** The amount recorded. */
 		valuePed: number;
@@ -6566,6 +7435,14 @@ export async function stockShrapnelConvert(input: ShrapnelConversionInput): Prom
 	return invokeCommand('stock_shrapnel_convert', { input });
 }
 
+export async function stockConversionFromAccount(input: StockConversionFromAccountInput): Promise<StockConversionFromAccount | null> {
+	return invokeCommand('stock_conversion_from_account', { input });
+}
+
+export async function stockSaleFromAccount(input: StockSaleFromAccountInput): Promise<StockSaleFromAccount | null> {
+	return invokeCommand('stock_sale_from_account', { input });
+}
+
 export async function activityHistory(profession: Profession): Promise<ActivityHistoryEntry[]> {
 	return invokeCommand('activity_history', { profession });
 }
@@ -6630,6 +7507,18 @@ export async function accountMeasuredSummary(): Promise<AccountMeasuredSummary> 
 	return invokeCommand('account_measured_summary', {});
 }
 
+export async function accountCostPlacements(): Promise<CostPlacements> {
+	return invokeCommand('account_cost_placements', {});
+}
+
+export async function accountCostPlace(input: CostPlacementInput): Promise<CostPlacementResult> {
+	return invokeCommand('account_cost_place', { input });
+}
+
+export async function accountCostPlacementClear(item: string): Promise<CostPlacementResult> {
+	return invokeCommand('account_cost_placement_clear', { item });
+}
+
 export async function accountProposals(kind: AccountProposalKind | null): Promise<AccountProposal[]> {
 	return invokeCommand('account_proposals', { kind });
 }
@@ -6648,6 +7537,56 @@ export async function accountProposalsLink(input: AccountProposalsLinkInput): Pr
 
 export async function accountProposalDismiss(input: AccountProposalDismissInput): Promise<void> {
 	return invokeCommand('account_proposal_dismiss', { input });
+}
+
+export async function accountSessionMinutes(sessionId: string): Promise<AccountSessionMinutes> {
+	return invokeCommand('account_session_minutes', { session_id: sessionId });
+}
+
+export async function accountArrivalUnknownOrigin(input: AccountArrivalInput): Promise<AccountArrivalRecorded> {
+	return invokeCommand('account_arrival_unknown_origin', { input });
+}
+
+export async function accountArrivalUnignore(input: AccountArrivalId): Promise<void> {
+	return invokeCommand('account_arrival_unignore', { input });
+}
+
+export async function accountArrivalUnknownOriginUndo(input: ActivityUndoInput): Promise<void> {
+	return invokeCommand('account_arrival_unknown_origin_undo', { input });
+}
+
+export async function accountReconciliationPlan(): Promise<StockReconciliationDraft> {
+	return invokeCommand('account_reconciliation_plan', {});
+}
+
+export async function accountReconciliationPaste(input: StockReconciliationPasteInput): Promise<StockReconciliationDraft> {
+	return invokeCommand('account_reconciliation_paste', { input });
+}
+
+export async function accountReconciliationDraft(): Promise<StockReconciliationDraft | null> {
+	return invokeCommand('account_reconciliation_draft', {});
+}
+
+export async function accountReconciliationRevise(input: StockReconciliationReviseInput): Promise<StockReconciliationRevised> {
+	return invokeCommand('account_reconciliation_revise', { input });
+}
+
+export async function accountReconciliationApply(input: StockReconciliationApplyInput): Promise<{
+		reconciliationId: string | null;
+		settled: string[];
+		refused: StockReconciliationRefused[];
+		outcome: 'applied';
+	} | {
+		reconciliationId: string;
+		outcome: 'alreadyApplied';
+	} | {
+		outcome: 'sessionTracked';
+	}> {
+	return invokeCommand('account_reconciliation_apply', { input });
+}
+
+export async function accountReconciliationUndo(input: ActivityUndoInput): Promise<void> {
+	return invokeCommand('account_reconciliation_undo', { input });
 }
 
 export async function accountRunBegin(): Promise<{

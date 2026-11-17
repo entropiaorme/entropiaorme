@@ -63,13 +63,30 @@ pub struct CycledBreakdown {
     pub consumables: f64,
 }
 
-/// The losses breakdown: tracking cost, its cycled split, and the ledger
-/// expenses.
+/// The sessions' overhead by category: what they cost beyond performing
+/// their activities, as the account readings measured it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OverheadBreakdown {
+    pub total: f64,
+    /// Teleport chips, Mind Essence, vehicles and their fuel.
+    pub travel: f64,
+    /// Portable repair and Trade Terminal units, and their like.
+    pub field_logistics: f64,
+    /// What was used up that the app cannot place yet.
+    pub unclassified: f64,
+}
+
+/// The losses breakdown: tracking cost (Cycled), its cycled split, the
+/// sessions' overhead, and the ledger expenses. The total losses are all
+/// three.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LossesBreakdown {
     pub tracking_cost: f64,
     pub cycled_breakdown: CycledBreakdown,
+    /// In the losses, never in `trackingCost`.
+    pub overhead: OverheadBreakdown,
     pub ledger: BTreeMap<String, f64>,
 }
 
@@ -85,6 +102,9 @@ pub struct TimelineDay {
     pub quest_pes: f64,
     pub ledger_gains: BTreeMap<String, f64>,
     pub tracking_cost: f64,
+    /// The overhead of the sessions started in it: in its losses, never in
+    /// `trackingCost`.
+    pub overhead_cost: f64,
     pub ledger_losses: BTreeMap<String, f64>,
 }
 
@@ -100,6 +120,9 @@ pub struct MonthlyEntry {
     pub quest_pes: f64,
     pub ledger_gains: BTreeMap<String, f64>,
     pub tracking_cost: f64,
+    /// The overhead of the sessions started in it: in its losses, never in
+    /// `trackingCost`.
+    pub overhead_cost: f64,
     pub ledger_losses: BTreeMap<String, f64>,
 }
 
@@ -231,6 +254,10 @@ pub struct HuntingActivityOverall {
     pub returns: f64,
     pub loot_rate: f64,
     pub expected: Nullable<ExpectedHuntingEconomics>,
+    /// The overhead of these same sessions shared to their hunting: a cost
+    /// beside `cycled`, never in it. Realised Net takes it off; the
+    /// Realised Rate's denominator is `cycled` and it.
+    pub overhead: f64,
 }
 
 /// Offensive-only Community Model v1 result over captured component evidence.
@@ -264,6 +291,11 @@ pub struct HuntingDefinitionComparison {
     pub returns: f64,
     pub loot_rate: f64,
     pub expected: Nullable<ExpectedHuntingEconomics>,
+    /// The overhead of these same instances shared to their hunting (on the
+    /// unassigned bucket, that of sessions recorded outside any
+    /// definition): a cost beside `cycled`, never in it. Realised Net takes
+    /// it off; the Realised Rate's denominator is `cycled` and it.
+    pub overhead: f64,
     pub loot_items: Vec<HarvestLootItem>,
     pub activities: Vec<HuntingActivityComparison>,
 }
@@ -337,6 +369,12 @@ pub struct HuntingActivityComparison {
     /// grain: ordinary loot TT, confirmed reward TT, and later confirmed
     /// markup from both ordinary loot and reward stock.
     pub rewarded_returns: f64,
+    /// The sessions' overhead shared to this activity by what it cycled: a
+    /// cost beside `cycled`, never in it. Realised Net is `rewardedReturns`
+    /// less `cycled` and this.
+    pub overhead: f64,
+    /// `rewardedReturns` over `cycled` and `overhead`: realised returns
+    /// over costs.
     pub rewarded_rate: f64,
     pub reward_status: HuntingRewardStatus,
     pub loot_items: Vec<HarvestLootItem>,
@@ -369,7 +407,12 @@ pub struct RealisedSpeciesMarkup {
 #[serde(rename_all = "camelCase")]
 pub struct RealisedDefinitionMarkup {
     pub definition_id: i64,
+    /// Net markup from confirmed sales; zero when nothing sold.
     pub net_markup: f64,
+    /// The overhead of the definition's sessions shared to their hunting
+    /// parts: a cost, never markup. Realised Net takes it off, and the
+    /// Realised Rate's denominator is Cycled and it.
+    pub overhead: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -434,6 +477,9 @@ pub struct HarvestTierComparison {
     pub cycled: f64,
     pub returns: f64,
     pub loot_rate: f64,
+    /// The overhead shared to this tier by what it cycled: a cost beside
+    /// `cycled`, never in it.
+    pub overhead: f64,
     pub loot_items: Vec<HarvestLootItem>,
 }
 
@@ -442,6 +488,13 @@ pub struct HarvestTierComparison {
 #[serde(rename_all = "camelCase")]
 pub struct AnalyticsHarvest {
     pub tier_comparisons: Vec<HarvestTierComparison>,
+    /// The overhead of the sessions that swung in the period, shared to
+    /// their harvesting: a cost beside Cycled, never in it. The tiers'
+    /// overhead and `unassignedOverhead` add up to it.
+    pub overhead: f64,
+    /// The part of `overhead` on no tier shown: a session that swung but
+    /// cycled nothing to share it by.
+    pub unassigned_overhead: f64,
 }
 
 // ── Ledger / preset / inventory DTOs ────────────────────────────────
@@ -512,7 +565,10 @@ pub struct InventoryItem {
     /// Whether part of it can be sold, listed, or converted, rather than only
     /// the whole. Not for an asset carrying activity origins.
     pub divisible: bool,
-    /// The acquisitions that built it, oldest first.
+    /// The acquisitions that built it, oldest first by date. Ids rise in
+    /// the order purchases are recorded, so the purchase `inventory_create`
+    /// or `inventory_purchase_add` just recorded is the one with the
+    /// highest id: the id a purchase proposal is linked to.
     pub purchases: Vec<AssetPurchase>,
     /// The activities a sale of this asset would credit. Empty for an asset
     /// that did not come out of a conversion.
@@ -640,11 +696,14 @@ pub struct ActivityHistoryEntry {
     pub id: String,
     /// The holding family this outcome acted on: `loot` or `equipment`.
     pub subject_kind: String,
-    /// The operational path: `auction`, `trade`, `conversion`, or `removal`.
+    /// The operational path: `auction`, `trade`, `conversion`, `removal`,
+    /// or `unknownOrigin` (stock held without knowing where it came from,
+    /// shown in the Inventory's history only).
     pub channel: String,
-    /// `listing`, `trade`, `conversion`, or `removal`.
+    /// `listing`, `trade`, `conversion`, `removal`, or `unknownOrigin`
+    /// (undone with `account_arrival_unknown_origin_undo`).
     pub kind: String,
-    /// `pending`, `sold`, `expired`, `converted`, or `removed`.
+    /// `pending`, `sold`, `expired`, `converted`, `removed`, or `held`.
     pub status: String,
     pub item_name: String,
     /// What a conversion produced; `null` for other outcomes.
@@ -675,6 +734,66 @@ pub struct ActivityHistoryEntry {
     pub itemised: bool,
     /// What the sold stock descends from, when a conversion produced it.
     pub derived_from: Vec<DerivedSource>,
+    /// Recorded on its own from the account readings, and the step it was
+    /// seen in; `null` for an entry the player made.
+    pub recorded_from_account: Nullable<RecordedFromAccount>,
+    /// The standing stock reconciliation that recorded it: undone only
+    /// with it (`account_reconciliation_undo`), never on its own. `null`
+    /// otherwise.
+    pub reconciliation_id: Nullable<String>,
+}
+
+/// The step between two account readings a record was seen in: it happened
+/// between `from` and `to`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedFromAccount {
+    pub from: String,
+    pub to: String,
+}
+
+/// The item a conversion form is about to convert.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StockConversionFromAccountInput {
+    pub item_name: String,
+}
+
+/// A conversion of an item the account readings recorded within the last
+/// hour, shown beside the conversion form's amount so the same conversion
+/// is not entered twice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StockConversionFromAccount {
+    /// The conversion's id, as its history entry carries it.
+    pub id: String,
+    /// How much of the item it took, and that amount's TT.
+    pub quantity: f64,
+    pub tt_value: f64,
+    /// When the step it was seen in ended.
+    pub recorded_at: String,
+}
+
+/// The item a trade form is about to sell.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StockSaleFromAccountInput {
+    pub item_name: String,
+}
+
+/// A sale of an item to the Trade Terminal the account readings recorded
+/// within the last hour, shown beside the trade form's amount so the same
+/// sale is not entered twice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StockSaleFromAccount {
+    /// The sale's id, as its history entry carries it.
+    pub id: String,
+    /// How much of the item it sold, and that amount's TT.
+    pub quantity: f64,
+    pub tt_value: f64,
+    /// When the step it was seen in ended.
+    pub recorded_at: String,
 }
 
 /// Which side of Inventory a conversion's result joins.
@@ -833,7 +952,12 @@ pub struct ActivityUndoInput {
 #[serde(rename_all = "camelCase")]
 pub struct RealisedTierMarkup {
     pub yield_tier: HarvestYieldTier,
+    /// Net markup from confirmed sales; zero when nothing sold.
     pub net_markup: f64,
+    /// The overhead of the sessions that swung this tier, shared to it by
+    /// what it cycled: a cost, never markup. Realised Net takes it off, and
+    /// the Realised Rate's denominator is Cycled and it.
+    pub overhead: f64,
 }
 
 // ── Request DTOs ────────────────────────────────────────────────────
@@ -1435,8 +1559,58 @@ impl Api {
                     .into_iter()
                     .map(derived_source_dto)
                     .collect(),
+                recorded_from_account: row
+                    .from_account
+                    .map(|step| RecordedFromAccount {
+                        from: eo_services::time::to_iso_utc(step.seen_from),
+                        to: eo_services::time::to_iso_utc(step.seen_to),
+                    })
+                    .into(),
+                reconciliation_id: row.reconciliation_id.into(),
             })
             .collect())
+    }
+
+    /// The latest standing conversion of an item the account readings
+    /// recorded within the last hour, or `null`. A read.
+    pub async fn stock_conversion_from_account(
+        &self,
+        input: StockConversionFromAccountInput,
+    ) -> Result<Nullable<StockConversionFromAccount>, ApiError> {
+        let recent = self
+            .analytics
+            .recent_conversion_from_account(&input.item_name)
+            .await
+            .map_err(analytics_error("conversion from the account"))?;
+        Ok(recent
+            .map(|recent| StockConversionFromAccount {
+                id: recent.record_id,
+                quantity: recent.quantity,
+                tt_value: recent.tt_value,
+                recorded_at: eo_services::time::to_iso_utc(recent.seen_to),
+            })
+            .into())
+    }
+
+    /// The latest standing sale of an item to the Trade Terminal the account
+    /// readings recorded within the last hour, or `null`. A read.
+    pub async fn stock_sale_from_account(
+        &self,
+        input: StockSaleFromAccountInput,
+    ) -> Result<Nullable<StockSaleFromAccount>, ApiError> {
+        let recent = self
+            .analytics
+            .recent_sale_from_account(&input.item_name)
+            .await
+            .map_err(analytics_error("sale from the account"))?;
+        Ok(recent
+            .map(|recent| StockSaleFromAccount {
+                id: recent.record_id,
+                quantity: recent.quantity,
+                tt_value: recent.tt_value,
+                recorded_at: eo_services::time::to_iso_utc(recent.seen_to),
+            })
+            .into())
     }
 
     /// Take back a confirmed sale, leaving the listing open. The stock does
@@ -1512,28 +1686,51 @@ impl Api {
 
     /// Net realised markup per yield tier, from confirmed stock outcomes.
     pub async fn harvest_realised_markup(&self) -> Result<Vec<RealisedTierMarkup>, ApiError> {
-        let rows = self
-            .analytics
-            .realised_markup_by_tier()
-            .await
-            .map_err(analytics_error("harvest realised markup"))?;
-        Ok(rows
+        let (rows, overhead) = tokio::try_join!(
+            self.analytics.realised_markup_by_tier(),
+            self.analytics.activity_overhead(),
+        )
+        .map_err(analytics_error("harvest realised markup"))?;
+        // Every tier with markup or overhead, in the tiers' own order.
+        let mut tiers: Vec<(eo_services::harvest_yield::HarvestYieldTier, f64, f64)> = rows
             .into_iter()
-            .map(|row| RealisedTierMarkup {
-                yield_tier: row.yield_tier.into(),
-                net_markup: row.net_markup,
+            .map(|row| (row.yield_tier, row.net_markup, 0.0))
+            .collect();
+        for (stored, amount) in overhead.tiers {
+            let tier = eo_services::harvest_yield::HarvestYieldTier::from_db(&stored);
+            match tiers.iter_mut().find(|(known, ..)| *known == tier) {
+                Some(row) => row.2 += amount,
+                None => tiers.push((tier, 0.0, amount)),
+            }
+        }
+        tiers.sort_by_key(|(tier, ..)| tier.sort_rank());
+        Ok(tiers
+            .into_iter()
+            .map(|(tier, net_markup, overhead)| RealisedTierMarkup {
+                yield_tier: tier.into(),
+                net_markup,
+                overhead,
             })
             .collect())
     }
 
     /// Net realised Hunting markup through both honest comparison axes.
     pub async fn hunting_realised_markup(&self) -> Result<HuntingRealisedMarkup, ApiError> {
-        let (species, definitions, derived) = tokio::try_join!(
+        let (species, definitions, derived, overhead) = tokio::try_join!(
             self.analytics.realised_markup_by_species(),
             self.analytics.realised_markup_by_definition(),
             self.analytics.realised_derived_by_definition(),
+            self.analytics.activity_overhead(),
         )
         .map_err(analytics_error("hunting realised markup"))?;
+        // Every definition with markup or overhead, by id.
+        let mut by_definition: BTreeMap<i64, (f64, f64)> = definitions
+            .into_iter()
+            .map(|row| (row.definition_id, (row.net_markup, 0.0)))
+            .collect();
+        for (definition_id, amount) in overhead.definitions {
+            by_definition.entry(definition_id).or_insert((0.0, 0.0)).1 += amount;
+        }
         Ok(HuntingRealisedMarkup {
             species: species
                 .into_iter()
@@ -1542,12 +1739,15 @@ impl Api {
                     net_markup: row.net_markup,
                 })
                 .collect(),
-            definitions: definitions
+            definitions: by_definition
                 .into_iter()
-                .map(|row| RealisedDefinitionMarkup {
-                    definition_id: row.definition_id,
-                    net_markup: row.net_markup,
-                })
+                .map(
+                    |(definition_id, (net_markup, overhead))| RealisedDefinitionMarkup {
+                        definition_id,
+                        net_markup,
+                        overhead,
+                    },
+                )
                 .collect(),
             derived: derived
                 .into_iter()
@@ -1923,6 +2123,12 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
                 harvest: data.losses_breakdown.cycled_breakdown.harvest.as_f64(),
                 consumables: data.losses_breakdown.cycled_breakdown.consumables.as_f64(),
             },
+            overhead: OverheadBreakdown {
+                total: data.losses_breakdown.overhead.total,
+                travel: data.losses_breakdown.overhead.travel,
+                field_logistics: data.losses_breakdown.overhead.field_logistics,
+                unclassified: data.losses_breakdown.overhead.unclassified,
+            },
             ledger: data.losses_breakdown.ledger,
         },
         total_gains: data.total_gains,
@@ -1939,6 +2145,7 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
                 quest_pes: point.quest_pes,
                 ledger_gains: point.ledger_gains,
                 tracking_cost: point.tracking_cost,
+                overhead_cost: point.overhead_cost,
                 ledger_losses: point.ledger_losses,
             })
             .collect(),
@@ -1954,6 +2161,7 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
                 quest_pes: point.quest_pes,
                 ledger_gains: point.ledger_gains,
                 tracking_cost: point.tracking_cost,
+                overhead_cost: point.overhead_cost,
                 ledger_losses: point.ledger_losses,
             })
             .collect(),
@@ -2068,8 +2276,9 @@ pub(crate) fn hunting_activity_dto(
             realised_reward_markup: row.realised_reward_markup,
             reward_items: row.reward_items.into_iter().map(loot_item).collect(),
             rewarded_returns: realised_returns,
-            rewarded_rate: if row.cycled > 0.0 {
-                round_half_even(realised_returns / row.cycled, 4)
+            overhead: row.overhead,
+            rewarded_rate: if row.cycled + row.overhead > 0.0 {
+                round_half_even(realised_returns / (row.cycled + row.overhead), 4)
             } else {
                 0.0
             },
@@ -2084,6 +2293,7 @@ pub(crate) fn hunting_activity_dto(
             returns: data.overall.returns,
             loot_rate: data.overall.loot_rate,
             expected: data.overall.expected.map(expected).into(),
+            overhead: data.overall.overhead,
         },
         definitions: data
             .definitions
@@ -2096,6 +2306,7 @@ pub(crate) fn hunting_activity_dto(
                 returns: row.returns,
                 loot_rate: row.loot_rate,
                 expected: row.expected.map(expected).into(),
+                overhead: row.overhead,
                 loot_items: row.loot_items.into_iter().map(loot_item).collect(),
                 activities: row.activities.into_iter().map(activity).collect(),
             })
@@ -2117,6 +2328,8 @@ pub(crate) fn hunting_activity_dto(
 
 pub(crate) fn harvest_dto(data: eo_services::analytics::HarvestData) -> AnalyticsHarvest {
     AnalyticsHarvest {
+        overhead: data.overhead,
+        unassigned_overhead: data.unassigned_overhead,
         tier_comparisons: data
             .tier_comparisons
             .into_iter()
@@ -2126,6 +2339,7 @@ pub(crate) fn harvest_dto(data: eo_services::analytics::HarvestData) -> Analytic
                 cycled: row.cycled,
                 returns: row.returns,
                 loot_rate: row.loot_rate,
+                overhead: row.overhead,
                 loot_items: row
                     .loot_items
                     .into_iter()

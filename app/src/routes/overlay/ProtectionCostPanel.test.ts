@@ -55,6 +55,11 @@ function candidates(
 		stream: { kind: 'unlimited' },
 		since: null,
 		baselineTtPed: null,
+		baselineSource: null,
+		incompleteAccountReadingAt: null,
+		billedFromAccountPed: 0,
+		accountTolerancePed: 0,
+		measuredSessions: 0,
 		sessions,
 		earlier: [],
 		...overrides,
@@ -97,6 +102,7 @@ const hyperion: ProtectionSet = {
 	latestObservation: null,
 	basisLocked: false,
 	backlog: { lastRecordedAt: null, sessions: 0, hits: 0 },
+	pieces: [],
 };
 
 const EMPTY_BACKLOG = { lastRecordedAt: null, sessions: 0, hits: 0 };
@@ -283,6 +289,97 @@ describe('recording an unlimited repair', () => {
 	});
 });
 
+describe('recording beside the account readings', () => {
+	it('records nothing when every session since the last repair was measured from the account', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([], { since: 1_700_000_000, measuredSessions: 2 }),
+		);
+		renderPanel();
+		await enterAmount('1.13');
+		expect(
+			await screen.findByText('Every session since the last repair was measured from your account'),
+		).toBeTruthy();
+		expect(screen.queryByText(/No hits recorded since/)).toBeNull();
+		expect((screen.getByText('Record') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('says how many sessions the account readings measured and left out', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 5)], { measuredSessions: 3 }),
+		);
+		renderPanel();
+		await enterAmount('1');
+		expect(
+			await screen.findByText('3 sessions were measured from your account and are left out.'),
+		).toBeTruthy();
+		expect((screen.getByText('Record') as HTMLButtonElement).disabled).toBe(false);
+	});
+
+	it('spreads only what the readings had not already billed of a repair', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 5)], {
+				measuredSessions: 1,
+				billedFromAccountPed: 1.13,
+				accountTolerancePed: 0.01,
+			}),
+		);
+		renderPanel();
+		await enterAmount('2');
+		expect(
+			await screen.findByText(
+				'2.00 PED: 1.13 already billed from your account, 0.87 over 1 session',
+			),
+		).toBeTruthy();
+		await fireEvent.click(screen.getByText('Record'));
+		// The repair is sent whole: the app takes the billed part off itself.
+		await waitFor(() =>
+			expect(lastRepairInput()).toMatchObject({ costPed: 2, sessionIds: ['s1'] }),
+		);
+	});
+
+	it('records nothing when a repair restored only what the readings billed, or less', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 5)], {
+				measuredSessions: 1,
+				billedFromAccountPed: 1.13,
+				accountTolerancePed: 0.01,
+			}),
+		);
+		renderPanel();
+		await enterAmount('1.13');
+		expect(
+			await screen.findByText(
+				'Everything this repair restored was already billed from your account',
+			),
+		).toBeTruthy();
+		expect((screen.getByText('Record') as HTMLButtonElement).disabled).toBe(true);
+
+		await fireEvent.input(screen.getByPlaceholderText('0.00 PED'), { target: { value: '1' } });
+		expect(
+			await screen.findByText(
+				'This repair is less than the decay already billed from your account since the last repair',
+			),
+		).toBeTruthy();
+		expect((screen.getByText('Record') as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it('shows the reason the app refused a recording', async () => {
+		api.getProtectionRecordingCandidates.mockResolvedValue(
+			candidates([session('s1', 1_700_000_000, 5)]),
+		);
+		api.confirmProtectionRepair.mockRejectedValueOnce(
+			new Error("A chosen session's armour was measured from your account"),
+		);
+		renderPanel();
+		await enterAmount('1');
+		await fireEvent.click(screen.getByText('Record'));
+		expect(
+			await screen.findByText("A chosen session's armour was measured from your account"),
+		).toBeTruthy();
+		expect(screen.queryByText('1.00 PED recorded')).toBeNull();
+	});
+});
+
 describe('recording a limited set', () => {
 	beforeEach(() => {
 		api.getProtectionOverview.mockResolvedValue({
@@ -324,6 +421,76 @@ describe('recording a limited set', () => {
 			),
 		);
 		expect(await screen.findByText('Baseline set at 30.00 PED')).toBeTruthy();
+	});
+
+	it("measures from the set's pieces in an account reading, with no baseline reading first", async () => {
+		api.getProtectionRecordingCandidates.mockImplementation(async (stream: { kind: string }) =>
+			stream.kind === 'limited'
+				? candidates([session('s1', 1_700_000_000, 5)], {
+						stream: { kind: 'limited', setId: 9 },
+						baselineTtPed: 30,
+						since: 1_699_000_000,
+						baselineSource: 'account',
+						accountTolerancePed: 0.02,
+					})
+				: candidates([]),
+		);
+		renderPanel();
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		expect(await screen.findByText(/Starting from your account reading of/)).toBeTruthy();
+
+		await enterAmount('29.5');
+		expect(screen.queryByText(/first reading/)).toBeNull();
+		expect(await screen.findByText('1.00 PED cost')).toBeTruthy();
+		// The account's values are truncated to the PEC: a reading a PEC
+		// per piece above them is no rise and books nothing.
+		await fireEvent.input(screen.getByPlaceholderText('0.00 PED'), { target: { value: '30.01' } });
+		expect(screen.queryByText('Reset baseline')).toBeNull();
+		expect(screen.getByText('0.00 PED cost')).toBeTruthy();
+	});
+
+	it('says when an account reading lacks a piece and a first reading is needed', async () => {
+		api.getProtectionRecordingCandidates.mockImplementation(async (stream: { kind: string }) =>
+			stream.kind === 'limited'
+				? candidates([], {
+						stream: { kind: 'limited', setId: 9 },
+						incompleteAccountReadingAt: 1_699_000_000,
+					})
+				: candidates([]),
+		);
+		renderPanel();
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await enterAmount('30');
+		expect(await screen.findByText(/does not hold every piece of Hyperion/)).toBeTruthy();
+		expect(screen.getByText('Set baseline')).toBeTruthy();
+	});
+
+	it("takes off what the readings already billed of the set's loss", async () => {
+		api.getProtectionRecordingCandidates.mockImplementation(async (stream: { kind: string }) =>
+			stream.kind === 'limited'
+				? candidates([session('s1', 1_700_000_000, 5)], {
+						stream: { kind: 'limited', setId: 9 },
+						baselineTtPed: 30,
+						since: 1_699_000_000,
+						billedFromAccountPed: 0.5,
+						accountTolerancePed: 0.02,
+						measuredSessions: 1,
+					})
+				: candidates([]),
+		);
+		renderPanel();
+		await fireEvent.click(await screen.findByText('Hyperion'));
+		await enterAmount('29');
+		// 1.00 fell, 0.50 of it already billed: 0.50 at 200%.
+		expect(await screen.findByText('1.00 PED cost')).toBeTruthy();
+		expect(screen.getByText(/0.50 PED of its loss was already billed/)).toBeTruthy();
+
+		await fireEvent.input(screen.getByPlaceholderText('0.00 PED'), { target: { value: '29.8' } });
+		expect(
+			await screen.findByText(
+				'This set lost less since its baseline than the sessions already billed from your account',
+			),
+		).toBeTruthy();
 	});
 
 	it('previews the markup-priced loss and needs a reason for a higher reading', async () => {

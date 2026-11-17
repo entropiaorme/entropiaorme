@@ -13,11 +13,18 @@ use std::sync::Arc;
 
 use eo_api::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
-    MeasuredSessionPage,
+    CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage,
+};
+use eo_api::account_minutes::{
+    AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
 };
 use eo_api::account_proposals::{
     AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
     AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading,
+};
+use eo_api::account_reconciliation::{
+    StockReconciliationApplied, StockReconciliationApplyInput, StockReconciliationDraft,
+    StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
 };
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use eo_api::analytics::{
@@ -28,8 +35,9 @@ use eo_api::analytics::{
     InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
     InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
     LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
-    RealisedTierMarkup, ShrapnelConversionInput, StockConversionInput, StockPosition,
-    StockRemovalInput,
+    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
+    StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
+    StockSaleFromAccount, StockSaleFromAccountInput,
 };
 use eo_api::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
@@ -70,8 +78,8 @@ use eo_api::mob_detection::{
 use eo_api::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
-    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput, ProtectionStream,
-    ProtectionUndoTarget, TerminalReadResult,
+    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetPieces, ProtectionSetUpdateInput,
+    ProtectionStream, ProtectionUndoTarget, TerminalReadResult,
 };
 use eo_api::quests::{
     Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
@@ -280,6 +288,25 @@ pub async fn protection_repair_confirm(
     input: ProtectionRepairInput,
 ) -> Result<ProtectionRepairOutcome, ApiError> {
     facade(&app)?.protection_repair_confirm(&input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn protection_set_pieces(
+    app: tauri::AppHandle,
+    set_id: i64,
+) -> Result<ProtectionSetPieces, ApiError> {
+    facade(&app)?.protection_set_pieces(set_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn protection_set_pieces_confirm(
+    app: tauri::AppHandle,
+    set_id: i64,
+    names: Vec<String>,
+) -> Result<ProtectionSetPieces, ApiError> {
+    facade(&app)?
+        .protection_set_pieces_confirm(set_id, names)
+        .await
 }
 
 // The Trade Terminal read captures the game window and recognises what it
@@ -1061,6 +1088,27 @@ pub async fn account_measured_summary(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn account_cost_placements(app: tauri::AppHandle) -> Result<CostPlacements, ApiError> {
+    facade(&app)?.account_cost_placements().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_cost_place(
+    app: tauri::AppHandle,
+    input: CostPlacementInput,
+) -> Result<CostPlacementResult, ApiError> {
+    facade(&app)?.account_cost_place(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_cost_placement_clear(
+    app: tauri::AppHandle,
+    item: String,
+) -> Result<CostPlacementResult, ApiError> {
+    facade(&app)?.account_cost_placement_clear(item).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn account_proposals(
     app: tauri::AppHandle,
     kind: Option<AccountProposalKind>,
@@ -1101,6 +1149,86 @@ pub async fn account_proposal_dismiss(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn account_session_minutes(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<AccountSessionMinutes, ApiError> {
+    facade(&app)?.account_session_minutes(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_arrival_unknown_origin(
+    app: tauri::AppHandle,
+    input: AccountArrivalInput,
+) -> Result<AccountArrivalRecorded, ApiError> {
+    facade(&app)?.account_arrival_unknown_origin(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_arrival_unignore(
+    app: tauri::AppHandle,
+    input: AccountArrivalId,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_arrival_unignore(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_arrival_unknown_origin_undo(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<(), ApiError> {
+    facade(&app)?
+        .account_arrival_unknown_origin_undo(input)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_plan(
+    app: tauri::AppHandle,
+) -> Result<StockReconciliationDraft, ApiError> {
+    facade(&app)?.account_reconciliation_plan().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_paste(
+    app: tauri::AppHandle,
+    input: StockReconciliationPasteInput,
+) -> Result<StockReconciliationDraft, ApiError> {
+    facade(&app)?.account_reconciliation_paste(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_draft(
+    app: tauri::AppHandle,
+) -> Result<Nullable<StockReconciliationDraft>, ApiError> {
+    facade(&app)?.account_reconciliation_draft().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_revise(
+    app: tauri::AppHandle,
+    input: StockReconciliationReviseInput,
+) -> Result<StockReconciliationRevised, ApiError> {
+    facade(&app)?.account_reconciliation_revise(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_apply(
+    app: tauri::AppHandle,
+    input: StockReconciliationApplyInput,
+) -> Result<StockReconciliationApplied, ApiError> {
+    facade(&app)?.account_reconciliation_apply(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_undo(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_reconciliation_undo(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn account_run_begin(app: tauri::AppHandle) -> Result<AccountRunReading, ApiError> {
     facade(&app)?.account_run_begin().await
 }
@@ -1134,6 +1262,22 @@ pub async fn stock_shrapnel_convert(
     input: ShrapnelConversionInput,
 ) -> Result<(), ApiError> {
     facade(&app)?.stock_shrapnel_convert(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stock_conversion_from_account(
+    app: tauri::AppHandle,
+    input: StockConversionFromAccountInput,
+) -> Result<Nullable<StockConversionFromAccount>, ApiError> {
+    facade(&app)?.stock_conversion_from_account(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stock_sale_from_account(
+    app: tauri::AppHandle,
+    input: StockSaleFromAccountInput,
+) -> Result<Nullable<StockSaleFromAccount>, ApiError> {
+    facade(&app)?.stock_sale_from_account(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

@@ -964,7 +964,7 @@ async fn an_effect_paid_elsewhere_lists_where_its_ticks_landed() {
     assert_eq!(block["effects"][0]["tickDamage"], 14.0);
 
     // Deleting the paying session unhooks the tick but leaves it a tick.
-    crate::tracking_reads::delete_session_impl(&h.db, "s")
+    crate::session_delete::delete_session_impl(&h.db, "s")
         .await
         .unwrap();
     let block =

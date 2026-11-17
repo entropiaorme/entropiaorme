@@ -75,6 +75,7 @@ function session(overrides: Partial<HuntingSessionSection> = {}): HuntingSession
 		expectedTtRate: null,
 		expectedMarketRate: null,
 		realisedReturns: 105,
+		overhead: 0,
 		realisedRate: 1.05,
 		items: [item],
 		...overrides,
@@ -98,6 +99,7 @@ function overall(overrides: Partial<HuntingOverallLine> = {}): HuntingOverallLin
 		realisedMarkup: 27,
 		realisedDerived: [],
 		realisedReturns: 189,
+		overhead: 0,
 		realisedRate: 1.05,
 		realisedOutsidePeriod: 0,
 		...overrides,
@@ -125,6 +127,7 @@ function activity(overrides: Partial<HuntingActivitySection> = {}): HuntingActiv
 		cycled: 100,
 		returns: 90,
 		lootRate: 0.9,
+		overhead: 0,
 		expected: null,
 		confirmedRewardPed: 0,
 		realisedRewardMarkup: 0,
@@ -232,6 +235,19 @@ describe('Hunting economic comparisons', () => {
 		// The figure spans every session, so the disclosure must not claim one.
 		expect(screen.getByText(/completions across every session in this period/)).not.toBeNull();
 		expect(screen.queryByText(/this session's completions/)).toBeNull();
+	});
+
+	it('says what Hunting realises: confirmed reward TT, markup, and the overhead taken off', () => {
+		const row = session();
+		const table = createTableModel<HuntingSessionSection>({
+			rows: () => [row],
+			pageSize: Number.MAX_SAFE_INTEGER,
+		});
+		render(HuntingPrimaryView, { props: primaryProps(table, row) });
+		const meaning = screen.getByTestId('realised-meaning').textContent ?? '';
+		expect(meaning).toContain('Confirmed reward TT');
+		expect(meaning).toContain("takes off the sessions' overhead");
+		expect(meaning).toContain('against Cycled and that overhead');
 	});
 
 	it('leaves a reward-free session with the loot-only outlook', () => {
@@ -427,6 +443,24 @@ describe('Hunting economic comparisons', () => {
 		for (const legacy of ['PES/100', 'Kills', 'Runs', 'Instances', 'Duration', 'Net / Kill']) {
 			expect(screen.queryByText(legacy)).toBeNull();
 		}
+	});
+
+	it("shows the unassigned bucket's overhead, which Overall takes off", () => {
+		const unassigned = session({
+			definitionId: null,
+			name: 'Unassigned',
+			key: 'unassigned',
+			isUnassigned: true,
+			overhead: 1.25,
+		});
+		const table = createTableModel<HuntingSessionSection>({
+			rows: () => [unassigned],
+			pageSize: Number.MAX_SAFE_INTEGER,
+		});
+		render(HuntingPrimaryView, { props: primaryProps(table, unassigned) });
+		expect(screen.getByTestId('unassigned-overhead').textContent).toMatch(
+			/Overhead of these sessions:\s*1\.25 PED/,
+		);
 	});
 
 	it('pins unassigned sessions last in the picker and suppresses their economic metrics', async () => {

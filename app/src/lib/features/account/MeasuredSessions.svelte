@@ -1,9 +1,11 @@
 <script lang="ts">
-	// The review of measured sessions: tracked beside measured per category
-	// over the whole history (the figures that decide what to trust), then
-	// the sessions newest first, each category's tracked figure above its
-	// measured one. A row opens the same measure the session's own record
-	// shows.
+	// The review of measured sessions: where the readings cover a session,
+	// its costs are the measured ones; this is where the chat log's tracked
+	// estimates are compared with them. Per category over the whole history
+	// first (how far the estimates run off), then the sessions newest first,
+	// each category's tracked estimate above its measured figure. A row
+	// opens the same measure the session's own record shows, with the
+	// comparison beside it.
 	import { ErrorNotice, Pagination, Skeleton, Toggle } from '$lib/components';
 	import Button from '$lib/components/Button.svelte';
 	import { exclusionMark } from '$lib/features/sessions/exclusion';
@@ -52,7 +54,7 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div class="flex flex-wrap items-center gap-2">
 			<p class="text-sm text-text-secondary">
-				Tracked figures beside what the account site's readings measured, session by session.
+				Where your account measured a session's costs, those are its costs. Here they are set against what the chat log estimated, session by session.
 			</p>
 			<InDevelopmentMark id="account-readings" align="left" />
 		</div>
@@ -102,7 +104,7 @@
 							<tbody>
 								<tr>
 									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
-										Tracked
+										Tracked estimate
 									</th>
 									{#each pairs as pair (pair.category)}
 										<td class="py-1 text-right text-lg font-medium text-text" data-testid="sum-tracked-{pair.category}">
@@ -122,7 +124,7 @@
 								</tr>
 								<tr class="border-t border-border/40">
 									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
-										Measured minus tracked
+										Measured minus tracked estimate
 									</th>
 									{#each pairs as pair (pair.category)}
 										<td
@@ -136,7 +138,7 @@
 								</tr>
 								<tr>
 									<th scope="row" class="py-1 text-left text-xs font-normal text-text-tertiary">
-										Share of tracked
+										Share of tracked estimate
 									</th>
 									{#each pairs as pair (pair.category)}
 										<td class="py-1 text-right text-sm text-text-secondary" data-testid="sum-share-{pair.category}">
@@ -179,7 +181,7 @@
 		{:else}
 			<div>
 				<p class="mb-2 text-right text-[11px] text-text-tertiary">
-					Each pair: tracked above, measured below
+					Each pair: tracked estimate above, measured below
 				</p>
 				<div class="overflow-x-auto">
 					<table class="w-full table-fixed text-sm">

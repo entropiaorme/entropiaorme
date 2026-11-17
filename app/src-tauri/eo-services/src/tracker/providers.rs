@@ -221,6 +221,9 @@ pub struct Providers {
     /// off the screen that the library does not hold. None resolves
     /// nothing.
     pub bundled_tools: Option<BundledToolResolver>,
+    /// An enhancer's TT by its exact name, from the game data, for pricing
+    /// a break. None knows no enhancer, so every break is unpriced.
+    pub enhancer_tt: Option<crate::enhancer_breaks::EnhancerTtResolver>,
 }
 
 impl Default for Providers {
@@ -236,6 +239,7 @@ impl Default for Providers {
             cpu_pressure: Arc::new(|| None),
             items: None,
             bundled_tools: None,
+            enhancer_tt: None,
         }
     }
 }

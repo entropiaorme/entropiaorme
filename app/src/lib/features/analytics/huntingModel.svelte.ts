@@ -31,7 +31,12 @@ import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyticsRange';
 import { projectRewardValue } from './rewardValue';
-import { type ConfidenceMode, projectLoot, type TreeCuttingItem } from './treeCuttingModel.svelte';
+import {
+	type ConfidenceMode,
+	projectLoot,
+	realisedRateOver,
+	type TreeCuttingItem,
+} from './treeCuttingModel.svelte';
 
 // ── Sessions axis ──────────────────────────────────────────────────────
 
@@ -87,6 +92,8 @@ export type HuntingSessionSection = Omit<HuntingDefinitionComparison, 'activitie
 	expectedTtRate: number | null;
 	expectedMarketRate: number | null;
 	realisedReturns: number;
+	/** Realised returns over Cycled and the overhead (`overhead`, from the
+	 * comparison row): a cost beside Cycled, which Realised Net takes off. */
 	realisedRate: number;
 	items: TreeCuttingItem[];
 	activities: HuntingActivitySection[];
@@ -152,6 +159,10 @@ export type HuntingOverallLine = {
 	realisedMarkup: number;
 	realisedDerived: RealisedDerivedMarkup[];
 	realisedReturns: number;
+	/** The period's overhead shared to its hunting, the unassigned
+	 * bucket's included. */
+	overhead: number;
+	/** Realised returns over Cycled and the overhead. */
 	realisedRate: number;
 	/** Confirmed markup whose species has no economic row in the selected period:
 	 * still real, still counted, and disclosed rather than dropped. */
@@ -316,7 +327,10 @@ export function createHuntingModel() {
 				muRate: projection.muRate,
 				...projected,
 				realisedReturns,
-				realisedRate: row.cycled > 0 ? realisedReturns / row.cycled : 0,
+				// The row's own overhead: the period's sessions shared to their
+				// hunting (on the unassigned bucket, sessions outside any
+				// definition), never the realised read's lifetime figure.
+				realisedRate: realisedRateOver(realisedReturns, row.cycled, row.overhead),
 				items: projection.items,
 				activities,
 			};
@@ -414,6 +428,8 @@ export function createHuntingModel() {
 		const realisedInPeriod = targetSections.reduce((sum, s) => sum + s.realisedMarkup, 0);
 		const reward = mergeRewardContexts(sessionSections.map((session) => session.reward));
 		const realisedReturns = data.overall.returns + reward.rewardTtPed + realisedMarkup;
+		// The period's whole overhead, the unassigned bucket's included.
+		const overhead = data.overall.overhead;
 		return {
 			realisedOutsidePeriod: realisedMarkup - realisedInPeriod,
 			cycled,
@@ -428,7 +444,8 @@ export function createHuntingModel() {
 			realisedMarkup,
 			realisedDerived: mergeDerived(realisedDerived),
 			realisedReturns,
-			realisedRate: cycled > 0 ? realisedReturns / cycled : 0,
+			overhead,
+			realisedRate: realisedRateOver(realisedReturns, cycled, overhead),
 		};
 	});
 

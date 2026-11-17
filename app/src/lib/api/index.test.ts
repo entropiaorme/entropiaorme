@@ -227,9 +227,78 @@ describe('account wrappers dispatch typed commands', () => {
 			'account_proposal_dismiss',
 			{ input: { id: 3 } },
 		],
+		[
+			'getSessionMinutes',
+			() => api.getSessionMinutes('s1'),
+			'account_session_minutes',
+			{ session_id: 's1' },
+		],
+		[
+			'recordArrivalUnknownOrigin',
+			() => api.recordArrivalUnknownOrigin({ id: 7, retake: true }),
+			'account_arrival_unknown_origin',
+			{ input: { id: 7, retake: true } },
+		],
+		[
+			'undoArrivalUnknownOrigin',
+			() => api.undoArrivalUnknownOrigin({ id: 'r-1' }),
+			'account_arrival_unknown_origin_undo',
+			{ input: { id: 'r-1' } },
+		],
+		[
+			'unignoreArrival',
+			() => api.unignoreArrival({ id: 7 }),
+			'account_arrival_unignore',
+			{ input: { id: 7 } },
+		],
 		['beginAccountRun', () => api.beginAccountRun(), 'account_run_begin', {}],
 		['finishAccountRun', () => api.finishAccountRun(), 'account_run_done', {}],
 		['cancelAccountRun', () => api.cancelAccountRun(), 'account_run_cancel', {}],
+		[
+			'planStockReconciliation',
+			() => api.planStockReconciliation(),
+			'account_reconciliation_plan',
+			{},
+		],
+		[
+			'planStockReconciliationFromPaste',
+			() => api.planStockReconciliationFromPaste({ text: 'Name,Quantity' }),
+			'account_reconciliation_paste',
+			{ input: { text: 'Name,Quantity' } },
+		],
+		[
+			'getStockReconciliationDraft',
+			() => api.getStockReconciliationDraft(),
+			'account_reconciliation_draft',
+			{},
+		],
+		[
+			'reviseStockReconciliation',
+			() =>
+				api.reviseStockReconciliation({
+					draftId: 'd1',
+					revision: { kind: 'set', items: ['Shrapnel'], choice: 'leftAsIs' },
+				}),
+			'account_reconciliation_revise',
+			{
+				input: {
+					draftId: 'd1',
+					revision: { kind: 'set', items: ['Shrapnel'], choice: 'leftAsIs' },
+				},
+			},
+		],
+		[
+			'applyStockReconciliation',
+			() => api.applyStockReconciliation({ draftId: 'd1' }),
+			'account_reconciliation_apply',
+			{ input: { draftId: 'd1' } },
+		],
+		[
+			'undoStockReconciliation',
+			() => api.undoStockReconciliation({ id: 'r1' }),
+			'account_reconciliation_undo',
+			{ input: { id: 'r1' } },
+		],
 	] as const)('%s', async (_name, call, command, args) => {
 		await call();
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);

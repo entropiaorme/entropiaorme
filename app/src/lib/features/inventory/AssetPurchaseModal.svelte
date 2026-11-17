@@ -9,6 +9,9 @@
 	 *
 	 * A position of an item with no TT (strongboxes, tokens) is bought by count
 	 * and price alone: there is no TT to enter, and every PED of it is markup.
+	 *
+	 * A new purchase can open filled in (`prefill`), from what the account
+	 * readings saw; every figure stays the player's to correct.
 	 */
 	import type { AssetPurchase, AssetPurchaseInput, InventoryItem } from '$lib/api';
 	import Button from '$lib/components/Button.svelte';
@@ -21,6 +24,7 @@
 	let {
 		item,
 		purchase = null,
+		prefill = null,
 		onsubmit,
 		oncancel,
 	}: {
@@ -28,13 +32,24 @@
 		item: InventoryItem | null;
 		/** The purchase being corrected, or null for a new one. */
 		purchase?: AssetPurchase | null;
+		/** A new purchase's figures to start from; `key` tells one fill from
+		 * another. */
+		prefill?: {
+			key: string;
+			quantity: number;
+			ttValue: number;
+			/** `null` when what was paid is the player's to give: the field
+			 * opens empty and must be filled. */
+			markupPaid: number | null;
+			acquiredAt: string;
+		} | null;
 		onsubmit: (input: AssetPurchaseInput) => Promise<void>;
 		oncancel: () => void;
 	} = $props();
 
 	let quantity = $state<number | null>(null);
 	let ttValue = $state(0);
-	let markupPed = $state(0);
+	let markupPed = $state<number | null>(0);
 	let acquiredAt = $state('');
 	let saving = $state(false);
 	let error = $state<string | null>(null);
@@ -42,16 +57,17 @@
 	let initialisedFor = $state<string | null>(null);
 	let opened = $state(0);
 
-	const key = $derived(item ? `${item.id}:${purchase?.id ?? 'new'}` : null);
+	const key = $derived(item ? `${item.id}:${purchase?.id ?? prefill?.key ?? 'new'}` : null);
 
 	$effect(() => {
 		if (item && key !== initialisedFor) {
-			quantity = purchase?.quantity ?? null;
+			const start = purchase ?? prefill;
+			quantity = start?.quantity ?? null;
 			// A new purchase starts at the TT each unit already carries, so the
 			// player usually only types how many and what they paid.
-			ttValue = purchase?.ttValue ?? 0;
-			markupPed = purchase?.markupPaid ?? 0;
-			acquiredAt = purchase?.acquiredAt ?? todayDate();
+			ttValue = start?.ttValue ?? 0;
+			markupPed = start ? start.markupPaid : 0;
+			acquiredAt = start?.acquiredAt ?? todayDate();
 			error = null;
 			opened += 1;
 			initialisedFor = key;
@@ -67,7 +83,8 @@
 	// its quantity at the position's TT per unit.
 	let ttTyped = $state(false);
 	$effect(() => {
-		if (!item || purchase || ttTyped) return;
+		// A filled-in TT is the one that was seen, not the position's rate.
+		if (!item || purchase || prefill || ttTyped) return;
 		const unitTt = perUnit(item.ttValue, item.quantity) ?? 0;
 		ttValue = Math.round((quantity ?? 0) * unitTt * 10000) / 10000;
 	});
@@ -82,24 +99,28 @@
 
 	/** A position with no TT stays one: its purchases carry none to enter. */
 	const noTt = $derived(
-		item !== null && isZeroTt(item.ttValue) && isZeroTt(purchase?.ttValue ?? 0),
+		item !== null &&
+			isZeroTt(item.ttValue) &&
+			isZeroTt(purchase?.ttValue ?? 0) &&
+			isZeroTt(prefill?.ttValue ?? 0),
 	);
 	const valid = $derived(
 		quantity !== null &&
 			quantity > 0 &&
 			Number.isFinite(ttValue) &&
 			ttValue >= 0 &&
+			markupPed !== null &&
 			Number.isFinite(markupPed),
 	);
 	const before = $derived(item ? currentAverage(item) : null);
 	const after = $derived(
-		item && valid && quantity !== null
+		item && valid && quantity !== null && markupPed !== null
 			? averageAfter(item, { quantity, ttValue, markupPaid: markupPed }, purchase)
 			: null,
 	);
 
 	async function save() {
-		if (!item || !valid || quantity === null || saving) return;
+		if (!item || !valid || quantity === null || markupPed === null || saving) return;
 		saving = true;
 		error = null;
 		try {

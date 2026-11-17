@@ -86,8 +86,9 @@
 		<p class="text-xs font-semibold leading-relaxed text-text">Loot TT plus confirmed economic outcomes</p>
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
 			Confirmed reward TT is added exactly once. Later realised markup from ordinary loot and stock
-			rewards returns through its immutable activity provenance. A ledger entry pegged to the session
-			is shared across its activities by what each cycled.
+			rewards returns through its immutable activity provenance. A ledger entry pegged to the session,
+			and the session's overhead, are shared across its activities by what each cycled. Realised Net
+			takes the overhead off, and the Realised Rate sets the returns against Cycled and the overhead.
 		</p>
 	</InfoTip>
 {/snippet}
@@ -143,7 +144,7 @@
 					muRate={muRate(selected)}
 					realisedNet={selected.rewardStatus === 'unverified'
 						? null
-						: selected.rewardedReturns - selected.cycled}
+						: selected.rewardedReturns - selected.cycled - selected.overhead}
 					realisedRate={selected.rewardStatus === 'unverified' ? null : selected.rewardedRate}
 					muTip={estimateTip}
 					realisedTip={realisedTip}

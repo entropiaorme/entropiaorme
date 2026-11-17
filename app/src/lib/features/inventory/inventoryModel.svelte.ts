@@ -1,4 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { ACCOUNT_TOPIC, undoArrivalUnknownOrigin, undoStockReconciliation } from '$lib/api/account';
 import type {
 	ActivityHistoryEntry,
 	AssetPurchaseInput,
@@ -56,6 +57,7 @@ import {
 	NANOCUBE_FALLBACK_MARKUP,
 	opportunityTier,
 } from '$lib/features/analytics/treeCuttingModel.svelte';
+import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
 import { describeError } from '$lib/view/errorState';
 import type { ConvertibleItem } from './conversionDraft';
 import type { ListingDraftFields } from './listingIntake';
@@ -163,10 +165,16 @@ export function createInventoryModel() {
 	let listings = $state<AuctionListing[]>([]);
 	let history = $state<ActivityHistoryEntry[]>([]);
 	let packetThresholdRequest = 0;
+	/** Each moves on with every read of its part (the stock, listings and
+	 * assets; the history), so a read that answers after a later one
+	 * started never overwrites it. */
+	let stockRequest = 0;
+	let historyRequest = 0;
 
 	async function load() {
 		loading = true;
 		error = null;
+		const request = ++stockRequest;
 		try {
 			const [positionRows, equipmentRows, listingRows, packetThreshold] = await Promise.all([
 				getLootInventory(),
@@ -174,12 +182,15 @@ export function createInventoryModel() {
 				getInventoryListings(),
 				getMarketAuctionPacketThreshold(packetFeeSharePct),
 			]);
-			positions = positionRows;
-			market = await holdingsMarket(positionRows);
-			equipment = equipmentRows;
-			listings = listingRows;
 			packetFeeSharePct = packetThreshold.maxFeeSharePct;
 			packetGrossMarkupPed = packetThreshold.grossMarkupPed;
+			if (request !== stockRequest) return;
+			const nextMarket = await holdingsMarket(positionRows);
+			if (request !== stockRequest) return;
+			positions = positionRows;
+			market = nextMarket;
+			equipment = equipmentRows;
+			listings = listingRows;
 		} catch (cause) {
 			error = describeError(cause, 'Failed to load inventory');
 		} finally {
@@ -205,8 +216,11 @@ export function createInventoryModel() {
 	async function loadHistory() {
 		historyLoading = true;
 		error = null;
+		const request = ++historyRequest;
 		try {
-			history = await getInventoryHistory();
+			const rows = await getInventoryHistory();
+			if (request !== historyRequest) return;
+			history = rows;
 			historyLoaded = true;
 		} catch (cause) {
 			error = describeError(cause, 'Failed to load inventory history');
@@ -217,20 +231,35 @@ export function createInventoryModel() {
 	}
 
 	async function refresh(includeHistory = historyLoaded) {
+		const request = ++stockRequest;
+		const asked = includeHistory ? ++historyRequest : null;
 		const [positionRows, equipmentRows, listingRows, historyRows] = await Promise.all([
 			getLootInventory(),
 			getEquipmentInventory(),
 			getInventoryListings(),
-			includeHistory ? getInventoryHistory() : Promise.resolve(history),
+			includeHistory ? getInventoryHistory() : Promise.resolve(null),
 		]);
+		if (historyRows && asked === historyRequest) history = historyRows;
+		if (request !== stockRequest) return;
+		// A sale or conversion can bring an item into holdings or take
+		// the last of one out, so the market is read for what is held now.
+		const nextMarket = await holdingsMarket(positionRows);
+		if (request !== stockRequest) return;
 		positions = positionRows;
+		market = nextMarket;
 		equipment = equipmentRows;
 		listings = listingRows;
-		history = historyRows;
-		// A sale or conversion can bring an item into holdings or take
-		// the last of one out.
-		market = await holdingsMarket(positionRows);
 	}
+
+	// The account readings record conversions and Trade Terminal sales on
+	// their own, and announce each on the account topic. Every frame re-reads
+	// the stock, listings and any history already shown, coalesced as every
+	// snapshot read is; a read that fails keeps what is shown, and the next
+	// frame reads again.
+	const accountFrames = createSnapshotStore<true>(ACCOUNT_TOPIC, async () => {
+		await refresh();
+		return true;
+	});
 
 	/** Re-read the holdings' market signals: a paste, a manual markup, or
 	 * a mark committed here or in another window. */
@@ -238,9 +267,25 @@ export function createInventoryModel() {
 		market = await holdingsMarket(positions);
 	}
 
-	/** Follow market writes from any window; returns the detach function. */
-	function subscribe(): Promise<UnlistenFn> {
-		return listen(MARKET_TOPIC, () => void refreshMarket());
+	/** Follow market writes from any window, and what the account readings
+	 * record; returns the detach function. */
+	async function subscribe(): Promise<UnlistenFn> {
+		const attached = await Promise.allSettled([
+			listen(MARKET_TOPIC, () => void refreshMarket()),
+			accountFrames.subscribe(),
+		]);
+		const stops = attached.flatMap((result) =>
+			result.status === 'fulfilled' ? [result.value] : [],
+		);
+		const failed = attached.find((result) => result.status === 'rejected');
+		if (failed) {
+			// All or nothing: a listener that did attach is not left behind.
+			for (const stop of stops) stop();
+			throw failed.reason;
+		}
+		return () => {
+			for (const stop of stops) stop();
+		};
 	}
 
 	async function withRefresh(work: () => Promise<unknown>, message: string) {
@@ -399,8 +444,20 @@ export function createInventoryModel() {
 				await undoInventoryTrade({ id: entry.id });
 			} else if (entry.kind === 'removal') {
 				await undoInventoryRemoval({ id: entry.id });
+			} else if (entry.kind === 'unknownOrigin') {
+				// Stock held as of unknown origin: taking it back leaves the
+				// arrival it came from open to decide again.
+				await undoArrivalUnknownOrigin({ id: entry.id });
 			}
 		}, 'Failed to undo that entry');
+	}
+
+	/** Undo a stock check as a whole: every record it made is taken back. */
+	async function undoCheck(reconciliationId: string) {
+		await withRefresh(
+			() => undoStockReconciliation({ id: reconciliationId }),
+			'Failed to undo the stock check',
+		);
 	}
 
 	async function recycle(itemName: string, quantity: number) {
@@ -609,6 +666,7 @@ export function createInventoryModel() {
 		sellEquipmentByTrade,
 		resolveListing,
 		undo,
+		undoCheck,
 		recycle,
 		convert,
 		remove,

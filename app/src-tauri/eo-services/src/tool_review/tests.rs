@@ -776,7 +776,7 @@ async fn deleting_a_session_releases_the_names_only_it_set_aside() {
     rig.review.dismiss("t", "t-u").await.unwrap().unwrap();
     rig.review.dismiss("s", "s-b").await.unwrap().unwrap();
 
-    crate::tracking_reads::delete_session_impl(&rig.db, "s")
+    crate::session_delete::delete_session_impl(&rig.db, "s")
         .await
         .unwrap();
     assert_eq!(
@@ -784,7 +784,7 @@ async fn deleting_a_session_releases_the_names_only_it_set_aside() {
         ["Teleport Chip"],
         "the other session's dismissal still carries its name"
     );
-    crate::tracking_reads::delete_session_impl(&rig.db, "t")
+    crate::session_delete::delete_session_impl(&rig.db, "t")
         .await
         .unwrap();
     assert!(dismissed(&rig.db).await.is_empty());

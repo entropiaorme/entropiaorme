@@ -25,13 +25,16 @@ use crate::clock::Clock;
 use crate::daily_rollup;
 use crate::db::{Db, DbError};
 use crate::harvest_yield::HarvestYieldTier;
+use crate::session_costs::{self, Bucket};
 use crate::session_scope::{self, StatsScope};
 use crate::stock_allocation;
 use crate::time::{naive_to_epoch, to_iso_utc};
 
 mod asset_positions;
 mod conversion;
+mod from_account;
 mod realised;
+mod reconciliation;
 mod strongbox_opening;
 
 pub use asset_positions::{AssetPurchaseRow, PurchaseFigures};
@@ -40,7 +43,17 @@ pub use conversion::{
     ConversionAcquisition, ConversionHolding, ConversionInput, ConversionLineRow,
     ConversionLineSide, ConversionOutput, ItemConversion,
 };
+pub use from_account::{
+    AccountRecord, AccountStep, FromAccount, RecentFromAccount, RecordedFromAccount, TakenBack,
+    UnknownOriginRecorded, UnknownOriginUndo, RECENT_FROM_ACCOUNT_SECONDS,
+};
 pub(crate) use realised::realised_markup_by_quest;
+pub use reconciliation::{
+    reconciliation_key, ApplyOutcome, Caution, Disposition, ExcludedItem, Exclusion, GroupFigures,
+    LineChoice, LineRefusal, Observation, ObservedStack, ReconciliationDraft, ReconciliationLine,
+    ReconciliationSource, ReconciliationUndo, Revised, Revision, UnitTt, HELD_BY_RECONCILIATION,
+    SESSION_TRACKED,
+};
 pub use strongbox_opening::{
     BoxSource, OpenedItem, OpenedItemRow, OpeningIntake, StrongboxOpening, StrongboxOpeningRow,
 };
@@ -230,11 +243,12 @@ pub struct ActivityHistoryRow {
     pub id: String,
     /// The holding family this outcome acted on: `loot` or `equipment`.
     pub subject_kind: String,
-    /// The operational path: `auction`, `trade`, `conversion`, or `removal`.
+    /// The operational path: `auction`, `trade`, `conversion`, `removal`,
+    /// or `unknownOrigin` (stock held without knowing where it came from).
     pub channel: String,
-    /// `listing`, `trade`, `conversion`, or `removal`.
+    /// `listing`, `trade`, `conversion`, `removal`, or `unknownOrigin`.
     pub kind: String,
-    /// `pending`, `sold`, `expired`, `converted`, or `removed`.
+    /// `pending`, `sold`, `expired`, `converted`, `removed`, or `held`.
     pub status: String,
     pub item_name: String,
     /// What a conversion produced. `None` for other outcomes.
@@ -265,6 +279,12 @@ pub struct ActivityHistoryRow {
     pub itemised: bool,
     /// What the sold stock descends from, when a conversion produced it.
     pub derived_from: Vec<DerivedSourceRow>,
+    /// Recorded on its own from the account readings, between these two
+    /// instants; `None` for an entry the player made.
+    pub from_account: Option<RecordedFromAccount>,
+    /// The standing stock reconciliation that recorded it, which undoes it
+    /// as a whole; `None` otherwise.
+    pub reconciliation_id: Option<String>,
 }
 
 /// One yield tier's realised markup from confirmed stock outcomes, for the Tree
@@ -274,6 +294,15 @@ pub struct ActivityHistoryRow {
 pub struct RealisedTierMarkup {
     pub yield_tier: HarvestYieldTier,
     pub net_markup: f64,
+}
+
+/// The sessions' overhead as Activity reads it, PED: a cost beside the
+/// realised markup, never part of it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ActivityOverhead {
+    /// By yield tier, as stored (`HarvestYieldTier::from_db` reads it).
+    pub tiers: BTreeMap<String, f64>,
+    pub definitions: BTreeMap<i64, f64>,
 }
 
 /// One mob species' realised markup from confirmed stock outcomes, for the Hunting
@@ -370,14 +399,28 @@ pub struct ReturnsData {
     pub ledger: std::collections::BTreeMap<String, f64>,
 }
 
-/// The losses breakdown: tracking cost, its cycled split, and the
-/// ledger expenses.
+/// The losses breakdown: tracking cost, its cycled split, the sessions'
+/// overhead, and the ledger expenses.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LossesData {
     pub tracking_cost: f64,
     pub cycled_breakdown: CycledData,
+    /// What the sessions cost beyond performing their activities: in the
+    /// losses, never in `tracking_cost` (Cycled).
+    pub overhead: OverheadData,
     pub ledger: std::collections::BTreeMap<String, f64>,
+}
+
+/// The sessions' overhead by category; its categories sum to `total`
+/// before rounding.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverheadData {
+    pub total: f64,
+    pub travel: f64,
+    pub field_logistics: f64,
+    pub unclassified: f64,
 }
 
 /// The per-family cycled-cost split, engine-typed.
@@ -408,6 +451,9 @@ pub struct TimelinePoint {
     pub quest_pes: f64,
     pub ledger_gains: std::collections::BTreeMap<String, f64>,
     pub tracking_cost: f64,
+    /// The overhead of the sessions started in the bucket: in its losses,
+    /// never in `tracking_cost` (Cycled).
+    pub overhead_cost: f64,
     pub ledger_losses: std::collections::BTreeMap<String, f64>,
 }
 
@@ -426,6 +472,13 @@ pub struct HuntingData {
 #[serde(rename_all = "camelCase")]
 pub struct HarvestData {
     pub tier_comparisons: Vec<HarvestTierRow>,
+    /// The overhead of the sessions that swung in the period, shared to
+    /// their harvesting: a cost beside Cycled, never in it. The tiers'
+    /// overhead and `unassigned_overhead` add up to it.
+    pub overhead: f64,
+    /// The part of `overhead` on no tier the period shows: a session that
+    /// swung but cycled nothing to share it by.
+    pub unassigned_overhead: f64,
 }
 
 /// One effective yield activity and its item composition.
@@ -437,6 +490,9 @@ pub struct HarvestTierRow {
     pub cycled: f64,
     pub returns: f64,
     pub loot_rate: f64,
+    /// The overhead shared to this tier by what it cycled: a cost beside
+    /// Cycled, never in it.
+    pub overhead: f64,
     pub loot_items: Vec<HarvestLootItemRow>,
 }
 
@@ -503,6 +559,9 @@ pub struct HuntingOverall {
     pub pes: f64,
     pub pes_per100_ped: f64,
     pub expected: Option<ExpectedHuntingAggregate>,
+    /// The overhead of these same sessions shared to their hunting: a cost
+    /// beside Cycled, never in it.
+    pub overhead: f64,
 }
 
 /// Offensive-only community-model aggregate over immutable tool phases.
@@ -545,6 +604,10 @@ pub struct HuntingDefinitionRow {
     pub pes: f64,
     pub pes_per100_ped: f64,
     pub expected: Option<ExpectedHuntingAggregate>,
+    /// The overhead of these same instances shared to their hunting (for
+    /// the unassigned bucket, that of sessions recorded outside any
+    /// definition): a cost beside Cycled, never in it.
+    pub overhead: f64,
     pub activities: Vec<HuntingSignatureRow>,
     pub mobs: Vec<HuntingMobShareRow>,
     pub instance_rows: Vec<HuntingInstanceRow>,
@@ -577,6 +640,10 @@ pub struct HuntingSignatureRow {
     /// existing realised-return total, not a separate public statistic.
     #[serde(skip)]
     pub realised_loot_markup: f64,
+    /// The sessions' overhead shared to this activity by what it cycled: a
+    /// cost beside Cycled, taken off its Realised Net and added to its
+    /// Realised Rate's denominator.
+    pub overhead: f64,
     /// Actual reward items observed at completion. Their current market
     /// projection is resolved outside the accounting service.
     pub reward_items: Vec<HarvestLootItemRow>,
@@ -856,7 +923,7 @@ fn hybrid_window(start: Option<f64>, end: Option<f64>, watermark: &str) -> Hybri
 /// the merged result reproduces the raw engine typing: an all-empty
 /// window leaves the wire as an integer zero, exactly as
 /// `COALESCE(SUM(...), 0)` does.
-type FamilySums = [Option<f64>; 13];
+type FamilySums = [Option<f64>; 16];
 
 fn merge_family_sums(into: &mut FamilySums, from: FamilySums) {
     for (slot, value) in into.iter_mut().zip(from) {
@@ -868,8 +935,9 @@ fn merge_family_sums(into: &mut FamilySums, from: FamilySums) {
 
 /// The `daily_rollups` family-sum columns, position-matched to
 /// [`FamilySums`] (loot, weapon, enhancer, armour, heal, dangling, skill,
-/// codex, quest, harvest loot, harvest cost, quest items, consumed doses).
-const ROLLUP_FAMILY_COLS: [&str; 13] = [
+/// codex, quest, harvest loot, harvest cost, quest items, consumed doses,
+/// and the overhead by category: travel, field logistics, unclassified).
+const ROLLUP_FAMILY_COLS: [&str; 16] = [
     "loot_tt",
     "weapon_cost",
     "enhancer_cost",
@@ -883,6 +951,9 @@ const ROLLUP_FAMILY_COLS: [&str; 13] = [
     "harvest_cost",
     "quest_item_tt",
     "consumable_cost",
+    "overhead_travel",
+    "overhead_field_logistics",
+    "overhead_unclassified",
 ];
 
 /// The rollup-side family sums for several windows in ONE conditional-
@@ -904,7 +975,7 @@ fn rollup_family_sums_multi(
     conn: &rusqlite::Connection,
     windows: &[HybridWindow],
 ) -> Result<Vec<FamilySums>, DbError> {
-    let mut out: Vec<FamilySums> = vec![[None; 13]; windows.len()];
+    let mut out: Vec<FamilySums> = vec![[None; 16]; windows.len()];
 
     // The windows that actually cover full rollup days, paired with their
     // index back into `out`.
@@ -956,7 +1027,7 @@ fn rollup_family_sums_multi(
         cols.join(", ")
     );
     let per_slot = conn.query_row(&sql, [], |row| {
-        let mut per_slot: Vec<FamilySums> = vec![[None; 13]; active.len()];
+        let mut per_slot: Vec<FamilySums> = vec![[None; 16]; active.len()];
         for (slot, sums) in per_slot.iter_mut().enumerate() {
             let base = slot * ROLLUP_FAMILY_COLS.len();
             for (family, value) in sums.iter_mut().enumerate() {
@@ -993,7 +1064,7 @@ fn raw_family_sums(
     }
 
     let (start, end) = range;
-    let mut sums: FamilySums = [None; 13];
+    let mut sums: FamilySums = [None; 16];
     // The same scope filters as `daily_rollup::recompute_day`: the raw
     // edges and the rollup rows must agree on which sessions count.
     let economy = |session: &str| session_scope::counts(StatsScope::Economy, session);
@@ -1002,7 +1073,8 @@ fn raw_family_sums(
         conn,
         // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         format!(
-            "SELECT SUM(loot_total_ped), SUM(enhancer_cost) FROM kills WHERE {w} AND {}",
+            "SELECT SUM(loot_total_ped), SUM({}) FROM kills WHERE {w} AND {}",
+            session_costs::scaled("enhancer_cost", Bucket::Enhancer, "kills.session_id"),
             economy("kills.session_id")
         ),
         &p,
@@ -1016,8 +1088,13 @@ fn raw_family_sums(
         conn,
         // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         format!(
-            "SELECT SUM(ts.cost_per_shot * ts.shots_fired) \
+            "SELECT SUM({}) \
              FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {w} AND {}",
+            session_costs::scaled(
+                "ts.cost_per_shot * ts.shots_fired",
+                Bucket::Weapon,
+                "k.session_id"
+            ),
             economy("k.session_id")
         ),
         &p,
@@ -1029,17 +1106,22 @@ fn raw_family_sums(
     let sessions = fetch(
         conn,
         format!(
-            "SELECT SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost), \
-             SUM(consumable_cost) FROM tracking_sessions WHERE {w} AND {}",
+            "SELECT {}, {} FROM tracking_sessions WHERE {w} AND {}",
+            session_costs::session_sums_sql("tracking_sessions"),
+            session_costs::overhead_sums_sql("tracking_sessions"),
             session_scope::counts_on(StatsScope::Economy, "tracking_sessions")
         ),
         &p,
-        4,
+        10,
     )?;
     sums[3] = sessions[0];
     sums[4] = sessions[1];
     sums[5] = sessions[2];
     sums[12] = sessions[3];
+    // A session's overhead sits on its start, as the day rollup places it.
+    sums[13] = sessions[7];
+    sums[14] = sessions[8];
+    sums[15] = sessions[9];
 
     let (w, p) = where_epoch("timestamp", start, end);
     sums[6] = fetch(
@@ -1069,7 +1151,8 @@ fn raw_family_sums(
     let harvest = fetch(
         conn,
         format!(
-            "SELECT SUM(loot_total_ped), SUM(cost_ped) FROM harvest_events WHERE {w} AND {}",
+            "SELECT SUM(loot_total_ped), SUM({}) FROM harvest_events WHERE {w} AND {}",
+            session_costs::scaled("cost_ped", Bucket::Harvesting, "harvest_events.session_id"),
             economy("harvest_events.session_id")
         ),
         &p,
@@ -1077,6 +1160,11 @@ fn raw_family_sums(
     )?;
     sums[9] = harvest[0];
     sums[10] = harvest[1];
+    // A measured bucket no tracked event carries sits on its session's
+    // start, as the day rollup places it.
+    sums[1] = session_costs::with_session_grain(sums[1], sessions[4]);
+    sums[2] = session_costs::with_session_grain(sums[2], sessions[5]);
+    sums[10] = session_costs::with_session_grain(sums[10], sessions[6]);
     let (w, p) = where_epoch("c.completed_at", start, end);
     sums[11] = fetch(
         conn,
@@ -1133,8 +1221,18 @@ struct Metrics {
     harvest: SqlNumber,
     consumables: SqlNumber,
     tracking_cost: SqlNumber,
+    /// The sessions' overhead by category: travel, field logistics,
+    /// unclassified. In Costs and Net, never in Cycled.
+    overhead: [SqlNumber; 3],
     ledger_gains: std::collections::BTreeMap<String, f64>,
     ledger_losses: std::collections::BTreeMap<String, f64>,
+}
+
+impl Metrics {
+    /// The sessions' overhead, every category added up.
+    fn overhead_total(&self) -> f64 {
+        self.overhead.iter().map(|part| part.as_f64()).sum()
+    }
 }
 
 /// Per-tag ledger totals for a window, rounded to two places and
@@ -1242,6 +1340,11 @@ fn assemble_metrics(
     let harvest = SqlNumber::from_family(sums[10]);
     let quest_item_tt = SqlNumber::from_family(sums[11]);
     let consumables = SqlNumber::from_family(sums[12]);
+    let overhead = [
+        SqlNumber::from_family(sums[13]),
+        SqlNumber::from_family(sums[14]),
+        SqlNumber::from_family(sums[15]),
+    ];
 
     // Wood TT is liquid loot; the headline Loot TT carries both
     // activities.
@@ -1274,6 +1377,7 @@ fn assemble_metrics(
         harvest,
         consumables,
         tracking_cost,
+        overhead,
         ledger_gains,
         ledger_losses,
     })
@@ -1288,7 +1392,7 @@ fn sum_values(map: &std::collections::BTreeMap<String, f64>) -> f64 {
 /// excluded), 0.0 when losses are non-positive.
 fn rate_from_metrics(m: &Metrics) -> f64 {
     let total_gains = m.loot_tt.as_f64() + m.quest_item_tt.as_f64() + sum_values(&m.ledger_gains);
-    let total_losses = m.tracking_cost.as_f64() + sum_values(&m.ledger_losses);
+    let total_losses = m.tracking_cost.as_f64() + m.overhead_total() + sum_values(&m.ledger_losses);
     if total_losses > 0.0 {
         total_gains / total_losses
     } else {
@@ -1442,7 +1546,8 @@ fn overview_read(
     let total_ledger_gains = sum_values(&m.ledger_gains);
     let total_ledger_losses = sum_values(&m.ledger_losses);
     let total_gains = m.loot_tt.as_f64() + m.quest_item_tt.as_f64() + total_ledger_gains;
-    let total_losses = m.tracking_cost.as_f64() + total_ledger_losses;
+    let overhead_total = m.overhead_total();
+    let total_losses = m.tracking_cost.as_f64() + overhead_total + total_ledger_losses;
     let return_rate = if total_losses > 0.0 {
         total_gains / total_losses
     } else {
@@ -1489,6 +1594,12 @@ fn overview_read(
                 harvest: m.harvest.rounded(2),
                 consumables: m.consumables.rounded(2),
             },
+            overhead: OverheadData {
+                total: eo_wire::normalizer::round_half_even(overhead_total, 2),
+                travel: m.overhead[0].rounded(2).as_f64(),
+                field_logistics: m.overhead[1].rounded(2).as_f64(),
+                unclassified: m.overhead[2].rounded(2).as_f64(),
+            },
             ledger: m.ledger_losses,
         },
         total_gains: eo_wire::normalizer::round_half_even(total_gains, 2),
@@ -1521,6 +1632,8 @@ struct BreakdownMaps {
     quest: std::collections::BTreeMap<String, SqlNumber>,
     /// Harvest swing decay (wood loot merges into `loot`).
     harvest_cost: std::collections::BTreeMap<String, SqlNumber>,
+    /// The sessions' overhead, on their start.
+    overhead: std::collections::BTreeMap<String, SqlNumber>,
     members: BTreeSet<String>,
 }
 
@@ -1559,14 +1672,16 @@ fn rollup_breakdown(
         BucketKind::Day => format!(
             "SELECT day AS bucket, has_rows, loot_tt, weapon_cost, enhancer_cost, \
              armour_cost, heal_cost, dangling_cost, skill_tt, codex_pes, quest_pes, \
-             harvest_loot_tt, harvest_cost, quest_item_tt, consumable_cost \
+             harvest_loot_tt, harvest_cost, quest_item_tt, consumable_cost, \
+             overhead_travel, overhead_field_logistics, overhead_unclassified \
              FROM daily_rollups WHERE day <= ?{extra} ORDER BY bucket"
         ),
         BucketKind::Month => format!(
             "SELECT strftime('%Y-%m', day) AS bucket, MAX(has_rows), SUM(loot_tt), \
              SUM(weapon_cost), SUM(enhancer_cost), SUM(armour_cost), SUM(heal_cost), \
              SUM(dangling_cost), SUM(skill_tt), SUM(codex_pes), SUM(quest_pes), \
-             SUM(harvest_loot_tt), SUM(harvest_cost), SUM(quest_item_tt), SUM(consumable_cost) \
+             SUM(harvest_loot_tt), SUM(harvest_cost), SUM(quest_item_tt), SUM(consumable_cost), \
+             SUM(overhead_travel), SUM(overhead_field_logistics), SUM(overhead_unclassified) \
              FROM daily_rollups WHERE day <= ?{extra} GROUP BY bucket ORDER BY bucket"
         ),
     };
@@ -1617,6 +1732,14 @@ fn rollup_breakdown(
                 .sum(SqlNumber::from_family(dangling))
                 .sum(SqlNumber::from_family(consumable));
             BreakdownMaps::merge(&mut maps.sess, &bucket, total);
+        }
+        let overhead = [family(15)?, family(16)?, family(17)?];
+        if overhead.iter().any(Option::is_some) {
+            let total = overhead
+                .into_iter()
+                .map(SqlNumber::from_family)
+                .fold(SqlNumber::Int(0), SqlNumber::sum);
+            BreakdownMaps::merge(&mut maps.overhead, &bucket, total);
         }
     }
     Ok(())
@@ -1683,9 +1806,14 @@ fn raw_breakdown(
         (
             &mut maps.weapon,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0) \
+                "SELECT {} as bucket, COALESCE(SUM({}), 0) \
                  FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {enc_w} GROUP BY bucket",
-                ts_bucket("k.timestamp")
+                ts_bucket("k.timestamp"),
+                session_costs::scaled(
+                    "ts.cost_per_shot * ts.shots_fired",
+                    Bucket::Weapon,
+                    "k.session_id"
+                ),
             ),
             &enc_p,
         ),
@@ -1693,18 +1821,18 @@ fn raw_breakdown(
         (
             &mut maps.enhancer,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(k.enhancer_cost), 0) FROM kills k WHERE {enc_w} GROUP BY bucket",
-                ts_bucket("k.timestamp")
+                "SELECT {} as bucket, COALESCE(SUM({}), 0) FROM kills k WHERE {enc_w} GROUP BY bucket",
+                ts_bucket("k.timestamp"),
+                session_costs::scaled("k.enhancer_cost", Bucket::Enhancer, "k.session_id"),
             ),
             &enc_p,
         ),
         (
             &mut maps.sess,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(s.armour_cost), 0) + COALESCE(SUM(s.heal_cost), 0) \
-                 + COALESCE(SUM(s.dangling_cost), 0) + COALESCE(SUM(s.consumable_cost), 0) \
-                 FROM tracking_sessions s WHERE {sess_w} GROUP BY bucket",
-                ts_bucket("s.started_at")
+                "SELECT {} as bucket, {} FROM tracking_sessions s WHERE {sess_w} GROUP BY bucket",
+                ts_bucket("s.started_at"),
+                session_costs::session_total_sql("s"),
             ),
             &sess_p,
         ),
@@ -1735,8 +1863,9 @@ fn raw_breakdown(
         (
             &mut maps.harvest_cost,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(h.cost_ped), 0) FROM harvest_events h WHERE {hv_w} GROUP BY bucket",
-                ts_bucket("h.timestamp")
+                "SELECT {} as bucket, COALESCE(SUM({}), 0) FROM harvest_events h WHERE {hv_w} GROUP BY bucket",
+                ts_bucket("h.timestamp"),
+                session_costs::scaled("h.cost_ped", Bucket::Harvesting, "h.session_id"),
             ),
             &hv_p,
         ),
@@ -1780,6 +1909,22 @@ fn raw_breakdown(
     for (bucket, value) in wood {
         maps.members.insert(bucket.clone());
         BreakdownMaps::merge(&mut maps.loot, &bucket, value);
+    }
+    // The sessions' overhead lands on their start, beside their own-grain
+    // costs (a second source over the sessions, outside the array).
+    let overhead = bucketed_epoch(
+        conn,
+        format!(
+            "SELECT {} as bucket, COALESCE(SUM({}), 0) FROM tracking_sessions s \
+             WHERE {sess_w} GROUP BY bucket",
+            ts_bucket("s.started_at"),
+            session_costs::overhead_total_sql("s.id"),
+        ),
+        &sess_p,
+    )?;
+    for (bucket, value) in overhead {
+        maps.members.insert(bucket.clone());
+        BreakdownMaps::merge(&mut maps.overhead, &bucket, value);
     }
     Ok(())
 }
@@ -1851,6 +1996,7 @@ fn breakdown_points(
             quest_pes: family(&maps.quest, bucket),
             ledger_gains: gains.get(bucket).cloned().unwrap_or_default(),
             tracking_cost: family(&cost, bucket),
+            overhead_cost: family(&maps.overhead, bucket),
             ledger_losses: losses.get(bucket).cloned().unwrap_or_default(),
         });
     }
@@ -1863,12 +2009,6 @@ fn breakdown_points(
 #[derive(Default)]
 struct SessionAgg {
     duration_hours: f64,
-    armour_cost: f64,
-    heal_cost: f64,
-    consumable_cost: f64,
-    dangling_cost: f64,
-    weapon_cost: f64,
-    enhancer_cost: f64,
     weapon_shots: f64,
     kills: i64,
     loot_tt: f64,
@@ -1912,9 +2052,7 @@ fn activity_sessions_read(conn: &mut rusqlite::Connection) -> Result<Vec<Session
     // aggregates prepare their own statements on the same connection.
     let divergent: Vec<DivergentSession> = {
         let mut stmt = conn.prepare(
-            "SELECT s.id, s.started_at, s.ended_at, COALESCE(s.armour_cost, 0), \
-             COALESCE(s.heal_cost, 0), COALESCE(s.dangling_cost, 0), s.session_name, \
-             COALESCE(s.consumable_cost, 0) \
+            "SELECT s.id, s.started_at, s.ended_at, s.session_name \
              FROM tracking_sessions s \
              LEFT JOIN session_summaries ss ON ss.session_id = s.id \
              WHERE s.ended_at IS NOT NULL AND ss.session_id IS NULL",
@@ -1926,19 +2064,19 @@ fn activity_sessions_read(conn: &mut rusqlite::Connection) -> Result<Vec<Session
                 row.get::<_, String>(0)?,
                 row.get::<_, f64>(1).unwrap_or(0.0),
                 row.get::<_, f64>(2).unwrap_or(0.0),
-                as_float(row, 3),
-                as_float(row, 4),
-                as_float(row, 5),
-                row.get::<_, Option<String>>(6)?,
-                as_float(row, 7),
+                row.get::<_, Option<String>>(3)?,
             ));
         }
         out
     };
-    for (id, started, ended, armour, heal, dangling, name, consumable) in divergent {
-        let mut agg = raw_session_agg(conn, &id, started, ended, armour, heal, dangling, name)?;
-        agg.consumable_cost = consumable;
-        agg.cycled_ped = eo_wire::normalizer::round_half_even(agg.cycled_ped + consumable, 4);
+    let ids: Vec<&str> = divergent.iter().map(|(id, ..)| id.as_str()).collect();
+    let mut costs = session_costs::resolve_many(conn, &ids)?;
+    for (id, started, ended, name) in divergent {
+        let resolved = costs
+            .remove(&id)
+            .map(|costs| costs.resolved)
+            .unwrap_or_default();
+        let agg = raw_session_agg(conn, &id, started, ended, name, &resolved)?;
         sessions.insert(id, agg);
     }
 
@@ -1999,30 +2137,23 @@ fn read_summary_activity_aggs(
 }
 
 /// One ended session with no summary row, as the reconciliation read
-/// returns it: id, start, end, armour, heal, dangling, the session name
-/// facet, and consumed doses.
-type DivergentSession = (String, f64, f64, f64, f64, f64, Option<String>, f64);
+/// returns it: id, start, end, and the session name facet.
+type DivergentSession = (String, f64, f64, Option<String>);
 
 /// Compute one session's Activity aggregate directly from the raw tables, for
 /// the reconciliation path (an ended session with no summary row). Mirrors the
 /// summary's own per-session computation query for query, so an included
 /// no-gains session carries the same numbers a summary would if it held one.
-#[allow(clippy::too_many_arguments)]
 fn raw_session_agg(
     conn: &rusqlite::Connection,
     session_id: &str,
     started_at: f64,
     ended_at: f64,
-    armour_cost: f64,
-    heal_cost: f64,
-    dangling_cost: f64,
     session_name: Option<String>,
+    costs: &session_costs::BucketCosts,
 ) -> Result<SessionAgg, DbError> {
     let mut agg = SessionAgg {
         duration_hours: (ended_at - started_at).max(0.0) / 3600.0,
-        armour_cost,
-        heal_cost,
-        dangling_cost,
         // Carried from the caller's own read of the session row rather
         // than re-queried per session.
         session_name: session_name.filter(|name| !name.is_empty()),
@@ -2030,29 +2161,25 @@ fn raw_session_agg(
         ..SessionAgg::default()
     };
 
-    let (kills, loot_tt, enhancer_cost) = conn.query_row(
-        // every-kill: spend (loot and enhancer sum every row; the count takes
-        // only the rows still counted as kills).
+    let (kills, loot_tt) = conn.query_row(
+        // every-kill: spend (loot sums every row; the count takes only the
+        // rows still counted as kills).
         "SELECT COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
-         COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
+         COALESCE(SUM(loot_total_ped), 0) \
          FROM kills WHERE session_id = ?",
         rusqlite::params![session_id],
-        |row| Ok((row.get::<_, i64>(0)?, as_float(row, 1), as_float(row, 2))),
+        |row| Ok((row.get::<_, i64>(0)?, as_float(row, 1))),
     )?;
     agg.kills = kills;
     agg.loot_tt = loot_tt;
-    agg.enhancer_cost = enhancer_cost;
 
-    let (weapon_cost, weapon_shots) = conn.query_row(
-        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
-        "SELECT COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0), \
-         COALESCE(SUM(ts.shots_fired), 0) FROM kill_tool_stats ts \
+    agg.weapon_shots = conn.query_row(
+        // every-kill: spend (every shot fired).
+        "SELECT COALESCE(SUM(ts.shots_fired), 0) FROM kill_tool_stats ts \
          JOIN kills k ON k.id = ts.kill_id WHERE k.session_id = ?",
         rusqlite::params![session_id],
-        |row| Ok((as_float(row, 0), as_float(row, 1))),
+        |row| Ok(as_float(row, 0)),
     )?;
-    agg.weapon_cost = weapon_cost;
-    agg.weapon_shots = weapon_shots;
 
     agg.skill_tt = conn.query_row(
         "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains \
@@ -2087,10 +2214,7 @@ fn raw_session_agg(
         }
     }
 
-    agg.cycled_ped = eo_wire::normalizer::round_half_even(
-        agg.weapon_cost + agg.enhancer_cost + agg.armour_cost + agg.heal_cost + agg.dangling_cost,
-        4,
-    );
+    agg.cycled_ped = eo_wire::normalizer::round_half_even(costs.cycled(), 4);
     Ok(agg)
 }
 
@@ -2195,15 +2319,21 @@ type HarvestTierItemTotals = (String, String, i64, f64);
 /// its principal effect is which tier a swing reaches, which grouping inside
 /// a tier holds constant. Comparing tools belongs with equipment, on cost.
 async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, DbError> {
-    let (raw, composition): (Vec<HarvestTierTotals>, Vec<HarvestTierItemTotals>) = db
+    type TierOverhead = Vec<(Option<String>, f64)>;
+    let (raw, composition, overhead_parts): (
+        Vec<HarvestTierTotals>,
+        Vec<HarvestTierItemTotals>,
+        TierOverhead,
+    ) = db
         .with_reader(move |conn| {
             let economy = session_scope::counts(StatsScope::Economy, "h.session_id");
             let mut stmt = conn.prepare(&format!(
                 "SELECT yield_tier, COUNT(*), \
-                 COALESCE(SUM(cost_ped), 0), \
+                 COALESCE(SUM({}), 0), \
                  COALESCE(SUM(loot_total_ped), 0) FROM harvest_events h \
                  WHERE (?1 IS NULL OR h.timestamp >= ?1) AND {economy} \
-                 GROUP BY yield_tier"
+                 GROUP BY yield_tier",
+                session_costs::scaled("h.cost_ped", Bucket::Harvesting, "h.session_id")
             ))?;
             let raw = stmt
                 .query_map([epoch_start], |row| {
@@ -2238,9 +2368,38 @@ async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, 
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok((raw, composition))
+            // The overhead of the sessions that swung in the period, shared
+            // to their harvesting.
+            let mut swung = conn.prepare(&format!(
+                "SELECT DISTINCT h.session_id FROM harvest_events h \
+                 WHERE (?1 IS NULL OR h.timestamp >= ?1) AND {economy}"
+            ))?;
+            let swung: std::collections::HashSet<String> = swung
+                .query_map([epoch_start], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let overhead: Vec<(Option<String>, f64)> = realised::overhead_parts(conn)?
+                .into_iter()
+                .filter(|part| part.source_kind == "harvest" && swung.contains(&part.session_id))
+                .map(|part| (part.yield_tier, part.amount))
+                .collect();
+            Ok((raw, composition, overhead))
         })
         .await?;
+    let mut tier_overhead: std::collections::HashMap<HarvestYieldTier, f64> =
+        std::collections::HashMap::new();
+    let mut unassigned_overhead = 0.0;
+    let mut overhead = 0.0;
+    for (tier, amount) in overhead_parts {
+        overhead += amount;
+        match tier {
+            Some(tier) => {
+                *tier_overhead
+                    .entry(HarvestYieldTier::from_db(&tier))
+                    .or_default() += amount
+            }
+            None => unassigned_overhead += amount,
+        }
+    }
 
     let mut items_by_tier: std::collections::HashMap<HarvestYieldTier, Vec<HarvestLootItemRow>> =
         std::collections::HashMap::new();
@@ -2278,12 +2437,23 @@ async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, 
                 } else {
                     0.0
                 },
+                overhead: eo_wire::normalizer::round_half_even(
+                    tier_overhead.remove(&tier).unwrap_or(0.0),
+                    2,
+                ),
                 loot_items: items_by_tier.remove(&tier).unwrap_or_default(),
             }
         })
         .collect();
     tier_comparisons.sort_by_key(|row| row.yield_tier.sort_rank());
-    Ok(HarvestData { tier_comparisons })
+    // Overhead on a tier the period shows no swing of has no row to sit
+    // on: it is unassigned.
+    unassigned_overhead += tier_overhead.values().sum::<f64>();
+    Ok(HarvestData {
+        tier_comparisons,
+        overhead: eo_wire::normalizer::round_half_even(overhead, 2),
+        unassigned_overhead: eo_wire::normalizer::round_half_even(unassigned_overhead, 2),
+    })
 }
 
 // ── hunting_activity_impl ──
@@ -2341,6 +2511,9 @@ struct SignatureAgg {
     confirmed_reward_ped: f64,
     realised_reward_markup: f64,
     realised_loot_markup: f64,
+    /// The sessions' overhead shared to these contexts: a cost, never in
+    /// Cycled.
+    overhead: f64,
     reward_kinds: std::collections::BTreeSet<String>,
     reward_items: std::collections::BTreeMap<String, (i64, f64)>,
     loot_items: std::collections::BTreeMap<String, (i64, f64)>,
@@ -2495,16 +2668,19 @@ fn hunting_sessions(
             // every-kill: spend (cycled and loot sum every row; the count
             // takes only the rows still counted as kills, and a claimed
             // reward that spent nothing makes no cell, as the projection's).
-            "SELECT k.context_id, \
-                    COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
-                    COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
-                    COALESCE(SUM(k.cost_ped + k.enhancer_cost), 0), \
-                    COALESCE(SUM(k.loot_total_ped), 0) \
-             FROM kills k \
-             WHERE k.session_id = ?1 \
-             GROUP BY 1, 2, 3 \
-             HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
-                 OR SUM(k.cost_ped + k.enhancer_cost) > 0",
+            &format!(
+                "SELECT k.context_id, \
+                        COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
+                        COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
+                        COALESCE(SUM({}), 0), \
+                        COALESCE(SUM(k.loot_total_ped), 0) \
+                 FROM kills k \
+                 WHERE k.session_id = ?1 \
+                 GROUP BY 1, 2, 3 \
+                 HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
+                     OR SUM(k.cost_ped + k.enhancer_cost) > 0",
+                session_costs::kill_cycled_sql("k")
+            ),
         )?;
         for session_id in &unsettled {
             let mut rows = stmt.query(rusqlite::params![session_id])?;
@@ -2794,6 +2970,18 @@ fn hunting_activity_read(
         }
     };
 
+    // The sessions' overhead shared to their hunting, by session: over
+    // exactly the sessions the figures below cover.
+    let overhead_parts = realised::overhead_parts(conn)?;
+    let mut session_overhead: HashMap<String, f64> = HashMap::new();
+    for part in overhead_parts
+        .iter()
+        .filter(|part| part.source_kind == "hunt" && sessions.contains_key(&part.session_id))
+    {
+        *session_overhead.entry(part.session_id.clone()).or_default() += part.amount;
+    }
+    let overhead_of = |id: &String| session_overhead.get(id).copied().unwrap_or(0.0);
+
     // ── Overall ──
     let overall = {
         let kills: i64 = sessions.values().map(|s| s.kills).sum();
@@ -2812,6 +3000,7 @@ fn hunting_activity_read(
             pes: round4(pes),
             pes_per100_ped: pes_per100(pes, pes_cycled),
             expected: overall_expected,
+            overhead: round2(sessions.keys().map(overhead_of).sum()),
         }
     };
 
@@ -3310,6 +3499,13 @@ fn hunting_activity_read(
             _ => {}
         }
     }
+    // The sessions' overhead, shared to each context by what it cycled.
+    let mut context_overhead: HashMap<i64, f64> = HashMap::new();
+    for part in &overhead_parts {
+        if let (Some(context_id), "hunt") = (part.activity_context_id, part.source_kind) {
+            *context_overhead.entry(context_id).or_default() += part.amount;
+        }
+    }
 
     // Fold contexts into per-definition signature aggregates. A context's
     // span is the stretch until the next context (or session end), which is
@@ -3379,6 +3575,7 @@ fn hunting_activity_read(
                 .get(context_id)
                 .copied()
                 .unwrap_or(0.0);
+            agg.overhead += context_overhead.get(context_id).copied().unwrap_or(0.0);
             if let Some(items) = context_reward_items.get(context_id) {
                 for (name, (quantity, value)) in items {
                     let item = agg.reward_items.entry(name.clone()).or_insert((0, 0.0));
@@ -3537,6 +3734,7 @@ fn hunting_activity_read(
                 pes: round4(pes),
                 pes_per100_ped: pes_per100(pes, pes_cycled),
                 expected: definition_expected.remove(&definition_id),
+                overhead: round2(group.iter().map(|(id, _)| overhead_of(id)).sum()),
                 activities,
                 mobs,
                 instance_rows,
@@ -3643,6 +3841,7 @@ fn assemble_signatures(
             confirmed_reward_ped: round2(agg.confirmed_reward_ped),
             realised_reward_markup: round2(agg.realised_reward_markup),
             realised_loot_markup: round2(agg.realised_loot_markup),
+            overhead: round2(agg.overhead),
             reward_items: loot_rows(&agg.reward_items),
             reward_status: status,
             loot_items: loot_rows(&agg.loot_items),
@@ -3771,6 +3970,7 @@ fn assemble_signatures(
             confirmed_reward_ped: round2(variants.iter().map(|v| v.confirmed_reward_ped).sum()),
             realised_reward_markup: round2(variants.iter().map(|v| v.realised_reward_markup).sum()),
             realised_loot_markup: round2(variants.iter().map(|v| v.realised_loot_markup).sum()),
+            overhead: round2(variants.iter().map(|v| v.overhead).sum()),
             reward_items: loot_rows(&family_reward_items),
             reward_status: family_reward_status,
             loot_items: loot_rows(&family_items),
@@ -4464,6 +4664,312 @@ fn produced_unit_tt(item_name: &str) -> Option<f64> {
         "Universal Ammo" => Some(0.0001),
         _ => None,
     }
+}
+
+/// A conversion at a fixed TT ratio: held stock in, one item out, or PED
+/// for Universal Ammo, which is liquid and never stock. Recycling into
+/// Nanocubes is 1:1; Shrapnel into Universal Ammo is 100:101.
+struct RatioConversion<'a> {
+    /// What went in: each item and the quantity of it.
+    inputs: &'a [(String, f64)],
+    target: &'a str,
+    value_ratio: f64,
+}
+
+/// Record a conversion at a fixed ratio inside the caller's transaction,
+/// as [`conversion::write_conversion`] records any other. A refusal in terms
+/// of the state found comes back as the inner `Err`.
+fn write_ratio_conversion(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    profession: Profession,
+    conversion: &RatioConversion<'_>,
+    converted_at: &str,
+    now: f64,
+) -> Result<Result<(), String>, DbError> {
+    let mut converted_tt = 0.0_f64;
+    for (item, quantity) in conversion.inputs {
+        let (_, unit_tt) = item_positions(tx, item)?;
+        converted_tt += quantity * unit_tt;
+    }
+    // What the produced item is worth per unit, so the conversion records a
+    // count rather than a value wearing a count's label. Falling back to the
+    // target's own recorded loot covers a future target this table has not
+    // learned yet. No conversion the app offers reaches the last fallback;
+    // if one ever does, the count carries the source's PED magnitude rather
+    // than a scale nothing supports.
+    let (_, target_loot_unit_tt) = item_positions(tx, conversion.target)?;
+    let target_unit_tt = produced_unit_tt(conversion.target)
+        .or_else(|| (target_loot_unit_tt > STOCK_EPSILON).then_some(target_loot_unit_tt))
+        .unwrap_or(1.0);
+    let gain =
+        eo_wire::normalizer::round_half_even(converted_tt * (conversion.value_ratio - 1.0), 4);
+    let output_tt = converted_tt + gain;
+
+    // Universal Ammo is liquid value and never becomes stock, so converting
+    // into it is an outcome in PED. Anything else is a single stock output.
+    let (outputs, ped_amount) = if is_universal_ammo(conversion.target) {
+        (Vec::new(), Some(output_tt))
+    } else if output_tt > STOCK_EPSILON {
+        (
+            vec![ConversionOutput {
+                item_name: conversion.target.to_string(),
+                quantity: output_tt / target_unit_tt,
+                tt_value: output_tt,
+                holding: ConversionHolding::Loot,
+            }],
+            None,
+        )
+    } else {
+        (Vec::new(), None)
+    };
+    let request = ItemConversion {
+        inputs: conversion
+            .inputs
+            .iter()
+            .map(|(item_name, quantity)| ConversionInput::Held {
+                item_name: item_name.clone(),
+                quantity: *quantity,
+                worth: None,
+            })
+            .collect(),
+        outputs,
+        ped_amount,
+        converted_at: Some(converted_at.to_string()),
+    };
+    let terms = conversion::ConversionTerms {
+        itemised: false,
+        target_label: Some(conversion.target.to_string()),
+        gain_description: "Shrapnel Conversion".to_string(),
+    };
+    conversion::write_conversion(tx, id, profession, &request, converted_at, now, &terms)
+}
+
+/// A sale of held stock with no listing: to another player at the price
+/// agreed, or to the Trade Terminal at its TT.
+struct PrivateSale<'a> {
+    id: &'a str,
+    profession: Profession,
+    item: &'a str,
+    quantity: f64,
+    /// What it sold for; `None` for its TT, which is what the Trade
+    /// Terminal pays.
+    price: Option<f64>,
+    sold_at: &'a str,
+}
+
+/// Record a private sale inside the caller's transaction: the stock leaves
+/// by the weighted allocation, and what it fetched above or below its TT and
+/// any markup paid for it is realised on the day.
+fn write_private_sale(
+    tx: &rusqlite::Transaction<'_>,
+    sale: &PrivateSale<'_>,
+    now: f64,
+) -> Result<(), DbError> {
+    let PrivateSale {
+        id,
+        profession,
+        item,
+        quantity,
+        price,
+        sold_at,
+    } = *sale;
+    let (positions, unit_tt) = item_positions(tx, item)?;
+    let plan = stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
+    let tt_value = quantity * unit_tt;
+    let final_price = price.unwrap_or(tt_value);
+    tx.execute(
+        "INSERT INTO private_sales (id, item_name, profession, quantity, \
+             attributed_qty, unattributed_qty, tt_value, attributed_tt, final_price, \
+             sold_at, created_at, paid_markup) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rusqlite::params![
+            id,
+            item,
+            profession.as_str(),
+            quantity,
+            plan.attributed_qty,
+            plan.unattributed_qty,
+            tt_value,
+            plan.attributed_tt,
+            final_price,
+            sold_at,
+            now,
+            plan.paid_markup,
+        ],
+    )?;
+    record_opening_balance(tx, item, id, &plan, sold_at, now)?;
+    for allocation in &plan.allocations {
+        insert_movement(
+            tx,
+            item,
+            "trade",
+            Some(id),
+            allocation.provenance,
+            allocation.session_definition_id,
+            allocation.activity_context_id,
+            allocation.tool_name,
+            -allocation.quantity,
+            -allocation.tt_value,
+            sold_at,
+            now,
+            allocation.derived.outflow(),
+        )?;
+    }
+    let markup = final_price - tt_value - plan.paid_markup;
+    if markup.abs() > STOCK_EPSILON {
+        let entry_id = Uuid::new_v4().to_string();
+        let kind = if markup > 0.0 { "markup" } else { "expense" };
+        tx.execute(
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+             VALUES (?, ?, ?, ?, ?, 'market')",
+            rusqlite::params![
+                entry_id,
+                sold_at,
+                kind,
+                format!("Private Sale: {item}"),
+                markup.abs(),
+            ],
+        )?;
+        tx.execute(
+            "UPDATE private_sales SET sale_entry_id = ? WHERE id = ?",
+            rusqlite::params![entry_id, id],
+        )?;
+    }
+    daily_rollup::refresh_days(tx, [sold_at])?;
+    Ok(())
+}
+
+/// A removal of held stock whose ultimate outcome is unknown.
+struct StockRemoval<'a> {
+    id: &'a str,
+    profession: Profession,
+    item: &'a str,
+    quantity: f64,
+    removed_at: &'a str,
+}
+
+/// Record a removal inside the caller's transaction: the stock leaves the
+/// open positions by the weighted allocation, and no ledger row is written.
+/// A removal beyond what the app holds is refused, as the inner `Err`.
+fn write_removal(
+    tx: &rusqlite::Transaction<'_>,
+    removal: &StockRemoval<'_>,
+    now: f64,
+) -> Result<Result<(), String>, DbError> {
+    let StockRemoval {
+        id,
+        profession,
+        item,
+        quantity,
+        removed_at,
+    } = *removal;
+    let (positions, unit_tt) = item_positions(tx, item)?;
+    let plan = stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
+    if plan.excess_qty > STOCK_EPSILON {
+        return Ok(Err(
+            "you cannot remove more than the current stock".to_string()
+        ));
+    }
+    tx.execute(
+        "INSERT INTO stock_removals \
+             (id, item_name, profession, quantity, tt_value, removed_at, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rusqlite::params![
+            id,
+            item,
+            profession.as_str(),
+            quantity,
+            quantity * unit_tt,
+            removed_at,
+            now,
+        ],
+    )?;
+    for allocation in &plan.allocations {
+        insert_movement(
+            tx,
+            item,
+            "removal",
+            Some(id),
+            allocation.provenance,
+            allocation.session_definition_id,
+            allocation.activity_context_id,
+            allocation.tool_name,
+            -allocation.quantity,
+            -allocation.tt_value,
+            removed_at,
+            now,
+            allocation.derived.outflow(),
+        )?;
+    }
+    Ok(Ok(()))
+}
+
+/// Undo one removal inside the caller's transaction: its stock comes back.
+/// `false` when no standing removal has that id.
+fn undo_removal_within(
+    tx: &rusqlite::Transaction<'_>,
+    removal_id: &str,
+    undone_at: &str,
+) -> rusqlite::Result<bool> {
+    use rusqlite::OptionalExtension as _;
+    let exists: Option<i64> = tx
+        .query_row(
+            "SELECT 1 FROM stock_removals WHERE id = ? AND undone_at IS NULL",
+            rusqlite::params![removal_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    tx.execute(
+        "DELETE FROM stock_movements WHERE ref_id = ?",
+        rusqlite::params![removal_id],
+    )?;
+    tx.execute(
+        "UPDATE stock_removals SET undone_at = ? WHERE id = ?",
+        rusqlite::params![undone_at, removal_id],
+    )?;
+    Ok(true)
+}
+
+/// Undo one private sale inside the caller's transaction: its stock comes
+/// back and the markup row it owned goes. `false` when no standing sale
+/// has that id.
+fn undo_private_sale_within(
+    tx: &rusqlite::Transaction<'_>,
+    sale_id: &str,
+    undone_at: &str,
+) -> Result<bool, DbError> {
+    use rusqlite::OptionalExtension as _;
+    let sale: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT sold_at, sale_entry_id FROM private_sales \
+             WHERE id = ? AND undone_at IS NULL",
+            rusqlite::params![sale_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((sold_at, entry_id)) = sale else {
+        return Ok(false);
+    };
+    tx.execute(
+        "DELETE FROM stock_movements WHERE ref_id = ?",
+        rusqlite::params![sale_id],
+    )?;
+    if let Some(entry_id) = entry_id {
+        tx.execute(
+            "DELETE FROM ledger_entries WHERE id = ?",
+            rusqlite::params![entry_id],
+        )?;
+    }
+    tx.execute(
+        "UPDATE private_sales SET undone_at = ?, sale_entry_id = NULL WHERE id = ?",
+        rusqlite::params![undone_at, sale_id],
+    )?;
+    daily_rollup::refresh_days(tx, [sold_at])?;
+    Ok(true)
 }
 
 /// Undo one conversion inside the caller's transaction: what it consumed
@@ -6658,8 +7164,9 @@ impl AnalyticsService {
     }
 
     /// Convert held Shrapnel into Universal Ammo at the game's fixed 100:101
-    /// ratio. The 1% increase becomes realised only here, when the player says
-    /// the conversion happened.
+    /// ratio. The 1% increase becomes realised only by a recorded conversion:
+    /// this one, when the player says the conversion happened, or one the
+    /// account readings recorded on seeing it (see [`Self::record_from_account`]).
     pub async fn convert_shrapnel(
         &self,
         profession: Profession,
@@ -6693,7 +7200,8 @@ impl AnalyticsService {
             ));
         }
         let id = Uuid::new_v4().to_string();
-        let (source_c, target_c) = (source_item.to_string(), target_item.to_string());
+        let inputs = vec![(source_item.to_string(), quantity)];
+        let target = target_item.to_string();
         let converted_at = converted_at
             .filter(|value| !value.is_empty())
             .map(str::to_string)
@@ -6703,53 +7211,6 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let (_, unit_tt) = item_positions(&tx, &source_c)?;
-                // What the produced item is worth per unit, so the conversion
-                // records a count rather than a value wearing a count's label.
-                // Falling back to the target's own recorded loot covers a
-                // future target this table has not learned yet. No conversion
-                // the app offers reaches the last fallback; if one ever does,
-                // the count carries the source's PED magnitude rather than a
-                // scale nothing supports.
-                let (_, target_loot_unit_tt) = item_positions(&tx, &target_c)?;
-                let target_unit_tt = produced_unit_tt(&target_c)
-                    .or_else(|| {
-                        (target_loot_unit_tt > STOCK_EPSILON).then_some(target_loot_unit_tt)
-                    })
-                    .unwrap_or(1.0);
-                let converted_tt = quantity * unit_tt;
-                let gain =
-                    eo_wire::normalizer::round_half_even(converted_tt * (value_ratio - 1.0), 4);
-                let output_tt = converted_tt + gain;
-
-                // Universal Ammo is liquid value and never becomes stock, so
-                // converting into it is an outcome in PED. Anything else is a
-                // single stock output.
-                let (outputs, ped_amount) = if is_universal_ammo(&target_c) {
-                    (Vec::new(), Some(output_tt))
-                } else if output_tt > STOCK_EPSILON {
-                    (
-                        vec![ConversionOutput {
-                            item_name: target_c.clone(),
-                            quantity: output_tt / target_unit_tt,
-                            tt_value: output_tt,
-                            holding: ConversionHolding::Loot,
-                        }],
-                        None,
-                    )
-                } else {
-                    (Vec::new(), None)
-                };
-                let request = ItemConversion {
-                    inputs: vec![ConversionInput::Held {
-                        item_name: source_c.clone(),
-                        quantity,
-                        worth: None,
-                    }],
-                    outputs,
-                    ped_amount,
-                    converted_at: Some(converted_at.clone()),
-                };
                 // The service tolerates converting past tracked stock for the
                 // same reason it tolerates selling past it: the player may
                 // hold stock from before tracking began, and the excess rides
@@ -6758,19 +7219,17 @@ impl AnalyticsService {
                 // because what a conversion produces carries the source's
                 // activity composition forward and crediting activities with
                 // output they did not grow is the thing to avoid.
-                let terms = conversion::ConversionTerms {
-                    itemised: false,
-                    target_label: Some(target_c.clone()),
-                    gain_description: "Shrapnel Conversion".to_string(),
-                };
-                let written = conversion::write_conversion(
+                let written = write_ratio_conversion(
                     &tx,
                     &id,
                     profession,
-                    &request,
+                    &RatioConversion {
+                        inputs: &inputs,
+                        target: &target,
+                        value_ratio,
+                    },
                     &converted_at,
                     now,
-                    &terms,
                 )?;
                 if written.is_ok() {
                     tx.commit()?;
@@ -6812,69 +7271,18 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let (positions, unit_tt) = item_positions(&tx, &item)?;
-                let plan =
-                    stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
-                let tt_value = quantity * unit_tt;
-                tx.execute(
-                    "INSERT INTO private_sales (id, item_name, profession, quantity, \
-                         attributed_qty, unattributed_qty, tt_value, attributed_tt, final_price, \
-                         sold_at, created_at, paid_markup) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
-                        id,
-                        item,
-                        profession.as_str(),
+                write_private_sale(
+                    &tx,
+                    &PrivateSale {
+                        id: &id,
+                        profession,
+                        item: &item,
                         quantity,
-                        plan.attributed_qty,
-                        plan.unattributed_qty,
-                        tt_value,
-                        plan.attributed_tt,
-                        final_price,
-                        sold_at,
-                        now,
-                        plan.paid_markup,
-                    ],
+                        price: Some(final_price),
+                        sold_at: &sold_at,
+                    },
+                    now,
                 )?;
-                record_opening_balance(&tx, &item, &id, &plan, &sold_at, now)?;
-                for allocation in &plan.allocations {
-                    insert_movement(
-                        &tx,
-                        &item,
-                        "trade",
-                        Some(&id),
-                        allocation.provenance,
-                        allocation.session_definition_id,
-                        allocation.activity_context_id,
-                        allocation.tool_name,
-                        -allocation.quantity,
-                        -allocation.tt_value,
-                        &sold_at,
-                        now,
-                        allocation.derived.outflow(),
-                    )?;
-                }
-                let markup = final_price - tt_value - plan.paid_markup;
-                if markup.abs() > STOCK_EPSILON {
-                    let entry_id = Uuid::new_v4().to_string();
-                    let kind = if markup > 0.0 { "markup" } else { "expense" };
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, ?, ?, ?, 'market')",
-                        rusqlite::params![
-                            entry_id,
-                            sold_at,
-                            kind,
-                            format!("Private Sale: {item}"),
-                            markup.abs(),
-                        ],
-                    )?;
-                    tx.execute(
-                        "UPDATE private_sales SET sale_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, id],
-                    )?;
-                }
-                daily_rollup::refresh_days(&tx, [sold_at.as_str()])?;
                 tx.commit()?;
                 Ok(())
             })
@@ -6912,47 +7320,21 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let (positions, unit_tt) = item_positions(&tx, &item)?;
-                let plan =
-                    stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
-                if plan.excess_qty > STOCK_EPSILON {
-                    return Ok(Err(
-                        "you cannot remove more than the current stock".to_string()
-                    ));
-                }
-                tx.execute(
-                    "INSERT INTO stock_removals \
-                         (id, item_name, profession, quantity, tt_value, removed_at, created_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
-                        id,
-                        item,
-                        profession.as_str(),
+                let written = write_removal(
+                    &tx,
+                    &StockRemoval {
+                        id: &id,
+                        profession,
+                        item: &item,
                         quantity,
-                        quantity * unit_tt,
-                        removed_at,
-                        now,
-                    ],
+                        removed_at: &removed_at,
+                    },
+                    now,
                 )?;
-                for allocation in &plan.allocations {
-                    insert_movement(
-                        &tx,
-                        &item,
-                        "removal",
-                        Some(&id),
-                        allocation.provenance,
-                        allocation.session_definition_id,
-                        allocation.activity_context_id,
-                        allocation.tool_name,
-                        -allocation.quantity,
-                        -allocation.tt_value,
-                        &removed_at,
-                        now,
-                        allocation.derived.outflow(),
-                    )?;
+                if written.is_ok() {
+                    tx.commit()?;
                 }
-                tx.commit()?;
-                Ok(Ok(()))
+                Ok(written)
             })
             .await?
             .map_err(AnalyticsError::Rejected)
@@ -6960,7 +7342,8 @@ impl AnalyticsService {
 
     /// Everything this activity has done to its stock, newest first.
     ///
-    /// Listings, trades, conversions, and removals in one list, each carrying whether it can be
+    /// Listings, trades, conversions, and removals in one list (and, for the
+    /// Inventory, stock held as of unknown origin), each carrying whether it can be
     /// taken back. The verdict is computed here because it depends on what the
     /// rest of the ledger has since done with the stock, which the caller
     /// cannot see.
@@ -7013,6 +7396,8 @@ impl AnalyticsService {
                             ped_amount: None,
                             itemised: false,
                             derived_from,
+                            from_account: None,
+                            reconciliation_id: None,
                             occurred_at: listing
                                 .resolved_at
                                 .clone()
@@ -7084,6 +7469,8 @@ impl AnalyticsService {
                             ped_amount: None,
                             itemised: false,
                             derived_from,
+                            from_account: None,
+                            reconciliation_id: None,
                             id,
                             kind: "trade".to_string(),
                             subject_kind: "loot".to_string(),
@@ -7127,6 +7514,8 @@ impl AnalyticsService {
                             ped_amount: None,
                             itemised: false,
                             derived_from: Vec::new(),
+                            from_account: None,
+                            reconciliation_id: None,
                             id,
                             kind: "removal".to_string(),
                             subject_kind: "loot".to_string(),
@@ -7146,6 +7535,10 @@ impl AnalyticsService {
                         });
                     }
                 }
+
+                from_account::push_unknown_origin_rows(conn, profession, &mut rows)?;
+                from_account::attach_sources(conn, &mut rows)?;
+                reconciliation::attach_reconciliations(conn, &mut rows)?;
 
                 // Newest first, and stable on the id so a day with several
                 // entries does not reshuffle between reads.
@@ -7289,6 +7682,9 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
+                if reconciliation::standing_reconciliation_of(&tx, &conversion_id)?.is_some() {
+                    return Ok(Err(reconciliation::HELD_BY_RECONCILIATION.to_string()));
+                }
                 let undone = undo_conversion_within(&tx, &conversion_id, &undone_at, now)?;
                 if matches!(undone, Ok(true)) {
                     tx.commit()?;
@@ -7307,39 +7703,18 @@ impl AnalyticsService {
         let undone_at = self.default_date();
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let sale: Option<(String, Option<String>)> = tx
-                    .query_row(
-                        "SELECT sold_at, sale_entry_id FROM private_sales \
-                         WHERE id = ? AND undone_at IS NULL",
-                        rusqlite::params![sale_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .optional()?;
-                let Some((sold_at, entry_id)) = sale else {
-                    return Ok(false);
-                };
-                tx.execute(
-                    "DELETE FROM stock_movements WHERE ref_id = ?",
-                    rusqlite::params![sale_id],
-                )?;
-                if let Some(entry_id) = entry_id {
-                    tx.execute(
-                        "DELETE FROM ledger_entries WHERE id = ?",
-                        rusqlite::params![entry_id],
-                    )?;
+                if reconciliation::standing_reconciliation_of(&tx, &sale_id)?.is_some() {
+                    return Ok(Err(reconciliation::HELD_BY_RECONCILIATION.to_string()));
                 }
-                tx.execute(
-                    "UPDATE private_sales SET undone_at = ?, sale_entry_id = NULL WHERE id = ?",
-                    rusqlite::params![undone_at, sale_id],
-                )?;
-                daily_rollup::refresh_days(&tx, [sold_at])?;
-                tx.commit()?;
-                Ok(true)
+                let undone = undo_private_sale_within(&tx, &sale_id, &undone_at)?;
+                if undone {
+                    tx.commit()?;
+                }
+                Ok(Ok(undone))
             })
-            .await
-            .map_err(AnalyticsError::from)
+            .await?
+            .map_err(AnalyticsError::Rejected)
     }
 
     /// Undo an uncertain removal recorded in error. No ledger row exists;
@@ -7349,31 +7724,18 @@ impl AnalyticsService {
         let undone_at = self.default_date();
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let exists: Option<i64> = tx
-                    .query_row(
-                        "SELECT 1 FROM stock_removals WHERE id = ? AND undone_at IS NULL",
-                        rusqlite::params![removal_id],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                if exists.is_none() {
-                    return Ok(false);
+                if reconciliation::standing_reconciliation_of(&tx, &removal_id)?.is_some() {
+                    return Ok(Err(reconciliation::HELD_BY_RECONCILIATION.to_string()));
                 }
-                tx.execute(
-                    "DELETE FROM stock_movements WHERE ref_id = ?",
-                    rusqlite::params![removal_id],
-                )?;
-                tx.execute(
-                    "UPDATE stock_removals SET undone_at = ? WHERE id = ?",
-                    rusqlite::params![undone_at, removal_id],
-                )?;
-                tx.commit()?;
-                Ok(true)
+                let undone = undo_removal_within(&tx, &removal_id, &undone_at)?;
+                if undone {
+                    tx.commit()?;
+                }
+                Ok(Ok(undone))
             })
-            .await
-            .map_err(AnalyticsError::from)
+            .await?
+            .map_err(AnalyticsError::Rejected)
     }
 
     /// The stored inventory row re-read and shaped (the create / patch
@@ -7437,9 +7799,19 @@ impl AnalyticsService {
                     let tx = conn.transaction()?;
                     tx.execute(
                         "INSERT INTO inventory_items \
-                         (id, name, tt_value, markup_paid, notes, acquired_at, quantity) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![id, name, tt_value, markup_paid, notes, date, quantity],
+                         (id, name, tt_value, markup_paid, notes, acquired_at, quantity, \
+                          updated_at) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![
+                            id,
+                            name,
+                            tt_value,
+                            markup_paid,
+                            notes,
+                            date,
+                            quantity,
+                            now
+                        ],
                     )?;
                     asset_positions::insert_purchase(
                         &tx,
@@ -7898,7 +8270,9 @@ mod tests {
             "{\"totalReturnRate\":0.0,\"trend\":\"stable\",\"returnsBreakdown\":{\"lootTt\":0.0,\
              \"questItemTt\":0.0,\"pes\":0.0,\"codexPes\":0.0,\"questPes\":0.0,\"ledger\":{}},\"lossesBreakdown\":\
              {\"trackingCost\":0.0,\"cycledBreakdown\":{\"weapon\":0,\"healing\":0,\"enhancer\":0,\
-             \"armour\":0,\"dangling\":0,\"harvest\":0,\"consumables\":0},\"ledger\":{}},\"totalGains\":0.0,\"totalLosses\":0.0,\
+             \"armour\":0,\"dangling\":0,\"harvest\":0,\"consumables\":0},\"overhead\":\
+             {\"total\":0.0,\"travel\":0.0,\"fieldLogistics\":0.0,\"unclassified\":0.0},\
+             \"ledger\":{}},\"totalGains\":0.0,\"totalLosses\":0.0,\
              \"timeline\":[],\"monthlyBreakdown\":[]}"
         );
     }
@@ -7917,7 +8291,10 @@ mod tests {
     async fn empty_harvest_emits_an_empty_tier_table() {
         let (_dir, db) = open_env().await;
         let value = to_json(harvest_impl(&db, None).await.unwrap());
-        assert_eq!(to_wire_json(&value), "{\"tierComparisons\":[]}");
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"tierComparisons\":[],\"overhead\":0.0,\"unassignedOverhead\":0.0}"
+        );
     }
 
     /// Tier is the source activity; tool is a nested strategy. One tool may
@@ -10904,12 +11281,18 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
         ];
         merge_family_sums(
             &mut into,
             [
                 Some(3.0),
                 Some(4.0),
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -10955,6 +11338,7 @@ mod tests {
             harvest: SqlNumber::Int(0),
             consumables: SqlNumber::Int(0),
             tracking_cost: SqlNumber::Float(cost),
+            overhead: [SqlNumber::Int(0); 3],
             ledger_gains: map(gains),
             ledger_losses: map(losses),
         }
@@ -11120,6 +11504,12 @@ mod tests {
     async fn raw_session_agg_computes_every_field() {
         let (_dir, db) = open_env().await;
         db.with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO tracking_sessions \
+                 (id, started_at, ended_at, armour_cost, heal_cost, dangling_cost) \
+                 VALUES ('rs', 1000.0, 8200.0, 0.07, 0.11, 0.13)",
+                [],
+            )?;
             for (kill, mob, species, maturity, loot, enhancer) in [
                 ("k1", "Young Atrox", "Atrox", "Young", 2.0, 0.1),
                 ("k2", "Young Atrox", "Atrox", "Young", 3.0, 0.0),
@@ -11151,23 +11541,22 @@ mod tests {
         .unwrap();
 
         let agg = db
-            .with_reader(|conn| raw_session_agg(conn, "rs", 1000.0, 8200.0, 0.07, 0.11, 0.13, None))
+            .with_reader(|conn| {
+                let costs = session_costs::resolve(conn, "rs")?.resolved;
+                raw_session_agg(conn, "rs", 1000.0, 8200.0, None, &costs)
+            })
             .await
             .unwrap();
         assert_eq!(agg.duration_hours, 2.0); // (8200 - 1000) / 3600
-        assert_eq!(agg.armour_cost, 0.07);
-        assert_eq!(agg.heal_cost, 0.11);
-        assert_eq!(agg.dangling_cost, 0.13);
         assert_eq!(agg.kills, 5);
         assert_eq!(agg.loot_tt, 10.5);
-        assert_eq!(agg.enhancer_cost, 0.1);
-        assert_eq!(agg.weapon_cost, 1.6); // 30 @ 0.05 + 10 @ 0.01
         assert_eq!(agg.weapon_shots, 40.0);
         assert_eq!(agg.skill_tt, 0.75); // 0.5 + 0.25 (NULL excluded)
                                         // Atrox 3 of 4 known kills = 0.75, species present -> dominant mob.
         assert_eq!(agg.dominant_mob, Some("Young Atrox".to_string()));
         assert_eq!(agg.dominant_mob_kills, 3);
-        // weapon 1.6 + enhancer 0.1 + armour 0.07 + heal 0.11 + dangling 0.13.
+        // weapon 1.6 (30 @ 0.05 + 10 @ 0.01) + enhancer 0.1 + armour 0.07 +
+        // heal 0.11 + dangling 0.13.
         assert_eq!(agg.cycled_ped, 2.01);
     }
 
@@ -11192,15 +11581,14 @@ mod tests {
         .unwrap();
         let agg = db
             .with_reader(|conn| {
+                let costs = session_costs::resolve(conn, "tg")?.resolved;
                 raw_session_agg(
                     conn,
                     "tg",
                     1000.0,
                     4600.0,
-                    0.0,
-                    0.0,
-                    0.0,
                     Some("Thing".to_string()),
+                    &costs,
                 )
             })
             .await

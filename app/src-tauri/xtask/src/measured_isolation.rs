@@ -1,18 +1,29 @@
 //! One whole-tree rule over the tracked backend source, enforcing the
 //! measured-figures boundary:
 //!
-//!   - Rule (no account readings in accounting surfaces): the modules that
-//!     compute the tracked figures (the same accounting surface the
-//!     market-isolation guard holds: the ledger, the analytics aggregates,
+//!   - Rule (measured costs through one resolver): the modules that compute
+//!     the session figures ([`surfaces`]: the accounting surface the
+//!     market-isolation guard holds (the ledger, the analytics aggregates,
 //!     the cost engine, the rollups, the tracker's session accounting, the
-//!     quest reward accounting) may not import or reference the account
-//!     readings module (`account`, its tables, or its facade family).
-//!     Figures measured from the account site's readings stand beside the
-//!     tracked ones; they never replace or adjust a session's cost, net,
-//!     armour cost, healing cost, or loot. The boundary is one-directional:
+//!     quest reward accounting, the cost resolver, and every reader of a
+//!     session's costs), plus [`COST_READERS`], readers of a session's
+//!     costs that guard cannot hold) may not import or
+//!     reference the account readings module (`account`, or its facade
+//!     family), nor name its readings or measures. A session's measured
+//!     costs reach them as plain rows (`account_session_costs` and its
+//!     bucket, line, armour part, gap and top-up tables, and a running
+//!     session's costs so far, `account_live_session_costs`), read by
+//!     exactly one file, the resolver ([`RESOLVER`]), which chooses the
+//!     measured or the tracked figure per bucket (or, for a running
+//!     session, blends them) and knows nothing of readings; what it resolves
+//!     them to (`session_cost_resolutions` and its buckets and mixed
+//!     armour and weapon) is its own, read
+//!     elsewhere only through the SQL it hands out. Any other accounting
+//!     file naming either set of rows fails, as does any account import
+//!     anywhere on the surface, the resolver included. The boundary is one-directional:
 //!     the account module MAY read what it needs (the equipment library and
-//!     the protection sets name what an item is), the accounting layer may
-//!     never read a measured figure.
+//!     the protection sets name what an item is) and ask the resolver to
+//!     refresh what is derived from the rows it stores.
 //!
 //! What it sees: every `use` statement, joined across lines and expanded
 //! through its `{...}` groups, whose path reaches a segment named
@@ -26,10 +37,13 @@
 //! What it cannot see: a re-export of the account module's items through a
 //! module off the accounting surface (`crate::elsewhere::Reading`), a glob
 //! of a module off the surface that re-exports them, or a reference built
-//! inside a macro. Those stay a matter for review.
+//! inside a macro. Tables are matched as substrings of a code line, so a
+//! name assembled at run time or split across literals escapes it, and a
+//! longer name containing a table's is flagged as that table. Those stay
+//! a matter for review.
 //!
 //! Whole-tree rather than diff-scoped, like its siblings: the guarantee is
-//! "no consumer anywhere on the accounting surface".
+//! "no consumer anywhere on the accounting surface but the resolver".
 
 use std::sync::OnceLock;
 
@@ -41,12 +55,44 @@ use crate::market_isolation::ACCOUNTING_SURFACES;
 /// The roots an import of the account module is reached from.
 const ROOTS: &[&str] = &["crate", "super", "eo_services", "eo_api"];
 
-/// The account module's tables.
+/// The account module's tables no accounting file may name: the readings,
+/// the measures, and the chat log's verdicts on their gaps.
 const TABLES: &[&str] = &[
     "account_readings",
     "account_reading_holdings",
+    "account_session_gap_verdicts",
     "account_session_measures",
 ];
+
+/// The stored measured costs, what was published of a running session's
+/// costs so far, and what the resolver keeps of them: rows only
+/// [`RESOLVER`] may name.
+const COST_TABLES: &[&str] = &[
+    "account_live_session_costs",
+    "account_session_cost_armour_parts",
+    "account_session_cost_buckets",
+    "account_session_cost_gaps",
+    "account_session_cost_lines",
+    "account_session_cost_top_ups",
+    "account_session_costs",
+    "session_cost_resolution_armour",
+    "session_cost_resolution_buckets",
+    "session_cost_resolution_weapon",
+    "session_cost_resolutions",
+];
+
+/// Readers of a session's costs the market-isolation guard cannot hold
+/// (a test there reads the market module's own source), held here.
+pub const COST_READERS: &[&str] = &["app/src-tauri/eo-services/src/session_rollup.rs"];
+
+/// Every path this guard holds: the shared accounting surface and
+/// [`COST_READERS`].
+pub fn surfaces() -> impl Iterator<Item = &'static str> {
+    ACCOUNTING_SURFACES.iter().chain(COST_READERS).copied()
+}
+
+/// The one accounting file that reads the stored measured costs.
+pub const RESOLVER: &str = "app/src-tauri/eo-services/src/session_costs.rs";
 
 /// A single lint violation: file, 1-based line number, detail.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,11 +108,7 @@ fn tracked_sources(repo_root: &std::path::Path) -> Result<Vec<String>, String> {
     Ok(out
         .lines()
         .filter(|line| line.ends_with(".rs"))
-        .filter(|line| {
-            ACCOUNTING_SURFACES
-                .iter()
-                .any(|surface| line.starts_with(surface) || *line == *surface)
-        })
+        .filter(|line| surfaces().any(|surface| line.starts_with(surface) || *line == surface))
         .map(|line| line.to_string())
         .collect())
 }
@@ -214,8 +256,8 @@ pub fn scan_text(path: &str, text: &str) -> Vec<Finding> {
             findings.push(Finding {
                 path: posix.clone(),
                 lineno: *lineno,
-                detail: "imports the account readings module; measured figures stand beside \
-the tracked ones and never join them"
+                detail: "imports the account readings module; measured costs reach the \
+accounting surface only as rows the cost resolver reads"
                     .to_string(),
             });
         }
@@ -240,13 +282,22 @@ the tracked ones and never join them"
         }
         let detail = if let Some(table) = TABLES.iter().find(|table| line.contains(**table)) {
             Some(format!(
-                "references the account readings ({table}); measured figures stand beside \
-the tracked ones and never join them"
+                "references the account readings ({table}); measured costs reach the \
+accounting surface only as rows the cost resolver reads"
+            ))
+        } else if let Some(table) = COST_TABLES
+            .iter()
+            .find(|table| line.contains(**table))
+            .filter(|_| posix != RESOLVER)
+        {
+            Some(format!(
+                "reads the stored measured costs ({table}) outside the cost resolver \
+({RESOLVER}); every reader takes them from the resolver"
             ))
         } else if !inside_a_use && account_path().is_match(code) {
             Some(
-                "references an account path; measured figures stand beside the tracked ones \
-and never join them"
+                "references an account path; measured costs reach the accounting surface \
+only as rows the cost resolver reads"
                     .to_string(),
             )
         } else {
@@ -284,15 +335,19 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     let findings = evaluate(&repo_root)?;
 
     if findings.is_empty() {
-        println!("measured-isolation: no account-reading references on the accounting surface.");
+        println!(
+            "measured-isolation: no account-reading references on the accounting surface, \
+and the measured costs are read by the resolver alone."
+        );
         return Ok(0);
     }
 
     eprintln!(
-        "measured-isolation: measured-figure boundary violations.\n\nFigures measured \
-from the account site's readings stand beside the tracked figures: they never \
-replace or adjust a session's cost, net, armour cost, healing cost, or loot. The \
-accounting surface may not import or query the account readings. Offenders:\n"
+        "measured-isolation: measured-figure boundary violations.\n\nA session's measured \
+costs reach the accounting surface only as the stored cost rows, read by the cost \
+resolver ({RESOLVER}) alone. The accounting surface may not import the account \
+module or query its readings or measures, and no other accounting file may read \
+the cost rows. Offenders:\n"
     );
     for f in &findings {
         eprintln!("  {}:{}: {}", f.path, f.lineno, f.detail);
@@ -378,9 +433,104 @@ mod tests {
 
     #[test]
     fn flags_raw_sql_against_the_account_tables() {
-        for table in TABLES {
+        for table in TABLES.iter().chain(COST_TABLES) {
             let text = format!("let q = \"SELECT * FROM {table}\";");
             assert_eq!(lines(&text), vec![1], "{table}");
+        }
+    }
+
+    fn resolver_lines(text: &str) -> Vec<usize> {
+        scan_text(RESOLVER, text)
+            .iter()
+            .map(|finding| finding.lineno)
+            .collect()
+    }
+
+    #[test]
+    fn the_resolver_alone_may_read_the_stored_costs() {
+        for table in COST_TABLES {
+            let text = format!("let q = \"SELECT * FROM {table}\";");
+            assert!(resolver_lines(&text).is_empty(), "{table}");
+            // The same text anywhere else on the surface fails.
+            assert_eq!(lines(&text), vec![1], "{table}");
+            let elsewhere = scan_text("app/src-tauri/eo-services/src/daily_rollup.rs", &text);
+            assert_eq!(elsewhere.len(), 1, "{table}");
+            assert!(elsewhere[0].detail.contains("outside the cost resolver"));
+        }
+    }
+
+    #[test]
+    fn a_running_sessions_costs_so_far_are_read_by_the_resolver_alone() {
+        let text = "let q = \"SELECT * FROM account_live_session_costs\";";
+        assert!(resolver_lines(text).is_empty());
+        for reader in [
+            "app/src-tauri/eo-services/src/tracker/session.rs",
+            "app/src-tauri/eo-services/src/tracker/cycled.rs",
+            "app/src-tauri/eo-api/src/tracking.rs",
+        ] {
+            let found = scan_text(reader, text);
+            assert_eq!(found.len(), 1, "{reader}");
+            assert!(found[0].detail.contains("account_live_session_costs"));
+            assert!(found[0].detail.contains("outside the cost resolver"));
+        }
+    }
+
+    #[test]
+    fn the_resolver_may_not_read_the_readings_or_import_the_account_module() {
+        for table in TABLES {
+            let text = format!("let q = \"SELECT * FROM {table}\";");
+            assert_eq!(resolver_lines(&text), vec![1], "{table}");
+        }
+        assert_eq!(
+            resolver_lines("use crate::account::costs::SessionCosts;"),
+            vec![1]
+        );
+        assert_eq!(
+            resolver_lines("fn f() {\n    let v = crate::account::costs::COSTS_VERSION;\n}\n"),
+            vec![2]
+        );
+    }
+
+    #[test]
+    fn the_resolver_is_on_the_accounting_surface() {
+        assert!(ACCOUNTING_SURFACES.contains(&RESOLVER));
+    }
+
+    #[test]
+    fn every_reader_of_a_sessions_costs_is_held() {
+        for reader in [
+            "app/src-tauri/eo-services/src/tracking_reads.rs",
+            "app/src-tauri/eo-services/src/session_rollup.rs",
+            "app/src-tauri/eo-services/src/session_weapon_rollup.rs",
+            "app/src-tauri/eo-services/src/skilling_forecast.rs",
+            "app/src-tauri/eo-services/src/session_definitions.rs",
+            "app/src-tauri/eo-services/src/session_expectation.rs",
+            "app/src-tauri/eo-services/src/loaded_expectation.rs",
+            "app/src-tauri/eo-services/src/maintenance.rs",
+            "app/src-tauri/eo-services/src/daily_rollup.rs",
+            "app/src-tauri/eo-services/src/session_summary.rs",
+        ] {
+            assert!(surfaces().any(|surface| surface == reader), "{reader}");
+            let text = "use crate::account::costs::SessionCosts;";
+            assert_eq!(scan_text(reader, text).len(), 1, "{reader}");
+        }
+        // The deletion that lets the account module go of a session is not
+        // a cost reader.
+        assert!(!surfaces().any(|surface| surface.ends_with("session_delete.rs")));
+    }
+
+    #[test]
+    fn the_resolution_is_the_resolvers_own() {
+        for table in [
+            "session_cost_resolutions",
+            "session_cost_resolution_buckets",
+            "session_cost_resolution_weapon",
+        ] {
+            let text = format!("let q = \"SELECT * FROM {table}\";");
+            assert!(resolver_lines(&text).is_empty(), "{table}");
+            let elsewhere = scan_text("app/src-tauri/eo-services/src/tracking_reads.rs", &text);
+            assert_eq!(elsewhere.len(), 1, "{table}");
+            assert!(elsewhere[0].detail.contains(table));
         }
     }
 

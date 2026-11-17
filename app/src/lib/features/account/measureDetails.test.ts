@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MeasuredEvent } from '$lib/api/commands.gen';
+import type { MeasuredAmount, MeasuredEvent } from '$lib/api/commands.gen';
 import { formatDate, formatTime } from '$lib/utils/format';
 import { carried, exact, measure, SPAN, wholePec } from './__fixtures__/measure';
 import {
@@ -8,6 +8,7 @@ import {
 	eventLines,
 	eventSentence,
 	hasDetails,
+	listsWholePec,
 	measureClock,
 	placeName,
 	readingClock,
@@ -154,8 +155,8 @@ describe('the notable events in plain words', () => {
 				'Sold on the auction: 10 Oil, 1.0000 PED',
 			],
 			[
-				{ kind: 'cardChanged', between: SPAN, from: wholePec(100), to: wholePec(98) },
-				'The PED Card went from 100.00 PED to 98.00 PED with nothing to explain it',
+				{ kind: 'ammoToppedUp', between: SPAN, name: 'Universal Ammo' },
+				'Universal Ammo topped up: what was fired in that span is the tracked figure',
 			],
 		];
 		for (const [event, sentence] of cases) expect(eventSentence(event)).toBe(sentence);
@@ -228,23 +229,110 @@ describe('the details', () => {
 		expect(groups[0].total).toEqual(exact(2.5));
 	});
 
-	it('gives a repair its cost, about a derived one, and says when it is unknown', () => {
+	it('shows a repair as what it restored, with what the PED Card paid only as a cross-check', () => {
 		const base = {
 			between: SPAN,
 			items: [{ item: carried('Harness'), amount: exact(1) }],
 			restored: exact(1),
 		};
 		expect(
-			repairLine({ ...base, cost: { kind: 'paid', amount: wholePec(1.02) } }, formatTime).cost,
-		).toBe('1.02 PED');
+			repairLine({ ...base, cost: { kind: 'paid', amount: wholePec(1.02) } }, formatTime).paid,
+		).toBe('1.02 PED paid');
 		expect(
-			repairLine({ ...base, cost: { kind: 'derived', amount: wholePec(1) } }, formatTime).cost,
-		).toBe('about 1.00 PED');
+			repairLine({ ...base, cost: { kind: 'derived', amount: wholePec(1) } }, formatTime).paid,
+		).toBe('about 1.00 PED paid');
 		const unknown = repairLine({ ...base, cost: { kind: 'unknown' } }, formatTime);
-		expect(unknown.cost).toBe('cost unknown');
+		expect(unknown.paid).toBeNull();
 		expect(unknown.what).toBe('Harness');
 		expect(unknown.restored).toBe('1.0000 PED');
 		expect(repairLines([], formatTime)).toEqual([]);
+	});
+
+	it('says when a listed amount rests on values rounded down to the PEC', () => {
+		expect(listsWholePec(measure())).toBe(false);
+		expect(
+			listsWholePec(
+				measure({ decay: [{ item: carried('Rifle'), role: 'weapon', decay: exact(0.5) }] }),
+			),
+		).toBe(false);
+		expect(
+			listsWholePec(
+				measure({ decay: [{ item: carried('Harness'), role: 'armour', decay: wholePec(0.3) }] }),
+			),
+		).toBe(true);
+		expect(
+			listsWholePec(
+				measure({
+					otherConsumption: [
+						{ item: carried('Mind Essence'), role: 'material', units: 900, amount: wholePec(0.09) },
+					],
+				}),
+			),
+		).toBe(true);
+		expect(
+			listsWholePec(
+				measure({
+					unexplainedDepartures: [
+						{ item: carried('Oil'), role: 'material', units: 10, amount: wholePec(0.1) },
+					],
+				}),
+			),
+		).toBe(true);
+		expect(
+			listsWholePec(
+				measure({
+					repairs: [
+						{
+							between: SPAN,
+							items: [{ item: carried('Harness'), amount: wholePec(1) }],
+							restored: wholePec(1),
+							cost: { kind: 'unknown' },
+						},
+					],
+				}),
+			),
+		).toBe(true);
+		const ammo = (burned: MeasuredAmount) =>
+			measure({
+				ammo: [
+					{
+						name: 'Universal Ammo',
+						netUnits: -10000,
+						net: burned,
+						split: {
+							kind: 'settled',
+							burnedUnits: 10000,
+							burned,
+							strongboxUnits: 0,
+							strongbox: exact(0),
+							convertedUnits: 0,
+							converted: exact(0),
+						},
+					},
+				],
+			});
+		expect(listsWholePec(ammo(wholePec(1)))).toBe(true);
+		expect(listsWholePec(ammo(exact(1)))).toBe(false);
+		// An unsettled ammo type lists no burned figure, so nothing of it rests on rounding.
+		expect(
+			listsWholePec(
+				measure({
+					ammo: [
+						{
+							name: 'Universal Ammo',
+							netUnits: -10000,
+							net: wholePec(-1),
+							split: {
+								kind: 'unsettled',
+								burnedUnitsByRows: 10000,
+								strongboxUnitsByRows: 0,
+								convertedUnits: 0,
+							},
+						},
+					],
+				}),
+			),
+		).toBe(false);
 	});
 
 	it('lists consumption heaviest first with its units', () => {
@@ -290,6 +378,33 @@ describe('the details', () => {
 		expect(settled.parts).toEqual(['10000 burned', '1000 paid out by strongboxes (0.1000 PED)']);
 		expect(unsettled.burned).toBeNull();
 		expect(unsettled.parts[0]).toBe('net change -9000 units');
+	});
+
+	it('qualifies what burned of an ammo type topped up mid-session', () => {
+		const used = {
+			name: 'Universal Ammo',
+			netUnits: -20000,
+			net: exact(-2),
+			split: {
+				kind: 'settled' as const,
+				burnedUnits: 25000,
+				burned: exact(2.5),
+				strongboxUnits: 0,
+				strongbox: exact(0),
+				convertedUnits: 0,
+				converted: exact(0),
+			},
+		};
+		const [topped] = ammoLines(
+			[used],
+			[{ kind: 'ammoToppedUp', between: SPAN, name: 'Universal Ammo' }],
+		);
+		expect(topped.burned).toEqual(exact(2.5));
+		expect(topped.parts).toEqual([
+			'25000 burned outside the span it was topped up in, which is not measured',
+		]);
+		const [plain] = ammoLines([used]);
+		expect(plain.parts).toEqual(['25000 burned']);
 	});
 
 	it('has details only when the measure holds something to show', () => {

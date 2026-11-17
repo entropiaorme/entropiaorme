@@ -32,6 +32,7 @@ const set: ProtectionSet = {
 	latestObservation: null,
 	basisLocked: false,
 	backlog: { lastRecordedAt: null, sessions: 0, hits: 0 },
+	pieces: [],
 };
 
 const repair: ProtectionCostWindow = {

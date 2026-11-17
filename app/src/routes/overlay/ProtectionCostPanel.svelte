@@ -3,7 +3,12 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import ArmourSessionPicker from '$lib/features/protection/ArmourSessionPicker.svelte';
-	import { formatDay, formatSessionStart } from '$lib/features/protection/armourRecording';
+	import {
+		billedRefusalLine,
+		billedSplit,
+		formatDay,
+		formatSessionStart,
+	} from '$lib/features/protection/armourRecording';
 	import { createArmourRecording } from '$lib/features/protection/armourRecordingModel.svelte';
 	import { inDevelopment, InDevelopmentMark } from '$lib/inDevelopment';
 	import { formatPed } from '$lib/utils/format';
@@ -39,6 +44,12 @@
 	});
 	const confirmLabel = $derived(
 		recording.increased ? 'Reset baseline' : recording.isBaseline ? 'Set baseline' : 'Record',
+	);
+	const measuredLeftOut = $derived(recording.candidates?.measuredSessions ?? 0);
+	const accountReadingDay = $derived(
+		recording.baselineFromAccount && recording.candidates?.since != null
+			? formatDay(recording.candidates.since)
+			: null,
 	);
 </script>
 
@@ -115,7 +126,9 @@
 				{/if}
 				<Button variant="secondary" size="sm" onclick={recording.enterManually}>Enter manually</Button>
 				{#if recording.baselineTt !== null}
-					<span class="ml-auto text-[10px] tabular-nums text-white/35">Baseline {formatPed(recording.baselineTt)} PED</span>
+					<span class="ml-auto text-[10px] tabular-nums text-white/35">
+						{accountReadingDay ? `Starting from your account reading of ${accountReadingDay}, ` : 'Baseline '}{formatPed(recording.baselineTt)} PED
+					</span>
 				{/if}
 			</div>
 		{:else if recording.phase === 'scanning'}
@@ -139,7 +152,22 @@
 				{/if}
 			</div>
 			{#if recording.isBaseline}
-				<p class="text-[10px] text-white/40">This is {recording.set?.name}'s first reading: it sets the starting point and records no cost.</p>
+				<p class="text-[10px] text-white/40">
+					{recording.incompleteAccountReadingAt !== null
+						? `Your account reading of ${formatDay(recording.incompleteAccountReadingAt)} does not hold every piece of ${recording.set?.name}, so this first reading sets the starting point and records no cost.`
+						: `This is ${recording.set?.name}'s first reading: it sets the starting point and records no cost.`}
+				</p>
+			{/if}
+			{#if recording.billedRefusal}
+				<p class="border-l-2 border-amber-400/70 pl-2 text-[10px] text-amber-200/80" role="status">{billedRefusalLine(recording.billedRefusal, limited)}</p>
+			{:else if !limited && recording.billedFromAccount > 0 && recording.amount !== null && recording.costPed !== null}
+				<p class="text-[10px] tabular-nums text-white/45">
+					{billedSplit(recording.amount, recording.billedFromAccount, recording.costPed, recording.chosen.length)}
+				</p>
+			{:else if limited && recording.billedFromAccount > 0 && recording.costPed !== null}
+				<p class="text-[10px] tabular-nums text-white/45">
+					{formatPed(recording.billedFromAccount)} PED of its loss was already billed from your account.
+				</p>
 			{/if}
 			{#if recording.increased}
 				<div class="flex items-center gap-2 border-l-2 border-amber-400/70 pl-2">
@@ -159,11 +187,21 @@
 					Covers {only.definitionName ?? only.sessionName ?? 'your last session'}, {formatSessionStart(only.startedAt)} · {only.hitCount}
 					{only.hitCount === 1 ? 'hit' : 'hits'}
 				</p>
+			{:else if recording.allMeasured}
+				<p class="border-l-2 border-amber-400/70 pl-2 text-[10px] text-amber-200/80" role="status">
+					Every session since {limited ? "this set's last reading" : 'the last repair'} was measured from your account
+				</p>
 			{:else if recording.candidates && recording.sessions.length === 0}
 				<p class="text-[10px] text-white/40">
 					No hits recorded since the {limited ? 'baseline' : 'last repair'}{recording.candidates.since ? ` on ${formatDay(recording.candidates.since)}` : ''}; this cost will count toward your overall costs only.
 				</p>
 			{/if}
+		{/if}
+
+		{#if recording.spreads && !recording.allMeasured && measuredLeftOut > 0 && recording.phase !== 'scanning'}
+			<p class="text-[10px] text-white/40">
+				{measuredLeftOut} {measuredLeftOut === 1 ? 'session was' : 'sessions were'} measured from your account and {measuredLeftOut === 1 ? 'is' : 'are'} left out.
+			</p>
 		{/if}
 
 		{#if recording.notice}<p class="border-l-2 border-amber-400/70 pl-2 text-[10px] text-amber-200/80">{recording.notice}</p>{/if}

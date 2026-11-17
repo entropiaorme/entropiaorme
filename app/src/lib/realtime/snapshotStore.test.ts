@@ -78,6 +78,27 @@ describe('hydrate', () => {
 		expect(store.current).toEqual(snapshotB);
 	});
 
+	it('settles a call made mid-read only once the follow-up it queued has landed', async () => {
+		const first = deferred<Snapshot>();
+		const second = deferred<Snapshot>();
+		const read = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const store = createSnapshotStore(TOPIC, read);
+
+		void store.hydrate();
+		let settled = false;
+		const asked = store.hydrate().then(() => {
+			settled = true;
+		});
+		first.resolve(snapshotA);
+		await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+		// The first read has landed, but not the one this call asked for.
+		expect(settled).toBe(false);
+
+		second.resolve(snapshotB);
+		await asked;
+		expect(store.current).toEqual(snapshotB);
+	});
+
 	it('still runs the queued follow-up when the in-flight read fails', async () => {
 		const first = deferred<Snapshot>();
 		const read = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(snapshotB);
@@ -141,5 +162,55 @@ describe('subscribe', () => {
 			expect(store.current).toEqual(snapshotA);
 		});
 		expect(read).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('connect', () => {
+	it('attaches the listener before the first read, and detaches it', async () => {
+		const unlisten = vi.fn();
+		const order: string[] = [];
+		listen.mockImplementation(async () => {
+			order.push('listen');
+			return unlisten;
+		});
+		const read = vi.fn(async () => {
+			order.push('read');
+			return snapshotA;
+		});
+		const store = createSnapshotStore(TOPIC, read);
+
+		const detach = store.connect();
+		await vi.waitFor(() => expect(store.current).toEqual(snapshotA));
+		expect(order).toEqual(['listen', 'read']);
+
+		detach();
+		expect(unlisten).toHaveBeenCalledTimes(1);
+	});
+
+	it('detaches a listener that attaches after the consumer left', async () => {
+		const attached = deferred<() => void>();
+		const unlisten = vi.fn();
+		listen.mockReturnValue(attached.promise);
+		const store = createSnapshotStore(TOPIC, vi.fn().mockResolvedValue(snapshotA));
+
+		const detach = store.connect();
+		detach();
+		attached.resolve(unlisten);
+		await vi.waitFor(() => expect(unlisten).toHaveBeenCalledTimes(1));
+	});
+
+	it('still reads when the listener cannot attach, and can skip the read', async () => {
+		listen.mockRejectedValue(new Error('no bus'));
+		const read = vi.fn().mockResolvedValue(snapshotA);
+		const store = createSnapshotStore(TOPIC, read);
+
+		store.connect();
+		await vi.waitFor(() => expect(store.current).toEqual(snapshotA));
+
+		const quiet = createSnapshotStore(TOPIC, read);
+		read.mockClear();
+		quiet.connect({ hydrate: false });
+		await Promise.resolve();
+		expect(read).not.toHaveBeenCalled();
 	});
 });

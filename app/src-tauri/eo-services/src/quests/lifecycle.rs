@@ -138,6 +138,10 @@ fn snapshot_reward_attributions(
         duration: f64,
     }
 
+    // Contexts weigh by their tracked spend, never a measured one: the
+    // snapshot is taken at the hand-in, usually while the session is still
+    // live and before anything is measured, so every session a run spans
+    // is weighed on the one basis the chat log gives them all.
     let rows: Vec<ContextWeight> = {
         // every-kill: spend (a context's cycled spend, every shot fired).
         let mut stmt = conn.prepare(
@@ -1107,5 +1111,82 @@ impl QuestService {
             return false;
         }
         (last + cooldown_hours * 3600.0) > self.now_epoch()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A quest's reward weighs the contexts of its run by their tracked
+    /// spend, even when a session in the run was measured since.
+    #[test]
+    fn a_quest_weighs_its_contexts_by_tracked_spend() {
+        let conn = crate::db::migrated_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+             VALUES ('s1', 1000.0, 4600.0, 0)",
+            [],
+        )
+        .unwrap();
+        for (context, cost, enhancer) in [(1_i64, 1.0, 0.1), (2, 3.0, 0.0)] {
+            conn.execute(
+                "INSERT INTO session_contexts (id, session_id, created_at) \
+                 VALUES (?1, 's1', 1000.0)",
+                [context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO session_intervals (id, session_id, kind, label, started_at) \
+                 VALUES (?1, 's1', 'quest', 'Daily', 1000.0)",
+                [context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO session_context_intervals (context_id, interval_id) \
+                 VALUES (?1, ?1)",
+                [context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO quest_run_intervals (run_id, interval_id) VALUES (5, ?1)",
+                [context],
+            )
+            .unwrap();
+            let kill = format!("k{context}");
+            conn.execute(
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, \
+                 enhancer_cost, loot_total_ped, context_id) \
+                 VALUES (?1, 's1', 'Atrox', 1500.0, ?2, ?3, 1.0, ?4)",
+                rusqlite::params![kill, cost, enhancer, context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, cost_per_shot) \
+                 VALUES (?1, 'Rifle', 1, ?2)",
+                rusqlite::params![kill, cost],
+            )
+            .unwrap();
+        }
+        // Measured at twice what was tracked: the weights must not see it.
+        crate::session_costs_tests::store_measured(&conn, "s1", &[("weapon", 8.0)]);
+        crate::session_costs::refresh_derived(&conn, "s1").unwrap();
+
+        snapshot_reward_attributions(&conn, 9, 5, 4600.0).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT activity_context_id, cycled_ped, weight FROM quest_reward_attributions \
+                 WHERE completion_id = 9 ORDER BY activity_context_id",
+            )
+            .unwrap();
+        let rows: Vec<(i64, f64, f64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!((rows[0].1 - 1.1).abs() < 1e-9, "{rows:?}");
+        assert!((rows[1].1 - 3.0).abs() < 1e-9, "{rows:?}");
+        assert!((rows[0].2 - 1.1 / 4.1).abs() < 1e-9, "{rows:?}");
     }
 }

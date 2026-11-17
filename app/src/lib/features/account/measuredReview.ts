@@ -1,6 +1,7 @@
 /**
- * The review of measured sessions: each session's tracked figures beside
- * what its readings measured, and the same pairs summed over the whole
+ * The review of measured sessions. Where the readings cover a session, its
+ * measured figures are its costs; here each session's tracked estimates
+ * are compared with them, and the same pairs summed over the whole
  * history, as the backend sums them: every session whose readings cover
  * it whole and that counts in the PED stats, each pair over the sessions
  * where both of its figures are known.

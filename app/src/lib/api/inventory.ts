@@ -73,6 +73,13 @@ export const undoInventoryListing = commands.auctionListingUndo;
 export const undoInventoryConversion = commands.stockConversionUndo;
 export const undoInventoryTrade = commands.privateSaleUndo;
 export const undoInventoryRemoval = commands.stockRemovalUndo;
+/** The latest conversion of an item the account readings recorded within
+ * the last hour, or `null`: shown beside a manual conversion form so the
+ * same conversion is not entered twice. */
+export const getConversionFromAccount = commands.stockConversionFromAccount;
+/** The latest Trade Terminal sale of an item the account readings recorded
+ * within the last hour, or `null`: shown beside the trade form. */
+export const getSaleFromAccount = commands.stockSaleFromAccount;
 
 /** Read a pasted Inventory Changes export as an opening of one box type. */
 export const readStrongboxExport = commands.strongboxExportRead;

@@ -1,12 +1,17 @@
-//! What the readings propose: a strongbox opening, a listing sold, or a
-//! listing returned, seen in the step between two consecutive readings.
+//! What the readings propose: a strongbox opening, a listing sold, a
+//! listing returned, or a purchase at auction, seen in the step between two
+//! consecutive readings.
 //!
 //! A proposal is a guess. The app never records one on its own: it fills
-//! in the existing strongbox review or listing confirmation, and the player
-//! records it through the existing commands or dismisses it. Nothing here
-//! writes or sums an accounting figure. The strongbox openings and the
-//! auction listings are read, never written: to match a listing, and to
-//! tell whether the record a proposal became still stands.
+//! in the existing strongbox review, listing confirmation or asset purchase,
+//! and the player records it through the existing commands or dismisses
+//! it. Nothing here writes or sums an accounting figure. The strongbox
+//! openings, the auction listings and the asset purchases are read, never
+//! written:
+//! to match a listing, and to tell whether the record a proposal became
+//! still stands. What closes exactly with no markup in it (a Shrapnel
+//! conversion, a recycling, a sale to the Trade Terminal) is no proposal:
+//! it is recorded on its own (see [`super::follow`]).
 //!
 //! Each stored reading is examined once, against the reading stored before
 //! it: what the step proposes is worked out on a reader ([`prepare`]) and
@@ -24,6 +29,25 @@
 //! - **An opening** is proposed whenever a step holds one, settled or not.
 //!   An unsettled one carries why it did not settle and no ammo figure;
 //!   what arrived that may be its contents is listed apart, never claimed.
+//! - **Openings seen across consecutive steps outside a session and a
+//!   strongbox run** (the readings taken while signed in and otherwise
+//!   idle) are read as one. When a reading's step held nothing but an
+//!   opening, and so did the steps before it back to where the opening
+//!   began, each still proposed and neither decided nor claimed, the whole
+//!   span is read as one opening (see [`super::composite::whole_opening`]).
+//!   If it balances, one settled proposal across the span (at most
+//!   [`WHOLE_OPENING_STEPS`] steps) takes the place of the step's own and
+//!   of every proposal it spans, which are stored all the same and no
+//!   longer offered; if not, the step is proposed on its own as before. A
+//!   span whose earlier proposals were decided or claimed meanwhile is not
+//!   read whole when it is stored. An opening recorded another way that is
+//!   only part of one read whole turns it back into its steps (see
+//!   [`pending`]).
+//! - **A purchase at auction** is proposed when a step outside every
+//!   tracked session holds one item arriving for more than its TT and
+//!   nothing else ([`super::recognition::purchase`]), and the chat log of no
+//!   session looted that item inside the step. Its markup is what the
+//!   player paid above TT, so it is never recorded on its own.
 //! - **A listing outcome** is proposed only when exactly one of the
 //!   player's listings on auction from before the step matches it by item
 //!   name and quantity (and TT, where the listing has one), and the
@@ -52,11 +76,13 @@ use serde::{Deserialize, Serialize};
 
 use super::amount::{Amount, Pec, Precision, MICRO_PER_PEC, MICRO_PER_PED};
 use super::composite::{
-    new_ammo_rows, recognise, NewAmmoRow, OpenedBoxes, OpenedContent, Opening, Settlement,
+    new_ammo_rows, only_an_opening, recognise, whole_opening, NewAmmoRow, OpenedBoxes,
+    OpenedContent, Opening, Settlement,
 };
 use super::diff::{diff, MoveKind, Span, Step, StepSet};
 use super::measure::conversion_rows;
 use super::reading::{Container, HoldingKey, Reading};
+use super::recognition::{purchase, Purchase};
 use super::roles::{RoleBook, RoleSource};
 use super::store::{self, Purpose, ReadingId, StoredReading};
 use super::AccountError;
@@ -68,12 +94,20 @@ pub const PAYLOAD_VERSION: i64 = 1;
 /// The longest step whose PED Card rise is offered as a sale's proceeds.
 pub const PROCEEDS_WITHIN_SECONDS: f64 = 180.0;
 
+/// The most steps (pairs of consecutive readings) an opening is read whole
+/// across.
+pub const WHOLE_OPENING_STEPS: i64 = 60;
+
 /// What a proposal is of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProposalKind {
     Opening,
     ListingSold,
     ListingReturned,
+    Purchase,
+    /// Something that arrived during a tracked session that no loot line,
+    /// recorded reward, conversion or opening explains.
+    Arrival,
 }
 
 impl ProposalKind {
@@ -82,6 +116,8 @@ impl ProposalKind {
             ProposalKind::Opening => "opening",
             ProposalKind::ListingSold => "listing_sold",
             ProposalKind::ListingReturned => "listing_returned",
+            ProposalKind::Purchase => "purchase",
+            ProposalKind::Arrival => "arrival",
         }
     }
 
@@ -90,6 +126,8 @@ impl ProposalKind {
             "opening" => Some(ProposalKind::Opening),
             "listing_sold" => Some(ProposalKind::ListingSold),
             "listing_returned" => Some(ProposalKind::ListingReturned),
+            "purchase" => Some(ProposalKind::Purchase),
+            "arrival" => Some(ProposalKind::Arrival),
             _ => None,
         }
     }
@@ -189,11 +227,46 @@ pub struct ListingProposal {
     pub returned_to: Option<Container>,
 }
 
+/// Something that arrived in a step of a tracked session that nothing the
+/// app recorded explains: no loot line of the session's chat log, no
+/// recorded quest reward, no Shrapnel conversion and no strongbox opening.
+/// A purchase, a trade, a gift or a pickup: the player says which.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArrivalProposal {
+    /// The item, as the account site names it, and where it arrived.
+    pub key: HoldingKey,
+    pub units: i64,
+    /// Its TT, as the readings show it.
+    pub amount: Amount,
+    /// The PED Card fell by its TT in the step: bought at the Trade
+    /// Terminal, at no markup.
+    pub bought_at_tt: bool,
+}
+
 /// What a proposal holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detail {
     Opening(OpeningProposal),
     Listing(ListingProposal),
+    Purchase(Purchase),
+    Arrival(ArrivalProposal),
+}
+
+impl Detail {
+    /// Whether this is what a proposal of `kind` holds.
+    fn is_of(&self, kind: ProposalKind) -> bool {
+        matches!(
+            (kind, self),
+            (ProposalKind::Opening, Detail::Opening(_))
+                | (
+                    ProposalKind::ListingSold | ProposalKind::ListingReturned,
+                    Detail::Listing(_)
+                )
+                | (ProposalKind::Purchase, Detail::Purchase(_))
+                | (ProposalKind::Arrival, Detail::Arrival(_))
+        )
+    }
 }
 
 /// A pending proposal, as offered.
@@ -235,6 +308,9 @@ pub struct AuctionDeparture {
 pub struct StepOutcomes {
     pub opening: Option<OpeningProposal>,
     pub departures: Vec<AuctionDeparture>,
+    /// A purchase at auction, if the step holds one and nothing else;
+    /// proposed only outside every tracked session.
+    pub purchase: Option<Purchase>,
 }
 
 /// Read the step from `before` to `after`: an opening, and what left the
@@ -244,9 +320,7 @@ pub fn step_outcomes(
     after: &Reading,
     roles: &dyn RoleSource,
 ) -> Result<StepOutcomes, AccountError> {
-    let pair = [before.clone(), after.clone()];
-    let book = RoleBook::resolve(roles, &pair);
-    let set = diff(before, after, &|name| book.stacking(name))?;
+    let set = step_between(before, after, roles)?;
     let reserved = conversion_rows(&set, before, after)?;
     let composites = recognise(&set, before, after, &reserved)?;
     let opening = match &composites.opening {
@@ -259,6 +333,7 @@ pub fn step_outcomes(
     Ok(StepOutcomes {
         opening,
         departures: departures(&set, before),
+        purchase: purchase(&set)?,
     })
 }
 
@@ -434,7 +509,7 @@ fn proceeds(set: &StepSet, sold: usize) -> Option<Pec> {
 // ── Matching a listing ──────────────────────────────────────────────
 
 /// The local calendar day of a reading, as a listing's date is written.
-fn local_day(at: f64) -> String {
+pub(super) fn local_day(at: f64) -> String {
     crate::time::epoch_to_instant(at)
         .with_timezone(&chrono::Local)
         .date_naive()
@@ -516,11 +591,45 @@ fn payload<T: Serialize>(value: &T) -> Result<String, AccountError> {
     serde_json::to_string(value).map_err(|_| AccountError::Stored("a proposal does not serialise"))
 }
 
-/// The proposals the step from `before` to `after` holds.
+/// Whether no tracked session's play overlaps `between`.
+fn outside_every_session(
+    conn: &rusqlite::Connection,
+    between: &Span,
+) -> Result<bool, AccountError> {
+    Ok(conn.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM tracking_sessions \
+                            WHERE started_at < ?2 AND COALESCE(ended_at, ?2) > ?1)",
+        rusqlite::params![between.from, between.to],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// Whether the chat log of any session looted `name` inside `between`.
+fn looted_inside(
+    conn: &rusqlite::Connection,
+    name: &str,
+    between: &Span,
+) -> Result<bool, AccountError> {
+    Ok(conn.query_row(
+        // every-kill: spend (any row's loot, a claimed reward's arrival
+        // included: an item that came in either way was never bought)
+        "SELECT EXISTS (SELECT 1 FROM kill_loot_items l JOIN kills k ON k.id = l.kill_id \
+                        WHERE l.item_name = ?1 AND k.timestamp >= ?2 AND k.timestamp <= ?3) \
+             OR EXISTS (SELECT 1 FROM harvest_loot_items l \
+                        JOIN harvest_events e ON e.id = l.harvest_id \
+                        WHERE l.item_name = ?1 AND e.timestamp >= ?2 AND e.timestamp <= ?3)",
+        rusqlite::params![name, between.from, between.to],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// The proposals the step from `before` to `after` holds. `session` is the
+/// tracked session the step fell in, if any.
 fn found_in_step(
     conn: &rusqlite::Connection,
     before: &Reading,
     after: &Reading,
+    session: Option<&str>,
     roles: &dyn RoleSource,
 ) -> Result<Vec<Found>, AccountError> {
     let outcomes = step_outcomes(before, after, roles)?;
@@ -530,17 +639,22 @@ fn found_in_step(
     };
     let mut found = Vec::new();
     if let Some(opening) = &outcomes.opening {
-        let subject = opening
-            .boxes
-            .iter()
-            .map(|boxes| boxes.name.as_str())
-            .collect::<Vec<_>>()
-            .join(" + ");
-        found.push(Found {
-            kind: ProposalKind::Opening,
-            subject,
-            payload: payload(opening)?,
-        });
+        found.push(opening_found(opening)?);
+    }
+    // A purchase only outside every tracked session, and never of an item
+    // a session looted meanwhile: loot arriving beside a repair or a fee
+    // looks the same.
+    if let Some(bought) = &outcomes.purchase {
+        if session.is_none()
+            && outside_every_session(conn, &between)?
+            && !looted_inside(conn, &bought.key.name, &between)?
+        {
+            found.push(Found {
+                kind: ProposalKind::Purchase,
+                subject: bought.key.name.clone(),
+                payload: payload(bought)?,
+            });
+        }
     }
     for departure in &outcomes.departures {
         let Some(listing_id) = matching_listing(conn, departure, &between)? else {
@@ -565,6 +679,162 @@ fn found_in_step(
         });
     }
     Ok(found)
+}
+
+/// An opening proposal, ready to store: its subject is its boxes' names.
+fn opening_found(opening: &OpeningProposal) -> Result<Found, AccountError> {
+    let subject = opening
+        .boxes
+        .iter()
+        .map(|boxes| boxes.name.as_str())
+        .collect::<Vec<_>>()
+        .join(" + ");
+    Ok(Found {
+        kind: ProposalKind::Opening,
+        subject,
+        payload: payload(opening)?,
+    })
+}
+
+/// An opening read whole across consecutive steps, ready to store.
+#[derive(Debug, Clone)]
+struct Whole {
+    /// The reading before its first step, and when it was taken.
+    prev: ReadingId,
+    from: f64,
+    /// The readings whose own opening proposals it takes the place of.
+    spans: Vec<ReadingId>,
+    found: Found,
+}
+
+/// Whether a reading was taken while signed in and otherwise idle: no
+/// session, no strongbox run.
+fn is_idle_reading(header: &store::ReadingHeader) -> bool {
+    header.purpose == Purpose::Ambient && header.session_id.is_none()
+}
+
+/// The step from `before` to `after`, its items' stacking resolved from
+/// both.
+pub(super) fn step_between(
+    before: &Reading,
+    after: &Reading,
+    roles: &dyn RoleSource,
+) -> Result<StepSet, AccountError> {
+    let pair = [before.clone(), after.clone()];
+    let book = RoleBook::resolve(roles, &pair);
+    diff(before, after, &|name| book.stacking(name))
+}
+
+/// The reading before the widest span of the opening proposals seen at
+/// `reading` (the step's own, and an opening read whole that ends there),
+/// while every one of them is still pending and unclaimed; `None` when
+/// there is none, or one is decided or claimed.
+fn open_opening_at(
+    conn: &rusqlite::Connection,
+    reading: ReadingId,
+) -> Result<Option<ReadingId>, AccountError> {
+    let mut stmt = conn.prepare(
+        "SELECT prev_reading_id, status, claimed_at FROM account_proposals \
+         WHERE kind = ?1 AND reading_id = ?2",
+    )?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![ProposalKind::Opening.as_str(), reading.0],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                ))
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let undecided = rows.iter().all(|(_, status, claimed)| {
+        claimed.is_none() && Decision::parse(status) == Some(Decision::Pending)
+    });
+    Ok(if undecided {
+        rows.iter().map(|(prev, _, _)| *prev).min().map(ReadingId)
+    } else {
+        None
+    })
+}
+
+/// How many steps lie between two stored readings: the readings stored
+/// after `from`, up to and including `to`.
+fn steps_between(
+    conn: &rusqlite::Connection,
+    from: ReadingId,
+    to: ReadingId,
+) -> Result<i64, AccountError> {
+    Ok(conn.query_row(
+        // id-order: insertion (the chain follows the order readings were stored)
+        "SELECT COUNT(*) FROM account_readings WHERE id > ?1 AND id <= ?2",
+        [from.0, to.0],
+        |row| row.get(0),
+    )?)
+}
+
+/// The opening the step from `before` to `after` ends, read whole back to
+/// where it began: `after` was taken while idle and its step held nothing
+/// but an opening, as did every step back to the start of the span, each
+/// taken while idle and still proposed, pending and unclaimed, and never
+/// more than [`WHOLE_OPENING_STEPS`] steps in all. A proposal spanning one
+/// step is taken only when that step held nothing but its opening; one
+/// spanning more was read whole already. `None` when there is no earlier
+/// step to join, or the span does not balance.
+fn whole_across(
+    conn: &rusqlite::Connection,
+    before: &StoredReading,
+    after: &StoredReading,
+    roles: &dyn RoleSource,
+) -> Result<Option<Whole>, AccountError> {
+    if !is_idle_reading(&after.header)
+        || !only_an_opening(&step_between(&before.reading, &after.reading, roles)?)
+    {
+        return Ok(None);
+    }
+    let mut earliest = before.clone();
+    let mut spans = Vec::new();
+    while is_idle_reading(&earliest.header) {
+        let Some(start) = open_opening_at(conn, earliest.header.id)? else {
+            break;
+        };
+        if steps_between(conn, start, after.header.id)? > WHOLE_OPENING_STEPS {
+            break;
+        }
+        let Some(start_reading) = store::load_reading(conn, start)? else {
+            break;
+        };
+        if Some(start) == earliest.header.prev
+            && !only_an_opening(&step_between(
+                &start_reading.reading,
+                &earliest.reading,
+                roles,
+            )?)
+        {
+            break;
+        }
+        spans.push(earliest.header.id);
+        earliest = start_reading;
+    }
+    if spans.is_empty() {
+        return Ok(None);
+    }
+    let set = step_between(&earliest.reading, &after.reading, roles)?;
+    let Some(opening) = whole_opening(&set)? else {
+        return Ok(None);
+    };
+    let rows = new_ammo_rows(&set, &earliest.reading, &after.reading, &[])?;
+    let mut found = opening_found(&opening_proposal(&opening, &rows))?;
+    // Beside the step's own proposal at the same reading: its subject also
+    // names the reading its span starts after.
+    found.subject = format!("{} after reading {}", found.subject, earliest.header.id.0);
+    Ok(Some(Whole {
+        prev: earliest.header.id,
+        from: earliest.reading.taken_at(),
+        spans,
+        found,
+    }))
 }
 
 /// The tracked session a step fell in: the session the later reading was
@@ -599,6 +869,8 @@ struct ExaminedStep {
     between: Span,
     session: Option<String>,
     found: Vec<Found>,
+    /// The opening this step ends, read whole across the steps before it.
+    whole: Option<Whole>,
 }
 
 impl Examination {
@@ -644,7 +916,15 @@ fn prepare_again(
     };
     let before = store::load_reading(conn, prev)?
         .ok_or(AccountError::Stored("a reading's predecessor is missing"))?;
-    let found = found_in_step(conn, &before.reading, &after.reading, roles)?;
+    let session = session_of(&after);
+    let found = found_in_step(
+        conn,
+        &before.reading,
+        &after.reading,
+        session.as_deref(),
+        roles,
+    )?;
+    let whole = whole_across(conn, &before, &after, roles)?;
     Ok(Some(Examination {
         reading,
         step: Some(ExaminedStep {
@@ -653,8 +933,9 @@ fn prepare_again(
                 from: before.reading.taken_at(),
                 to: after.reading.taken_at(),
             },
-            session: session_of(&after),
+            session,
             found,
+            whole,
         }),
     }))
 }
@@ -670,7 +951,29 @@ pub fn commit(
     let tx = conn.transaction()?;
     let mut added = 0;
     if let Some(step) = &examination.step {
-        for found in &step.found {
+        // An opening read whole is stored only while every proposal it
+        // spans is still pending and unclaimed.
+        let mut whole = step.whole.as_ref();
+        if let Some(read_whole) = whole {
+            for spanned in &read_whole.spans {
+                if open_opening_at(&tx, *spanned)?.is_none() {
+                    whole = None;
+                    break;
+                }
+            }
+        }
+        // The step's own proposals are stored whether or not an opening is
+        // read whole across it: the whole one takes their place while it
+        // stands, and they are there should it give way to its steps.
+        let mut stored: Vec<(&Found, ReadingId, f64)> = step
+            .found
+            .iter()
+            .map(|found| (found, step.prev, step.between.from))
+            .collect();
+        if let Some(whole) = whole {
+            stored.push((&whole.found, whole.prev, whole.from));
+        }
+        for (found, prev, from) in stored {
             added += tx.execute(
                 "INSERT INTO account_proposals \
                      (kind, reading_id, prev_reading_id, seen_from, seen_to, session_id, \
@@ -682,8 +985,8 @@ pub fn commit(
                 rusqlite::params![
                     found.kind.as_str(),
                     examination.reading.0,
-                    step.prev.0,
-                    step.between.from,
+                    prev.0,
+                    from,
                     step.between.to,
                     step.session,
                     found.subject,
@@ -792,7 +1095,7 @@ pub struct Examined {
 /// stored value that does not decode, a missing predecessor). Such a
 /// reading is passed. Any other error (the database itself) leaves it to
 /// be examined again.
-fn is_the_step_s_own(error: &AccountError) -> bool {
+pub(super) fn is_the_step_s_own(error: &AccountError) -> bool {
     !matches!(error, AccountError::Db(_))
 }
 
@@ -893,6 +1196,75 @@ fn opening_stands(conn: &rusqlite::Connection, id: &str) -> Result<bool, Account
     )?)
 }
 
+/// Whether the asset purchase a purchase proposal was recorded as (by the
+/// purchase's own id) still stands: bought, not made by a conversion, and
+/// not taken back. Another purchase of the same asset, or another asset
+/// going, does not touch it.
+fn purchase_stands(conn: &rusqlite::Connection, id: &str) -> Result<bool, AccountError> {
+    let Ok(id) = id.trim().parse::<i64>() else {
+        return Ok(false);
+    };
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM asset_purchases WHERE id = ?1 AND conversion_id IS NULL)",
+        [id],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// Whether stock of unknown origin recorded from an arrival (by its own
+/// id) still stands: recorded, and not taken back.
+fn unknown_origin_stands(conn: &rusqlite::Connection, id: &str) -> Result<bool, AccountError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM stock_unknown_origins WHERE id = ?1 AND undone_at IS NULL)",
+        [id.trim()],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// The standing stock of unknown origin recorded from the arrival
+/// proposal `proposal`, whether or not the proposal was marked recorded.
+fn standing_unknown_origin_of(
+    conn: &rusqlite::Connection,
+    proposal: i64,
+) -> Result<Option<String>, AccountError> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM stock_unknown_origins \
+             WHERE proposal_id = ?1 AND undone_at IS NULL LIMIT 1",
+            [proposal],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?)
+}
+
+/// The name of the asset an asset purchase (by its id) bought into.
+fn purchased_asset_name(
+    conn: &rusqlite::Connection,
+    id: &str,
+) -> Result<Option<String>, AccountError> {
+    let Ok(id) = id.trim().parse::<i64>() else {
+        return Ok(None);
+    };
+    Ok(conn
+        .query_row(
+            "SELECT COALESCE( \
+                 (SELECT i.name FROM inventory_items i WHERE i.id = p.position_id), \
+                 (SELECT i.name FROM inventory_items i WHERE i.position_id = p.position_id \
+                  LIMIT 1)) \
+             FROM asset_purchases p WHERE p.id = ?1",
+            [id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+/// Whether what an arrival was recorded as still stands: an asset
+/// purchase (by the purchase's id), or stock of unknown origin (by its own).
+fn arrival_record_stands(conn: &rusqlite::Connection, id: &str) -> Result<bool, AccountError> {
+    Ok(purchase_stands(conn, id)? || unknown_origin_stands(conn, id)?)
+}
+
 /// A listing's status while it stands (not undone); `None` when it does
 /// not.
 fn listing_status(conn: &rusqlite::Connection, id: &str) -> Result<Option<String>, AccountError> {
@@ -984,11 +1356,13 @@ fn latest_group(pool: &[&Candidate], count: f64) -> Option<Vec<i64>> {
 /// (it is that recording, never linked); otherwise the latest such run of
 /// proposals. Openings are weighed latest first, and a proposal is
 /// accounted for at most once; what no opening accounts for stays open.
-fn accounted_for(
-    openings: &[UnlinkedOpening],
+/// Also answers which openings found no group.
+fn accounted_for<'a>(
+    openings: &'a [UnlinkedOpening],
     candidates: &[Candidate],
-) -> std::collections::HashSet<i64> {
+) -> (std::collections::HashSet<i64>, Vec<&'a UnlinkedOpening>) {
     let mut taken = std::collections::HashSet::new();
+    let mut unmatched = Vec::new();
     for opening in openings {
         let wanted = opening.box_item.trim().to_lowercase();
         // Latest first.
@@ -1010,11 +1384,12 @@ fn accounted_for(
             .collect();
         let group =
             latest_group(&claimed, opening.count).or_else(|| latest_group(&pool, opening.count));
-        if let Some(group) = group {
-            taken.extend(group);
+        match group {
+            Some(group) => taken.extend(group),
+            None => unmatched.push(opening),
         }
     }
-    taken
+    (taken, unmatched)
 }
 
 fn decode(row: &Row, kind: ProposalKind) -> Option<Detail> {
@@ -1026,12 +1401,95 @@ fn decode(row: &Row, kind: ProposalKind) -> Option<Detail> {
         ProposalKind::ListingSold | ProposalKind::ListingReturned => {
             serde_json::from_str(&row.payload).ok().map(Detail::Listing)
         }
+        ProposalKind::Purchase => serde_json::from_str(&row.payload)
+            .ok()
+            .map(Detail::Purchase),
+        ProposalKind::Arrival => serde_json::from_str(&row.payload).ok().map(Detail::Arrival),
     }
+}
+
+/// The span of readings each opening proposal was seen across, whatever
+/// became of it: the reading before its first step, and its own.
+fn opening_spans(conn: &rusqlite::Connection) -> Result<Vec<(i64, i64, i64)>, AccountError> {
+    let mut stmt = conn
+        .prepare("SELECT id, prev_reading_id, reading_id FROM account_proposals WHERE kind = ?1")?;
+    let spans = stmt
+        .query_map([ProposalKind::Opening.as_str()], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(spans)
+}
+
+/// Whether the span of readings `(prev, reading)` lies strictly inside
+/// `(from, to)`.
+fn strictly_inside(prev: i64, reading: i64, from: i64, to: i64) -> bool {
+    from <= prev && to >= reading && (from < prev || to > reading)
+}
+
+/// Whether an opening read whole across a wider span of readings took the
+/// place of the proposal `(id, prev, reading)`, whatever became of it.
+fn spanned_by_a_wider(spans: &[(i64, i64, i64)], id: i64, prev: i64, reading: i64) -> bool {
+    spans
+        .iter()
+        .any(|&(other, from, to)| other != id && strictly_inside(prev, reading, from, to))
+}
+
+/// Whether the proposal `(id, prev, reading)` spans any narrower one: an
+/// opening read whole.
+fn spans_a_narrower(spans: &[(i64, i64, i64)], id: i64, prev: i64, reading: i64) -> bool {
+    spans
+        .iter()
+        .any(|&(other, from, to)| other != id && strictly_inside(from, to, prev, reading))
+}
+
+/// Whether an opening seen from `from` may hold one of `parts`, openings
+/// recorded another way that no group accounts for: one of its box,
+/// recorded since it began.
+fn may_hold_a_part(detail: &Detail, from: f64, parts: &[&UnlinkedOpening]) -> bool {
+    let Detail::Opening(opening) = detail else {
+        return false;
+    };
+    let [only] = opening.boxes.as_slice() else {
+        return false;
+    };
+    let wanted = only.name.trim().to_lowercase();
+    parts
+        .iter()
+        .any(|part| part.box_item.trim().to_lowercase() == wanted && from <= part.created_at)
+}
+
+/// The open opening proposals as the accounting below weighs them: each
+/// with a single kind of box.
+fn candidates_of<'a>(
+    open: impl Iterator<Item = &'a (Row, ProposalKind, Detail)>,
+) -> Vec<Candidate> {
+    open.filter_map(|(row, _, detail)| match detail {
+        Detail::Opening(opening) => match opening.boxes.as_slice() {
+            [only] => Some(Candidate {
+                id: row.id,
+                reading: row.reading,
+                prev: row.prev,
+                from: row.from,
+                box_item: only.name.clone(),
+                count: only.count,
+                claimed_at: row.claimed_at,
+            }),
+            _ => None,
+        },
+        Detail::Listing(_) | Detail::Purchase(_) | Detail::Arrival(_) => None,
+    })
+    .collect()
 }
 
 /// Every open proposal, the latest seen first, with whether each is
 /// claimed. Open: a pending opening, or a recorded one whose opening was
-/// taken back, unless an opening recorded another way accounts for it; a
+/// taken back, unless an opening recorded another way accounts for it or
+/// an opening read whole across a wider span took its place. An opening of
+/// its box recorded another way since that span began, which no group
+/// accounts for, may be a part of it: such an opening read whole gives way
+/// to the steps it spans (the narrowest proposals inside it), so a part
+/// recorded by hand is never offered again; a
 /// listing's proposal exactly while its listing is still on auction (a
 /// listing resolved by hand settles it, and a sale reverted opens it
 /// again).
@@ -1058,18 +1516,26 @@ fn open_proposals(conn: &rusqlite::Connection) -> Result<Vec<(Proposal, bool)>, 
         let Some(detail) = decode(&row, kind) else {
             continue;
         };
-        let is_open = match (kind, decision, &detail) {
-            (_, Decision::Dismissed, _) => false,
-            (ProposalKind::Opening, _, Detail::Listing(_))
-            | (ProposalKind::ListingSold | ProposalKind::ListingReturned, _, Detail::Opening(_)) => {
-                false
-            }
-            (ProposalKind::Opening, Decision::Pending, _) => true,
-            (ProposalKind::Opening, Decision::Recorded, _) => match &row.record {
+        let is_open = match (kind, decision) {
+            _ if !detail.is_of(kind) => false,
+            (_, Decision::Dismissed) => false,
+            (
+                ProposalKind::Opening | ProposalKind::Purchase | ProposalKind::Arrival,
+                Decision::Pending,
+            ) => true,
+            (ProposalKind::Opening, Decision::Recorded) => match &row.record {
                 Some(record) => !opening_stands(conn, record)?,
                 None => true,
             },
-            (ProposalKind::ListingSold | ProposalKind::ListingReturned, _, _) => {
+            (ProposalKind::Purchase, Decision::Recorded) => match &row.record {
+                Some(record) => !purchase_stands(conn, record)?,
+                None => true,
+            },
+            (ProposalKind::Arrival, Decision::Recorded) => match &row.record {
+                Some(record) => !arrival_record_stands(conn, record)?,
+                None => true,
+            },
+            (ProposalKind::ListingSold | ProposalKind::ListingReturned, _) => {
                 listing_status(conn, &row.subject)?.as_deref() == Some("pending")
             }
         };
@@ -1077,32 +1543,64 @@ fn open_proposals(conn: &rusqlite::Connection) -> Result<Vec<(Proposal, bool)>, 
             open.push((row, kind, detail));
         }
     }
-    let candidates: Vec<Candidate> = open
+    let spans = if open
         .iter()
-        .filter_map(|(row, _, detail)| match detail {
-            Detail::Opening(opening) => match opening.boxes.as_slice() {
-                [only] => Some(Candidate {
-                    id: row.id,
-                    reading: row.reading,
-                    prev: row.prev,
-                    from: row.from,
-                    box_item: only.name.clone(),
-                    count: only.count,
-                    claimed_at: row.claimed_at,
-                }),
-                _ => None,
-            },
-            Detail::Listing(_) => None,
+        .any(|(_, kind, _)| *kind == ProposalKind::Opening)
+    {
+        opening_spans(conn)?
+    } else {
+        Vec::new()
+    };
+    // Shown: every open proposal no opening read whole has taken the place of.
+    let mut shown: Vec<bool> = open
+        .iter()
+        .map(|(row, kind, _)| {
+            *kind != ProposalKind::Opening
+                || !spanned_by_a_wider(&spans, row.id, row.prev, row.reading)
         })
         .collect();
-    let accounted = if candidates.is_empty() {
-        std::collections::HashSet::new()
+    let candidates = candidates_of(open.iter().zip(&shown).filter(|(_, s)| **s).map(|(o, _)| o));
+    let unlinked = if candidates.is_empty() {
+        Vec::new()
     } else {
-        accounted_for(&unlinked_openings(conn)?, &candidates)
+        unlinked_openings(conn)?
     };
+    let (mut accounted, unmatched) = accounted_for(&unlinked, &candidates);
+    if !unmatched.is_empty() {
+        // An opening read whole that one of them may be a part of gives way
+        // to the narrowest proposals inside it.
+        let wholes: Vec<(i64, i64)> = open
+            .iter()
+            .zip(&shown)
+            .filter(|((row, _, detail), shown)| {
+                **shown
+                    && spans_a_narrower(&spans, row.id, row.prev, row.reading)
+                    && may_hold_a_part(detail, row.from, &unmatched)
+            })
+            .map(|((row, _, _), _)| (row.prev, row.reading))
+            .collect();
+        if !wholes.is_empty() {
+            for ((row, kind, _), shown) in open.iter().zip(shown.iter_mut()) {
+                if *kind != ProposalKind::Opening {
+                    continue;
+                }
+                let inside = wholes
+                    .iter()
+                    .any(|&(from, to)| from <= row.prev && row.reading <= to);
+                if inside {
+                    *shown = !spans_a_narrower(&spans, row.id, row.prev, row.reading);
+                }
+            }
+            let candidates =
+                candidates_of(open.iter().zip(&shown).filter(|(_, s)| **s).map(|(o, _)| o));
+            accounted = accounted_for(&unlinked, &candidates).0;
+        }
+    }
     Ok(open
         .into_iter()
-        .filter(|(row, _, _)| !accounted.contains(&row.id))
+        .zip(shown)
+        .filter(|((row, _, _), shown)| *shown && !accounted.contains(&row.id))
+        .map(|(open, _)| open)
         .map(|(row, kind, detail)| {
             (
                 Proposal {
@@ -1201,10 +1699,16 @@ pub fn claim(
         let retaken = retake.contains(&ProposalId(row.id));
         match open.iter().find(|(proposal, _)| proposal.id.0 == row.id) {
             None => return Ok(Decided::Refused("that proposal is no longer open")),
-            Some((_, true)) if !retaken => {
-                return Ok(Decided::Refused(
-                    "that proposal may already be recorded; check your openings first",
-                ))
+            Some((proposal, true)) if !retaken => {
+                return Ok(Decided::Refused(match proposal.kind {
+                    ProposalKind::Purchase => {
+                        "that purchase may already be recorded; check your assets first"
+                    }
+                    ProposalKind::Arrival => {
+                        "that arrival may already be recorded; check your assets and stock first"
+                    }
+                    _ => "that proposal may already be recorded; check your openings first",
+                }))
             }
             Some(_) => {}
         }
@@ -1254,6 +1758,8 @@ fn record_fits(
         ProposalKind::ListingReturned => {
             record == row.subject && listing_status(conn, record)?.as_deref() == Some("expired")
         }
+        ProposalKind::Purchase => purchase_stands(conn, record)?,
+        ProposalKind::Arrival => arrival_record_stands(conn, record)?,
     })
 }
 
@@ -1294,9 +1800,15 @@ pub fn link(
                 "that record does not stand as the outcome the proposal is of",
             ));
         }
-        if decision == Decision::Recorded && kind == ProposalKind::Opening {
+        if decision == Decision::Recorded {
             if let Some(earlier) = &row.record {
-                if opening_stands(&tx, earlier)? {
+                let stands = match kind {
+                    ProposalKind::Opening => opening_stands(&tx, earlier)?,
+                    ProposalKind::Purchase => purchase_stands(&tx, earlier)?,
+                    ProposalKind::Arrival => arrival_record_stands(&tx, earlier)?,
+                    ProposalKind::ListingSold | ProposalKind::ListingReturned => false,
+                };
+                if stands {
                     return Ok(Decided::Refused("that proposal is already recorded"));
                 }
             }
@@ -1330,6 +1842,8 @@ pub fn dismiss(
         Some(Decision::Recorded) => {
             let stands = match (ProposalKind::parse(&row.kind), &row.record) {
                 (Some(ProposalKind::Opening), Some(record)) => opening_stands(&tx, record)?,
+                (Some(ProposalKind::Purchase), Some(record)) => purchase_stands(&tx, record)?,
+                (Some(ProposalKind::Arrival), Some(record)) => arrival_record_stands(&tx, record)?,
                 (Some(ProposalKind::ListingSold | ProposalKind::ListingReturned), _) => {
                     listing_status(&tx, &row.subject)?.as_deref() != Some("pending")
                 }
@@ -1346,10 +1860,277 @@ pub fn dismiss(
             ))
         }
     }
+    // Stock of unknown origin recorded from it stands though it was never
+    // marked recorded: that is taken back, or the arrival marked, first.
+    if ProposalKind::parse(&row.kind) == Some(ProposalKind::Arrival) {
+        if let Some(standing) = standing_unknown_origin_of(&tx, row.id)? {
+            if row.record.as_deref() != Some(standing.as_str()) {
+                return Ok(Decided::Refused(
+                    "stock of unknown origin recorded from it still stands; take that back, \
+                     or mark the arrival recorded, first",
+                ));
+            }
+        }
+    }
+    // A recording of it was begun: it is finished, or released, first.
+    if row.claimed_at.is_some() {
+        return Ok(Decided::Refused(
+            "that proposal is being recorded; finish or release that first",
+        ));
+    }
     tx.execute(
         "UPDATE account_proposals SET status = ?1, decided_at = ?2, claimed_at = NULL \
          WHERE id = ?3",
         rusqlite::params![Decision::Dismissed.as_str(), now, id.0],
+    )?;
+    tx.commit()?;
+    Ok(Decided::Done)
+}
+
+// ── Arrivals in a tracked session ───────────────────────────────────
+
+/// An arrival a session's minutes found that nothing the app recorded
+/// explains, with the step it was seen in.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrivalSeen {
+    /// The later reading of the step, and the one before it.
+    pub reading: ReadingId,
+    pub prev_reading: ReadingId,
+    pub between: Span,
+    pub arrival: ArrivalProposal,
+}
+
+/// Why an arrival carries no proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotProposed {
+    /// Its step reaches back to readings stored before the app recognised
+    /// steps: history, never offered.
+    BeforeRecognition,
+    /// Its step lies wholly outside the session: what arrived then is the
+    /// purchase recogniser's to read, not the session's.
+    OutsideSession,
+    /// The last step of a running session: what arrives in it may still be
+    /// explained by what the chat log records next.
+    Settling,
+    /// Found on this read, and stored as a proposal as the read finishes.
+    Awaiting,
+}
+
+/// What an arrival was recorded as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordedAs {
+    /// An asset purchase, by the purchase's id.
+    Purchase,
+    /// Stock of unknown origin, by its own id.
+    UnknownOrigin,
+}
+
+/// What became of an arrival's proposal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArrivalDecision {
+    NotProposed(NotProposed),
+    /// Waiting for the player: pending, or recorded as something since
+    /// taken back. `possibly_recorded` when a recording of it was begun and
+    /// never linked.
+    Open {
+        proposal: ProposalId,
+        possibly_recorded: bool,
+        /// Stock of unknown origin recorded from it that stands though the
+        /// arrival was never marked recorded: what its undo names.
+        unlinked_record: Option<String>,
+    },
+    /// Recorded, and the record stands.
+    Recorded {
+        proposal: ProposalId,
+        record_id: String,
+        recorded_as: RecordedAs,
+        /// For a purchase, the asset it bought into.
+        asset_name: Option<String>,
+    },
+    /// The player said to leave it: it is not offered again unless they
+    /// take that back.
+    Ignored {
+        proposal: ProposalId,
+    },
+}
+
+/// An arrival proposal stored for a session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredArrival {
+    pub id: ProposalId,
+    /// The later reading of its step.
+    pub reading: ReadingId,
+    /// The item's name.
+    pub subject: String,
+    pub decision: ArrivalDecision,
+    /// Pending and unclaimed: withdrawn when its flag is gone.
+    pub withdrawable: bool,
+}
+
+/// Store arrivals of the session `session_id` as pending proposals, one for
+/// each step and item (one stored already is left as it is, whatever was
+/// decided of it), and withdraw the pending, unclaimed arrival proposals
+/// among `withdraw` whose flag is gone. One short write. Returns how many
+/// proposals were added or withdrawn.
+pub fn sync_arrivals(
+    conn: &mut rusqlite::Connection,
+    session_id: &str,
+    seen: &[ArrivalSeen],
+    withdraw: &[ProposalId],
+    now: f64,
+) -> Result<usize, AccountError> {
+    let tx = conn.transaction()?;
+    let mut changed = 0;
+    for arrival in seen {
+        changed += tx.execute(
+            "INSERT INTO account_proposals \
+                 (kind, reading_id, prev_reading_id, seen_from, seen_to, session_id, \
+                  subject, payload_version, payload_json, status, detected_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, \
+                     (SELECT id FROM tracking_sessions WHERE id = ?6), \
+                     ?7, ?8, ?9, ?10, ?11) \
+             ON CONFLICT (kind, reading_id, subject) DO NOTHING",
+            rusqlite::params![
+                ProposalKind::Arrival.as_str(),
+                arrival.reading.0,
+                arrival.prev_reading.0,
+                arrival.between.from,
+                arrival.between.to,
+                session_id,
+                arrival.arrival.key.name,
+                PAYLOAD_VERSION,
+                payload(&arrival.arrival)?,
+                Decision::Pending.as_str(),
+                now,
+            ],
+        )?;
+    }
+    for id in withdraw {
+        changed += tx.execute(
+            "DELETE FROM account_proposals \
+             WHERE id = ?1 AND kind = ?2 AND status = ?3 AND claimed_at IS NULL",
+            rusqlite::params![
+                id.0,
+                ProposalKind::Arrival.as_str(),
+                Decision::Pending.as_str()
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(changed)
+}
+
+/// Every arrival proposal stored for the session `session_id`, with what
+/// became of it. A row of an unknown decision is passed over.
+pub fn session_arrivals(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Vec<StoredArrival>, AccountError> {
+    let rows = {
+        let mut stmt = conn.prepare(
+            "SELECT id, reading_id, subject, status, record_id, claimed_at \
+             FROM account_proposals WHERE kind = ?1 AND session_id = ?2",
+        )?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![ProposalKind::Arrival.as_str(), session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<f64>>(5)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    let mut stored = Vec::with_capacity(rows.len());
+    for (id, reading, subject, status, record, claimed_at) in rows {
+        let proposal = ProposalId(id);
+        let decision = match (Decision::parse(&status), record) {
+            (Some(Decision::Dismissed), _) => ArrivalDecision::Ignored { proposal },
+            (Some(Decision::Recorded), Some(record)) if purchase_stands(conn, &record)? => {
+                ArrivalDecision::Recorded {
+                    proposal,
+                    asset_name: purchased_asset_name(conn, &record)?,
+                    record_id: record,
+                    recorded_as: RecordedAs::Purchase,
+                }
+            }
+            (Some(Decision::Recorded), Some(record)) if unknown_origin_stands(conn, &record)? => {
+                ArrivalDecision::Recorded {
+                    proposal,
+                    record_id: record,
+                    recorded_as: RecordedAs::UnknownOrigin,
+                    asset_name: None,
+                }
+            }
+            (Some(Decision::Recorded | Decision::Pending), _) => ArrivalDecision::Open {
+                proposal,
+                possibly_recorded: claimed_at.is_some(),
+                unlinked_record: standing_unknown_origin_of(conn, id)?,
+            },
+            (None, _) => continue,
+        };
+        stored.push(StoredArrival {
+            id: proposal,
+            reading: ReadingId(reading),
+            subject,
+            withdrawable: Decision::parse(&status) == Some(Decision::Pending)
+                && claimed_at.is_none(),
+            decision,
+        });
+    }
+    Ok(stored)
+}
+
+/// An arrival proposal that is open, for recording it as stock of unknown
+/// origin: what to record, and when its step ended.
+pub fn open_arrival(
+    conn: &rusqlite::Connection,
+    id: ProposalId,
+) -> Result<Option<(ArrivalProposal, f64)>, AccountError> {
+    Ok(open_proposals(conn)?
+        .into_iter()
+        .find(|(proposal, _)| proposal.id == id)
+        .and_then(|(proposal, _)| match proposal.detail {
+            Detail::Arrival(arrival) => Some((arrival, proposal.between.to)),
+            _ => None,
+        }))
+}
+
+/// Offer a dismissed arrival again: the player takes back having said to
+/// leave it. Pending again, as it was first proposed. Restoring one that
+/// is not dismissed changes nothing; only an arrival is restored so.
+pub fn restore_arrival(
+    conn: &mut rusqlite::Connection,
+    id: ProposalId,
+) -> Result<Decided, AccountError> {
+    let tx = conn.transaction()?;
+    let Some(row) = stored_row(&tx, id)? else {
+        return Ok(Decided::NotFound);
+    };
+    if ProposalKind::parse(&row.kind) != Some(ProposalKind::Arrival) {
+        return Ok(Decided::Refused("only an arrival is offered again so"));
+    }
+    match Decision::parse(&row.decision) {
+        Some(Decision::Dismissed) => {}
+        Some(Decision::Pending | Decision::Recorded) => return Ok(Decided::Done),
+        None => {
+            return Ok(Decided::Refused(
+                "that proposal is not one this version reads",
+            ))
+        }
+    }
+    tx.execute(
+        "UPDATE account_proposals \
+         SET status = ?1, decided_at = NULL, record_id = NULL, claimed_at = NULL \
+         WHERE id = ?2",
+        rusqlite::params![Decision::Pending.as_str(), id.0],
     )?;
     tx.commit()?;
     Ok(Decided::Done)

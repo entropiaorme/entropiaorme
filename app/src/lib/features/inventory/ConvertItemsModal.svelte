@@ -14,6 +14,7 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
 	import { todayDate } from '$lib/utils/format';
+	import AccountRecordHint from './AccountRecordHint.svelte';
 	import ConversionItemField from './ConversionItemField.svelte';
 	import HeldAmountField from './HeldAmountField.svelte';
 	import { type AmountMode, heldInMode } from './heldAmount';
@@ -168,6 +169,7 @@
 								held={heldQuantity(line, items)}
 								placeholder={kind === 'asset' ? roundedQuantity(heldQuantity(line, items)) : null}
 								subject={`of ${line.itemName || 'item'}`}
+								describedby={`conversion-input-${line.id}-account`}
 							/>
 						{:else if kind !== 'asset'}
 							<Input
@@ -285,6 +287,15 @@
 							<span>{roundedQuantity(excess)} beyond what is tracked won't credit an activity.</span>
 						{/if}
 					</div>
+					{#if kind === 'held' || kind === 'asset'}
+						<!-- Only what is held: the readings record conversions of held
+							stock alone, so a typed name never asks. -->
+						<AccountRecordHint
+							kind="conversion"
+							itemName={line.itemName}
+							id={`conversion-input-${line.id}-account`}
+						/>
+					{/if}
 				</div>
 			{/each}
 

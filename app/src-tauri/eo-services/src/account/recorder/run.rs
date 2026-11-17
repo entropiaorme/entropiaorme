@@ -1,7 +1,8 @@
 //! A strongbox run read from the account, and every stored reading
 //! examined for what it proposes.
 //!
-//! Outside a tracked session nothing reads the account, so the strongbox
+//! Outside a tracked session the account is read rarely, every few minutes
+//! at most, or not at all (see [`super::ReadingMode`]), so the strongbox
 //! view asks for readings of its own. When a run begins it needs a reading
 //! from before the boxes are opened: the latest stored reading when it was
 //! taken inside the floor, otherwise one taken at once. While the run is
@@ -226,7 +227,13 @@ impl Actor {
 
     /// Examine a reading just stored, through the one examination pass. It
     /// is already stored: a failure here is logged and never fails it.
-    pub(super) fn start_examine(&mut self, reading: ReadingId, taken_at: f64, started: Instant) {
+    pub(super) fn start_examine(
+        &mut self,
+        reading: ReadingId,
+        taken_at: f64,
+        started: Instant,
+        idle: bool,
+    ) {
         let db = self.db.clone();
         let game_data = self.game_data.clone();
         let now = self.now_epoch();
@@ -237,6 +244,7 @@ impl Actor {
             reading,
             taken_at,
             started,
+            idle,
             task,
         });
     }
@@ -246,6 +254,7 @@ impl Actor {
         reading: ReadingId,
         taken_at: f64,
         started: Instant,
+        idle: bool,
         examined: Result<Result<Option<Examined>, AccountError>, JoinError>,
     ) {
         let readable = match examined {
@@ -268,6 +277,11 @@ impl Actor {
         };
         // A run is never told nothing was opened when its step could not
         // be read: the reading stands, and the run hears it was unreadable.
+        // One taken while idle tells the run only of a reading it can use;
+        // otherwise the run takes its own.
+        if idle && !readable {
+            return;
+        }
         self.answer_waiters(
             started,
             if readable {

@@ -23,6 +23,8 @@
 		expectedEconomics,
 		realisedReturns,
 		realisedRate,
+		overhead,
+		unassignedOverhead = 0,
 		realisedDerived = [],
 		reward = null,
 		rewardScope = 'session',
@@ -39,7 +41,13 @@
 		expectedMarketRate?: number | null;
 		expectedEconomics?: ExpectedHuntingEconomics | null;
 		realisedReturns: number;
+		/** Realised returns over Cycled and the overhead. */
 		realisedRate: number;
+		/** The sessions' overhead shared to this scope: a cost beside Cycled,
+		 * which Realised Net takes off. */
+		overhead: number;
+		/** The part of `overhead` on no board activity: in Overall only. */
+		unassignedOverhead?: number;
 		/** The part of the realised figure that came through conversions. */
 		realisedDerived?: RealisedDerivedMarkup[];
 		/** Completion rewards aggregated over the scope's activities. Absent
@@ -98,11 +106,35 @@
 
 {#snippet realisedTip()}
 	<InfoTip label="What realised figures are">
-		<p class="text-xs font-semibold leading-relaxed text-text">Loot TT plus realised markup</p>
-		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
-			Only markup from a recorded sale or conversion, plus ledger entries pegged to a session. It
-			reads the same as TT Net until one of those realises a gain or loss.
+		<p class="text-xs font-semibold leading-relaxed text-text">
+			{reward ? 'Loot TT, confirmed reward TT and realised markup' : 'Loot TT plus realised markup'}
 		</p>
+		<p class="mt-1 text-xs leading-relaxed text-text-secondary" data-testid="realised-meaning">
+			{#if reward}
+				Confirmed reward TT, plus only markup from a recorded sale or conversion and ledger entries
+				pegged to a session. Realised Net also takes off the sessions' overhead, and the Realised
+				Rate sets the realised returns against Cycled and that overhead: until a sale or a pegged
+				entry realises a gain or loss, Realised Net reads as TT Net plus the confirmed reward TT,
+				less the overhead.
+			{:else}
+				Only markup from a recorded sale or conversion, plus ledger entries pegged to a session.
+				Realised Net also takes off the sessions' overhead, and the Realised Rate sets the realised
+				returns against Cycled and that overhead: until a sale or a pegged entry realises a gain or
+				loss, Realised Net reads as TT Net less the overhead.
+			{/if}
+		</p>
+		{#if overhead > 0}
+			<p class="mt-2 flex items-baseline justify-between gap-3 border-t border-border/50 pt-2 text-xs text-text-secondary" data-testid="realised-overhead">
+				<span>Overhead taken off</span>
+				<span class="shrink-0 tabular-nums text-text">{formatPed(overhead)} PED</span>
+			</p>
+			{#if unassignedOverhead > 0}
+				<p class="mt-1 text-xs text-text-tertiary" data-testid="realised-unassigned-overhead">
+					Of which {formatPed(unassignedOverhead)} PED came from sessions that cycled nothing on a
+					board activity, so it is counted here only.
+				</p>
+			{/if}
+		{/if}
 		{#if realisedDerived.length > 0}
 			<ul class="mt-2 space-y-1 border-t border-border/50 pt-2" data-testid="realised-derived">
 				{#each realisedDerived as row (row.originItem)}
@@ -128,7 +160,7 @@
 	ttRate={lootRate}
 	muNet={muProjectedReturns !== null ? muProjectedReturns - cycled : null}
 	{muRate}
-	realisedNet={realisedReturns - cycled}
+	realisedNet={realisedReturns - cycled - overhead}
 	{realisedRate}
 	muTip={estimateTip}
 	realisedTip={realisedTip}

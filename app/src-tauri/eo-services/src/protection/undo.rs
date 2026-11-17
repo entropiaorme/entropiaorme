@@ -12,7 +12,8 @@
 //! summaries and daily rollups repaired alongside. The stream's position
 //! then falls back to the previous live recording, so the next recording
 //! offers the same sessions again: correcting a recording is undoing it
-//! and recording it afresh.
+//! and recording it afresh. A limited reading measured against an account
+//! reading takes that baseline with it.
 
 use rusqlite::OptionalExtension;
 
@@ -136,6 +137,22 @@ fn undo_recording(
                 return Ok(Err(Refusal::NotLatest));
             }
             supersede_observation(tx, closing, now)?;
+            // A baseline taken from an account reading was kept only for
+            // this recording to stand on: it goes with it, and the set
+            // measures from its latest account reading again.
+            let opening_from_account: Option<i64> = tx
+                .query_row(
+                    "SELECT r.observation_id FROM protection_cost_windows w \
+                     JOIN protection_observation_readings r \
+                       ON r.observation_id = w.opening_observation_id \
+                     WHERE w.id = ?1",
+                    [window_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(opening) = opening_from_account {
+                supersede_observation(tx, opening, now)?;
+            }
         }
         _ => return Ok(Err(Refusal::NotLatest)),
     }

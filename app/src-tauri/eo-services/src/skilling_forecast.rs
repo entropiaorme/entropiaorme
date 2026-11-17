@@ -17,7 +17,10 @@
 //! markup from confirmed sales of its stock, expressed as a lift over the
 //! same definition's loot TT: it is what this activity's loot has actually
 //! returned above TT so far, never a market estimate, and it is absent
-//! (not zero) when nothing from the definition has sold.
+//! (not zero) when nothing from the definition has sold. A session's
+//! overhead (travel, field logistics, what the readings measured as used
+//! up that the app cannot place) is a cost beside Cycled, carried forward
+//! per PED cycled: it grows with the cycling, never with the loot.
 //!
 //! Beside the recorded loss stands an expected one: the same cycling with
 //! the loot Community Model v1 expects from the weapons the definition
@@ -68,6 +71,9 @@ pub struct ForecastSession {
     /// How that spend splits across the weapons fired, as each weapon's
     /// spend on the kills it made alone (shared kills carry no split).
     pub weapons: Vec<(String, f64)>,
+    /// What the session cost beyond performing its activity, beside
+    /// `cycled_ped` and never in it.
+    pub overhead_ped: f64,
 }
 
 /// What the forecast measures progress on: the per-level weight each
@@ -180,6 +186,8 @@ pub struct ForecastEvidence {
     pub pes: f64,
     /// Net markup realised from confirmed sales of this definition's stock.
     pub realised_markup: Option<f64>,
+    /// The sessions' overhead, beside their Cycled.
+    pub overhead_ped: f64,
 }
 
 impl ForecastEvidence {
@@ -206,7 +214,11 @@ pub struct SourceForecast {
     pub markup: Option<f64>,
     /// Cycled minus loot TT: the TT the forecast burns.
     pub tt_cost: f64,
-    /// The TT cost less realised markup; absent with the markup.
+    /// The overhead the forecast cycling carries, at the recorded overhead
+    /// per PED cycled.
+    pub overhead: f64,
+    /// The TT cost and the overhead, less realised markup; absent with the
+    /// markup.
     pub net_cost: Option<f64>,
     /// The TT cost under Community Model v1; absent when the model prices
     /// none of the definition's weapon spend.
@@ -465,6 +477,7 @@ fn forecast_source(
     let hours: f64 = group.iter().map(|s| s.hours).sum();
     let cycled: f64 = group.iter().map(|s| s.cycled_ped).sum();
     let loot: f64 = group.iter().map(|s| s.loot_tt).sum();
+    let overhead: f64 = group.iter().map(|s| s.overhead_ped).sum();
     let kills: u64 = group.iter().map(|s| s.kills).sum();
     let mut skill_pes: Vec<(String, f64)> = Vec::new();
     for session in group {
@@ -486,6 +499,7 @@ fn forecast_source(
         kills,
         pes: round_half_even(pes, 2),
         realised_markup: realised_markup.map(|markup| round_half_even(markup, 2)),
+        overhead_ped: round_half_even(overhead, 2),
     };
     let unanswered = |status: ForecastStatus| SourceForecast {
         evidence: evidence.clone(),
@@ -496,6 +510,7 @@ fn forecast_source(
         kills: None,
         markup: None,
         tt_cost: 0.0,
+        overhead: 0.0,
         net_cost: None,
         expected: None,
         skills: Vec::new(),
@@ -523,6 +538,8 @@ fn forecast_source(
     let forecast_loot = forecast_cycled * loot / cycled;
     let markup = evidence.markup_lift().map(|lift| forecast_loot * lift);
     let tt_cost = forecast_cycled - forecast_loot;
+    // Overhead rides the cycling: the recorded overhead per PED cycled.
+    let forecast_overhead = forecast_cycled * overhead / cycled;
     let expected = expected_loss(group, weapon_returns, cycled, forecast_cycled);
 
     let mut warnings = Vec::new();
@@ -548,7 +565,8 @@ fn forecast_source(
         kills: (kills > 0).then(|| (forecast_cycled * kills as f64 / cycled).round()),
         markup: markup.map(|value| round_half_even(value, 2)),
         tt_cost: round_half_even(tt_cost, 2),
-        net_cost: markup.map(|value| round_half_even(tt_cost - value, 2)),
+        overhead: round_half_even(forecast_overhead, 2),
+        net_cost: markup.map(|value| round_half_even(tt_cost + forecast_overhead - value, 2)),
         expected,
         skills,
         warnings,
@@ -600,6 +618,7 @@ fn ranked_cost(source: &SourceForecast) -> f64 {
     source
         .expected
         .map_or(source.tt_cost, |expected| expected.tt_cost)
+        + source.overhead
 }
 
 fn status_rank(status: ForecastStatus) -> u8 {
@@ -686,7 +705,7 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
         let mut stmt = conn.prepare(&format!(
             "SELECT s.definition_id, d.name, d.is_active, ss.duration_hours, ss.cycled_ped, \
                     ss.loot_tt, ss.regular_skill_ped_json, ss.kills, \
-                    COALESCE(ss.weapon_cost, 0), s.id \
+                    COALESCE(ss.weapon_cost, 0), s.id, ss.overhead_cost \
              FROM session_summaries ss \
              JOIN tracking_sessions s ON s.id = ss.session_id \
              JOIN session_definitions d ON d.id = s.definition_id \
@@ -709,6 +728,7 @@ pub async fn load_forecast_sessions(db: &Db) -> Result<Vec<ForecastSession>, DbE
                     weapons: weapons
                         .remove(&row.get::<_, String>(9)?)
                         .unwrap_or_default(),
+                    overhead_ped: row.get(10)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -738,7 +758,7 @@ pub async fn load_weapon_forecast_sessions(
             "SELECT s.definition_id, d.name, d.is_active, ss.duration_hours, \
                     COALESCE(ss.armour_cost, 0) + COALESCE(ss.heal_cost, 0) \
                       + COALESCE(ss.consumable_cost, 0) + COALESCE(ss.dangling_cost, 0), \
-                    s.started_at \
+                    s.started_at, ss.overhead_cost \
              FROM session_summaries ss \
              JOIN tracking_sessions s ON s.id = ss.session_id \
              JOIN session_definitions d ON d.id = s.definition_id \
@@ -759,10 +779,12 @@ pub async fn load_weapon_forecast_sessions(
                         row.get::<_, Option<f64>>(3)?.unwrap_or(0.0),
                         row.get::<_, f64>(4)?,
                         row.get::<_, f64>(5)?,
+                        row.get::<_, f64>(6)?,
                     ))
                 })
                 .optional()?;
-            let Some((definition_id, name, archived, duration, overhead, started_at)) = summary
+            let Some((definition_id, name, archived, duration, shared, started_at, overhead)) =
+                summary
             else {
                 continue;
             };
@@ -774,12 +796,15 @@ pub async fn load_weapon_forecast_sessions(
                     definition_name: name,
                     definition_archived: archived,
                     hours: duration * share,
-                    cycled_ped: cell.cycled_ped + overhead * share,
+                    cycled_ped: cell.cycled_ped + shared * share,
                     loot_tt: cell.loot_tt,
                     kills: cell.kills,
                     skill_pes: cell.pes,
                     weapon_ped: cell.cycled_ped,
                     weapons: vec![(cell.tool, cell.cycled_ped)],
+                    // The session's overhead, in the weapon's share of its
+                    // active time, as its own-grain costs are.
+                    overhead_ped: overhead * share,
                 },
             ));
         }
@@ -885,6 +910,7 @@ mod tests {
             skill_pes: skills.iter().map(|(n, p)| (n.to_string(), *p)).collect(),
             weapon_ped: 0.0,
             weapons: Vec::new(),
+            overhead_ped: 0.0,
         }
     }
 
@@ -1079,6 +1105,38 @@ mod tests {
         let markup = source.markup.unwrap();
         assert!((markup - source.loot_tt * 0.1).abs() < 0.011);
         assert!((source.net_cost.unwrap() - (source.tt_cost - markup)).abs() < 0.011);
+    }
+
+    #[test]
+    fn overhead_rides_the_cycling_into_the_net_cost_and_never_the_markup() {
+        let skill_levels = start();
+        let target = ForecastTarget::profession(&marksman(), &skill_levels);
+        // 10 PED of overhead over 200 PED cycled: 5 PEC per PED cycled.
+        let mut travelled = session(7, "Rifle work", 200.0, &[("Rifle", 5.0)]);
+        travelled.overhead_ped = 10.0;
+        let sold = skilling_forecast(
+            &skill_levels,
+            &target,
+            5.5,
+            &[travelled.clone()],
+            &[(7, 18.0)],
+            &[],
+        );
+        let source = &sold[0];
+        assert_eq!(source.evidence.overhead_ped, 10.0);
+        assert!((source.overhead - source.cycled_ped * 0.05).abs() < 0.011);
+        // The markup is the confirmed sales' alone; the overhead is a cost
+        // beside the TT burned.
+        let markup = source.markup.unwrap();
+        assert!((markup - source.loot_tt * 0.1).abs() < 0.011);
+        assert!(
+            (source.net_cost.unwrap() - (source.tt_cost + source.overhead - markup)).abs() < 0.011
+        );
+        // Nothing sold: no markup and no net cost, overhead or not.
+        let unsold = skilling_forecast(&skill_levels, &target, 5.5, &[travelled], &[], &[]);
+        assert_eq!(unsold[0].markup, None);
+        assert_eq!(unsold[0].net_cost, None);
+        assert!(unsold[0].overhead > 0.0);
     }
 
     #[test]

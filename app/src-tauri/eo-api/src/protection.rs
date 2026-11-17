@@ -7,7 +7,8 @@
 //! maps domain outcomes into the generated frontend contract.
 
 use eo_services::protection::{
-    CandidateSession as ServiceCandidate, ContextShare as ServiceContextShare,
+    BaselineSource as ServiceBaselineSource, CandidateSession as ServiceCandidate,
+    ConfirmedPiece as ServiceConfirmedPiece, ContextShare as ServiceContextShare,
     CostKind as ServiceCostKind, CostStatus as ServiceCostStatus,
     ObservationOutcome as ServiceObservationOutcome, ObservationSource as ServiceObservationSource,
     ProtectionCostAllocation as ServiceCostAllocation, ProtectionCostWindow as ServiceCostWindow,
@@ -15,7 +16,8 @@ use eo_services::protection::{
     ProtectionOverview as ServiceOverview, ProtectionSet as ServiceSet,
     ProtectionSetKind as ServiceSetKind, ProtectionStream as ServiceStream,
     RecordingCandidates as ServiceCandidates, RepairOutcome as ServiceRepairOutcome,
-    StreamBacklog as ServiceBacklog, UndoTarget as ServiceUndoTarget,
+    SetPieces as ServiceSetPieces, StreamBacklog as ServiceBacklog,
+    UndoTarget as ServiceUndoTarget,
 };
 use eo_services::repair_ocr::{TerminalReading, TerminalRefusal};
 use schemars::JsonSchema;
@@ -64,11 +66,41 @@ impl From<ProtectionObservationSource> for ServiceObservationSource {
     }
 }
 
-impl From<ServiceObservationSource> for ProtectionObservationSource {
+/// Where a stored reading of a limited set came from: the player's two
+/// ways of entering one, or the set's pieces in an account reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProtectionReadingSource {
+    Ocr,
+    Manual,
+    Account,
+}
+
+impl From<ServiceObservationSource> for ProtectionReadingSource {
     fn from(value: ServiceObservationSource) -> Self {
         match value {
             ServiceObservationSource::Ocr => Self::Ocr,
             ServiceObservationSource::Manual => Self::Manual,
+            ServiceObservationSource::Account => Self::Account,
+        }
+    }
+}
+
+/// Where a limited set's baseline comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ProtectionBaselineSource {
+    /// The set's own last Trade Terminal reading.
+    TradeTerminal,
+    /// The set's pieces in the latest account reading.
+    Account,
+}
+
+impl From<ServiceBaselineSource> for ProtectionBaselineSource {
+    fn from(value: ServiceBaselineSource) -> Self {
+        match value {
+            ServiceBaselineSource::TradeTerminal => Self::TradeTerminal,
+            ServiceBaselineSource::Account => Self::Account,
         }
     }
 }
@@ -125,7 +157,7 @@ pub struct ProtectionObservation {
     pub id: String,
     pub set_id: String,
     pub tt_value_ped: f64,
-    pub source: ProtectionObservationSource,
+    pub source: ProtectionReadingSource,
     pub raw_text: Nullable<String>,
     pub observed_at: f64,
     pub reset_reason: Nullable<String>,
@@ -169,6 +201,9 @@ pub struct ProtectionSet {
     pub basis_locked: bool,
     /// Play since the set's latest reading; empty before its first.
     pub backlog: ProtectionBacklog,
+    /// The item names confirmed as the set's pieces, which the account
+    /// readings bill the set by.
+    pub pieces: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -274,11 +309,51 @@ pub struct ProtectionRecordingCandidates {
     /// reading); absent before the first.
     pub since: Nullable<f64>,
     pub baseline_tt_ped: Nullable<f64>,
+    /// Where that baseline comes from.
+    pub baseline_source: Nullable<ProtectionBaselineSource>,
+    /// An account reading passed over as the set's baseline because it
+    /// does not hold every confirmed piece: when it was taken.
+    pub incomplete_account_reading_at: Nullable<f64>,
+    /// What the account readings already billed of what this recording
+    /// measures, in PED of TT, taken off before anything is spread: the
+    /// unlimited decay of measured sessions no repair has restored since,
+    /// or what a limited set's pieces lost in measured sessions since its
+    /// baseline.
+    pub billed_from_account_ped: f64,
+    /// How far a figure read from the account may stray: a PEC per piece.
+    pub account_tolerance_ped: f64,
+    /// Sessions since the previous recording whose armour the account
+    /// readings measured, left out of this recording.
+    pub measured_sessions: i64,
     /// Sessions with hits since the previous recording, oldest first.
     pub sessions: Vec<ProtectionCandidateSession>,
     /// Unlimited only: recent sessions from before the previous
     /// recording, which may be re-included. Oldest first.
     pub earlier: Vec<ProtectionCandidateSession>,
+}
+
+/// One item confirmed as a piece of a limited set.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionConfirmedPiece {
+    pub name: String,
+    pub confirmed_at: f64,
+}
+
+/// A limited set's pieces: those confirmed, and what the latest account
+/// reading suggests.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectionSetPieces {
+    pub set_id: String,
+    pub confirmed: Vec<ProtectionConfirmedPiece>,
+    /// Limited armour or plates in the latest account reading that the
+    /// set's name names, not yet confirmed.
+    pub suggested: Vec<String>,
+    /// The reading's other limited armour and plates no set in use holds.
+    pub others: Vec<String>,
+    /// When that reading was taken; absent before any.
+    pub reading_taken_at: Nullable<f64>,
 }
 
 /// What an undo takes back: the latest recording of one stream.
@@ -445,7 +520,17 @@ impl Api {
             .create_set(input.kind.into(), &input.name, input.markup_percent)
             .await
             .map_err(protection_error)?;
+        self.heal_measured_costs().await;
         self.protection_overview().await
+    }
+
+    /// A set's name places items in the account readings, and its markup
+    /// and pieces price them: once one changes, rebuild every measured
+    /// session's costs it left stale, when the account is attached.
+    async fn heal_measured_costs(&self) {
+        if let Some(account) = &self.account {
+            account.heal_costs().await;
+        }
     }
 
     pub async fn protection_set_update(
@@ -457,6 +542,7 @@ impl Api {
             .update_set(set_id, &input.name, input.markup_percent)
             .await
             .map_err(protection_error)?;
+        self.heal_measured_costs().await;
         self.protection_overview().await
     }
 
@@ -468,6 +554,7 @@ impl Api {
             .archive_set(set_id)
             .await
             .map_err(protection_error)?;
+        self.heal_measured_costs().await;
         self.protection_overview().await
     }
 
@@ -479,6 +566,7 @@ impl Api {
             .restore_set(set_id)
             .await
             .map_err(protection_error)?;
+        self.heal_measured_costs().await;
         self.protection_overview().await
     }
 
@@ -563,13 +651,42 @@ impl Api {
             .map_err(protection_error)
     }
 
+    /// A limited set's confirmed pieces, and the suggestions from the
+    /// latest account reading.
+    pub async fn protection_set_pieces(
+        &self,
+        set_id: i64,
+    ) -> Result<ProtectionSetPieces, ApiError> {
+        self.protection
+            .set_pieces(set_id)
+            .await
+            .map(Into::into)
+            .map_err(protection_error)
+    }
+
+    /// Name a limited set's pieces, then rebuild the costs of every session
+    /// the readings measured, which bill the set by them.
+    pub async fn protection_set_pieces_confirm(
+        &self,
+        set_id: i64,
+        names: Vec<String>,
+    ) -> Result<ProtectionSetPieces, ApiError> {
+        let pieces = self
+            .protection
+            .confirm_set_pieces(set_id, names)
+            .await
+            .map_err(protection_error)?;
+        self.heal_measured_costs().await;
+        Ok(pieces.into())
+    }
+
     /// Read the Trade Terminal's total off the game window.
     pub fn protection_trade_terminal_scan(&self) -> Result<TerminalReadResult, ApiError> {
         Ok(self.repair_ocr.scan_trade_terminal_value().into())
     }
 }
 
-fn protection_error(error: ProtectionError) -> ApiError {
+pub(crate) fn protection_error(error: ProtectionError) -> ApiError {
     match error {
         ProtectionError::Invalid(message) => ApiError::bad_request(message),
         ProtectionError::NotFound(message) => ApiError::not_found(message),
@@ -604,6 +721,26 @@ impl From<ServiceSet> for ProtectionSet {
             latest_observation: value.latest_observation.map(Into::into).into(),
             basis_locked: value.basis_locked,
             backlog: value.backlog.into(),
+            pieces: value.pieces,
+        }
+    }
+}
+
+impl From<ServiceSetPieces> for ProtectionSetPieces {
+    fn from(value: ServiceSetPieces) -> Self {
+        Self {
+            set_id: value.set_id.to_string(),
+            confirmed: value
+                .confirmed
+                .into_iter()
+                .map(|piece: ServiceConfirmedPiece| ProtectionConfirmedPiece {
+                    name: piece.name,
+                    confirmed_at: piece.confirmed_at,
+                })
+                .collect(),
+            suggested: value.suggested,
+            others: value.others,
+            reading_taken_at: value.reading_taken_at.into(),
         }
     }
 }
@@ -699,6 +836,11 @@ impl From<ServiceCandidates> for ProtectionRecordingCandidates {
             stream: value.stream.into(),
             since: value.since.into(),
             baseline_tt_ped: value.baseline_tt_ped.into(),
+            baseline_source: value.baseline_source.map(Into::into).into(),
+            incomplete_account_reading_at: value.incomplete_account_reading_at.into(),
+            billed_from_account_ped: value.billed_from_account_ped,
+            account_tolerance_ped: value.account_tolerance_ped,
+            measured_sessions: value.measured_sessions,
             sessions: value.sessions.into_iter().map(Into::into).collect(),
             earlier: value.earlier.into_iter().map(Into::into).collect(),
         }

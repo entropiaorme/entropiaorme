@@ -417,7 +417,7 @@
 				{@const tone = r.value === NO_DATA ? 'tone-faint' : r.color === 'text-text' ? '' : r.color}
 				<div class="stat">
 					<b>{def.shortLabel ?? def.label}{#if r.qualifier}<span> · {r.qualifier}</span>{/if}</b>
-					<em class={tone} title={r.incomplete}>
+					<em class={tone} title={[r.incomplete, r.note].filter(Boolean).join('. ') || undefined}>
 						{r.value}{#if r.incomplete}<sup aria-hidden="true">*</sup><span class="sr-only">, {r.incomplete}</span>{/if}
 					</em>
 				</div>

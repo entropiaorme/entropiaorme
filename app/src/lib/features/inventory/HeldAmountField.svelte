@@ -32,6 +32,7 @@
 		label,
 		subject,
 		variant = 'field',
+		describedby = undefined,
 		class: className = '',
 	}: {
 		/** The units entered; null while the field is empty. */
@@ -48,6 +49,9 @@
 		/** What the amount is of, for assistive technology ("to remove"). */
 		subject: string;
 		variant?: 'field' | 'inline';
+		/** The id of a line that says more about the amount (a reminder of
+		 * what the account recorded), for assistive technology. */
+		describedby?: string;
 		class?: string;
 	} = $props();
 
@@ -96,6 +100,7 @@
 			align="right"
 			placeholder={pedPlaceholder}
 			aria-label={ariaLabel}
+			aria-describedby={describedby}
 			bind:value={() => pedValue, setPed}
 		>
 			{#snippet suffix()}{@render unitMark(inline)}{/snippet}
@@ -108,6 +113,7 @@
 			align="right"
 			placeholder={placeholder !== null ? placeholder.toString() : '0'}
 			aria-label={ariaLabel}
+			aria-describedby={describedby}
 			bind:value={
 				() => units,
 				(next) => {

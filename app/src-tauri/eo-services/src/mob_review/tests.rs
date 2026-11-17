@@ -755,7 +755,7 @@ fn deleting_a_session_removes_its_detections() {
     );
     assert!(rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_traces") > 0);
     rig.runtime
-        .block_on(crate::tracking_reads::delete_session_impl(&rig.db, "s1"))
+        .block_on(crate::session_delete::delete_session_impl(&rig.db, "s1"))
         .unwrap();
     assert_eq!(
         rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_detections"),
@@ -1128,7 +1128,7 @@ fn deleting_a_session_removes_its_continuity_kills() {
     let rig = rig();
     hunt_with_continuity(&rig);
     rig.runtime
-        .block_on(crate::tracking_reads::delete_session_impl(&rig.db, "s1"))
+        .block_on(crate::session_delete::delete_session_impl(&rig.db, "s1"))
         .unwrap();
     assert_eq!(
         rig.scalar::<i64>("SELECT COUNT(*) FROM kill_mob_carried"),

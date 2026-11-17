@@ -380,6 +380,29 @@ describe('customisable stat pills', () => {
 		expect(netRender && screen.getByText(netRender.value)).toBeTruthy();
 	});
 
+	it('a cost figure says on hover where its costs come from, read from the account', () => {
+		overlayStats.current = [{ id: 'net' as StatId, enabled: true }];
+		const through = '2026-11-17T14:52:00+00:00';
+		const status = activeStatus({
+			cost: 10,
+			returns: 12.5,
+			overheadCost: 0.5,
+			costsMeasuredThrough: through,
+		});
+		render(OverlayReadout, { props: { data: liveData({ status: 'active' }), status } });
+		const value = screen.getByText('+2.00');
+		expect(value.getAttribute('title')).toMatch(
+			/^Costs from your account up to .+, tracked since$/,
+		);
+	});
+
+	it('a cost figure carries no such word when the account does not measure them', () => {
+		overlayStats.current = [{ id: 'net' as StatId, enabled: true }];
+		const status = activeStatus({ cost: 10, returns: 12.5 });
+		render(OverlayReadout, { props: { data: liveData({ status: 'active' }), status } });
+		expect(screen.getByText('+2.50').getAttribute('title')).toBeNull();
+	});
+
 	it('renders nothing when no overlay stat is enabled', () => {
 		overlayStats.current = [{ id: 'net' as StatId, enabled: false }];
 		const netDef = getStatDef('net' as StatId);

@@ -17,14 +17,19 @@ use super::{GLOBAL_CORRELATION_WINDOW_SECONDS, LOOT_DEDUP_WINDOW_SECONDS};
 
 /// Where one loot group lands: a mob kill, or a harvesting swing.
 enum RoutedLoot {
-    /// A kill, its shot evidence, and the answer kept for the review when it
-    /// was pinned to a creature on no list.
+    /// A kill, its shot evidence, the enhancer breaks whose cost it carries,
+    /// and the answer kept for the review when it was pinned to a creature
+    /// on no list.
     Kill(
         Kill,
         Vec<super::weapon_evidence::ShotEvidence>,
+        Vec<crate::enhancer_breaks::EnhancerBreak>,
         Option<Box<super::detection::KillDetection>>,
     ),
     Harvest(HarvestEvent),
+    /// Nothing to record: Shrapnel returned for enhancer breaks, held for
+    /// the next kill.
+    Returned,
 }
 
 enum ReconciledLootSource {
@@ -247,7 +252,15 @@ impl TrackerActor {
             // Classification reads the RAW group, not the blacklist-
             // filtered items: a user filter must trim what gets
             // recorded, never flip what kind of event happened.
-            if is_harvest_loot_group(&group.items) {
+            // A tick holding nothing but Shrapnel returned for enhancer
+            // breaks is no kill: the return waits, beside the breaks it came
+            // back for, for the kill their shots go towards.
+            let only_returns =
+                !group.items.is_empty() && group.items.iter().all(|item| item.is_enhancer_shrapnel);
+            if only_returns {
+                active.accumulator.returns.extend(items);
+                (RoutedLoot::Returned, Vec::new(), Vec::new())
+            } else if is_harvest_loot_group(&group.items) {
                 let (tool_name, cost) = Self::guarded_harvest_swing_cost(
                     active,
                     harvest_guardrail.as_ref(),
@@ -342,6 +355,10 @@ impl TrackerActor {
                 // was in force at the moment the kill settled.
                 let context_id = active.intervals.context_id();
                 let accumulator = &mut active.accumulator;
+                // Returns that arrived alone are kept among this kill's
+                // lines; tagged, they are never its loot.
+                let mut items = items;
+                items.append(&mut accumulator.returns);
                 let kill = Kill {
                     id: uuid::Uuid::new_v4().to_string(),
                     loot_source_id: group.source_id.clone(),
@@ -357,7 +374,7 @@ impl TrackerActor {
                     damage_taken: accumulator.damage_taken,
                     critical_hits: accumulator.critical_hits,
                     cost_ped: accumulator.weapon_cost(),
-                    enhancer_cost: accumulator.enhancer_cost,
+                    enhancer_cost: accumulator.enhancer_cost(),
                     loot_total_ped: filtered_total_ped,
                     loot_items: items,
                     tool_stats: std::mem::take(&mut accumulator.tool_stats),
@@ -369,6 +386,11 @@ impl TrackerActor {
 
                 // The kill's stored weapon evidence is written with it.
                 let evidence = std::mem::take(&mut accumulator.evidence);
+                // Its shots' times stay in memory, beside it.
+                let shot_times = std::mem::take(&mut accumulator.shot_times);
+                // The breaks among its shots are kept with it, as its
+                // enhancer cost is.
+                let breaks = std::mem::take(&mut accumulator.breaks);
                 // Reset accumulator for next kill (tool_stats moved into
                 // the kill above, exactly the original's shallow copy
                 // followed by a fresh dict).
@@ -383,6 +405,7 @@ impl TrackerActor {
                 // Append the finalised kill to the session; the list tail
                 // doubles as the original's `_last_kill` alias.
                 active.session.kills.push(kill.clone());
+                active.kill_shot_times.insert(kill.id.clone(), shot_times);
                 let carried = unlisted_pin.zip(pinned_mob).map(|((key, without), mob)| {
                     Box::new(super::detection::KillDetection::pinned_unlisted(
                         &kill.id,
@@ -393,7 +416,7 @@ impl TrackerActor {
                     ))
                 });
                 (
-                    RoutedLoot::Kill(kill, evidence, carried),
+                    RoutedLoot::Kill(kill, evidence, breaks, carried),
                     Vec::new(),
                     Vec::new(),
                 )
@@ -403,8 +426,8 @@ impl TrackerActor {
         // The routed record is a detached value by here; the borrow of
         // the live session ended with the block above.
         match routed {
-            RoutedLoot::Kill(kill, evidence, carried) => {
-                self.persist_kill(&kill, evidence, carried).await;
+            RoutedLoot::Kill(kill, evidence, breaks, carried) => {
+                self.persist_kill(&kill, evidence, breaks, carried).await;
                 // Only a kill recorded while the screen was read waits for
                 // its answer: one recorded otherwise took the typed creature
                 // as the player's word.
@@ -414,6 +437,7 @@ impl TrackerActor {
                         .await;
                 }
             }
+            RoutedLoot::Returned => {}
             RoutedLoot::Harvest(harvest) => {
                 self.persist_harvest(&harvest).await;
                 if !restamps.is_empty() {

@@ -13,10 +13,11 @@ use std::time::Duration;
 use chrono::NaiveDate;
 use serde_json::Value;
 
+use super::costs::Status;
 use super::measure::{CoverageLevel, Edge};
 use super::recorder::{
     AccountRecorder, ConnectOutcome, ConnectionFlag, ConnectionState, ConnectionStatus, MemoryFlag,
-    RecorderParts,
+    ReadingMode, RecorderParts,
 };
 use super::scripted::{
     responses, PacedClock, ScriptedFault, ScriptedRead, ScriptedReading, ScriptedRow, ScriptedSite,
@@ -79,6 +80,28 @@ async fn rig_seeded(
     plan: &[Planned<'_>],
     seed: impl FnOnce(&mut rusqlite::Connection) + Send + 'static,
 ) -> Rig {
+    rig_built(
+        ReadingMode::OnDemand,
+        readings,
+        connected_before,
+        plan,
+        seed,
+    )
+    .await
+}
+
+/// [`rig`], reading as the installed app does: always while connected.
+async fn always_rig(readings: Vec<(Value, Value)>, plan: &[Planned<'_>]) -> Rig {
+    rig_built(ReadingMode::Always, readings, false, plan, |_| {}).await
+}
+
+async fn rig_built(
+    mode: ReadingMode,
+    readings: Vec<(Value, Value)>,
+    connected_before: bool,
+    plan: &[Planned<'_>],
+    seed: impl FnOnce(&mut rusqlite::Connection) + Send + 'static,
+) -> Rig {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open(&dir.path().join("account.db")).await.unwrap();
     let clock = Arc::new(PacedClock::new(
@@ -124,9 +147,11 @@ async fn rig_seeded(
             site: site.clone(),
             flag: flag.clone(),
             game_data: None,
+            chat_log: None,
             changed: Some(Arc::new(move || {
                 counted.fetch_add(1, Ordering::SeqCst);
             })),
+            mode,
         },
         &tokio::runtime::Handle::current(),
     );
@@ -172,6 +197,21 @@ impl Rig {
             .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
                 session_id: id.to_string(),
             }));
+    }
+
+    /// Start a session planned as not yet running the way the tracker
+    /// does: its row is marked running, then the start is published.
+    async fn start_running(&self, id: &str) {
+        let marked = id.to_string();
+        write(&self.db, move |conn| {
+            conn.execute(
+                "UPDATE tracking_sessions SET is_active = 1 WHERE id = ?1",
+                [marked],
+            )?;
+            Ok(())
+        })
+        .await;
+        self.start(id);
     }
 
     fn stop(&self, id: &str) {
@@ -393,6 +433,176 @@ async fn a_session_is_read_at_once_then_every_minute_then_closed_and_sealed() {
     // Every reading tagged with the session: its closing readings too.
     assert_eq!(measure.coverage.reading_count, 6);
     assert_eq!(calls(&rig), 2 + 6 * 2);
+    // Its costs were stored with the seal, and are what a read serves.
+    let costs = rig
+        .recorder
+        .session_costs("hunt".into())
+        .await
+        .unwrap()
+        .expect("a known session");
+    assert_eq!(costs.status, Status::Measured);
+    assert_eq!(stored_costs(&rig).await, 1);
+}
+
+/// How many sessions have stored costs.
+async fn stored_costs(rig: &Rig) -> i64 {
+    read(&rig.db, |conn| {
+        Ok(
+            conn.query_row("SELECT COUNT(*) FROM account_session_costs", [], |row| {
+                row.get(0)
+            })?,
+        )
+    })
+    .await
+}
+
+/// What was published of a running session's costs so far: when they run
+/// to, in seconds from the start, and the weapon's measured amount.
+async fn published(rig: &Rig, session: &str) -> Option<(f64, Option<i64>)> {
+    let session = session.to_string();
+    let row: Option<(f64, Option<i64>)> = read(&rig.db, move |conn| {
+        use rusqlite::OptionalExtension as _;
+        Ok(conn
+            .query_row(
+                "SELECT measured_through, weapon_micro_ped FROM account_live_session_costs \
+                 WHERE session_id = ?1",
+                [session],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    })
+    .await;
+    row.map(|(at, weapon)| (rig.clock.since_start(at), weapon))
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_running_session_s_costs_so_far_are_published_after_each_of_its_readings() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 120.0,
+        end: None,
+        active: false,
+    }];
+    let rig = rig(script(6), false, &plan).await;
+    assert_eq!(rig.connect(COOKIE).await, ConnectOutcome::Connected);
+    rig.at(120.0).await;
+    rig.start_running("hunt").await;
+    rig.until(|status| status.readings_stored == 2).await;
+    rig.at(150.0).await;
+    // The baseline alone measures nothing yet.
+    assert_eq!(published(&rig, "hunt").await, None);
+    rig.until(|status| status.readings_stored == 3).await;
+    rig.at(210.0).await;
+    // Up to the reading at 180: a thousand rounds burned, 0.10 PED.
+    assert_eq!(published(&rig, "hunt").await, Some((180.0, Some(100_000))));
+    rig.until(|status| status.readings_stored == 4).await;
+    rig.at(270.0).await;
+    assert_eq!(published(&rig, "hunt").await, Some((240.0, Some(200_000))));
+}
+
+#[tokio::test(start_paused = true)]
+async fn costs_a_sealed_session_lacks_are_rebuilt_when_the_connection_starts() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 120.0,
+        end: Some(270.0),
+        active: false,
+    }];
+    // A session sealed before its costs were kept: its measure is stored,
+    // its costs are not.
+    let rig = rig_seeded(script(1), false, &plan, |conn| {
+        let base = crate::time::naive_to_epoch(
+            NaiveDate::from_ymd_opt(2026, 7, 1)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap(),
+        );
+        for (at, ammo) in [
+            (110.0, 100_000),
+            (180.0, 90_000),
+            (240.0, 80_000),
+            (290.0, 70_000),
+        ] {
+            let reading = super::test_support::reading(
+                base + at,
+                1_000,
+                &[(
+                    "Universal Ammo",
+                    super::reading::Container::Carried,
+                    ammo,
+                    ammo / 100,
+                )],
+            );
+            let tag = (at > 120.0).then_some("hunt");
+            super::store::record_reading(conn, &reading, super::store::Purpose::Session, tag)
+                .unwrap();
+        }
+        let seal = super::sessions::measure_to_seal(conn, "hunt", None, None, base + 400.0)
+            .unwrap()
+            .expect("an ended session with readings");
+        assert_eq!(
+            super::sessions::cache_sealed(conn, &[seal], base + 400.0).unwrap(),
+            1
+        );
+        super::costs::clear(conn, "hunt").unwrap();
+    })
+    .await;
+    // Anything asked of the connection is answered once it has started.
+    rig.recorder.disconnect().await;
+    assert_eq!(stored_costs(&rig).await, 1);
+}
+
+/// A session sealed while its end was unread and nothing had been read
+/// since keeps no costs; the next reading stored outside any session
+/// closes its gap, and its costs are then weighed and stored.
+#[tokio::test(start_paused = true)]
+async fn a_reading_outside_any_session_lets_a_sealed_session_s_gap_be_weighed() {
+    let plan = [Planned {
+        id: "hunt",
+        start: -600.0,
+        end: Some(-300.0),
+        active: false,
+    }];
+    let rig = rig_seeded(script(1), false, &plan, |conn| {
+        let base = crate::time::naive_to_epoch(
+            NaiveDate::from_ymd_opt(2026, 7, 1)
+                .unwrap()
+                .and_hms_opt(12, 0, 0)
+                .unwrap(),
+        );
+        // Read from before its start until the sign-in dropped.
+        for (at, ammo) in [(-605.0, 100_000), (-540.0, 90_000), (-480.0, 80_000)] {
+            let reading = super::test_support::reading(
+                base + at,
+                1_000,
+                &[(
+                    "Universal Ammo",
+                    super::reading::Container::Carried,
+                    ammo,
+                    ammo / 100,
+                )],
+            );
+            let tag = (at > -600.0).then_some("hunt");
+            super::store::record_reading(conn, &reading, super::store::Purpose::Session, tag)
+                .unwrap();
+        }
+        let seal = super::sessions::measure_to_seal(conn, "hunt", None, None, base - 100.0)
+            .unwrap()
+            .expect("an ended session with readings");
+        assert_eq!(
+            super::sessions::cache_sealed(conn, &[seal], base - 100.0).unwrap(),
+            1
+        );
+    })
+    .await;
+    rig.at(1.0).await;
+    assert_eq!(stored_costs(&rig).await, 0, "its gap waits for a reading");
+    assert_eq!(rig.connect(COOKIE).await, ConnectOutcome::Connected);
+    rig.until(|status| status.readings_stored == 1).await;
+    rig.at(10.0).await;
+    // The connect reading closes the gap; with no chat log here the gap is
+    // not billed, but it is weighed, and the costs are kept.
+    assert_eq!(stored_costs(&rig).await, 1);
 }
 
 #[tokio::test(start_paused = true)]
@@ -1333,7 +1543,9 @@ async fn whether_any_reading_was_ever_stored_outlives_the_connection() {
             site: rig.site.clone(),
             flag: rig.flag.clone(),
             game_data: None,
+            chat_log: None,
             changed: None,
+            mode: ReadingMode::OnDemand,
         },
         &tokio::runtime::Handle::current(),
     );
@@ -1395,6 +1607,40 @@ async fn a_run_reads_from_its_start_every_minute_until_done_and_never_inside_the
     })
     .await;
     assert_eq!(examined, 3);
+}
+
+/// How many stored readings' steps have been looked at for the stock.
+async fn steps_followed(rig: &Rig) -> i64 {
+    read(&rig.db, |conn| {
+        Ok(
+            conn.query_row("SELECT COUNT(*) FROM account_steps_recognised", [], |row| {
+                row.get(0)
+            })?,
+        )
+    })
+    .await
+}
+
+#[tokio::test(start_paused = true)]
+async fn no_step_is_followed_for_the_stock_while_a_strongbox_run_is_open() {
+    let rig = rig(script(10), false, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(10.0).await;
+    assert_eq!(steps_followed(&rig).await, 1, "the connect reading");
+    let begun = rig.recorder.run_begin().await;
+    assert_eq!(read_at(&rig, begun), Some(0.0));
+    // The run's reading at 60 waits while the run is open.
+    rig.at(61.0).await;
+    assert_eq!(rig.stored().await.len(), 2);
+    assert_eq!(steps_followed(&rig).await, 1);
+    rig.at(70.0).await;
+    let recorder = rig.recorder.clone();
+    let done = tokio::spawn(async move { recorder.run_done().await });
+    rig.at(116.0).await;
+    done.await.unwrap();
+    // Once the run is over, every step is looked at.
+    rig.at(120.0).await;
+    assert_eq!(steps_followed(&rig).await, 3);
 }
 
 #[tokio::test(start_paused = true)]
@@ -1574,7 +1820,9 @@ async fn the_readings_left_unexamined_are_examined_at_start_one_at_a_time() {
         .filter(|proposal| proposal.reading.0 <= 15)
         .filter_map(|proposal| match &proposal.detail {
             super::proposals::Detail::Opening(opening) => Some(opening.boxes[0].count),
-            super::proposals::Detail::Listing(_) => None,
+            super::proposals::Detail::Listing(_)
+            | super::proposals::Detail::Purchase(_)
+            | super::proposals::Detail::Arrival(_) => None,
         })
         .collect();
     assert_eq!(counts, vec![7]);
@@ -1689,4 +1937,354 @@ async fn a_disconnect_stops_the_keep_alive() {
     rig.recorder.disconnect().await;
     rig.at(10.0 * KEEP_ALIVE_EVERY.as_secs_f64()).await;
     assert!(after_connect(&rig).is_empty());
+}
+
+/// How many holding states the store holds, across every reading.
+async fn holdings_stored(rig: &Rig) -> i64 {
+    read(&rig.db, |conn| {
+        Ok(
+            conn.query_row("SELECT COUNT(*) FROM account_reading_holdings", [], |row| {
+                row.get(0)
+            })?,
+        )
+    })
+    .await
+}
+
+/// Whether every request so far was a full reading: a balance and its
+/// items, in pairs, never a balance asked for on its own.
+fn only_full_readings(rig: &Rig) -> bool {
+    let calls = rig.site.calls();
+    calls.len().is_multiple_of(2)
+        && calls
+            .chunks(2)
+            .all(|pair| pair == [ScriptedRead::Balance, ScriptedRead::Items])
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_an_idle_connection_is_read_whole_every_five_minutes_and_nothing_new_is_kept_light(
+) {
+    use super::recorder::IDLE_READ_EVERY;
+    let rig = always_rig(script(1), &[]).await;
+    rig.connect(COOKIE).await;
+    // The connect reading is the first ever: a change, so the next is a
+    // minute on.
+    rig.at(59.0).await;
+    assert_eq!(item_reads(&rig), 1);
+    rig.at(61.0).await;
+    assert_eq!(item_reads(&rig), 2);
+    let kept = holdings_stored(&rig).await;
+    assert_eq!(kept, 2, "the connect reading's keyframe");
+    // It agreed with the one before it: five minutes to the next.
+    let every = IDLE_READ_EVERY.as_secs_f64();
+    rig.at(60.0 + every - 1.0).await;
+    assert_eq!(item_reads(&rig), 2);
+    rig.at(60.0 + 11.0 * every + 30.0).await;
+    let mut expected = vec![tagged(0.0, "connect", None)];
+    for k in 0..12 {
+        expected.push(tagged(60.0 + every * f64::from(k), "ambient", None));
+    }
+    assert_eq!(rig.stored().await, expected);
+    // The readings keep the session: no balance is asked for on its own.
+    assert!(only_full_readings(&rig));
+    // Every reading after the first is a row of its own and no holdings.
+    assert_eq!(holdings_stored(&rig).await, kept);
+    assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_a_change_brings_the_next_reading_a_minute_on_until_two_agree() {
+    let rows = |ammo: i64| -> Vec<ScriptedRow> {
+        vec![
+            ("Universal Ammo", "CARRIED", ammo, ammo / 100),
+            ("Common Dung", "STORAGE (Calypso)", 29, 0),
+        ]
+    };
+    let (a, b, c) = (rows(1_000_000), rows(999_000), rows(998_000));
+    let readings = responses(&[
+        (25_000, a.as_slice()),
+        (25_000, a.as_slice()),
+        (25_000, b.as_slice()),
+        (25_000, c.as_slice()),
+    ]);
+    let rig = always_rig(readings, &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(1_000.0).await;
+    let times: Vec<f64> = rig.stored().await.iter().map(|(at, _, _)| *at).collect();
+    // The first reading; one that agrees, five minutes to the next; two
+    // changes a minute apart; then one that agrees, and five minutes.
+    assert_eq!(times, vec![0.0, 60.0, 360.0, 420.0, 480.0, 780.0]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_a_tracked_session_takes_over_the_idle_readings_and_hands_them_back() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 500.0,
+        end: Some(690.0),
+        active: false,
+    }];
+    let rig = always_rig(script(1), &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(500.0).await;
+    rig.start("hunt");
+    rig.at(690.0).await;
+    rig.stop("hunt");
+    rig.at(1_100.0).await;
+    let hunt = Some("hunt");
+    assert_eq!(
+        rig.stored().await,
+        vec![
+            tagged(0.0, "connect", None),
+            tagged(60.0, "ambient", None),
+            tagged(360.0, "ambient", None),
+            // The session's minutes, not the idle reading due at 660.
+            tagged(500.0, "baseline", hunt),
+            tagged(560.0, "session", hunt),
+            tagged(620.0, "session", hunt),
+            tagged(680.0, "session", hunt),
+            // Its closing reading agrees with the one before: sealed.
+            tagged(735.0, "session", hunt),
+            // Five minutes after it, the idle readings again.
+            tagged(1_035.0, "ambient", None),
+        ]
+    );
+    assert!(rig.sealed_at("hunt").await.is_some());
+    assert!(only_full_readings(&rig));
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_an_idle_reading_the_site_refuses_signs_the_player_out() {
+    let rig = always_rig(script(1), &[]).await;
+    rig.connect(COOKIE).await;
+    // Calls 0 and 1 connect; the idle reading's balance is refused.
+    rig.site.fail_at(2, ScriptedFault::Unauthorised);
+    let status = rig
+        .until(|status| status.state == ConnectionState::Expired)
+        .await;
+    assert!(status.has_connected, "being signed out is not a disconnect");
+    rig.at(3_600.0).await;
+    assert_eq!(
+        calls(&rig),
+        3,
+        "nothing is asked of the site once it refused"
+    );
+    assert_eq!(rig.stored().await, vec![tagged(0.0, "connect", None)]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_a_disconnect_or_shutting_down_stops_the_idle_readings() {
+    let rig = always_rig(script(1), &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(100.0).await;
+    assert_eq!(calls(&rig), 4);
+    rig.recorder.disconnect().await;
+    rig.at(3_600.0).await;
+    assert_eq!(calls(&rig), 4);
+
+    let rig = always_rig(script(1), &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(100.0).await;
+    rig.recorder.shutdown().await;
+    rig.at(3_600.0).await;
+    assert_eq!(calls(&rig), 4);
+    assert_eq!(
+        rig.stored().await,
+        vec![tagged(0.0, "connect", None), tagged(60.0, "ambient", None)]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_development_build_reads_nothing_between_sessions_and_runs() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 120.0,
+        end: Some(230.0),
+        active: false,
+    }];
+    let rig = rig(script(10), false, &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(120.0).await;
+    rig.start("hunt");
+    rig.at(230.0).await;
+    rig.stop("hunt");
+    rig.at(1_000.0).await;
+    assert!(rig.sealed_at("hunt").await.is_some());
+    assert!(matches!(
+        rig.recorder.run_begin().await,
+        super::recorder::RunReading::Read { .. }
+    ));
+    assert!(matches!(
+        rig.recorder.run_done().await,
+        super::recorder::RunReading::Read { .. }
+    ));
+    rig.at(1_200.0).await;
+    let reads = item_reads(&rig);
+    let before = calls(&rig);
+    rig.at(1_200.0 + 3_600.0).await;
+    assert_eq!(item_reads(&rig), reads, "no item read outside them");
+    let since: Vec<ScriptedRead> = rig.site.calls().into_iter().skip(before).collect();
+    assert!(!since.is_empty());
+    assert!(
+        since.iter().all(|call| *call == ScriptedRead::Balance),
+        "only the balance keeps the session"
+    );
+    assert!(rig
+        .stored()
+        .await
+        .iter()
+        .all(|(_, purpose, _)| purpose != "ambient"));
+}
+
+/// The opening edge of a session's measure as it stands.
+async fn opening_edge(rig: &Rig, session: &str) -> Edge {
+    let MeasureRead::Measured { measure, .. } = rig
+        .recorder
+        .session_measure(session.to_string())
+        .await
+        .unwrap()
+    else {
+        panic!("the session has readings");
+    };
+    measure.coverage.opening
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_a_session_started_during_an_idle_reading_takes_its_own_baseline_at_once() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 61.0,
+        end: None,
+        active: false,
+    }];
+    let rig = always_rig(script(1), &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(59.0).await;
+    // The idle reading at 60 is still on its way when the session starts.
+    rig.site.hold();
+    rig.at(61.0).await;
+    rig.start_running("hunt").await;
+    rig.at(62.0).await;
+    rig.site.release();
+    rig.until(|status| status.readings_stored == 2).await;
+    rig.at(100.0).await;
+    let hunt = Some("hunt");
+    // The idle reading was abandoned; the baseline was asked for at once
+    // and is the session's own.
+    assert_eq!(
+        rig.stored().await,
+        vec![tagged(0.0, "connect", None), tagged(62.0, "baseline", hunt)]
+    );
+    assert_eq!(opening_edge(&rig, "hunt").await, Edge::Read);
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_a_session_started_inside_an_idle_reading_s_floor_takes_its_own_baseline() {
+    let plan = [Planned {
+        id: "hunt",
+        start: 90.0,
+        end: None,
+        active: false,
+    }];
+    let rig = always_rig(script(1), &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(90.0).await;
+    rig.start_running("hunt").await;
+    rig.at(100.0).await;
+    let hunt = Some("hunt");
+    assert_eq!(
+        rig.stored().await,
+        vec![
+            tagged(0.0, "connect", None),
+            tagged(60.0, "ambient", None),
+            // Thirty seconds after the idle reading, not at its floor.
+            tagged(90.0, "baseline", hunt),
+        ]
+    );
+    assert_eq!(opening_edge(&rig, "hunt").await, Edge::Read);
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_a_failed_idle_reading_puts_the_next_back_five_minutes() {
+    let rig = always_rig(script(3), &[]).await;
+    rig.connect(COOKIE).await;
+    // Calls 0 and 1 connect, 2 and 3 read at 60; the reading at 120
+    // fails at its balance.
+    rig.site.fail_at(4, ScriptedFault::Network);
+    rig.at(121.0).await;
+    assert_eq!(calls(&rig), 5);
+    rig.at(419.0).await;
+    assert_eq!(calls(&rig), 5, "not a minute on, though the last changed");
+    rig.at(1_000.0).await;
+    let times: Vec<f64> = rig.stored().await.iter().map(|(at, _, _)| *at).collect();
+    // A change, a minute; a failure, five; a change, a minute; agreement,
+    // five.
+    assert_eq!(times, vec![0.0, 60.0, 420.0, 480.0, 780.0]);
+    assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_a_failed_idle_reading_leaves_a_waiting_strongbox_run_to_its_own() {
+    use super::recorder::RunReading;
+    let rig = always_rig(script(2), &[]).await;
+    rig.connect(COOKIE).await;
+    rig.at(59.0).await;
+    // The idle reading at 60 is held, then fails at its balance.
+    rig.site.fail_at(2, ScriptedFault::Network);
+    rig.site.hold();
+    rig.at(61.0).await;
+    let recorder = rig.recorder.clone();
+    let begun = tokio::spawn(async move { recorder.run_begin().await });
+    rig.at(62.0).await;
+    rig.site.release();
+    // The run is not told the idle reading failed: it reads for itself,
+    // once the floor allows.
+    let begun = begun.await.unwrap();
+    assert_eq!(read_at(&rig, begun), Some(115.0), "{begun:?}");
+    assert!(matches!(begun, RunReading::Read { .. }));
+    rig.recorder.run_cancel();
+}
+
+#[tokio::test(start_paused = true)]
+async fn installed_an_unchanged_idle_reading_after_a_session_lets_its_gap_be_weighed() {
+    use super::costs::Unmeasured;
+    let plan = [Planned {
+        id: "hunt",
+        start: 120.0,
+        end: Some(230.0),
+        active: false,
+    }];
+    let rig = always_rig(script(1), &plan).await;
+    rig.connect(COOKIE).await;
+    rig.at(120.0).await;
+    rig.start("hunt");
+    rig.at(230.0).await;
+    // Calls 0 and 1 connect, 2 and 3 the idle reading at 60, 4 to 7 the
+    // session's two; every closing reading fails, so the session is sealed
+    // with its close unread.
+    for call in 8..=10 {
+        rig.site.fail_at(call, ScriptedFault::Network);
+    }
+    rig.stop("hunt");
+    rig.at(600.0).await;
+    assert!(rig.sealed_at("hunt").await.is_some());
+    assert_eq!(stored_costs(&rig).await, 0, "its gap waits for a reading");
+    // The next idle reading changes nothing, and is the first after the
+    // session's own: the gap is weighed.
+    rig.at(700.0).await;
+    assert_eq!(
+        rig.stored().await.last(),
+        Some(&tagged(670.0, "ambient", None))
+    );
+    assert_eq!(stored_costs(&rig).await, 1);
+    let costs = rig
+        .recorder
+        .session_costs("hunt".into())
+        .await
+        .unwrap()
+        .expect("a known session");
+    assert_ne!(
+        costs.status,
+        Status::Unmeasured(Unmeasured::AwaitingGapReading)
+    );
 }

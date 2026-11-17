@@ -8,8 +8,16 @@
 //! rebuilt from the keyframe before it and the readings between. A reading
 //! is a keyframe when no reading precedes it, when the one before it is
 //! more than ten minutes older, when it is taken on connecting, when it is
-//! the first reading of a tracked session, or when
-//! [`KEYFRAME_EVERY`] readings of changes already follow the last keyframe.
+//! the first reading of a tracked session, or when [`KEYFRAME_EVERY`]
+//! readings already follow the last keyframe. A reading whose holdings are
+//! those of the reading before it is not made a keyframe for its age or
+//! for that length: it stores its own row and no holding at all, so an
+//! account read again and again while nothing changes grows by one row a
+//! reading, and still says when its holdings were last confirmed. Only once
+//! [`CHAIN_CAP`] readings follow the last keyframe is it stored whole, so
+//! rebuilding any reading still reads a bounded chain. The next reading
+//! that changes something starts a keyframe if the chain has grown long
+//! meanwhile.
 //!
 //! The chain follows the order readings were stored, never their times:
 //! the wall clock can step back (the repeated hour when summer time ends),
@@ -29,8 +37,8 @@ use rusqlite::OptionalExtension;
 
 use super::amount::Pec;
 use super::measure::{
-    measure_own_readings, measure_session_with_baseline, SessionMeasure, SessionWindow,
-    MEASURE_VERSION,
+    measure_across_gap, measure_used, select_readings, AcrossGap, Edge, GapEnd, GapMeasure,
+    Neighbours, SessionMeasure, SessionWindow, BASELINE_WITHIN_SECONDS, MEASURE_VERSION,
 };
 use super::reading::{Container, ContainerKind, Holding, HoldingKey, Reading, Row};
 use super::roles::RoleSource;
@@ -40,9 +48,30 @@ use crate::db::Db;
 /// A reading taken longer than this after the one before it is a keyframe.
 pub const KEYFRAME_AFTER_SECONDS: f64 = 600.0;
 
-/// At most this many readings of changes follow a keyframe, so rebuilding
-/// any reading reads a bounded chain.
+/// Once this many readings follow a keyframe, the next reading that
+/// changes something is a keyframe.
 pub const KEYFRAME_EVERY: usize = 30;
+
+/// Once this many readings follow a keyframe, the next reading is a
+/// keyframe even when it changes nothing: the longest chain any reading is
+/// rebuilt from.
+pub const CHAIN_CAP: usize = 10 * KEYFRAME_EVERY;
+
+/// How long a chain of readings may grow before a keyframe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChainLimits {
+    /// [`KEYFRAME_EVERY`].
+    pub every: usize,
+    /// [`CHAIN_CAP`].
+    pub cap: usize,
+}
+
+impl ChainLimits {
+    pub const STORED: ChainLimits = ChainLimits {
+        every: KEYFRAME_EVERY,
+        cap: CHAIN_CAP,
+    };
+}
 
 /// Why a reading was taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +86,9 @@ pub enum Purpose {
     Run,
     /// At the player's request.
     Manual,
+    /// Taken while signed in and nothing else is being read, so the
+    /// inventory is followed between sessions.
+    Ambient,
 }
 
 impl Purpose {
@@ -67,6 +99,7 @@ impl Purpose {
             Purpose::Session => "session",
             Purpose::Run => "run",
             Purpose::Manual => "manual",
+            Purpose::Ambient => "ambient",
         }
     }
 
@@ -77,6 +110,7 @@ impl Purpose {
             "session" => Some(Purpose::Session),
             "run" => Some(Purpose::Run),
             "manual" => Some(Purpose::Manual),
+            "ambient" => Some(Purpose::Ambient),
             _ => None,
         }
     }
@@ -179,6 +213,60 @@ pub fn last_stored(conn: &rusqlite::Connection) -> Result<Option<ReadingHeader>,
     .optional()?
     .map(decode_header)
     .transpose()
+}
+
+/// The reading stored last, rebuilt whole: the account as it was last read.
+pub fn latest_reading(conn: &rusqlite::Connection) -> Result<Option<StoredReading>, AccountError> {
+    match last_stored(conn)? {
+        Some(header) => load_reading(conn, header.id),
+        None => Ok(None),
+    }
+}
+
+/// The last reading taken at or before `at` (of all, when `at` is absent):
+/// the account as it was last read by then.
+pub fn last_reading_by(
+    conn: &rusqlite::Connection,
+    at: Option<f64>,
+) -> Result<Option<ReadingId>, AccountError> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM account_readings WHERE ?1 IS NULL OR taken_at <= ?1 \
+             ORDER BY taken_at DESC, id DESC LIMIT 1",
+            [at],
+            |row| row.get(0),
+        )
+        .optional()?
+        .map(ReadingId))
+}
+
+/// Every reading stored from `first` on, rebuilt whole, in the order they
+/// were stored.
+pub fn readings_from(
+    conn: &rusqlite::Connection,
+    first: ReadingId,
+) -> Result<Vec<StoredReading>, AccountError> {
+    let ids: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            // id-order: insertion
+            "SELECT id FROM account_readings WHERE id >= ?1 ORDER BY id",
+        )?;
+        let ids = stmt
+            .query_map([first.0], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids
+    };
+    load_in_order(conn, &ids)
+}
+
+/// Whether any stored reading held an item of exactly this name.
+pub fn ever_held(conn: &rusqlite::Connection, name: &str) -> Result<bool, AccountError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM account_reading_holdings \
+                        WHERE item_name = ?1 AND row_count > 0)",
+        [name],
+        |row| row.get(0),
+    )?)
 }
 
 /// The holding states one reading stored, an empty holding standing for a
@@ -306,6 +394,29 @@ pub fn record_reading(
     purpose: Purpose,
     session_id: Option<&str>,
 ) -> Result<ReadingHeader, AccountError> {
+    record_within(conn, reading, purpose, session_id, ChainLimits::STORED)
+}
+
+/// [`record_reading`] with the chain's limits lowered, so a test reaches
+/// them with a few readings.
+#[cfg(test)]
+pub(crate) fn record_reading_within(
+    conn: &mut rusqlite::Connection,
+    reading: &Reading,
+    purpose: Purpose,
+    session_id: Option<&str>,
+    limits: ChainLimits,
+) -> Result<ReadingHeader, AccountError> {
+    record_within(conn, reading, purpose, session_id, limits)
+}
+
+fn record_within(
+    conn: &mut rusqlite::Connection,
+    reading: &Reading,
+    purpose: Purpose,
+    session_id: Option<&str>,
+    limits: ChainLimits,
+) -> Result<ReadingHeader, AccountError> {
     let tx = conn.transaction()?;
     let latest = last_stored(&tx)?;
     let first_of_session = match session_id {
@@ -319,14 +430,25 @@ pub fn record_reading(
     let mut before_state: Option<BTreeMap<HoldingKey, Holding>> = None;
     let mut frame = Frame::Key;
     if let Some(latest) = &latest {
-        if purpose != Purpose::Connect
-            && !first_of_session
-            && reading.taken_at() - latest.taken_at <= KEYFRAME_AFTER_SECONDS
-        {
-            let (state, changes) = state_at(&tx, latest)?;
-            if changes < KEYFRAME_EVERY {
-                frame = Frame::Delta;
-                before_state = Some(state);
+        if purpose != Purpose::Connect && !first_of_session {
+            let recent = reading.taken_at() - latest.taken_at <= KEYFRAME_AFTER_SECONDS;
+            // After a long pause the reading before is rebuilt only to see
+            // whether anything changed: one that cannot be rebuilt is
+            // followed by a keyframe, as it always was.
+            let before = if recent {
+                Some(state_at(&tx, latest)?)
+            } else {
+                state_at(&tx, latest).ok()
+            };
+            if let Some((state, changes)) = before {
+                // Holdings the reading before already holds are stored as
+                // no change at all, however long the pause, until the
+                // chain reaches its cap.
+                let unchanged = *reading.holdings() == state;
+                if (unchanged && changes < limits.cap) || (recent && changes < limits.every) {
+                    frame = Frame::Delta;
+                    before_state = Some(state);
+                }
             }
         }
     }
@@ -588,6 +710,8 @@ pub enum CachedMeasure {
     Current {
         measure: Box<SessionMeasure>,
         sealed_at: Option<f64>,
+        /// When it was computed: what is derived from it names it.
+        computed_at: f64,
     },
     /// Computed by other rules, or no longer decodable: recompute it.
     Stale {
@@ -603,7 +727,7 @@ pub fn cached_measure(
 ) -> Result<CachedMeasure, AccountError> {
     let row = conn
         .query_row(
-            "SELECT measure_version, measure_json, sealed_at \
+            "SELECT measure_version, measure_json, sealed_at, computed_at \
              FROM account_session_measures WHERE session_id = ?1",
             [session_id],
             |row| {
@@ -611,11 +735,12 @@ pub fn cached_measure(
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<f64>>(2)?,
+                    row.get::<_, f64>(3)?,
                 ))
             },
         )
         .optional()?;
-    let Some((version, json, sealed_at)) = row else {
+    let Some((version, json, sealed_at, computed_at)) = row else {
         return Ok(CachedMeasure::Missing);
     };
     // Older rules, or a later build's: either way not these rules.
@@ -626,6 +751,7 @@ pub fn cached_measure(
         Ok(measure) => CachedMeasure::Current {
             measure: Box::new(measure),
             sealed_at,
+            computed_at,
         },
         Err(_) => CachedMeasure::Stale { sealed_at },
     })
@@ -641,6 +767,13 @@ pub struct ComputedMeasure {
     /// The session's tagged readings when it was computed: how many, and
     /// the last stored. A cache write checks they still hold.
     tagged: TaggedReadings,
+}
+
+impl ComputedMeasure {
+    /// The last reading the measure used: what it measures up to.
+    pub fn last_reading(&self) -> Option<ReadingId> {
+        self.last_reading
+    }
 }
 
 /// How many readings are tagged with a session, and the last of them.
@@ -667,35 +800,193 @@ fn tagged_readings(
     )?)
 }
 
-/// Compute a session's measure from its stored readings. A read: run it
-/// on a reader.
+/// The sessions either side of a tracked session: the latest stop of one
+/// that started before it, and the start of the first that started after
+/// it (an equal start split by id, as the session list orders them).
+pub fn neighbours(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    window: &SessionWindow,
+) -> Result<Neighbours, AccountError> {
+    Ok(conn.query_row(
+        // id-order: tiebreak (sessions are ordered by their start; id splits
+        // equal instants).
+        "SELECT \
+           (SELECT MAX(ended_at) FROM tracking_sessions \
+             WHERE id <> ?1 AND (started_at < ?2 OR (started_at = ?2 AND id < ?1))), \
+           (SELECT MIN(started_at) FROM tracking_sessions \
+             WHERE id <> ?1 AND (started_at > ?2 OR (started_at = ?2 AND id > ?1)))",
+        rusqlite::params![session_id, window.started_at],
+        |row| {
+            Ok(Neighbours {
+                previous_ended_at: row.get(0)?,
+                next_started_at: row.get(1)?,
+            })
+        },
+    )?)
+}
+
+/// Compute a session's measure from its stored readings, between the
+/// sessions either side of it. A read: run it on a reader.
 pub fn compute_session_measure(
     conn: &rusqlite::Connection,
     session_id: &str,
     window: &SessionWindow,
     roles: &dyn RoleSource,
 ) -> Result<ComputedMeasure, AccountError> {
+    let used = used_readings(conn, session_id, window)?;
+    let readings: Vec<Reading> = used
+        .readings
+        .iter()
+        .map(|stored| stored.reading.clone())
+        .collect();
+    Ok(ComputedMeasure {
+        measure: measure_used(&readings, used.opening, used.closing, roles)?,
+        first_reading: used.readings.first().map(|stored| stored.header.id),
+        last_reading: used.readings.last().map(|stored| stored.header.id),
+        tagged: tagged_readings(conn, session_id)?,
+    })
+}
+
+/// The stored readings a session's measure uses, in the order they were
+/// stored, and whether they read its ends.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UsedReadings {
+    pub readings: Vec<StoredReading>,
+    pub opening: Edge,
+    pub closing: Edge,
+}
+
+/// The stored readings a session's measure uses, chosen exactly as
+/// [`compute_session_measure`] chooses them. A read: run it on a reader.
+pub fn used_readings(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    window: &SessionWindow,
+) -> Result<UsedReadings, AccountError> {
     let SessionReadings {
         readings: stored,
         own,
     } = readings_for_session(conn, session_id, window)?;
+    let neighbours = neighbours(conn, session_id, window)?;
     let readings: Vec<Reading> = stored.iter().map(|stored| stored.reading.clone()).collect();
     // The session's own baseline: the reading it started.
     let baseline = stored.iter().position(|stored| {
         stored.header.purpose == Purpose::Baseline
             && stored.header.session_id.as_deref() == Some(session_id)
     });
-    let outcome = match own {
-        Some(own) => measure_own_readings(window, &readings, own, baseline, roles)?,
-        None => measure_session_with_baseline(window, &readings, baseline, roles)?,
-    };
-    let used = &stored[outcome.used.clone()];
-    Ok(ComputedMeasure {
-        measure: outcome.measure,
-        first_reading: used.first().map(|stored| stored.header.id),
-        last_reading: used.last().map(|stored| stored.header.id),
-        tagged: tagged_readings(conn, session_id)?,
+    let (used, opening, closing) = select_readings(window, &neighbours, &readings, own, baseline);
+    Ok(UsedReadings {
+        readings: stored[used].to_vec(),
+        opening,
+        closing,
     })
+}
+
+/// One end of a session read across a gap, by a stored reading.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StoredGapEnd {
+    pub reading: ReadingId,
+    /// When the reading was taken.
+    pub taken_at: f64,
+    pub end: GapEnd,
+}
+
+/// A session measured across a gap, with the stored readings it rests on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredAcrossGap {
+    pub gap: AcrossGap,
+    pub first_reading: ReadingId,
+    pub last_reading: ReadingId,
+    pub opening: Option<StoredGapEnd>,
+    pub closing: Option<StoredGapEnd>,
+}
+
+/// Whether a session can be measured across a gap, from its stored
+/// readings.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StoredGapMeasure {
+    /// See [`GapMeasure::NotOffered`].
+    NotOffered,
+    /// See [`GapMeasure::Awaiting`].
+    Awaiting,
+    Offered(Box<StoredAcrossGap>),
+}
+
+/// Measure a sealed session across a gap from its stored readings, between
+/// the sessions either side of it (see [`measure_across_gap`]). Only a
+/// session with readings of its own is measured so. A read: run it on a
+/// reader.
+pub fn compute_gap_measure(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    window: &SessionWindow,
+    roles: &dyn RoleSource,
+) -> Result<StoredGapMeasure, AccountError> {
+    let SessionReadings {
+        readings: stored,
+        own,
+    } = readings_for_session(conn, session_id, window)?;
+    let Some(own) = own else {
+        return Ok(StoredGapMeasure::NotOffered);
+    };
+    let neighbours = neighbours(conn, session_id, window)?;
+    let readings: Vec<Reading> = stored.iter().map(|stored| stored.reading.clone()).collect();
+    let baseline = stored.iter().position(|stored| {
+        stored.header.purpose == Purpose::Baseline
+            && stored.header.session_id.as_deref() == Some(session_id)
+    });
+    // The reading stored just after the session's own, when it is the next
+    // session's baseline, taken as that session started.
+    let next_baseline = match stored.get(own.end) {
+        Some(after)
+            if after.header.purpose == Purpose::Baseline
+                && after.header.session_id.as_deref() != Some(session_id) =>
+        {
+            let started: Option<f64> = match after.header.session_id.as_deref() {
+                Some(next) => conn
+                    .query_row(
+                        "SELECT started_at FROM tracking_sessions WHERE id = ?1",
+                        [next],
+                        |row| row.get(0),
+                    )
+                    .optional()?,
+                None => None,
+            };
+            started
+                .filter(|started| neighbours.next_started_at == Some(*started))
+                .filter(|started| {
+                    (0.0..=BASELINE_WITHIN_SECONDS).contains(&(after.header.taken_at - started))
+                })
+                .map(|_| own.end)
+        }
+        _ => None,
+    };
+    let gap = match measure_across_gap(
+        window,
+        &neighbours,
+        &readings,
+        own,
+        baseline,
+        next_baseline,
+        roles,
+    )? {
+        GapMeasure::NotOffered => return Ok(StoredGapMeasure::NotOffered),
+        GapMeasure::Awaiting => return Ok(StoredGapMeasure::Awaiting),
+        GapMeasure::Offered(gap) => *gap,
+    };
+    let end = |end: GapEnd| StoredGapEnd {
+        reading: stored[end.index].header.id,
+        taken_at: stored[end.index].header.taken_at,
+        end,
+    };
+    Ok(StoredGapMeasure::Offered(Box::new(StoredAcrossGap {
+        first_reading: stored[gap.used.start].header.id,
+        last_reading: stored[gap.used.end - 1].header.id,
+        opening: gap.opening.map(end),
+        closing: gap.closing.map(end),
+        gap,
+    })))
 }
 
 /// Cache a computed measure only while it is still the truth, in one
@@ -711,19 +1002,36 @@ pub fn cache_session_measure_if_current(
     computed_at: f64,
 ) -> Result<bool, AccountError> {
     let tx = conn.transaction()?;
+    let written = cache_if_current_in(&tx, session_id, computed, sealed_at, computed_at)?;
+    tx.commit()?;
+    Ok(written)
+}
+
+/// [`cache_session_measure_if_current`] inside a transaction the caller
+/// holds and commits, so what is derived from the measure can be written
+/// in the same one.
+pub fn cache_if_current_in(
+    tx: &rusqlite::Connection,
+    session_id: &str,
+    computed: &ComputedMeasure,
+    sealed_at: Option<f64>,
+    computed_at: f64,
+) -> Result<bool, AccountError> {
     let exists: bool = tx.query_row(
         "SELECT EXISTS (SELECT 1 FROM tracking_sessions WHERE id = ?1)",
         [session_id],
         |row| row.get(0),
     )?;
-    if !exists || tagged_readings(&tx, session_id)? != computed.tagged {
+    if !exists || tagged_readings(tx, session_id)? != computed.tagged {
         return Ok(false);
     }
+    // Only a seal by the current rules is weighed: one by other rules is
+    // replaced whatever it counted.
     let sealed_from: Option<i64> = tx
         .query_row(
             "SELECT reading_count FROM account_session_measures \
-             WHERE session_id = ?1 AND sealed_at IS NOT NULL",
-            [session_id],
+             WHERE session_id = ?1 AND sealed_at IS NOT NULL AND measure_version = ?2",
+            rusqlite::params![session_id, MEASURE_VERSION],
             |row| row.get(0),
         )
         .optional()?;
@@ -732,13 +1040,13 @@ pub fn cache_session_measure_if_current(
     if sealed_from.is_some_and(|sealed| sealed > reading_count) {
         return Ok(false);
     }
-    cache_session_measure(&tx, session_id, computed, sealed_at, computed_at)?;
-    tx.commit()?;
+    cache_session_measure(tx, session_id, computed, sealed_at, computed_at)?;
     Ok(true)
 }
 
 /// Cache a computed measure. `sealed_at` marks it final: the session has
-/// ended and its closing readings are in. A short write.
+/// ended and its closing readings are in. The costs stored from the
+/// measure it replaces go with it. A short write.
 pub fn cache_session_measure(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -746,6 +1054,7 @@ pub fn cache_session_measure(
     sealed_at: Option<f64>,
     computed_at: f64,
 ) -> Result<(), AccountError> {
+    super::costs::clear(conn, session_id)?;
     let measure = &computed.measure;
     let coverage = measure.coverage;
     let json = serde_json::to_string(measure)
@@ -810,6 +1119,7 @@ pub fn session_measure(
         CachedMeasure::Current {
             measure,
             sealed_at: Some(_),
+            ..
         } => return Ok(*measure),
         CachedMeasure::Current { sealed_at, .. } | CachedMeasure::Stale { sealed_at } => sealed_at,
         CachedMeasure::Missing => None,

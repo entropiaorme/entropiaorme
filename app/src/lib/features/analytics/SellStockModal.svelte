@@ -15,6 +15,7 @@
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
+	import AccountRecordHint from '$lib/features/inventory/AccountRecordHint.svelte';
 	import HeldAmountField from '$lib/features/inventory/HeldAmountField.svelte';
 	import type { AmountMode } from '$lib/features/inventory/heldAmount';
 	import { formatPed, formatQuantity, formatTt, todayDate } from '$lib/utils/format';
@@ -186,7 +187,13 @@
 				held={item.heldQty}
 				label="Amount"
 				subject="to sell"
+				describedby={saleMethod === 'trade' ? 'trade-account-record' : undefined}
 			/>
+			{#if saleMethod === 'trade'}
+				<!-- A sale to the Trade Terminal is recorded as a trade; the
+					readings may have recorded this one already. -->
+				<AccountRecordHint kind="sale" itemName={item.itemName} id="trade-account-record" />
+			{/if}
 
 			{#if excess > 0}
 				<p class="text-xs text-warning">

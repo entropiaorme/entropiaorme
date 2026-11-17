@@ -19,8 +19,10 @@ use eo_api::account::{
     MeasuredCoverageLevel, MeasuredEvent, MeasuredGainMark, MeasuredLeftOutReason,
     MeasuredPrecision, MeasuredRole, MeasuredSettlement, MeasuredStacking,
 };
+use eo_api::account_minutes::{ArrivalDisposition, ArrivalNotProposed};
+use eo_api::account_proposals::AccountProposalKind;
 use eo_api::{Api, ApiError};
-use eo_services::account::recorder::{MemoryFlag, RecorderParts};
+use eo_services::account::recorder::{MemoryFlag, ReadingMode, RecorderParts};
 use eo_services::account::scripted::{
     recorded_hunt_responses, PacedClock, ScriptedFault, ScriptedSite,
 };
@@ -131,7 +133,9 @@ pub(crate) async fn harness_with(
             site: site.clone(),
             flag: Arc::new(MemoryFlag::new(false)),
             game_data: Some(game_data.clone()),
+            chat_log: None,
             changed: None,
+            mode: ReadingMode::OnDemand,
         },
         &tokio::runtime::Handle::current(),
     );
@@ -486,16 +490,25 @@ async fn measured_sessions_stand_beside_their_tracked_figures() {
     harness
         .db
         .with_writer(|conn| {
+            // What the chat log tracked: the weapon's 64.80 on a kill
+            // looting 38.20, armour 1.40 and healing 0.30.
             conn.execute(
-                "INSERT INTO session_summaries \
-                     (session_id, started_at, ended_at, duration_hours, kills, loot_tt, \
-                      weapon_cost, enhancer_cost, armour_cost, heal_cost, dangling_cost, \
-                      cycled_ped, regular_skill_ped_json, attribute_levels_json, \
-                      regular_skill_tt, attribute_levels_total) \
-                 SELECT id, started_at, ended_at, 0.2, 31, 38.2, 64.8, 0, 1.4, 0.3, 0, 66.5, \
-                        '{}', '{}', 0, 0 FROM tracking_sessions WHERE id = 'hunt'",
+                "UPDATE tracking_sessions SET armour_cost = 1.4, heal_cost = 0.3 \
+                 WHERE id = 'hunt'",
                 [],
             )?;
+            conn.execute(
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, loot_total_ped) \
+                 SELECT 'hunt-k', id, 'Mayhem', started_at + 1.0, 64.8, 38.2 \
+                 FROM tracking_sessions WHERE id = 'hunt'",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, cost_per_shot) \
+                 VALUES ('hunt-k', 'Opalo', 1, 64.8)",
+                [],
+            )?;
+            eo_services::session_summary::write_session_summary(conn, "hunt")?;
             conn.execute(
                 "UPDATE tracking_sessions SET economy_excluded_at = 1.0 WHERE id = 'hunt'",
                 [],
@@ -562,19 +575,26 @@ async fn measured_sessions_stand_beside_their_tracked_figures() {
     let tracked = page.sessions[0].tracked.as_ref().unwrap();
     assert!(tracked.armour_unrecorded);
     assert_eq!(tracked.armour_cost, 1.4);
-    // The tracked figures are read, never moved.
-    let summary: f64 = harness
+    // The session's own weapon cost is the measured one (ammo burned and
+    // the weapon's wear); the tracked figure beside it stays what the chat
+    // log recorded.
+    assert_eq!(tracked.weapon_cost, 64.8);
+    let (summary, measured): (f64, i64) = harness
         .db
         .with_reader(|conn| {
             Ok(conn.query_row(
-                "SELECT weapon_cost FROM session_summaries WHERE session_id = 'hunt'",
+                "SELECT s.weapon_cost, b.amount_micro_ped FROM session_summaries s \
+                 JOIN account_session_cost_buckets b \
+                   ON b.session_id = s.session_id AND b.bucket = 'weapon' \
+                 WHERE s.session_id = 'hunt'",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )?)
         })
         .await
         .unwrap();
-    assert_eq!(summary, 64.8);
+    assert!(close(summary, measured as f64 / 1_000_000.0));
+    assert!(summary != 64.8);
     assert!(matches!(
         harness
             .api
@@ -589,6 +609,80 @@ async fn measured_sessions_stand_beside_their_tracked_figures() {
         .unwrap()
         .0
         .is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_recorded_session_reads_minute_by_minute_with_a_handle_on_each_arrival() {
+    let harness = harness(the_hunt_from_its_opening_reading(), &[HUNT]).await;
+    record_the_hunt(&harness).await;
+    let minutes = harness
+        .api
+        .account_session_minutes("hunt".into())
+        .await
+        .unwrap();
+    assert!(!minutes.running);
+    assert!(minutes.coverage.complete);
+    assert_eq!(minutes.coverage.reading_count, 13);
+    assert_eq!(
+        minutes.steps.len(),
+        12,
+        "one step between each two readings"
+    );
+    for pair in minutes.steps.windows(2) {
+        assert_eq!(
+            pair[0].between.to, pair[1].between.from,
+            "the steps follow on"
+        );
+        assert_eq!(pair[0].reading_id, pair[1].previous_reading_id);
+    }
+    // Nothing was tracked from the chat log, so what arrived in the session
+    // is unexplained, and each such arrival carries the proposal it is
+    // decided by; what arrived after the stop is the purchases' to offer.
+    let flagged: Vec<_> = minutes
+        .steps
+        .iter()
+        .flat_map(|step| step.arrived_not_looted.iter())
+        .collect();
+    let offered = flagged
+        .iter()
+        .filter(|arrival| match &arrival.disposition {
+            ArrivalDisposition::Open {
+                possibly_recorded: false,
+                ..
+            } => true,
+            ArrivalDisposition::NotProposed {
+                reason: ArrivalNotProposed::OutsideSession,
+            } => false,
+            other => panic!("{other:?}"),
+        })
+        .count();
+    assert!(offered > 0);
+    let proposed = harness
+        .api
+        .account_proposals(Some(AccountProposalKind::Arrival))
+        .await
+        .unwrap();
+    assert_eq!(proposed.len(), offered);
+    // Read again, nothing more is proposed.
+    harness
+        .api
+        .account_session_minutes("hunt".into())
+        .await
+        .unwrap();
+    let again = harness
+        .api
+        .account_proposals(Some(AccountProposalKind::Arrival))
+        .await
+        .unwrap();
+    assert_eq!(again.len(), proposed.len());
+    let unknown = harness
+        .api
+        .account_session_minutes("no such session".into())
+        .await;
+    assert!(
+        matches!(unknown, Err(ApiError::NotFound { .. })),
+        "{unknown:?}"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -646,12 +740,19 @@ pub(crate) struct Seeded {
     pub sealed: bool,
     /// Its ammo split is unsettled.
     pub unsettled: bool,
+    /// A teleport chip wears 0.02 over it: travel overhead.
+    pub travel: bool,
+    /// A gadget nothing names wears 0.10 over it: unclassified overhead
+    /// until it is placed.
+    pub gadget: bool,
 }
 
 pub(crate) const COMPLETE: Seeded = Seeded {
     complete: true,
     sealed: true,
     unsettled: false,
+    travel: false,
+    gadget: false,
 };
 
 /// Readings for an existing tracked session from `started` to `ended`:
@@ -688,6 +789,12 @@ pub(crate) fn seed_measured(
         };
         hold("Universal Ammo", ammo, ammo / 100);
         hold("Opalo", 1, 500 - wear);
+        if how.travel {
+            hold("Teleportation Chip 1", 1, 8_665 - wear / 5);
+        }
+        if how.gadget {
+            hold("Odd Gadget", 1, 2_000 - wear);
+        }
         if shrapnel > 0 {
             hold("Shrapnel", shrapnel, shrapnel / 100);
         }
@@ -712,7 +819,7 @@ pub(crate) fn seed_measured(
     if !how.sealed {
         return;
     }
-    let mut seal = measure_to_seal(conn, id, None, ended + 100.0)
+    let mut seal = measure_to_seal(conn, id, None, None, ended + 100.0)
         .unwrap()
         .expect("an ended session with readings");
     if how.unsettled {
@@ -769,10 +876,24 @@ async fn the_measured_summary_sums_what_both_sides_know() {
             )?;
             for (id, started, how) in sessions {
                 let ended = started + 300.0;
+                // What the chat log tracked: the weapon's 1.50 on a kill
+                // looting 0.25, armour 0.50 and healing 0.25.
                 conn.execute(
-                    "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
-                     VALUES (?1, ?2, ?3, 0)",
+                    "INSERT INTO tracking_sessions \
+                         (id, started_at, ended_at, is_active, armour_cost, heal_cost) \
+                     VALUES (?1, ?2, ?3, 0, 0.5, 0.25)",
                     rusqlite::params![id, started, ended],
+                )?;
+                conn.execute(
+                    "INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, \
+                                        loot_total_ped) \
+                     VALUES (?1 || '-k', ?1, 'Atrox', ?2 + 1.0, 1.5, 0.25)",
+                    rusqlite::params![id, started],
+                )?;
+                conn.execute(
+                    "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, cost_per_shot) \
+                     VALUES (?1 || '-k', 'Opalo', 1, 1.5)",
+                    [id],
                 )?;
                 conn.execute(
                     "INSERT INTO session_summaries \
@@ -897,4 +1018,242 @@ async fn the_measured_summary_sums_what_both_sides_know() {
         summary.weapon.measured.precision,
         MeasuredPrecision::WholePec
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn confirming_a_limited_set_s_pieces_bills_the_measured_hunt_by_them() {
+    let harness = harness_with(
+        the_hunt_from_its_opening_reading(),
+        &[HUNT],
+        Box::new(|conn, _| {
+            conn.execute(
+                "UPDATE protection_sets SET economy_kind = 'limited', markup_percent = 140 \
+                 WHERE name = 'Pegasus'",
+                [],
+            )
+            .unwrap();
+        }),
+    )
+    .await;
+    record_the_hunt(&harness).await;
+    let armour = |detail: &Value| {
+        (
+            detail["summary"]["costBreakdown"]["armourCost"]
+                .as_f64()
+                .unwrap(),
+            detail["summary"]["costBreakdown"]["basis"]["armourCost"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+        )
+    };
+    async fn detail(harness: &Harness) -> Value {
+        serde_json::to_value(
+            harness
+                .api
+                .tracking_session_detail("hunt".into())
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    // What the readings measured, by kind: the unlimited armour's loss and
+    // the limited pieces' loss.
+    let (unlimited, limited): (i64, i64) = harness
+        .db
+        .with_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT \
+                   (SELECT amount_micro_ped FROM account_session_cost_armour_parts \
+                    WHERE session_id = 'hunt' AND part = 'unlimited'), \
+                   (SELECT SUM(amount_micro_ped) FROM account_session_cost_lines \
+                    WHERE session_id = 'hunt' AND kind = 'limitedDecay')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert!(limited > 0, "the Pegasus pieces wore");
+
+    // Until its pieces are named, the set's part waits: the armour is the
+    // unlimited armour measured, and nothing recorded for the set.
+    let before = armour(&detail(&harness).await);
+    assert_eq!(before.1, "mixed");
+    assert!((before.0 - (unlimited as f64 / 1e6 * 100.0).round() / 100.0).abs() < 1e-9);
+
+    let set_id: i64 = harness
+        .db
+        .with_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT id FROM protection_sets WHERE name = 'Pegasus'",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    let pieces = harness.api.protection_set_pieces(set_id).await.unwrap();
+    assert!(pieces.confirmed.is_empty());
+    assert_eq!(
+        pieces.suggested,
+        [
+            "Pegasus Arm Guards (M,L)",
+            "Pegasus Foot Guards (M,L)",
+            "Pegasus Gloves (M,L)",
+            "Pegasus Helmet (M,L)",
+            "Pegasus Shin Guards (M,L)",
+            "Pegasus Thigh Guards (M,L)",
+        ]
+    );
+    let confirmed = harness
+        .api
+        .protection_set_pieces_confirm(set_id, pieces.suggested.clone())
+        .await
+        .unwrap();
+    assert_eq!(confirmed.confirmed.len(), 6);
+    assert!(confirmed.suggested.is_empty());
+
+    // Confirmed once, the measured hunt is billed by them: the pieces' loss
+    // at the set's markup, beside the unlimited armour.
+    let after = armour(&detail(&harness).await);
+    assert_eq!(after.1, "measured");
+    let expected = (unlimited as f64 + limited as f64 * 1.4) / 1e6;
+    assert!(
+        (after.0 - (expected * 100.0).round() / 100.0).abs() < 1e-9,
+        "{} against {expected}",
+        after.0
+    );
+}
+
+/// Placing an item through the commands moves its measured wear where the
+/// player puts it, in every figure, and clearing it puts it back.
+#[tokio::test(start_paused = true)]
+async fn placing_an_item_moves_its_cost_through_every_figure() {
+    use eo_api::account::{CostPlacementCategory, CostPlacementInput};
+    let harness = harness(recorded_hunt_responses(), &[]).await;
+    let started = 10_000.0;
+    let ended = started + 300.0;
+    harness
+        .db
+        .with_writer(move |conn| {
+            conn.execute(
+                "INSERT INTO equipment_library (name, item_type, properties_json) \
+                 VALUES ('Opalo', 'weapon', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES ('g', ?1, ?2, 0)",
+                rusqlite::params![started, ended],
+            )?;
+            conn.execute(
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, \
+                                    loot_total_ped) \
+                 VALUES ('g-k', 'g', 'Atrox', ?1, 1.5, 0.25)",
+                [started + 1.0],
+            )?;
+            conn.execute(
+                "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, cost_per_shot) \
+                 VALUES ('g-k', 'Opalo', 1, 1.5)",
+                [],
+            )?;
+            seed_measured(
+                conn,
+                "g",
+                started,
+                ended,
+                Seeded {
+                    gadget: true,
+                    ..COMPLETE
+                },
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let api = &harness.api;
+    // Cycled, the overhead band by category, the day series' overhead, and
+    // the session's own Net.
+    let figures = || async {
+        let overview = api.analytics_overview("all").await.unwrap();
+        let detail = api.tracking_session_detail("g".into()).await.unwrap();
+        let days: f64 = overview.timeline.iter().map(|day| day.overhead_cost).sum();
+        (
+            overview.losses_breakdown.tracking_cost,
+            overview.losses_breakdown.cycled_breakdown.healing,
+            overview.losses_breakdown.overhead.travel,
+            overview.losses_breakdown.overhead.unclassified,
+            days,
+            detail.summary.net,
+        )
+    };
+    let near = |actual: f64, expected: f64| (actual - expected).abs() < 1e-6;
+
+    // Unplaced, its wear is unclassified overhead, and it awaits a place.
+    let (cycled, healing, travel, unclassified, days, net) = figures().await;
+    assert!(near(unclassified, 0.1), "{unclassified}");
+    assert!(near(travel, 0.0));
+    assert!(near(days, 0.1));
+    let awaiting = api.account_cost_placements().await.unwrap().awaiting;
+    assert_eq!(awaiting.len(), 1);
+    assert_eq!(awaiting[0].item, "Odd Gadget");
+
+    let place = |category| CostPlacementInput {
+        item: "Odd Gadget".into(),
+        category,
+    };
+    // As travel: overhead still, in another band; Cycled and Net stand.
+    let placed = api
+        .account_cost_place(place(CostPlacementCategory::Travel))
+        .await
+        .unwrap();
+    assert!(placed.pending_sessions.is_empty());
+    assert!(placed.placements.awaiting.is_empty());
+    assert_eq!(placed.placements.placed.len(), 1);
+    let (now_cycled, _, now_travel, now_unclassified, now_days, now_net) = figures().await;
+    assert!(near(now_travel, 0.1) && near(now_unclassified, 0.0));
+    assert!(near(now_cycled, cycled) && near(now_days, 0.1) && near(now_net, net));
+
+    // As a healing tool: Cycled's healing, no overhead; Net stands.
+    api.account_cost_place(place(CostPlacementCategory::HealingTool))
+        .await
+        .unwrap();
+    let (now_cycled, now_healing, now_travel, now_unclassified, now_days, now_net) =
+        figures().await;
+    assert!(near(now_cycled, cycled + 0.1), "{now_cycled}");
+    assert!(near(now_healing, healing + 0.1));
+    assert!(near(now_travel, 0.0) && near(now_unclassified, 0.0) && near(now_days, 0.0));
+    assert!(near(now_net, net));
+
+    // As no cost: in no figure, so Net rises by what it cost.
+    api.account_cost_place(place(CostPlacementCategory::NotACost))
+        .await
+        .unwrap();
+    let (now_cycled, _, now_travel, now_unclassified, now_days, now_net) = figures().await;
+    assert!(near(now_cycled, cycled));
+    assert!(near(now_travel + now_unclassified + now_days, 0.0));
+    assert!(near(now_net, net + 0.1), "{now_net}");
+
+    // Cleared: back where it started, awaiting a place again.
+    let cleared = api
+        .account_cost_placement_clear("Odd Gadget".into())
+        .await
+        .unwrap();
+    assert!(cleared.pending_sessions.is_empty());
+    assert_eq!(cleared.placements.awaiting.len(), 1);
+    assert!(cleared.placements.placed.is_empty());
+    assert_eq!(
+        figures().await,
+        (cycled, healing, travel, unclassified, days, net)
+    );
+    // A blank name is no placement.
+    assert!(matches!(
+        api.account_cost_place(CostPlacementInput {
+            item: " ".into(),
+            category: CostPlacementCategory::Travel,
+        })
+        .await,
+        Err(ApiError::BadRequest { .. })
+    ));
 }

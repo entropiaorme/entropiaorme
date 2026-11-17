@@ -47,7 +47,9 @@ use eo_services::tracker::HuntTracker;
 use eo_services::weapon_review::WeaponReviewService;
 
 pub mod account;
+pub mod account_minutes;
 pub mod account_proposals;
+pub mod account_reconciliation;
 pub mod activities;
 pub mod analytics;
 pub mod character;
@@ -256,7 +258,8 @@ impl Api {
         let codex = codex::build_codex_service(db.clone(), game_data.clone(), clock.clone());
         let analytics = AnalyticsService::new(db.clone(), clock.clone());
         let market = MarketService::new(db.clone(), clock.clone());
-        let protection = ProtectionService::new(db.clone(), clock.clone());
+        let protection =
+            ProtectionService::new(db.clone(), clock.clone()).with_game_data(game_data.clone());
         let healing_review = HealingReviewService::new(db.clone(), clock.clone());
         let weapon_pricing =
             weapon_pricing(&config_service, game_data.clone(), tracker.dose_board());

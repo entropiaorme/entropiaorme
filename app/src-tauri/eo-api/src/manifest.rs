@@ -15,11 +15,18 @@ use serde_json::Value;
 
 use crate::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
-    MeasuredSessionPage,
+    CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage,
+};
+use crate::account_minutes::{
+    AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
 };
 use crate::account_proposals::{
     AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
     AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading,
+};
+use crate::account_reconciliation::{
+    StockReconciliationApplied, StockReconciliationApplyInput, StockReconciliationDraft,
+    StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
 };
 use crate::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use crate::analytics::{
@@ -30,8 +37,9 @@ use crate::analytics::{
     InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
     InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
     LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
-    RealisedTierMarkup, ShrapnelConversionInput, StockConversionInput, StockPosition,
-    StockRemovalInput,
+    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
+    StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
+    StockSaleFromAccount, StockSaleFromAccountInput,
 };
 use crate::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
@@ -72,8 +80,8 @@ use crate::mob_detection::{
 use crate::protection::{
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
     ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
-    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetUpdateInput, ProtectionStream,
-    ProtectionUndoTarget, TerminalReadResult,
+    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetPieces, ProtectionSetUpdateInput,
+    ProtectionStream, ProtectionUndoTarget, TerminalReadResult,
 };
 use crate::quests::{
     Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
@@ -308,6 +316,28 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(ProtectionRepairInput)),
             }],
             returns: Some(schema(schema_for!(ProtectionRepairOutcome))),
+        },
+        CommandSpec {
+            name: "protection_set_pieces",
+            args: vec![ArgSpec {
+                name: "set_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(ProtectionSetPieces))),
+        },
+        CommandSpec {
+            name: "protection_set_pieces_confirm",
+            args: vec![
+                ArgSpec {
+                    name: "set_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "names",
+                    schema: schema(schema_for!(Vec<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ProtectionSetPieces))),
         },
         CommandSpec {
             name: "protection_trade_terminal_scan",
@@ -1126,6 +1156,22 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: None,
         },
         CommandSpec {
+            name: "stock_conversion_from_account",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockConversionFromAccountInput)),
+            }],
+            returns: Some(schema(schema_for!(Nullable<StockConversionFromAccount>))),
+        },
+        CommandSpec {
+            name: "stock_sale_from_account",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockSaleFromAccountInput)),
+            }],
+            returns: Some(schema(schema_for!(Nullable<StockSaleFromAccount>))),
+        },
+        CommandSpec {
             name: "activity_history",
             args: vec![ArgSpec {
                 name: "profession",
@@ -1245,6 +1291,27 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(AccountMeasuredSummary))),
         },
         CommandSpec {
+            name: "account_cost_placements",
+            args: vec![],
+            returns: Some(schema(schema_for!(CostPlacements))),
+        },
+        CommandSpec {
+            name: "account_cost_place",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(CostPlacementInput)),
+            }],
+            returns: Some(schema(schema_for!(CostPlacementResult))),
+        },
+        CommandSpec {
+            name: "account_cost_placement_clear",
+            args: vec![ArgSpec {
+                name: "item",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(CostPlacementResult))),
+        },
+        CommandSpec {
             name: "account_proposals",
             args: vec![ArgSpec {
                 name: "kind",
@@ -1281,6 +1348,80 @@ pub fn manifest() -> Vec<CommandSpec> {
             args: vec![ArgSpec {
                 name: "input",
                 schema: schema(schema_for!(AccountProposalDismissInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_session_minutes",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(AccountSessionMinutes))),
+        },
+        CommandSpec {
+            name: "account_arrival_unknown_origin",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountArrivalInput)),
+            }],
+            returns: Some(schema(schema_for!(AccountArrivalRecorded))),
+        },
+        CommandSpec {
+            name: "account_arrival_unignore",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountArrivalId)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_arrival_unknown_origin_undo",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_reconciliation_plan",
+            args: vec![],
+            returns: Some(schema(schema_for!(StockReconciliationDraft))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_paste",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockReconciliationPasteInput)),
+            }],
+            returns: Some(schema(schema_for!(StockReconciliationDraft))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_draft",
+            args: vec![],
+            returns: Some(schema(schema_for!(Nullable<StockReconciliationDraft>))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_revise",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockReconciliationReviseInput)),
+            }],
+            returns: Some(schema(schema_for!(StockReconciliationRevised))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_apply",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockReconciliationApplyInput)),
+            }],
+            returns: Some(schema(schema_for!(StockReconciliationApplied))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_undo",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
             }],
             returns: None,
         },

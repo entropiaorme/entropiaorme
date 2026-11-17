@@ -79,17 +79,7 @@ export function createListingProposals() {
 		},
 		/** Attach the topic listener, then read; returns the detach. */
 		connect(): () => void {
-			let detach: (() => void) | undefined;
-			let closed = false;
-			void store.subscribe().then((unlisten) => {
-				if (closed) unlisten();
-				else detach = unlisten;
-			});
-			void store.hydrate();
-			return () => {
-				closed = true;
-				detach?.();
-			};
+			return store.connect();
 		},
 	};
 }

@@ -340,6 +340,12 @@ export type TreeCuttingOverall = {
 	 * until something sells, which is the recognition boundary made
 	 * visible. */
 	realisedReturns: number;
+	/** The period's overhead: the tiers' and what no tier cycled to share it
+	 * by. A cost beside Cycled, never in it, which Realised Net takes off. */
+	overhead: number;
+	/** The part of `overhead` on no board activity. */
+	unassignedOverhead: number;
+	/** Realised returns over Cycled and the overhead. */
 	realisedRate: number;
 };
 
@@ -357,6 +363,10 @@ export type TreeCuttingSection = {
 	muProjectedReturns: number | null;
 	muRate: number | null;
 	realisedReturns: number;
+	/** The overhead of the sessions that swung this tier, shared to it by
+	 * what it cycled: a cost beside Cycled, never in it. */
+	overhead: number;
+	/** Realised returns over Cycled and the overhead. */
 	realisedRate: number;
 	items: TreeCuttingItem[];
 };
@@ -485,6 +495,17 @@ export function projectLoot(
 	return { items, muProjectedReturns, muRate };
 }
 
+/** Realised returns over what they cost: Cycled and the overhead beside it.
+ * Nothing spent reads as zero. */
+export function realisedRateOver(
+	realisedReturns: number,
+	cycled: number,
+	overhead: number,
+): number {
+	const costs = cycled + overhead;
+	return costs > 0 ? realisedReturns / costs : 0;
+}
+
 function toSection(
 	tier: HarvestTierComparison,
 	market: MarketHarvestData | null,
@@ -492,6 +513,7 @@ function toSection(
 	confidenceMode: ConfidenceMode,
 	realisedMarkup: number,
 ): TreeCuttingSection {
+	const realisedReturns = tier.returns + realisedMarkup;
 	const projection = projectLoot(tier.lootItems, tier.cycled, market, marketByItem, confidenceMode);
 
 	return {
@@ -502,8 +524,9 @@ function toSection(
 		lootRate: tier.lootRate,
 		muProjectedReturns: projection.muProjectedReturns,
 		muRate: projection.muRate,
-		realisedReturns: tier.returns + realisedMarkup,
-		realisedRate: tier.cycled > 0 ? (tier.returns + realisedMarkup) / tier.cycled : 0,
+		realisedReturns,
+		overhead: tier.overhead,
+		realisedRate: realisedRateOver(realisedReturns, tier.cycled, tier.overhead),
 		realisedMarkup,
 		items: projection.items,
 	};
@@ -606,6 +629,9 @@ export function createTreeCuttingModel() {
 		const muRate = muProjectedReturns !== null && cycled > 0 ? muProjectedReturns / cycled : null;
 		const realisedMarkup = sections.reduce((sum, s) => sum + s.realisedMarkup, 0);
 		const realisedReturns = returns + realisedMarkup;
+		// The period's whole overhead: the tiers' and what no tier cycled to
+		// share it by.
+		const overhead = data?.overhead ?? 0;
 		return {
 			cycled,
 			returns,
@@ -613,7 +639,9 @@ export function createTreeCuttingModel() {
 			muProjectedReturns,
 			muRate,
 			realisedReturns,
-			realisedRate: cycled > 0 ? realisedReturns / cycled : 0,
+			overhead,
+			unassignedOverhead: data?.unassignedOverhead ?? 0,
+			realisedRate: realisedRateOver(realisedReturns, cycled, overhead),
 			realisedMarkup,
 		};
 	});

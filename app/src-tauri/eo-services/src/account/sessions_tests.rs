@@ -52,6 +52,26 @@ fn summary_row(conn: &rusqlite::Connection, id: &str) {
         rusqlite::params![id, STARTED, ENDED],
     )
     .unwrap();
+    // The tracked facts that summary sums: the weapon's 66.00 on one kill
+    // looting 37.50 and 0.50 fired after it, armour 1.20 and healing 0.30.
+    conn.execute(
+        "UPDATE tracking_sessions SET armour_cost = 1.2, heal_cost = 0.3, dangling_cost = 0.5 \
+         WHERE id = ?1",
+        [id],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, loot_total_ped) \
+         VALUES (?1 || '-k', ?1, 'Atrox', ?2, 66.0, 37.5)",
+        rusqlite::params![id, STARTED + 1.0],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, cost_per_shot) \
+         VALUES (?1 || '-k', 'Rifle', 132, 0.5)",
+        [id],
+    )
+    .unwrap();
 }
 
 fn cached_rows(conn: &rusqlite::Connection) -> i64 {
@@ -68,16 +88,16 @@ fn a_measure_is_read_only_for_a_known_session_with_readings() {
     session_row(&conn, "quiet", ENDED + 600.0, Some(ENDED + 900.0));
     let roles = KnownRoles::default();
     assert_eq!(
-        session_measure(&conn, "absent", &roles, 1.0, None).unwrap(),
+        session_measure(&conn, "absent", &roles, None, 1.0, None).unwrap(),
         (MeasureRead::UnknownSession, None)
     );
     assert_eq!(
-        session_measure(&conn, "quiet", &roles, 1.0, None).unwrap(),
+        session_measure(&conn, "quiet", &roles, None, 1.0, None).unwrap(),
         (MeasureRead::NoReadings, None)
     );
     // Still being read (waiting for its closing readings): computed, not
     // sealed, and nothing to cache.
-    let (read, to_seal) = session_measure(&conn, "hunt", &roles, 1.0, Some("hunt")).unwrap();
+    let (read, to_seal) = session_measure(&conn, "hunt", &roles, None, 1.0, Some("hunt")).unwrap();
     let MeasureRead::Measured { measure, sealed } = read else {
         panic!("the hunt has readings");
     };
@@ -86,7 +106,7 @@ fn a_measure_is_read_only_for_a_known_session_with_readings() {
     assert_eq!(cached_rows(&conn), 0, "a read caches nothing itself");
     // Ended and no longer read (the app closed during the wait): sealed
     // then, handed back to cache, and served from the cache after.
-    let (read, to_seal) = session_measure(&conn, "hunt", &roles, 2.0, None).unwrap();
+    let (read, to_seal) = session_measure(&conn, "hunt", &roles, None, 2.0, None).unwrap();
     assert!(matches!(read, MeasureRead::Measured { sealed: true, .. }));
     let to_seal = to_seal.expect("a seal to cache");
     assert_eq!(to_seal.sealed_at, 2.0);
@@ -98,7 +118,7 @@ fn a_measure_is_read_only_for_a_known_session_with_readings() {
             ..
         }
     ));
-    let (read, to_seal) = session_measure(&conn, "hunt", &roles, 3.0, None).unwrap();
+    let (read, to_seal) = session_measure(&conn, "hunt", &roles, None, 3.0, None).unwrap();
     assert!(matches!(read, MeasureRead::Measured { sealed: true, .. }));
     assert!(
         to_seal.is_none(),
@@ -114,13 +134,15 @@ fn a_running_session_is_computed_on_every_read_and_never_cached() {
         record_reading(&mut conn, reading, Purpose::Session, Some("live")).unwrap();
     }
     let (read, to_seal) =
-        session_measure(&conn, "live", &KnownRoles::default(), 1.0, None).unwrap();
+        session_measure(&conn, "live", &KnownRoles::default(), None, 1.0, None).unwrap();
     let MeasureRead::Measured { measure, sealed } = read else {
         panic!("the session has readings");
     };
     assert!(!sealed && to_seal.is_none());
     assert_eq!(measure.coverage.level, CoverageLevel::Partial);
-    assert!(measure_to_seal(&conn, "live", None, 1.0).unwrap().is_none());
+    assert!(measure_to_seal(&conn, "live", None, None, 1.0)
+        .unwrap()
+        .is_none());
     assert_eq!(cached_rows(&conn), 0);
 }
 
@@ -145,7 +167,8 @@ fn a_session_s_own_baseline_reads_its_start_and_a_connect_reading_does_not() {
             };
             record_reading(&mut conn, reading, purpose, Some("s")).unwrap();
         }
-        let (read, _) = session_measure(&conn, "s", &KnownRoles::default(), 1.0, None).unwrap();
+        let (read, _) =
+            session_measure(&conn, "s", &KnownRoles::default(), None, 1.0, None).unwrap();
         let MeasureRead::Measured { measure, .. } = read else {
             panic!("the session has readings");
         };
@@ -173,7 +196,7 @@ fn measured_sessions_page_newest_first_beside_their_tracked_figures() {
     record_reading(&mut conn, &later, Purpose::Session, Some("later")).unwrap();
     session_row(&conn, "unread", ENDED + 7_200.0, Some(ENDED + 7_300.0));
 
-    let (first, sealed) = measured_sessions(&conn, None, Some(1), None, 10.0, None).unwrap();
+    let (first, sealed) = measured_sessions(&conn, None, Some(1), None, None, 10.0, None).unwrap();
     assert!(sealed.is_empty(), "a running session is never cached");
     assert_eq!(first.total, 2);
     assert_eq!(first.sessions.len(), 1);
@@ -183,7 +206,7 @@ fn measured_sessions_page_newest_first_beside_their_tracked_figures() {
     let next = first.next.expect("another page follows");
 
     let (second, sealed) =
-        measured_sessions(&conn, Some(&next), Some(1), None, 10.0, None).unwrap();
+        measured_sessions(&conn, Some(&next), Some(1), None, None, 10.0, None).unwrap();
     assert!(second.next.is_none());
     assert_eq!(sealed.len(), 1, "the ended hunt is sealed by this read");
     cache_sealed(&mut conn, &sealed, 10.0).unwrap();
@@ -213,10 +236,11 @@ fn measured_sessions_page_newest_first_beside_their_tracked_figures() {
             tracked.loot_tt,
             tracked.cycled
         ),
-        (66.0, 0.3, 1.2, 37.5, 67.5)
+        // The weapon is every shot fired, as the measured weapon counts it.
+        (66.5, 0.3, 1.2, 37.5, 68.0)
     );
     // Read again with the hunt cached: nothing to write.
-    let (_, sealed) = measured_sessions(&conn, None, None, None, 11.0, None).unwrap();
+    let (_, sealed) = measured_sessions(&conn, None, None, None, None, 11.0, None).unwrap();
     assert!(sealed.is_empty());
 }
 
@@ -232,7 +256,8 @@ fn measured_sessions_order_by_start_with_the_id_only_splitting_ties() {
     let mut seen = Vec::new();
     let mut seek = None;
     loop {
-        let (page, _) = measured_sessions(&conn, seek.as_ref(), Some(1), None, 1.0, None).unwrap();
+        let (page, _) =
+            measured_sessions(&conn, seek.as_ref(), Some(1), None, None, 1.0, None).unwrap();
         seen.extend(page.sessions.iter().map(|session| session.id.clone()));
         match page.next {
             Some(next) => seek = Some(next),
@@ -241,7 +266,7 @@ fn measured_sessions_order_by_start_with_the_id_only_splitting_ties() {
     }
     assert_eq!(seen, ["a", "c", "b", "z"]);
     // A page is never larger than the cap, whatever is asked for.
-    let (page, _) = measured_sessions(&conn, None, Some(1_000), None, 1.0, None).unwrap();
+    let (page, _) = measured_sessions(&conn, None, Some(1_000), None, None, 1.0, None).unwrap();
     assert_eq!(page.sessions.len(), 4);
     assert_eq!(MEASURED_PAGE_MAX, 50);
 }
@@ -255,7 +280,7 @@ fn a_page_is_capped_at_fifty() {
         session_row(&conn, &id, f64::from(index), None);
         record_reading(&mut conn, &reading, Purpose::Session, Some(&id)).unwrap();
     }
-    let (page, _) = measured_sessions(&conn, None, Some(500), None, 1.0, None).unwrap();
+    let (page, _) = measured_sessions(&conn, None, Some(500), None, None, 1.0, None).unwrap();
     assert_eq!(page.sessions.len(), 50);
     assert!(page.next.is_some());
     assert_eq!(page.total, 60);
@@ -269,7 +294,7 @@ async fn deleting_a_session_keeps_its_readings_untagged_and_drops_its_measure() 
         .unwrap();
     db.with_writer(|conn| {
         store_the_hunt(conn, "hunt");
-        let seal = measure_to_seal(conn, "hunt", None, 1.0)
+        let seal = measure_to_seal(conn, "hunt", None, None, 1.0)
             .unwrap()
             .expect("an ended hunt with readings");
         cache_sealed(conn, &[seal], 1.0).unwrap();
@@ -277,7 +302,7 @@ async fn deleting_a_session_keeps_its_readings_untagged_and_drops_its_measure() 
     })
     .await
     .unwrap();
-    crate::tracking_reads::delete_session_impl(&db, "hunt")
+    crate::session_delete::delete_session_impl(&db, "hunt")
         .await
         .unwrap();
     let (readings, tagged, measures): (i64, i64, i64) = db
@@ -316,7 +341,7 @@ fn releasing_a_session_touches_no_other() {
 /// The hunt computed for sealing, as a read hands it back.
 fn hunt_to_seal(conn: &mut rusqlite::Connection) -> super::sessions::ToSeal {
     store_the_hunt(conn, "hunt");
-    measure_to_seal(conn, "hunt", None, 1.0)
+    measure_to_seal(conn, "hunt", None, None, 1.0)
         .unwrap()
         .expect("an ended hunt with readings")
 }
@@ -330,7 +355,8 @@ fn a_seal_is_not_written_once_a_reading_was_stored_after_it_was_computed() {
     assert_eq!(cache_sealed(&mut conn, &[seal], 2.0).unwrap(), 0);
     assert_eq!(cached_rows(&conn), 0);
     // The next read computes again, over every reading.
-    let (_, to_seal) = session_measure(&conn, "hunt", &KnownRoles::default(), 3.0, None).unwrap();
+    let (_, to_seal) =
+        session_measure(&conn, "hunt", &KnownRoles::default(), None, 3.0, None).unwrap();
     assert_eq!(
         cache_sealed(&mut conn, &[to_seal.unwrap()], 3.0).unwrap(),
         1
@@ -358,12 +384,16 @@ fn a_late_seal_never_replaces_one_computed_from_more_readings() {
     for reading in readings.iter().take(10) {
         record_reading(&mut conn, reading, Purpose::Session, Some("hunt")).unwrap();
     }
-    let early = measure_to_seal(&conn, "hunt", None, 1.0).unwrap().unwrap();
+    let early = measure_to_seal(&conn, "hunt", None, None, 1.0)
+        .unwrap()
+        .unwrap();
     for reading in readings.iter().skip(10) {
         record_reading(&mut conn, reading, Purpose::Session, Some("hunt")).unwrap();
     }
     // The connection's own seal, over every reading, lands first.
-    let full = measure_to_seal(&conn, "hunt", None, 2.0).unwrap().unwrap();
+    let full = measure_to_seal(&conn, "hunt", None, None, 2.0)
+        .unwrap()
+        .unwrap();
     assert_eq!(cache_sealed(&mut conn, &[full], 2.0).unwrap(), 1);
     let sealed_count = |conn: &rusqlite::Connection| -> i64 {
         conn.query_row(
@@ -391,4 +421,112 @@ fn a_late_seal_never_replaces_one_computed_from_more_readings() {
     .unwrap();
     assert_eq!(cache_sealed(&mut conn, &[early], 4.0).unwrap(), 0);
     assert_eq!(sealed_count(&conn), before);
+}
+
+#[test]
+fn a_topped_up_measure_totals_its_ammo_as_topped_up_and_never_as_settled() {
+    use super::measure::{measure_session, SessionWindow};
+    use super::reading::Container;
+    use super::sessions::MeasureTotals;
+    use super::test_support::reading;
+    const C: Container = Container::Carried;
+    // 10 000 fired, a top-up minute, then 15 000 fired.
+    let readings = [
+        reading(0.0, 0, &[("Universal Ammo", C, 100_000, 1_000)]),
+        reading(60.0, 0, &[("Universal Ammo", C, 90_000, 900)]),
+        reading(120.0, 0, &[("Universal Ammo", C, 95_000, 950)]),
+        reading(180.0, 0, &[("Universal Ammo", C, 80_000, 800)]),
+    ];
+    let window = SessionWindow {
+        started_at: 0.0,
+        ended_at: Some(180.0),
+    };
+    let roles = KnownRoles::from_parts(&[], &[], None);
+    let measure = measure_session(&window, &readings, &roles).unwrap().measure;
+    let totals = MeasureTotals::of(&measure).unwrap();
+    assert_eq!(
+        totals.ammo,
+        AmmoTotal::ToppedUp {
+            burned: Amount::exact(2_500_000),
+            steps: 1
+        }
+    );
+    // The same minutes with nothing topped up total as settled.
+    let readings = [
+        reading(0.0, 0, &[("Universal Ammo", C, 100_000, 1_000)]),
+        reading(60.0, 0, &[("Universal Ammo", C, 90_000, 900)]),
+        reading(120.0, 0, &[("Universal Ammo", C, 85_000, 850)]),
+    ];
+    let measure = measure_session(&window, &readings, &roles).unwrap().measure;
+    assert_eq!(
+        MeasureTotals::of(&measure).unwrap().ammo,
+        AmmoTotal::Settled(Amount::exact(1_500_000))
+    );
+}
+
+#[test]
+fn the_measured_summary_leaves_a_topped_up_weapon_out_of_its_weapon_pair() {
+    use super::reading::Container;
+    use super::sessions::measured_summary;
+    use super::test_support::reading;
+    const C: Container = Container::Carried;
+    let mut conn = migrated_in_memory().unwrap();
+    // Two sessions read whole, one after the other, each a kill the chat
+    // log priced at 1.50: one fires steadily, the other has ammo bought
+    // mid-session.
+    for (id, middle, from) in [("steady", 85_000, 0.0), ("topped", 95_000, 1_000.0)] {
+        session_row(&conn, id, from + 1_000.0, Some(from + 1_300.0));
+        conn.execute(
+            "INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, loot_total_ped) \
+             VALUES (?1 || '-k', ?1, 'Atrox', ?2, 1.5, 0.5)",
+            rusqlite::params![id, from + 1_100.0],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, cost_per_shot) \
+             VALUES (?1 || '-k', 'Opalo', 1, 1.5)",
+            [id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_summaries \
+                 (session_id, started_at, ended_at, duration_hours, kills, loot_tt, weapon_cost, \
+                  enhancer_cost, armour_cost, heal_cost, dangling_cost, cycled_ped, \
+                  regular_skill_ped_json, attribute_levels_json, regular_skill_tt, \
+                  attribute_levels_total) \
+             VALUES (?1, ?2, ?3, 0.1, 1, 0.5, 1.5, 0, 0, 0, 0, 1.5, '{}', '{}', 0, 0)",
+            rusqlite::params![id, from + 1_000.0, from + 1_300.0],
+        )
+        .unwrap();
+        let readings = [
+            reading(from + 970.0, 0, &[("Universal Ammo", C, 100_000, 1_000)]),
+            reading(from + 1_060.0, 0, &[("Universal Ammo", C, 90_000, 900)]),
+            reading(
+                from + 1_180.0,
+                0,
+                &[("Universal Ammo", C, middle, middle / 100)],
+            ),
+            reading(from + 1_330.0, 0, &[("Universal Ammo", C, 80_000, 800)]),
+        ];
+        for reading in &readings {
+            record_reading(&mut conn, reading, Purpose::Session, Some(id)).unwrap();
+        }
+        let seal = measure_to_seal(&conn, id, None, None, 5_000.0)
+            .unwrap()
+            .expect("an ended session with readings");
+        assert_eq!(
+            seal.computed.measure.coverage.level,
+            CoverageLevel::Complete
+        );
+        cache_sealed(&mut conn, &[seal], 5_000.0).unwrap();
+    }
+    let summary = measured_summary(&conn, &std::collections::HashSet::new()).unwrap();
+    assert_eq!(summary.included, 2);
+    // Only the steady session's weapon is set beside its tracked figure:
+    // the topped-up one has no whole-session ammo figure.
+    assert_eq!(summary.weapon.sessions, 1);
+    assert!((summary.weapon.tracked - 1.5).abs() < 1e-9);
+    assert_eq!(summary.weapon.measured, Amount::exact(2_000_000));
+    // Its other figures still count.
+    assert_eq!(summary.loot.sessions, 2);
 }

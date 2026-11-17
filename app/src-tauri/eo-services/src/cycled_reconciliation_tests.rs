@@ -19,10 +19,18 @@
 //!   cost;
 //! - the maintained projections equal a rebuild from the raw tables.
 //!
+//! Some sessions also carry costs the account readings measured, bucket by
+//! bucket: a measured bucket is the session's cost wherever a read reports
+//! it (at nothing, too), the tracked events share it out below the
+//! session, and a bucket the readings left unmeasured keeps its tracked
+//! figure.
+//!
 //! How each stream's amount reaches its bucket (a protection recording's
 //! spread over sessions, a dose's booking, a shot correction) is proven
 //! where that stream is written; this property starts from the recorded
-//! facts. Amounts are whole PEC so every figure is exact at two decimals.
+//! facts. Amounts are whole PEC, so every tracked figure is exact at two
+//! decimals; a measured bucket shared over events is exact to a rounding
+//! error.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -93,6 +101,10 @@ struct GenSession {
     heal_pec: u32,
     consumable_pec: u32,
     dangling_pec: u32,
+    /// The account readings' measured costs, when the session has them: per
+    /// bucket (weapon, enhancer, harvesting, healing, armour, consumables),
+    /// the amount in PEC, or unmeasured.
+    measured: Option<[Option<u32>; 6]>,
 }
 
 fn gen_kill(contexts: usize) -> impl Strategy<Value = GenKill> {
@@ -128,6 +140,10 @@ fn gen_session() -> impl Strategy<Value = GenSession> {
                     0..4,
                 ),
                 (0u32..500, 0u32..500, 0u32..500, 0u32..50),
+                prop::option::of(prop::array::uniform6(prop::option::of(prop_oneof![
+                    Just(0u32),
+                    1u32..2000
+                ]))),
             )
                 .prop_map(
                     |(
@@ -138,6 +154,7 @@ fn gen_session() -> impl Strategy<Value = GenSession> {
                         kills,
                         swings,
                         (armour_pec, heal_pec, consumable_pec, dangling_pec),
+                        measured,
                     )| GenSession {
                         ended_hours_ago,
                         duration_minutes,
@@ -149,6 +166,7 @@ fn gen_session() -> impl Strategy<Value = GenSession> {
                         heal_pec,
                         consumable_pec,
                         dangling_pec,
+                        measured,
                     },
                 )
         },
@@ -159,19 +177,29 @@ fn ped(pec: u32) -> f64 {
     f64::from(pec) / 100.0
 }
 
-/// One session's expected buckets, in PEC.
+/// One session's expected buckets, in PED, and what its kills and swings
+/// carry of them.
 #[derive(Debug, Default, Clone, Copy)]
 struct Buckets {
-    weapon: u64,
-    enhancer: u64,
-    harvest: u64,
-    armour: u64,
-    heal: u64,
-    consumable: u64,
-    dangling: u64,
+    weapon: f64,
+    enhancer: f64,
+    harvest: f64,
+    armour: f64,
+    heal: f64,
+    consumable: f64,
+    dangling: f64,
+    /// The weapon and enhancer cost its kills carry.
+    kill_grain: f64,
+    /// The harvesting cost its swings carry.
+    swing_grain: f64,
 }
 
 impl Buckets {
+    /// The buckets as the chat log tracked them, then resolved against the
+    /// session's measured costs, by the rule stated independently here: a
+    /// measured bucket is its measured amount, nothing included, shared over
+    /// its tracked events by their cost (the weapon's over its kills and its
+    /// dangling spend); a bucket left unmeasured stays tracked.
     fn of(session: &GenSession) -> Self {
         let kill_weapon = |kill: &GenKill| -> u64 {
             kill.phases
@@ -179,22 +207,68 @@ impl Buckets {
                 .map(|(shots, pec)| u64::from(*shots) * u64::from(*pec))
                 .sum()
         };
-        Self {
-            weapon: session.kills.iter().map(kill_weapon).sum(),
-            enhancer: session
-                .kills
-                .iter()
-                .map(|k| u64::from(k.enhancer_pec))
-                .sum(),
-            harvest: session.swings.iter().map(|(pec, _)| u64::from(*pec)).sum(),
-            armour: u64::from(session.armour_pec),
-            heal: u64::from(session.heal_pec),
-            consumable: u64::from(session.consumable_pec),
-            dangling: u64::from(session.dangling_pec),
+        let pec = |amount: u64| amount as f64 / 100.0;
+        let weapon = pec(session.kills.iter().map(kill_weapon).sum());
+        let enhancer = pec(session
+            .kills
+            .iter()
+            .map(|k| u64::from(k.enhancer_pec))
+            .sum());
+        let harvest = pec(session.swings.iter().map(|(pec, _)| u64::from(*pec)).sum());
+        let dangling = ped(session.dangling_pec);
+        let mut out = Self {
+            weapon,
+            enhancer,
+            harvest,
+            armour: ped(session.armour_pec),
+            heal: ped(session.heal_pec),
+            consumable: ped(session.consumable_pec),
+            dangling,
+            kill_grain: weapon + enhancer,
+            swing_grain: harvest,
+        };
+        let Some(measured) = session.measured else {
+            return out;
+        };
+        let taken = |index: usize| -> Option<f64> { measured[index].map(ped) };
+        let mut kill_weapon_resolved = weapon;
+        if let Some(amount) = taken(0) {
+            if weapon + dangling > 0.0 {
+                out.weapon = weapon * amount / (weapon + dangling);
+                out.dangling = dangling * amount / (weapon + dangling);
+                kill_weapon_resolved = out.weapon;
+            } else {
+                out.weapon = amount;
+                kill_weapon_resolved = 0.0;
+            }
         }
+        let mut kill_enhancer_resolved = enhancer;
+        if let Some(amount) = taken(1) {
+            out.enhancer = amount;
+            if enhancer == 0.0 {
+                kill_enhancer_resolved = 0.0;
+            } else {
+                kill_enhancer_resolved = amount;
+            }
+        }
+        if let Some(amount) = taken(2) {
+            out.harvest = amount;
+            out.swing_grain = if harvest > 0.0 { amount } else { 0.0 };
+        }
+        if let Some(amount) = taken(3) {
+            out.heal = amount;
+        }
+        if let Some(amount) = taken(4) {
+            out.armour = amount;
+        }
+        if let Some(amount) = taken(5) {
+            out.consumable = amount;
+        }
+        out.kill_grain = kill_weapon_resolved + kill_enhancer_resolved;
+        out
     }
 
-    fn cycled(self) -> u64 {
+    fn cycled(self) -> f64 {
         self.weapon
             + self.enhancer
             + self.harvest
@@ -212,6 +286,8 @@ impl Buckets {
         self.heal += other.heal;
         self.consumable += other.consumable;
         self.dangling += other.dangling;
+        self.kill_grain += other.kill_grain;
+        self.swing_grain += other.swing_grain;
     }
 }
 
@@ -319,6 +395,10 @@ fn seed(conn: &rusqlite::Connection, now: f64, sessions: &[GenSession]) -> Resul
             )?;
         }
 
+        if let Some(measured) = &session.measured {
+            seed_measured_costs(conn, &id, measured)?;
+        }
+
         crate::session_summary::write_session_summary(conn, &id)?;
         crate::daily_rollup::refresh_session_days(conn, &id)?;
         crate::session_rollup::recompute_session(conn, &id)?;
@@ -326,10 +406,68 @@ fn seed(conn: &rusqlite::Connection, now: f64, sessions: &[GenSession]) -> Resul
     Ok(())
 }
 
-fn close(actual: f64, expected_pec: u64, what: &str) {
-    let expected = expected_pec as f64 / 100.0;
+/// The measured costs as the account side stores them for a sealed
+/// session, with a measured overhead bucket beside them that no Cycled
+/// figure may include.
+fn seed_measured_costs(
+    conn: &rusqlite::Connection,
+    id: &str,
+    measured: &[Option<u32>; 6],
+) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO account_session_costs (session_id, costs_version, measure_version, \
+         measure_computed_at, status, reason, computed_at) \
+         VALUES (?1, ?2, ?3, 1.0, 'measured', NULL, 2.0)",
+        rusqlite::params![
+            id,
+            crate::session_costs::MEASURED_COSTS_VERSION,
+            crate::session_costs::MEASURED_MEASURE_VERSION
+        ],
+    )?;
+    let buckets = [
+        "weapon",
+        "enhancer",
+        "harvesting",
+        "healing",
+        "armour",
+        "consumables",
+    ];
+    for (bucket, amount) in buckets.iter().zip(measured) {
+        match amount {
+            Some(pec) => conn.execute(
+                "INSERT INTO account_session_cost_buckets \
+                 (session_id, bucket, basis, reason, amount_micro_ped, precision) \
+                 VALUES (?1, ?2, 'measured', NULL, ?3, 'wholePec')",
+                rusqlite::params![id, bucket, i64::from(*pec) * 10_000],
+            )?,
+            None => conn.execute(
+                "INSERT INTO account_session_cost_buckets \
+                 (session_id, bucket, basis, reason, amount_micro_ped, precision) \
+                 VALUES (?1, ?2, 'unmeasured', 'gap', NULL, NULL)",
+                rusqlite::params![id, bucket],
+            )?,
+        };
+    }
+    conn.execute(
+        "INSERT INTO account_session_cost_buckets \
+         (session_id, bucket, basis, reason, amount_micro_ped, precision) \
+         VALUES (?1, 'travel', 'measured', NULL, 3000000, 'wholePec')",
+        [id],
+    )?;
+    Ok(())
+}
+
+fn close(actual: f64, expected: f64, what: &str) {
+    near(actual, expected, 0, what);
+}
+
+/// Within the rounding of `parts` figures each shown to the PEC: a measured
+/// bucket shared over events leaves fractions of a PEC on each part, while
+/// a whole session's figure stays whole.
+fn near(actual: f64, expected: f64, parts: usize, what: &str) {
+    let tolerance = 1e-6 + 0.005 * parts as f64;
     assert!(
-        (actual - expected).abs() < 1e-6,
+        (actual - expected).abs() <= tolerance,
         "{what}: {actual} != {expected}"
     );
 }
@@ -386,7 +524,7 @@ async fn check(sessions: Vec<GenSession>) {
         };
         match stored {
             Some(cycled) => close(cycled, expected.cycled(), "summary cycled"),
-            None => assert_eq!(expected.cycled(), 0, "a costed session has a summary"),
+            None => assert_eq!(expected.cycled(), 0.0, "a costed session has a summary"),
         }
         let row = rows.iter().find(|row| row["id"] == id.as_str()).unwrap();
         close(
@@ -411,7 +549,7 @@ async fn check(sessions: Vec<GenSession>) {
     let losses = &overview.losses_breakdown;
     let lines = &losses.cycled_breakdown;
     close(losses.tracking_cost, total.cycled(), "overview cycled");
-    close(lines.weapon.as_f64(), total.weapon, "weapon line");
+    near(lines.weapon.as_f64(), total.weapon, 1, "weapon line");
     close(lines.enhancer.as_f64(), total.enhancer, "enhancer line");
     close(lines.harvest.as_f64(), total.harvest, "harvest line");
     close(lines.armour.as_f64(), total.armour, "armour line");
@@ -421,7 +559,7 @@ async fn check(sessions: Vec<GenSession>) {
         total.consumable,
         "consumables line",
     );
-    close(lines.dangling.as_f64(), total.dangling, "dangling line");
+    near(lines.dangling.as_f64(), total.dangling, 1, "dangling line");
     let timeline: f64 = overview.timeline.iter().map(|day| day.tracking_cost).sum();
     close(timeline, total.cycled(), "overview timeline");
 
@@ -432,34 +570,44 @@ async fn check(sessions: Vec<GenSession>) {
         .iter()
         .map(|tier| tier.cycled)
         .sum();
-    close(tiers, total.harvest, "harvest tiers");
+    near(
+        tiers,
+        total.swing_grain,
+        harvest.tier_comparisons.len(),
+        "harvest tiers",
+    );
 
     // Hunting: kill-grain weapon and enhancer cost of the sessions that
     // hunted, partitioned by definition, by top-level activity row within
     // each definition (a co-active bundle is one row, never one per
     // member), and by species.
-    let hunted: u64 = sessions
+    let hunted: f64 = sessions
         .iter()
         .zip(&buckets)
         .filter(|(session, _)| !session.kills.is_empty())
-        .map(|(_, buckets)| buckets.weapon + buckets.enhancer)
+        .map(|(_, buckets)| buckets.kill_grain)
         .sum();
     let hunting = service.hunting_activity("all").await.unwrap();
-    close(hunting.overall.cycled, hunted, "hunting overall");
+    near(hunting.overall.cycled, hunted, 1, "hunting overall");
     let definitions: f64 = hunting.definitions.iter().map(|row| row.cycled).sum();
-    close(definitions, hunted, "hunting definitions");
+    near(
+        definitions,
+        hunted,
+        hunting.definitions.len(),
+        "hunting definitions",
+    );
     for definition in &hunting.definitions {
         let activities: f64 = definition.activities.iter().map(|row| row.cycled).sum();
-        assert!(
-            (activities - definition.cycled).abs() < 1e-6,
-            "{}: activities {activities} != {}",
-            definition.name,
-            definition.cycled
+        near(
+            activities,
+            definition.cycled,
+            definition.activities.len() + 1,
+            &format!("{} activities", definition.name),
         );
     }
     let species: f64 = hunting.species.iter().map(|row| row.cycled).sum();
-    close(species, hunted, "hunting species");
-    assert!(hunting.overall.cycled <= losses.tracking_cost + 1e-6);
+    near(species, hunted, hunting.species.len(), "hunting species");
+    assert!(hunting.overall.cycled <= losses.tracking_cost + 0.005 + 1e-6);
 
     // Rebuilding every projection from the raw tables changes nothing.
     let report = crate::maintenance::rebuild_and_verify(&db, now)

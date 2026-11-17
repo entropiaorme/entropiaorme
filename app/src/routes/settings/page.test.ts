@@ -39,6 +39,9 @@ const account = vi.hoisted(() => ({
 	getSessionMeasure: vi.fn(),
 	getMeasuredSessions: vi.fn(),
 	getMeasuredSummary: vi.fn(),
+	getCostPlacements: vi.fn(async () => ({ awaiting: [], placed: [] })),
+	placeCostItem: vi.fn(),
+	clearCostPlacement: vi.fn(),
 }));
 vi.mock('$lib/api/account', () => account);
 

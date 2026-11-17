@@ -245,6 +245,14 @@ describe('inventory assets', () => {
 		expect(screen.getByText(/1% gain then enters Realised Net/i)).not.toBeNull();
 	});
 
+	it('offers checking the loot against the account', async () => {
+		const onreconcile = vi.fn();
+		render(InventoryHoldings, { props: { ...lootProps([]), onreconcile } });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Check against your account' }));
+		expect(onreconcile).toHaveBeenCalledOnce();
+	});
+
 	it('offers preset and custom packet fee caps beside markup confidence', async () => {
 		const onchange = vi.fn();
 		render(InventoryHoldings, {

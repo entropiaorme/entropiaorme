@@ -12,6 +12,7 @@
  */
 
 import type { ProtectionCandidateSession, TerminalReadRefusal } from '$lib/api';
+import { formatPed } from '$lib/utils/format';
 
 /** The sessions of one session type, oldest first. */
 export interface SessionGroup {
@@ -217,4 +218,31 @@ export function terminalRefusalLine(
 			return unhandled;
 		}
 	}
+}
+
+/** What a repair splits into beside what the account readings already
+ * billed, e.g. "2.00 PED: 1.13 already billed from your account, 0.87 over
+ * 2 sessions". */
+export function billedSplit(
+	totalPed: number,
+	billedPed: number,
+	spreadPed: number,
+	sessions: number,
+): string {
+	const over =
+		sessions === 0
+			? 'to no session'
+			: `over ${sessions} ${sessions === 1 ? 'session' : 'sessions'}`;
+	return `${formatPed(totalPed)} PED: ${formatPed(billedPed)} already billed from your account, ${formatPed(spreadPed)} ${over}`;
+}
+
+/** Why a figure cannot be recorded beside what the account readings
+ * already billed, in the player's terms. */
+export function billedRefusalLine(refusal: 'below' | 'allBilled', limited: boolean): string {
+	if (refusal === 'allBilled') {
+		return 'Everything this repair restored was already billed from your account';
+	}
+	return limited
+		? 'This set lost less since its baseline than the sessions already billed from your account'
+		: 'This repair is less than the decay already billed from your account since the last repair';
 }

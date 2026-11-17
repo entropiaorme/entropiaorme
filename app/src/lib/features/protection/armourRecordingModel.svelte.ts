@@ -6,7 +6,13 @@
  * Unlimited protection is one pooled repair: the amount is the Repair
  * Terminal total. A limited set is measured by its Trade Terminal value; the
  * first reading is a baseline, a later lower one books the TT lost at the
- * set's markup, and a higher one needs a reason to reset the baseline.
+ * set's markup, and a higher one needs a reason to reset the baseline. A
+ * set whose pieces an account reading holds measures from that reading, so
+ * no baseline reading is needed. Sessions the account readings measured are
+ * never covered: a recording with only those since the last one has
+ * nothing to record. What the readings already billed of a repair or of a
+ * set's loss is taken off before the rest is spread, and a figure below it
+ * is refused.
  */
 
 import {
@@ -40,6 +46,10 @@ import {
 } from './armourRecording';
 
 export type RecordingPhase = 'ready' | 'scanning' | 'review' | 'saved';
+
+/** Why a figure cannot be recorded beside what the account readings
+ * already billed: it is below that, or it restored nothing more. */
+export type BilledRefusal = 'below' | 'allBilled';
 
 /** What a confirmed recording did, in the player's terms. */
 export type RecordingResult =
@@ -100,15 +110,36 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 			: null,
 	);
 	const isBaseline = $derived(stream.kind === 'limited' && baselineTt === null);
-	const increased = $derived(
-		baselineTt !== null && amount !== null && amount > baselineTt + INCREASE_TOLERANCE,
+	/** The baseline is the set's pieces in an account reading. */
+	const baselineFromAccount = $derived(
+		stream.kind === 'limited' && candidates?.baselineSource === 'account',
 	);
+	/** What the account readings already billed of what this measures. */
+	const billed = $derived(candidates?.billedFromAccountPed ?? 0);
+	const tolerance = $derived((candidates?.accountTolerancePed ?? 0) + INCREASE_TOLERANCE);
+	const increased = $derived(
+		baselineTt !== null && amount !== null && amount > baselineTt + tolerance,
+	);
+	/** The TT this recording measures beyond what the readings billed: the
+	 * repair total, or the set's fall from its baseline, less that part. */
+	const beyondBilled = $derived.by((): number | null => {
+		if (amount === null) return null;
+		if (stream.kind === 'unlimited') return amount - billed;
+		if (baselineTt === null || increased) return null;
+		return baselineTt - amount - billed;
+	});
+	const billedRefusal = $derived.by((): BilledRefusal | null => {
+		if (billed <= 0 || beyondBilled === null) return null;
+		if (beyondBilled < -tolerance) return 'below';
+		if (stream.kind === 'unlimited' && beyondBilled <= tolerance) return 'allBilled';
+		return null;
+	});
 	/** The cost this recording will book, before it is confirmed. */
 	const costPed = $derived.by((): number | null => {
-		if (amount === null) return null;
-		if (stream.kind === 'unlimited') return amount;
-		if (baselineTt === null || increased || !set) return null;
-		return ((baselineTt - amount) * set.markupPercent) / 100;
+		if (beyondBilled === null || billedRefusal !== null) return null;
+		if (stream.kind === 'unlimited') return Math.max(0, beyondBilled);
+		if (!set) return null;
+		return (Math.max(0, beyondBilled) * set.markupPercent) / 100;
 	});
 	const sessions = $derived(candidates?.sessions ?? []);
 	const earlier = $derived(candidates?.earlier ?? []);
@@ -119,6 +150,15 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 	const hits = $derived(totalHits(chosen));
 	/** Whether this recording spreads over sessions at all. */
 	const spreads = $derived(!isBaseline && !increased);
+	/** Every session since the previous recording was measured from the
+	 * account: there is nothing left for this recording to cover. */
+	const allMeasured = $derived(
+		!isBaseline &&
+			!increased &&
+			candidates !== null &&
+			candidates.sessions.length === 0 &&
+			candidates.measuredSessions > 0,
+	);
 	/** The picker only earns its space when there is a choice to make. */
 	const pickerVisible = $derived(spreads && (sessions.length > 1 || earlier.length > 0));
 	const canConfirm = $derived(
@@ -127,6 +167,8 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 			!saving &&
 			!candidatesLoading &&
 			(!increased || resetReason.trim().length > 0) &&
+			!allMeasured &&
+			billedRefusal === null &&
 			(stream.kind === 'unlimited' || set !== null),
 	);
 
@@ -355,6 +397,28 @@ export function createArmourRecording(options: ArmourRecordingOptions) {
 		},
 		get baselineTt() {
 			return baselineTt;
+		},
+		get baselineFromAccount() {
+			return baselineFromAccount;
+		},
+		get allMeasured() {
+			return allMeasured;
+		},
+		/** The figure entered, read as PED; absent while it does not read. */
+		get amount() {
+			return amount;
+		},
+		/** What the account readings already billed of what this measures. */
+		get billedFromAccount() {
+			return billed;
+		},
+		get billedRefusal() {
+			return billedRefusal;
+		},
+		/** The account reading passed over as the baseline for lacking a
+		 * piece: when it was taken. */
+		get incompleteAccountReadingAt() {
+			return stream.kind === 'limited' ? (candidates?.incompleteAccountReadingAt ?? null) : null;
 		},
 		get isBaseline() {
 			return isBaseline;

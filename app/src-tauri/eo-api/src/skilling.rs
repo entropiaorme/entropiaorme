@@ -210,7 +210,10 @@ pub struct SkillingForecastSource {
     pub markup: Nullable<f64>,
     /// Cycled minus loot TT.
     pub tt_cost: f64,
-    /// TT cost less realised markup; null with the markup.
+    /// The overhead the forecast cycling carries (travel, field logistics,
+    /// what the app cannot place), at the recorded overhead per PED cycled.
+    pub overhead: f64,
+    /// TT cost and overhead, less realised markup; null with the markup.
     pub net_cost: Nullable<f64>,
     /// The TT cost under Community Model v1 at the planning looter basis;
     /// null when the model prices none of the definition's weapon spend.
@@ -400,6 +403,7 @@ fn source_dto(source: SourceForecast) -> SkillingForecastSource {
         kills: source.kills.into(),
         markup: source.markup.into(),
         tt_cost: source.tt_cost,
+        overhead: source.overhead,
         net_cost: source.net_cost.into(),
         expected: source.expected.map(Into::into).into(),
         skills: source.skills.into_iter().map(skill_dto).collect(),

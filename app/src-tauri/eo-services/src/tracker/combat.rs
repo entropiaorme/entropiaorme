@@ -5,6 +5,7 @@
 use eo_wire::domain_events::{TrackingReason, TrackingStatus};
 
 use crate::bus_events::{BusEvent, CombatPayload, HotbarItemKind};
+use crate::enhancer_breaks::{markup_percent, BreakPricing, EnhancerBreak};
 use crate::expected_hunting::OffensiveLoadoutEvidence;
 use crate::ped::Ped;
 use crate::tracking_models::ToolStats;
@@ -16,7 +17,7 @@ use super::attribution::{
 };
 use super::providers::Providers;
 use super::session::ActiveSession;
-use super::time::{instant_to_epoch, resolve_local};
+use super::time::{instant_to_epoch, parse_timestamp_instant, resolve_local};
 use super::weapon_effects::EffectActivation;
 use super::weapon_evidence::ShotEvidence;
 use super::weapons::break_matches_active_weapon;
@@ -32,12 +33,22 @@ pub(super) struct Accumulator {
     pub(super) damage_dealt: f64,
     pub(super) damage_taken: f64,
     pub(super) critical_hits: i64,
-    pub(super) enhancer_cost: Ped,
+    /// The enhancer breaks since the last kill: the next kill carries
+    /// their cost, and keeps them.
+    pub(super) breaks: Vec<EnhancerBreak>,
+    /// Shrapnel the game returned for breaks, arrived in a tick of its own:
+    /// no kill, so the next kill keeps it among its loot lines (tagged, so
+    /// never loot).
+    pub(super) returns: Vec<crate::tracking_models::LootItem>,
     /// Keyed by phase key (the bare tool name, then `name#2`...), in
     /// first-seen order.
     pub(super) tool_stats: Vec<(String, ToolStats)>,
     /// Stored weapon evidence for this kill's shots, written with it.
     pub(super) evidence: Vec<ShotEvidence>,
+    /// When each shot of this fight was recorded, in memory only: what of
+    /// its spend came after a given instant (the live costs time the
+    /// tracked play after the account's latest reading by it).
+    pub(super) shot_times: Vec<f64>,
 }
 
 struct DefenceEvidence {
@@ -59,8 +70,10 @@ impl Accumulator {
             .sum()
     }
 
-    pub(super) fn total_cost(&self) -> Ped {
-        self.weapon_cost() + self.enhancer_cost
+    /// What the breaks since the last kill cost, as far as each is priced:
+    /// an unpriced break adds nothing here and is kept with its reason.
+    pub(super) fn enhancer_cost(&self) -> Ped {
+        self.breaks.iter().filter_map(EnhancerBreak::cost).sum()
     }
 }
 
@@ -163,6 +176,7 @@ impl TrackerActor {
             return None;
         }
         active.accumulator.shots_fired += 1;
+        active.accumulator.shot_times.push(observed_at);
         if critical {
             active.accumulator.critical_hits += 1;
         }
@@ -589,13 +603,22 @@ impl TrackerActor {
         }
     }
 
-    /// Handle an enhancer break event: update enhancer state for
-    /// future shots. There is no DB write or publish.
+    /// Handle an enhancer break event. A break of a damage enhancer on the
+    /// weapon in use updates its stacks for later shots and is kept, priced,
+    /// with the shots it was fired among: the next kill carries its cost.
+    /// Any other break leaves the session unchanged.
     pub(super) fn on_enhancer_break(&mut self, event: &BusEvent) {
         let BusEvent::EnhancerBreak(payload) = event else {
             return;
         };
-        let Some(active) = self.session.active_mut() else {
+        let Self {
+            session,
+            providers,
+            clock,
+            chatlog_clock,
+            ..
+        } = &mut *self;
+        let Some(active) = session.active_mut() else {
             return;
         };
 
@@ -630,11 +653,41 @@ impl TrackerActor {
         // the session unchanged.
         active.dirty = true;
         let key = active.weapons.active_key.clone().expect("checked above");
-        active
+        let state = active
             .weapons
             .enhancer_states
             .get_mut(&key)
-            .expect("checked above")
-            .apply_break(remaining);
+            .expect("checked above");
+        state.apply_break(remaining);
+
+        // Dated by its chat line, as a kill is by its loot line.
+        let observed_at = instant_to_epoch(
+            parse_timestamp_instant(chatlog_clock, &payload.timestamp)
+                .unwrap_or_else(|| resolve_local(clock.now())),
+        );
+        let returned = Ped(payload.shrapnel_ped);
+        let tt = providers
+            .enhancer_tt
+            .as_ref()
+            .and_then(|resolve| resolve(enhancer_name));
+        let markup = markup_percent(&state.props);
+        let pricing = BreakPricing::price(tt, markup, returned);
+        let weapon_name = state.tool_name.clone();
+        let session_id = active.session.id.clone();
+        let context_id = active.intervals.context_id();
+        active.accumulator.breaks.push(EnhancerBreak {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id,
+            context_id,
+            observed_at,
+            enhancer_name: enhancer_name.to_string(),
+            weapon_name,
+            returned,
+            // The whole stated return while the session runs; its end
+            // settles it against the Shrapnel tagged as returns.
+            deducted: returned,
+            markup_percent: markup,
+            pricing,
+        });
     }
 }

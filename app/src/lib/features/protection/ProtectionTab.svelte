@@ -7,6 +7,8 @@
 	import { formatDay, formatSessionStart } from './armourRecording';
 	import ProtectionRecordingDetail from './ProtectionRecordingDetail.svelte';
 	import type { ProtectionModel } from './protectionModel.svelte';
+	import SetPiecesSection from './SetPiecesSection.svelte';
+	import { piecesSummary } from './setPieces';
 
 	let { model }: { model: ProtectionModel } = $props();
 
@@ -115,6 +117,7 @@
 										<div class="min-w-0 flex-1">
 											<span class="block truncate text-sm font-medium text-text">{set.name}</span>
 											<span class="text-xs tabular-nums text-text-tertiary">{set.markupPercent.toFixed(2)}% average MU</span>
+											<span class="text-xs text-text-tertiary"> · {piecesSummary(set.pieces.length)}</span>
 										</div>
 										<div class="shrink-0 text-right">
 											{#if set.latestObservation}
@@ -233,10 +236,15 @@
 			</div>
 			<p class="mt-1.5 text-xs text-text-tertiary">
 				{model.editingSet?.basisLocked
-					? 'Fixed after the first reading, since every reading is priced with it. A new acquisition is a new set.'
+					? 'Fixed once a reading or a session read from your account has been priced with it. A new acquisition is a new set.'
 					: 'The TT-weighted average paid across the whole set. It is intentionally approximate.'}
 			</p>
 		</div>
+		{#if model.editingSet}
+			{#key model.editingSet.id}
+				<SetPiecesSection setId={model.editingSet.id} onConfirmed={() => void model.refresh()} />
+			{/key}
+		{/if}
 		<div class="flex justify-end gap-2">
 			<Button variant="secondary" onclick={() => (model.setModalOpen = false)}>Cancel</Button>
 			<Button onclick={model.saveSet} disabled={model.setSaveDisabled} loading={model.saving}>{model.editingSet ? 'Save changes' : 'Add set'}</Button>

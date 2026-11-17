@@ -130,6 +130,49 @@ describe('cycled / loot_tt / rate / pes / kills / globals / hofs', () => {
 	});
 });
 
+describe('live costs from the account readings', () => {
+	const through = '2026-11-17T14:52:00+00:00';
+	const note = `Costs from your account up to ${new Date(through).toLocaleTimeString('en-US', {
+		hour: 'numeric',
+		minute: '2-digit',
+	})}, tracked since`;
+
+	it('net takes the measured overhead off, which Cycled never holds', () => {
+		const status = active({
+			returns: 12,
+			cost: 10,
+			overheadCost: 0.5,
+			costsMeasuredThrough: through,
+		});
+		expect(render('net', status).value).toBe('+1.50');
+		expect(render('cycled', status).value).toBe('10.00');
+	});
+
+	it('the cost figures say they come from the account up to its latest reading', () => {
+		const status = active({ returns: 12, cost: 10, costsMeasuredThrough: through });
+		for (const id of ['cycled', 'net', 'rate'] as StatId[]) {
+			expect(render(id, status).note, id).toBe(note);
+		}
+		// A figure built on the tracked kills alone says nothing of it.
+		const kills = active({ multiplierLast: 1.2, costsMeasuredThrough: through });
+		expect(render('multiplier_last', kills).note).toBeUndefined();
+	});
+
+	it('says nothing while the costs do not rest on the readings', () => {
+		const status = active({ returns: 12, cost: 10 });
+		for (const id of ['cycled', 'net', 'rate'] as StatId[]) {
+			expect(render(id, status).note, id).toBeUndefined();
+		}
+		// Exactly today's figure.
+		expect(render('net', status)).toEqual({ value: '+2.00', color: 'text-positive' });
+	});
+
+	it('an empty figure carries no note', () => {
+		const status = active({ cost: 0, kill_count: 0, costsMeasuredThrough: through });
+		expect(render('avg_cost_per_kill', status)).toEqual(EMPTY);
+	});
+});
+
 describe('net: sign + colour', () => {
 	it('positive net -> +sign, text-positive', () => {
 		expect(render('net', active({ returns: 110, cost: 100 }))).toEqual({
@@ -565,6 +608,32 @@ describe('the expected MU rate', () => {
 		const render = STAT_DEFS.expected_mu_rate.render(session, { valuation, looterBasis: 'animal' });
 		expect(render.value).toBe('99.3%');
 		expect(render.qualifier).toBe('A');
+	});
+
+	it('is over the session Cycled, exactly as before, without the account', () => {
+		const unread = active({ session_id: 's1', cost: 120, expectedCycle: cycle });
+		const render = STAT_DEFS.expected_mu_rate.render(unread, {
+			valuation,
+			looterBasis: 'three_looter_mean',
+		});
+		// 99.835 x 1.08 / 120.
+		expect(render.value).toBe('89.9%');
+	});
+
+	it('stays over the tracked Cycled it was modelled on when the account measures the costs', () => {
+		const measured = active({
+			session_id: 's1',
+			cost: 130,
+			expectedCycle: cycle,
+			costsMeasuredThrough: '2026-11-17T14:52:00+00:00',
+		});
+		const render = STAT_DEFS.expected_mu_rate.render(measured, {
+			valuation,
+			looterBasis: 'three_looter_mean',
+		});
+		expect(render.value).toBe('96.3%');
+		// Loot MU Rate is a measured return: over the live Cycled.
+		expect(STAT_DEFS.mu_rate.render(measured, { valuation }).value).toBe('83.1%');
 	});
 
 	it('reads empty before a modelled shot or without a markup', () => {

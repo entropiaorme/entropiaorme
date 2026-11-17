@@ -174,7 +174,7 @@ impl Container {
     /// A row with a parent is attached (see `holdings_of`).
     /// The text is trimmed before it is recognised (`"AUCTION\n"` is the
     /// auction).
-    fn from_site(raw: &str) -> Result<Container, RowRefusal> {
+    pub(super) fn from_site(raw: &str) -> Result<Container, RowRefusal> {
         let raw = raw.trim();
         match raw {
             "CARRIED" => Ok(Container::Carried),

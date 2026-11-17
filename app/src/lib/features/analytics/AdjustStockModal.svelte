@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import AccountRecordHint from '$lib/features/inventory/AccountRecordHint.svelte';
 	import HeldAmountField from '$lib/features/inventory/HeldAmountField.svelte';
 	import { type AmountMode, pedForUnits } from '$lib/features/inventory/heldAmount';
 	import { formatPed } from '$lib/utils/format';
@@ -79,6 +80,7 @@
 					{unitTt}
 					held={item.heldQty}
 					subject={mode === 'remove' ? 'to remove' : 'to convert'}
+					describedby={mode === 'shrapnel' ? 'shrapnel-account-record' : undefined}
 				/>
 				{#if tooMany}
 					<p class="text-xs text-warning">More than the {item.itemName} in stock.</p>
@@ -86,6 +88,13 @@
 					<p class="text-xs tabular-nums text-text-tertiary">
 						{formatPed(pedForUnits(units, unitTt) * 1.01)} PED ammo after conversion
 					</p>
+				{/if}
+				{#if mode === 'shrapnel'}
+					<AccountRecordHint
+						kind="conversion"
+						itemName={item.itemName}
+						id="shrapnel-account-record"
+					/>
 				{/if}
 			</div>
 

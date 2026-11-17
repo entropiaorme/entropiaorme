@@ -1981,10 +1981,25 @@ mod tests {
         // + account readings' 3 tables and 2 reading indexes
         // + the counted-kills view
         // + account proposals' 2 tables and status index
+        // + account session costs' 3 tables
+        // + session cost resolutions' 2 tables
+        // + limited set pieces' 4 tables and 3 indexes
+        // + enhancer breaks' table and 2 indexes
+        // + the costs' gap ends table, gap verdicts table and the
+        //   remembered chat-log time base
+        // + the cost placements' table
+        // + the costs' top-up steps table and the resolution's weapon parts
+        // + a running session's costs measured so far
+        // + the stock records the readings made on their own, with their
+        //   item index, the steps looked at for them, and where history ends
+        // + stock of unknown origin recorded from an arrival
+        // + the stock reconciliation's draft, its applied reconciliations
+        //   with their lines, records and acknowledged records taken back,
+        //   and the records' index
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 267);
+        assert_eq!(master.len(), 300);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

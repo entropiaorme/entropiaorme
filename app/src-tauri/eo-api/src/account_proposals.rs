@@ -1,8 +1,9 @@
 //! What the account readings propose, and the readings a strongbox run
 //! asks for.
 //!
-//! A proposal is a guess: a strongbox opening, a listing sold, or a
-//! listing returned, seen between two readings. Nothing here records one.
+//! A proposal is a guess: a strongbox opening, a listing sold, a listing
+//! returned, or a purchase at auction, seen between two readings. Nothing
+//! here records one.
 //! The frontend reads a proposal and hands the player's confirmed result to
 //! the existing strongbox or listing command as a normal input; or the
 //! player dismisses it. Its certainty crosses the wire typed: whether an
@@ -46,6 +47,10 @@ pub enum AccountProposalKind {
     Opening,
     ListingSold,
     ListingReturned,
+    Purchase,
+    /// Something that arrived during a tracked session that no loot line,
+    /// recorded reward, conversion or opening explains.
+    Arrival,
 }
 
 impl From<AccountProposalKind> for ProposalKind {
@@ -54,6 +59,8 @@ impl From<AccountProposalKind> for ProposalKind {
             AccountProposalKind::Opening => ProposalKind::Opening,
             AccountProposalKind::ListingSold => ProposalKind::ListingSold,
             AccountProposalKind::ListingReturned => ProposalKind::ListingReturned,
+            AccountProposalKind::Purchase => ProposalKind::Purchase,
+            AccountProposalKind::Arrival => ProposalKind::Arrival,
         }
     }
 }
@@ -129,6 +136,42 @@ pub enum AccountProposalOutcome {
         tt: MeasuredAmount,
         returned_to: AccountPlace,
     },
+    /// One item arrived as the PED Card fell by more than its TT, outside
+    /// every tracked session: bought at auction, its markup paid. Recorded
+    /// by the player as an asset purchase, and linked to that purchase,
+    /// never recorded on its own.
+    #[serde(rename_all = "camelCase")]
+    Purchase {
+        /// The item, as the account site names it.
+        item_name: String,
+        units: i64,
+        /// Its TT, as the readings show it.
+        tt: MeasuredAmount,
+        /// The PED Card's fall.
+        paid: MeasuredAmount,
+        /// What it cost above its TT.
+        markup: MeasuredAmount,
+        /// Where it arrived.
+        arrived_in: AccountPlace,
+    },
+    /// Something arrived during a tracked session that no loot line,
+    /// recorded quest reward, Shrapnel conversion or strongbox opening
+    /// explains: a purchase, a trade, a gift or a pickup. The player records
+    /// it as an asset purchase (claimed, the purchase recorded, then linked
+    /// to the purchase's id), as stock of unknown origin, or dismisses it.
+    #[serde(rename_all = "camelCase")]
+    Arrival {
+        /// The item, as the account site names it.
+        item_name: String,
+        units: i64,
+        /// Its TT, as the readings show it.
+        tt: MeasuredAmount,
+        /// The PED Card fell by its TT in the same step: bought at the
+        /// Trade Terminal, at no markup.
+        bought_at_tt: bool,
+        /// Where it arrived.
+        arrived_in: AccountPlace,
+    },
 }
 
 /// A pending proposal.
@@ -169,7 +212,9 @@ pub struct AccountProposalsClaimInput {
 }
 
 /// Proposals linked, as one, to the record they became: the strongbox
-/// opening's id, or the listing's.
+/// opening's id, the listing's, or for a purchase the asset purchase's id
+/// (the highest purchase id on the asset `inventory_create` or
+/// `inventory_purchase_add` returns).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountProposalsLinkInput {
@@ -257,6 +302,21 @@ fn proposal(value: &Proposal) -> Option<AccountProposal> {
                 returned_to: place(listing.returned_to.as_ref()?),
             }
         }
+        (Detail::Purchase(bought), ProposalKind::Purchase) => AccountProposalOutcome::Purchase {
+            item_name: bought.key.name.clone(),
+            units: bought.units,
+            tt: amount(bought.amount),
+            paid: card(bought.paid),
+            markup: amount(bought.markup),
+            arrived_in: place(&bought.key.container),
+        },
+        (Detail::Arrival(arrival), ProposalKind::Arrival) => AccountProposalOutcome::Arrival {
+            item_name: arrival.key.name.clone(),
+            units: arrival.units,
+            tt: amount(arrival.amount),
+            bought_at_tt: arrival.bought_at_tt,
+            arrived_in: place(&arrival.key.container),
+        },
         _ => return None,
     };
     Some(AccountProposal {

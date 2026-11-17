@@ -196,8 +196,9 @@ pub(super) fn take_units(
     let carved_id = Uuid::new_v4().to_string();
     conn.execute(
         "INSERT INTO inventory_items \
-         (id, name, tt_value, markup_paid, acquired_at, quantity, position_id, drawn_through) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         (id, name, tt_value, markup_paid, acquired_at, quantity, position_id, drawn_through, \
+          updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             carved_id,
             name,
@@ -206,7 +207,8 @@ pub(super) fn take_units(
             acquired_at,
             wanted,
             position,
-            drawn_through
+            drawn_through,
+            now
         ],
     )?;
     conn.execute(

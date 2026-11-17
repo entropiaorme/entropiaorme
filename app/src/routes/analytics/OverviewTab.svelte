@@ -30,6 +30,7 @@
 	{@const data = model.data}
 	{@const config = model.config}
 	{@const pieView = model.pieView}
+	{@const overhead = model.overheadBand}
 	<div class="space-y-6" data-testid="analytics-overview-area">
 
 		<!-- Returns breakdown: donut + legend | gains/losses -->
@@ -78,6 +79,18 @@
 						>
 							Cycled
 						</span>
+						{#if overhead}
+							<!-- Overhead is a band of its own beside Cycled, never inside it. -->
+							<span
+								class="px-2.5 py-1 text-xs font-medium rounded-md bg-accent/15 text-accent cursor-default"
+								title="Always included: {overhead.categories
+									.map((category) => `${category.label.toLowerCase()} ${formatPed(category.ped)}`)
+									.join(', ')}"
+								data-testid="overhead-band"
+							>
+								Overhead
+							</span>
+						{/if}
 						{#each Object.keys(config.lossTags) as tag}
 							<button
 								type="button"
@@ -346,12 +359,12 @@
 			{@const lb = data.lossesBreakdown}
 			{@const rb = data.returnsBreakdown}
 			{@const cb = lb.cycledBreakdown}
-			<!-- The table honours the Global Returns tag toggles, so its totals
-			     always reconcile with the donut card above. -->
-			{@const totalLedgerGains = Object.entries(rb.ledger).reduce((s, [tag, v]) => s + (PROGRESSION_GAIN_TAGS.has(tag) || !config.gainTags[tag] ? 0 : v), 0)}
-			{@const totalLedgerLosses = Object.entries(lb.ledger).reduce((s, [tag, v]) => s + (config.lossTags[tag] ? v : 0), 0)}
-			{@const totalReturns = rb.lootTt + totalLedgerGains}
-			{@const totalCosts = lb.trackingCost + totalLedgerLosses}
+			<!-- The table honours the Global Returns tag toggles and reads the
+			     model's own totals, so it always reconciles with the donut card
+			     above: Costs are Cycled, the overhead and the enabled ledger
+			     losses. -->
+			{@const totalReturns = model.totals?.returns ?? 0}
+			{@const totalCosts = model.totals?.costs ?? 0}
 			<div class="mt-2">
 				<button
 					class="flex items-center gap-1.5 eyebrow mb-3 cursor-pointer hover:text-text transition-colors"
@@ -376,6 +389,12 @@
 								<td class="py-1.5 pl-5 text-text-secondary">Loot TT</td>
 								<td class="py-1.5 text-right tabular-nums text-text-secondary">{formatPed(rb.lootTt)}</td>
 							</tr>
+							{#if rb.questItemTt > 0}
+								<tr class="border-b border-border/30">
+									<td class="py-1.5 pl-5 text-text-secondary">{labelFor('questItemTt')}</td>
+									<td class="py-1.5 text-right tabular-nums text-text-secondary">{formatPed(rb.questItemTt)}</td>
+								</tr>
+							{/if}
 							{#each Object.entries(rb.ledger) as [tag, amount]}
 								{#if amount > 0 && !PROGRESSION_GAIN_TAGS.has(tag) && config.gainTags[tag]}
 									<tr class="border-b border-border/30">
@@ -438,6 +457,18 @@
 									<td class="py-1 pl-10 text-text-tertiary text-xs">Dangling</td>
 									<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(cb.dangling)}</td>
 								</tr>
+							{/if}
+							{#if overhead}
+								<tr class="border-b border-border/30" data-testid="breakdown-overhead">
+									<td class="py-1.5 pl-5 text-text-secondary">Overhead</td>
+									<td class="py-1.5 text-right tabular-nums text-text-secondary">{formatPed(overhead.total)}</td>
+								</tr>
+								{#each overhead.categories as category (category.key)}
+									<tr class="border-b border-border/20">
+										<td class="py-1 pl-10 text-text-tertiary text-xs">{category.label}</td>
+										<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(category.ped)}</td>
+									</tr>
+								{/each}
 							{/if}
 							{#each Object.entries(lb.ledger) as [tag, amount]}
 								{#if amount > 0 && config.lossTags[tag]}

@@ -493,7 +493,7 @@ fn proposed(conn: &rusqlite::Connection) -> Vec<String> {
         .into_iter()
         .filter_map(|proposal| match proposal.detail {
             Detail::Listing(listing) => Some(listing.listing_id),
-            Detail::Opening(_) => None,
+            Detail::Opening(_) | Detail::Purchase(_) | Detail::Arrival(_) => None,
         })
         .collect()
 }
@@ -638,7 +638,7 @@ fn open_counts(conn: &rusqlite::Connection) -> Vec<i64> {
         .iter()
         .map(|proposal| match &proposal.detail {
             Detail::Opening(opening) => opening.boxes[0].count,
-            Detail::Listing(_) => 0,
+            Detail::Listing(_) | Detail::Purchase(_) | Detail::Arrival(_) => 0,
         })
         .collect()
 }
@@ -833,4 +833,382 @@ fn a_claim_left_unlinked_is_taken_over_only_when_named() {
         )
         .unwrap();
     assert_eq!(claimed_at, 3.0);
+}
+
+/// A fast run opened in steps a minute apart: from 80 boxes and 80 keys,
+/// each step's boxes paying ten PED each, `ammo` of them as a row of
+/// Universal Ammo and the rest as an item of their own. Readings at
+/// `base`, `base + 60` and so on, with one more after the last step that
+/// changes nothing.
+fn fast_run(base: f64, steps: &[(i64, i64)]) -> Vec<Reading> {
+    let mut held = 80;
+    let mut names: Vec<String> = Vec::new();
+    let mut ammo_rows = 0;
+    let at = |index: usize| base + 60.0 * index as f64;
+    let build = |at: f64, held: i64, ammo_rows: i64, names: &[String]| {
+        let mut rows: Vec<(&str, Container, i64, i64)> = vec![
+            ("Halloween Strongbox", C, held, 0),
+            ("Strongbox Key", C, held, held * 1_000),
+            ("Universal Ammo", C, 50_000, 500),
+        ];
+        for _ in 0..ammo_rows {
+            rows.push(("Universal Ammo", C, 100_000, 1_000));
+        }
+        for name in names {
+            rows.push((name.as_str(), C, 1, 1_000));
+        }
+        reading(at, 25_000, &rows)
+    };
+    let mut readings = vec![build(at(0), held, ammo_rows, &names)];
+    for (index, (ammo, items)) in steps.iter().enumerate() {
+        held -= ammo + items;
+        ammo_rows += ammo;
+        for item in 0..*items {
+            names.push(format!("Prize {index}-{item} (F)"));
+        }
+        readings.push(build(at(index + 1), held, ammo_rows, &names));
+    }
+    let last = readings.len();
+    readings.push(build(at(last), held, ammo_rows, &names));
+    readings
+}
+
+/// Store readings in order, untagged, as `purpose` would.
+fn stored_as(conn: &mut rusqlite::Connection, readings: &[Reading], purpose: Purpose) {
+    for reading in readings {
+        record_reading(conn, reading, purpose, None).expect("stored");
+    }
+}
+
+/// Three steps, each with more arrivals than its weighing can take apart.
+const FAST: [(i64, i64); 3] = [(5, 17), (4, 18), (3, 17)];
+
+#[test]
+fn a_fast_run_seen_while_idle_is_one_settled_opening_with_every_item_certain() {
+    let readings = fast_run(0.0, &FAST);
+    // Step by step, each is too much to weigh: unsettled, nothing certain.
+    for pair in readings[..4].windows(2) {
+        let opening = step_outcomes(&pair[0], &pair[1], &roles())
+            .unwrap()
+            .opening
+            .expect("an opening");
+        assert_eq!(opening.settlement, Settlement::Unsettled);
+        assert!(opening.contents.is_empty());
+    }
+    let mut conn = migrated_in_memory().unwrap();
+    stored_as(&mut conn, &readings, Purpose::Ambient);
+    examine_all(&mut conn).unwrap();
+    let proposals = pending(&conn, Some(ProposalKind::Opening)).unwrap();
+    assert_eq!(proposals.len(), 1, "one opening, not three in doubt");
+    let proposal = &proposals[0];
+    assert_eq!(proposal.prev_reading, ReadingId(1));
+    assert_eq!(proposal.reading, ReadingId(4));
+    assert_eq!(proposal.between.from, 0.0);
+    assert_eq!(proposal.between.to, 180.0);
+    let Detail::Opening(opening) = &proposal.detail else {
+        panic!("an opening");
+    };
+    assert_eq!(opening.boxes[0].count, 64);
+    assert_eq!(opening.keys_used, 64);
+    assert_eq!(opening.keys.micro_ped(), 640 * PED);
+    assert_eq!(opening.settlement, Settlement::Settled);
+    assert_eq!(opening.doubt, None);
+    assert_eq!(
+        opening.ammo,
+        Some(ProposedAmmo {
+            units: 1_200_000,
+            amount: Amount::exact(120 * PED)
+        })
+    );
+    assert_eq!(opening.contents.len(), 52, "every item is certain");
+    assert!(opening.possible_contents.is_empty());
+    assert_eq!(opening.paid_ammo_alone, Some(12));
+    // The steps' own proposals, and the opening read whole over the first
+    // two, are still stored, and no longer offered.
+    assert_eq!(
+        count(
+            &conn,
+            "SELECT COUNT(*) FROM account_proposals WHERE kind = 'opening'"
+        ),
+        5
+    );
+    // Recording it settles the run: none of the steps is offered again.
+    let id = proposal.id;
+    assert_eq!(claim(&mut conn, &[id], &[], 500.0).unwrap(), Decided::Done);
+    recorded_opening(&conn, "whole", 64.0, 500.0);
+    assert_eq!(
+        link(&mut conn, &[id], "whole", 501.0).unwrap(),
+        Decided::Done
+    );
+    assert!(pending(&conn, None).unwrap().is_empty());
+}
+
+#[test]
+fn a_run_seen_by_a_strongbox_run_s_own_readings_keeps_its_steps() {
+    // The strongbox run's own readings keep today's step by step reading.
+    let mut conn = migrated_in_memory().unwrap();
+    stored_as(&mut conn, &fast_run(0.0, &FAST), Purpose::Run);
+    examine_all(&mut conn).unwrap();
+    assert_eq!(open_counts(&conn), vec![20, 22, 22]);
+}
+
+#[test]
+fn a_span_read_whole_joins_only_steps_still_undecided_and_only_when_it_balances() {
+    // A step dismissed before the next arrives is not joined: the later
+    // steps are read whole from where it ends.
+    let readings = fast_run(0.0, &FAST);
+    let mut conn = migrated_in_memory().unwrap();
+    stored_as(&mut conn, &readings[..2], Purpose::Ambient);
+    examine_all(&mut conn).unwrap();
+    let first = pending(&conn, None).unwrap()[0].id;
+    assert_eq!(dismiss(&mut conn, first, 100.0).unwrap(), Decided::Done);
+    stored_as(&mut conn, &readings[2..], Purpose::Ambient);
+    examine_all(&mut conn).unwrap();
+    let proposals = pending(&conn, Some(ProposalKind::Opening)).unwrap();
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0].prev_reading, ReadingId(2));
+    assert_eq!(open_counts(&conn), vec![42]);
+
+    // A span that does not balance (a stack arriving that no box paid)
+    // leaves every step proposed on its own.
+    let mut readings = fast_run(0.0, &FAST);
+    let extra = |reading: &Reading| {
+        let mut holdings = reading.holdings().clone();
+        holdings.insert(
+            super::reading::HoldingKey {
+                name: "Shrapnel".into(),
+                container: C,
+            },
+            super::reading::Holding::new(vec![super::reading::Row {
+                quantity: 500_000,
+                value: Pec(5_000),
+            }])
+            .unwrap(),
+        );
+        Reading::new(reading.taken_at(), reading.balance(), holdings).unwrap()
+    };
+    for reading in &mut readings[2..] {
+        *reading = extra(reading);
+    }
+    let mut conn = migrated_in_memory().unwrap();
+    stored_as(&mut conn, &readings, Purpose::Ambient);
+    examine_all(&mut conn).unwrap();
+    assert_eq!(open_counts(&conn), vec![20, 22, 22]);
+}
+
+#[test]
+fn a_part_of_an_opening_read_whole_recorded_by_hand_turns_it_back_into_its_steps() {
+    // Steps of 22, 22 and 20 boxes, read whole as 64.
+    let run = |conn: &mut rusqlite::Connection| {
+        stored_as(conn, &fast_run(0.0, &FAST), Purpose::Ambient);
+        examine_all(conn).unwrap();
+        assert_eq!(open_counts(conn), vec![64]);
+    };
+    // The middle 22 recorded by hand: the 64 is never offered again, and
+    // the steps left are.
+    let mut conn = migrated_in_memory().unwrap();
+    run(&mut conn);
+    recorded_opening(&conn, "middle", 22.0, 500.0);
+    assert_eq!(open_counts(&conn), vec![20, 22]);
+    // The last two steps, 20 and 22, recorded as one: the first is left.
+    let mut conn = migrated_in_memory().unwrap();
+    run(&mut conn);
+    recorded_opening(&conn, "later", 42.0, 500.0);
+    assert_eq!(open_counts(&conn), vec![22]);
+    // The whole 64 recorded by hand accounts for the opening read whole.
+    let mut conn = migrated_in_memory().unwrap();
+    run(&mut conn);
+    recorded_opening(&conn, "all", 64.0, 500.0);
+    assert!(open_counts(&conn).is_empty());
+    // A count no step or run of steps adds up to leaves the steps offered,
+    // none of them twice.
+    let mut conn = migrated_in_memory().unwrap();
+    run(&mut conn);
+    recorded_opening(&conn, "odd", 5.0, 500.0);
+    assert_eq!(open_counts(&conn), vec![20, 22, 22]);
+}
+
+#[test]
+fn an_opening_is_read_whole_across_sixty_steps_at_most() {
+    // One box a minute for 61 minutes, each paying a row of ammo.
+    let steps = 61;
+    let mut held = 70;
+    let mut readings = Vec::new();
+    for index in 0..=steps {
+        let mut rows: Vec<(&str, Container, i64, i64)> = vec![
+            ("Halloween Strongbox", C, held, 0),
+            ("Strongbox Key", C, held, held * 1_000),
+            ("Universal Ammo", C, 50_000, 500),
+        ];
+        for _ in 0..index {
+            rows.push(("Universal Ammo", C, 100_000, 1_000));
+        }
+        readings.push(reading(60.0 * f64::from(index), 25_000, &rows));
+        held -= 1;
+    }
+    let mut conn = migrated_in_memory().unwrap();
+    stored_as(&mut conn, &readings, Purpose::Ambient);
+    examine_all(&mut conn).unwrap();
+    // The first sixty steps read whole; the last on its own.
+    assert_eq!(open_counts(&conn), vec![1, 60]);
+    let proposals = pending(&conn, Some(ProposalKind::Opening)).unwrap();
+    assert_eq!(proposals[1].prev_reading, ReadingId(1));
+    assert_eq!(proposals[1].reading, ReadingId(61));
+}
+
+// ── A purchase at auction ───────────────────────────────────────────
+
+/// One item arriving as the Card falls by 10 PED beyond its 2 PED of TT.
+fn bought() -> Vec<Reading> {
+    vec![
+        reading(0.0, 5_000, &[]),
+        reading(60.0, 3_800, &[("Garcen Grease", C, 10, 200)]),
+    ]
+}
+
+fn purchases(conn: &rusqlite::Connection) -> Vec<super::recognition::Purchase> {
+    pending(conn, Some(ProposalKind::Purchase))
+        .unwrap()
+        .into_iter()
+        .filter_map(|proposal| match proposal.detail {
+            Detail::Purchase(purchase) => Some(purchase),
+            Detail::Opening(_) | Detail::Listing(_) | Detail::Arrival(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_purchase_outside_every_session_is_proposed_with_the_markup_paid() {
+    let mut conn = migrated_in_memory().unwrap();
+    stored(&mut conn, &bought());
+    examine_all(&mut conn).unwrap();
+    let found = purchases(&conn);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].key.name, "Garcen Grease");
+    assert_eq!(found[0].units, 10);
+    assert_eq!(found[0].paid, Pec(1_200));
+    assert_eq!(found[0].markup.micro_ped(), 10 * PED);
+}
+
+#[test]
+fn a_purchase_is_never_proposed_in_a_step_a_tracked_session_overlaps() {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('live', 30.0, NULL, 1)",
+        [],
+    )
+    .unwrap();
+    stored(&mut conn, &bought());
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+}
+
+/// A step whose readings were taken for a session is the session's, even
+/// where the session's recorded span does not reach it.
+#[test]
+fn a_purchase_is_never_proposed_in_a_session_s_own_step() {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('live', 1000.0, NULL, 1)",
+        [],
+    )
+    .unwrap();
+    let readings = bought();
+    record_reading(&mut conn, &readings[0], Purpose::Session, Some("live")).unwrap();
+    record_reading(&mut conn, &readings[1], Purpose::Session, Some("live")).unwrap();
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+}
+
+#[test]
+fn an_item_a_session_looted_inside_the_step_is_never_a_purchase() {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('earlier', -500.0, -400.0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, timestamp, \
+         shots_fired, damage_dealt, cost_ped, loot_total_ped, is_global, is_hof) \
+         VALUES ('k', 'earlier', 'Atrox', 'Atrox', '', 30.0, 1, 1.0, 0.1, 2.0, 0, 0)",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped) \
+         VALUES ('k', 'Garcen Grease', 10, 2.0)",
+        [],
+    )
+    .unwrap();
+    stored(&mut conn, &bought());
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+}
+
+/// An asset held under `id`, with one purchase of `markup` PED above its
+/// TT (or one a conversion made); the purchase's id.
+fn asset(conn: &rusqlite::Connection, id: &str, markup: f64, made: bool) -> i64 {
+    conn.execute(
+        "INSERT OR IGNORE INTO inventory_items \
+             (id, name, tt_value, markup_paid, acquired_at, quantity) \
+         VALUES (?1, 'Garcen Grease', 2.0, ?2, '1970-01-01', 10)",
+        rusqlite::params![id, markup],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO asset_purchases \
+             (position_id, quantity, tt_value, markup_paid, acquired_at, conversion_id, \
+              created_at) \
+         VALUES (?1, 10, 2.0, ?2, '1970-01-01', ?3, 1.0)",
+        rusqlite::params![id, markup, made.then_some("a-conversion")],
+    )
+    .unwrap();
+    conn.last_insert_rowid()
+}
+
+#[test]
+fn a_purchase_is_settled_by_the_asset_purchase_it_became_and_opens_again_if_that_goes() {
+    let mut conn = migrated_in_memory().unwrap();
+    stored(&mut conn, &bought());
+    examine_all(&mut conn).unwrap();
+    let id = pending(&conn, Some(ProposalKind::Purchase)).unwrap()[0].id;
+    let older = asset(&conn, "older", 1.0, false);
+    let made = asset(&conn, "grease", 0.0, true);
+    let purchase = asset(&conn, "grease", 10.0, false);
+    let refused = Decided::Refused("that record does not stand as the outcome the proposal is of");
+    // Not an asset, nor a purchase a conversion made.
+    assert_eq!(link(&mut conn, &[id], "grease", 2.0).unwrap(), refused);
+    assert_eq!(
+        link(&mut conn, &[id], &made.to_string(), 2.0).unwrap(),
+        refused
+    );
+    // A claim left unlinked speaks of purchases.
+    assert_eq!(claim(&mut conn, &[id], &[], 2.0).unwrap(), Decided::Done);
+    assert_eq!(
+        claim(&mut conn, &[id], &[], 2.0).unwrap(),
+        Decided::Refused("that purchase may already be recorded; check your assets first")
+    );
+    assert_eq!(
+        link(&mut conn, &[id], &purchase.to_string(), 2.0).unwrap(),
+        Decided::Done
+    );
+    assert!(purchases(&conn).is_empty());
+    assert_eq!(
+        dismiss(&mut conn, id, 3.0).unwrap(),
+        Decided::Refused("that proposal is recorded")
+    );
+    // Another asset going leaves it settled.
+    conn.execute("DELETE FROM asset_purchases WHERE id = ?1", [older])
+        .unwrap();
+    conn.execute("DELETE FROM inventory_items WHERE id = 'older'", [])
+        .unwrap();
+    assert!(purchases(&conn).is_empty());
+    // The purchase taken back opens it again.
+    conn.execute("DELETE FROM asset_purchases WHERE id = ?1", [purchase])
+        .unwrap();
+    assert_eq!(purchases(&conn).len(), 1);
 }

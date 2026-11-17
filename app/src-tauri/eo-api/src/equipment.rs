@@ -607,6 +607,10 @@ pub struct EquipmentDetail {
     pub attack_rate: Nullable<WeaponAttackRate>,
     /// A consumable's dose; null for every other kind.
     pub consumable: Nullable<ConsumableSettings>,
+    /// The markup of the enhancers fitted to a weapon, in percent of TT, as
+    /// the player set it: what an enhancer break consumes beyond its TT.
+    /// Null when it is not set, and for every other kind.
+    pub enhancer_markup_percent: Nullable<f64>,
 }
 
 /// An add or update request. Field names stay in the request casing the
@@ -639,6 +643,10 @@ pub struct EquipmentRequest {
     pub implant_catalog_id: Option<String>,
     #[serde(default = "default_markup")]
     pub implant_markup: i64,
+    /// A weapon's enhancer markup, in percent of TT; absent when the player
+    /// has not set one.
+    #[serde(default)]
+    pub enhancer_markup: Option<i64>,
     #[serde(default)]
     pub healing_mode: HealingMode,
     #[serde(default)]
@@ -685,6 +693,7 @@ impl EquipmentRequest {
             damage_enhancers: 0,
             implant_catalog_id: None,
             implant_markup: default_markup(),
+            enhancer_markup: None,
             healing_mode: HealingMode::default(),
             heal_min: None,
             heal_max: None,
@@ -1110,6 +1119,7 @@ fn row_to_detail(
                 .map(WeaponAttackRate::from)
                 .into(),
             consumable: None.into(),
+            enhancer_markup_percent: eo_services::enhancer_breaks::markup_percent(props).into(),
         });
     }
 
@@ -1140,6 +1150,7 @@ fn row_to_detail(
             effect_profile: None.into(),
             attack_rate: None.into(),
             consumable: Some(settings).into(),
+            enhancer_markup_percent: None.into(),
         });
     }
 
@@ -1231,6 +1242,7 @@ fn row_to_detail(
         effect_profile: None.into(),
         attack_rate: None.into(),
         consumable: None.into(),
+        enhancer_markup_percent: None.into(),
     })
 }
 
@@ -1359,6 +1371,7 @@ impl Api {
             .await
             .map_err(ApiError::internal("equipment insert"))?;
         self.equipment_changed().await;
+        self.weapon_markup_changed(req.kind).await?;
         let Some(row) = self
             .db
             .equipment_row(inserted)
@@ -1400,6 +1413,7 @@ impl Api {
             .await
             .map_err(ApiError::internal("equipment update"))?;
         self.equipment_changed().await;
+        self.weapon_markup_changed(req.kind).await?;
         let Some(row) = self
             .db
             .equipment_row(item_id)
@@ -1456,6 +1470,23 @@ impl Api {
         if let Some(catalogues) = &self.tool_catalogues {
             catalogues.changed().await;
         }
+    }
+
+    /// A weapon was saved: the enhancer breaks its markup prices follow it,
+    /// with every figure derived from their sessions' costs.
+    async fn weapon_markup_changed(&self, kind: EquipmentKind) -> Result<(), ApiError> {
+        if kind != EquipmentKind::Weapon {
+            return Ok(());
+        }
+        let game_data = self.game_data.clone();
+        self.db
+            .with_writer(move |conn| {
+                let tt =
+                    |name: &str| eo_services::enhancer_breaks::tt_from_game_data(&game_data, name);
+                eo_services::enhancer_breaks::heal_prices(conn, &tt)
+            })
+            .await
+            .map_err(ApiError::internal("enhancer break repricing"))
     }
 
     /// The expanded detail for a stored entry.
@@ -1564,6 +1595,19 @@ impl Api {
                     props.insert("implant_entity".into(), implant_e);
                     props.insert("implant_catalog_id".into(), json!(req.implant_catalog_id));
                     props.insert("implant_markup".into(), json!(req.implant_markup));
+                }
+                // Likewise the enhancers' markup: stored only when set, and
+                // only as a markup the player can have paid.
+                if let Some(markup) = req.enhancer_markup {
+                    if markup < 100 {
+                        return Err(ApiError::bad_request(
+                            "enhancer_markup must be at least 100 percent",
+                        ));
+                    }
+                    props.insert(
+                        eo_services::enhancer_breaks::MARKUP_KEY.into(),
+                        json!(markup),
+                    );
                 }
                 // Likewise the damage-over-time effect: stored only when
                 // declared, validated as attribution will read it.

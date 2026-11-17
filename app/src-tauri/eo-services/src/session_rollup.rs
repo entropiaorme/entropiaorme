@@ -35,8 +35,10 @@ use crate::db::DbError;
 
 /// Bump when a cell's meaning changes: below-version sessions are served
 /// raw and heal on the next read. 6: a quest reward claimed at a hand-in is
-/// no longer a kill in the cells' counts.
-pub const ROLLUP_VERSION: i64 = 6;
+/// no longer a kill in the cells' counts. 7: a kill's cycled spend is its
+/// tracked spend at its session's resolved scale ([`crate::session_costs`]),
+/// so a measured session's cells add up to its measured buckets.
+pub const ROLLUP_VERSION: i64 = 7;
 
 /// Drop one session's cells and marker. The session reads raw from this
 /// commit on; the delete path wants exactly that, and [`recompute_session`]
@@ -88,17 +90,20 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
         // every-kill: spend (cycled and loot sum every row; the count takes
         // only the rows still counted as kills, and a claimed reward that
         // spent nothing makes no cell).
-        "INSERT INTO session_kill_rollups \
-             (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
-         SELECT session_id, context_id, \
-                COALESCE(mob_species, ''), COALESCE(mob_maturity, ''), \
-                COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
-                COALESCE(SUM(cost_ped + enhancer_cost), 0), \
-                COALESCE(SUM(loot_total_ped), 0) \
-         FROM kills WHERE session_id = ?1 \
-         GROUP BY 1, 2, 3, 4 \
-         HAVING COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END) > 0 \
-             OR SUM(cost_ped + enhancer_cost) > 0",
+        &format!(
+            "INSERT INTO session_kill_rollups \
+                 (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
+             SELECT session_id, context_id, \
+                    COALESCE(mob_species, ''), COALESCE(mob_maturity, ''), \
+                    COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
+                    COALESCE(SUM({}), 0), \
+                    COALESCE(SUM(loot_total_ped), 0) \
+             FROM kills WHERE session_id = ?1 \
+             GROUP BY 1, 2, 3, 4 \
+             HAVING COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END) > 0 \
+                 OR SUM(cost_ped + enhancer_cost) > 0",
+            crate::session_costs::kill_cycled_sql("kills")
+        ),
         rusqlite::params![session_id],
     )?;
     // Shrapnel rows fold their species away here, not at read time: every
@@ -467,6 +472,9 @@ pub(crate) fn effective_offensive_evidence_cells(
 /// steady-state case (one or two pending sessions) the named join order
 /// makes it the same indexed work.
 pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
+    // A session whose measured costs moved since its cells were settled
+    // settles again first.
+    crate::session_costs::heal(conn)?;
     let pending: i64 = conn.query_row(
         "SELECT COUNT(*) FROM tracking_sessions t \
          LEFT JOIN session_rollup_meta m \
@@ -525,18 +533,21 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
         // every-kill: spend (cycled and loot sum every row; the count takes
         // only the rows still counted as kills, and a claimed reward that
         // spent nothing makes no cell).
-        "INSERT INTO session_kill_rollups \
-             (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
-         SELECT p.id, k.context_id, \
-                COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
-                COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
-                COALESCE(SUM(k.cost_ped + k.enhancer_cost), 0), \
-                COALESCE(SUM(k.loot_total_ped), 0) \
-         FROM pending_settlement p CROSS JOIN kills k \
-         WHERE k.session_id = p.id \
-         GROUP BY 1, 2, 3, 4 \
-         HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
-             OR SUM(k.cost_ped + k.enhancer_cost) > 0",
+        &format!(
+            "INSERT INTO session_kill_rollups \
+                 (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
+             SELECT p.id, k.context_id, \
+                    COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
+                    COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
+                    COALESCE(SUM({}), 0), \
+                    COALESCE(SUM(k.loot_total_ped), 0) \
+             FROM pending_settlement p CROSS JOIN kills k \
+             WHERE k.session_id = p.id \
+             GROUP BY 1, 2, 3, 4 \
+             HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
+                 OR SUM(k.cost_ped + k.enhancer_cost) > 0",
+            crate::session_costs::kill_cycled_sql("k")
+        ),
         [],
     )?;
     tx.execute(

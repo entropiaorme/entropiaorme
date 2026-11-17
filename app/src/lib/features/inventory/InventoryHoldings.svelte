@@ -41,6 +41,7 @@
 		onshrapnel,
 		onconvertitems,
 		onopenboxes,
+		onreconcile,
 		onaddequipment,
 		oncreatelisting,
 		oneditequipment,
@@ -66,6 +67,8 @@
 		onconvertitems: (start: { name: string; assetId: string | null } | null) => void;
 		/** Go to the strongbox opening view. */
 		onopenboxes?: () => void;
+		/** Go to the check of the stock against the account. */
+		onreconcile?: () => void;
 		onaddequipment: () => void;
 		oncreatelisting: () => void;
 		oneditequipment: (item: InventoryItem) => void;
@@ -135,6 +138,7 @@
 				</div>
 			{/snippet}
 			{#snippet actions()}
+				{#if onreconcile}<Button size="sm" variant="ghost" onclick={onreconcile}>Check against your account</Button>{/if}
 				{#if onopenboxes}<Button size="sm" variant="secondary" onclick={onopenboxes}>Open strongboxes</Button>{/if}
 				<Button size="sm" variant="secondary" onclick={() => onconvertitems(null)}>Convert items</Button>
 				<Button size="sm" onclick={oncreatelisting}>Create listing</Button>

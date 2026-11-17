@@ -674,8 +674,8 @@ pub(super) fn write_conversion(
                 let asset_id = Uuid::new_v4().to_string();
                 tx.execute(
                     "INSERT INTO inventory_items \
-                     (id, name, tt_value, markup_paid, acquired_at, quantity) \
-                     VALUES (?, ?, ?, ?, ?, ?)",
+                     (id, name, tt_value, markup_paid, acquired_at, quantity, updated_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
                     rusqlite::params![
                         asset_id,
                         output.item_name,
@@ -683,6 +683,7 @@ pub(super) fn write_conversion(
                         basis,
                         converted_at,
                         output.quantity,
+                        now,
                     ],
                 )?;
                 insert_purchase(
@@ -1253,6 +1254,8 @@ pub(super) fn push_history_rows(
             ped_amount: header.ped_amount,
             itemised: header.itemised,
             derived_from: Vec::new(),
+            from_account: None,
+            reconciliation_id: None,
             kind: "conversion".to_string(),
             subject_kind: "loot".to_string(),
             channel: "conversion".to_string(),

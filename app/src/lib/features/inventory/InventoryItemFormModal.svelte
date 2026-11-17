@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { InventoryItem } from '$lib/types/analytics';
 	import { addEquipmentHolding, updateEquipmentHolding } from '$lib/api/inventory';
-	import { formatPed, isZeroTt } from '$lib/utils/format';
+	import { formatPed, isZeroTt, todayDate } from '$lib/utils/format';
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -11,18 +11,35 @@
 	let {
 		open = $bindable(false),
 		item = null,
+		prefill = null,
+		around = null,
 		onsaved,
 	}: {
 		open?: boolean;
 		item?: InventoryItem | null;
+		/** A new asset's figures to start from, as the account readings saw
+		 * them; every one stays editable, the day it was bought among them. */
+		prefill?: {
+			name: string;
+			quantity: number;
+			ttValue: number;
+			/** `null` when what was paid is the player's to give: the field
+			 * opens empty and must be filled. */
+			markupPaid: number | null;
+			acquiredAt: string;
+		} | null;
+		/** Runs the save, for a caller that sets something aside before it
+		 * and marks it after; a rejection is shown as the save's own. */
+		around?: ((save: () => Promise<InventoryItem>) => Promise<InventoryItem>) | null;
 		onsaved: (item: InventoryItem) => void;
 	} = $props();
 
 	let name = $state('');
 	let quantity = $state(1);
 	let ttValue = $state(0);
-	let markupPed = $state(0);
+	let markupPed = $state<number | null>(0);
 	let notes = $state('');
+	let acquiredAt = $state('');
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let initialised = $state(false);
@@ -31,11 +48,13 @@
 
 	$effect(() => {
 		if (open && !initialised) {
-			name = item?.name ?? '';
-			quantity = item?.quantity ?? 1;
-			ttValue = item?.ttValue ?? 0;
-			markupPed = item?.markupPaid ?? 0;
+			const start = item ?? prefill;
+			name = start?.name ?? '';
+			quantity = start?.quantity ?? 1;
+			ttValue = start?.ttValue ?? 0;
+			markupPed = start ? start.markupPaid : 0;
 			notes = item?.notes ?? '';
+			acquiredAt = prefill?.acquiredAt ?? todayDate();
 			error = null;
 			opened += 1;
 			initialised = true;
@@ -50,7 +69,7 @@
 	const locked = $derived(item ? figuresLockedReason(item) : null);
 	/** An asset a conversion made keeps the count it was made as. */
 	const quantityFixed = $derived(item !== null && !item.divisible);
-	const costBasis = $derived(ttValue + markupPed);
+	const costBasis = $derived(ttValue + (markupPed ?? 0));
 	const stack = $derived(quantity > 0 && Math.abs(quantity - 1) > 1e-9);
 	/** An item with no TT is worth its markup alone, and is held all the same. */
 	const noTt = $derived(isZeroTt(ttValue ?? 0));
@@ -60,6 +79,7 @@
 			quantity > 0 &&
 			Number.isFinite(ttValue) &&
 			ttValue >= 0 &&
+			markupPed !== null &&
 			Number.isFinite(markupPed),
 	);
 	const canSave = $derived(name.trim().length > 0 && (locked !== null || figuresValid));
@@ -69,25 +89,31 @@
 		saving = true;
 		error = null;
 		try {
-			const saved = item
-				? await updateEquipmentHolding(item.id, {
-						name: name.trim(),
-						notes: notes.trim() || null,
-						...(locked
-							? {}
-							: {
-									...(quantityFixed ? {} : { quantity }),
-									tt_value: ttValue,
-									markup_paid: markupPed,
-								}),
-					})
-				: await addEquipmentHolding({
-						name: name.trim(),
-						quantity,
-						tt_value: ttValue,
-						markup_paid: markupPed,
-						notes: notes.trim() || null,
-					});
+			// Only a sound figure reaches here unless the figures are locked,
+			// when none is sent.
+			const markup = markupPed ?? 0;
+			const write = () =>
+				item
+					? updateEquipmentHolding(item.id, {
+							name: name.trim(),
+							notes: notes.trim() || null,
+							...(locked
+								? {}
+								: {
+										...(quantityFixed ? {} : { quantity }),
+										tt_value: ttValue,
+										markup_paid: markup,
+									}),
+						})
+					: addEquipmentHolding({
+							name: name.trim(),
+							quantity,
+							tt_value: ttValue,
+							markup_paid: markup,
+							notes: notes.trim() || null,
+							...(prefill ? { acquired_at: acquiredAt || null } : {}),
+						});
+			const saved = await (around && !item ? around(write) : write());
 			onsaved(saved);
 			open = false;
 		} catch (e) {
@@ -150,6 +176,13 @@
 				resetKey={opened}
 				label={stack ? 'MU paid, all units' : 'MU paid'}
 			/>
+
+			{#if prefill && !item}
+				<div>
+					<label for="inventory-acquired" class="text-xs text-text-secondary mb-1 block">Bought</label>
+					<Input id="inventory-acquired" type="date" class="w-40" bind:value={acquiredAt} />
+				</div>
+			{/if}
 		{/if}
 
 		<div>
@@ -177,7 +210,7 @@
 					<span class="block text-xs tabular-nums text-text-tertiary">
 						{formatPed(perUnit(costBasis, quantity) ?? 0)} each{noTt
 							? ''
-							: `, ${formatPed(perUnit(markupPed, quantity) ?? 0)} of it markup`}
+							: `, ${formatPed(perUnit(markupPed ?? 0, quantity) ?? 0)} of it markup`}
 					</span>
 				{/if}
 			</span>

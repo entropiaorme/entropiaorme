@@ -30,6 +30,12 @@
 //! the host's own daylight-saving gaps and ambiguities, which would
 //! otherwise smear an hour across a reading that was never in doubt.
 //!
+//! What the live tail settled is remembered across the app's runs
+//! ([`OffsetMemory`]): when the offset settles again after a restart at
+//! the value remembered, it is taken to have held since the remembered
+//! offset did, so an instant from before the restart is still placed by
+//! it. A different value has held only since it settled.
+//!
 //! [`ChatLogReading`] is a newtype for one reason: it is the only
 //! thing [`crate::time::parse_timestamp_str`] hands back, and it
 //! offers no route to an instant except [`ChatLogClock::resolve`]. A
@@ -106,13 +112,97 @@ struct Candidate {
     agreements: u32,
 }
 
+/// A settled offset as remembered across the app's runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RememberedOffset {
+    /// Seconds the server's wall clock runs ahead of UTC.
+    pub offset_seconds: i64,
+    /// Since when (unix seconds) it is known to have held.
+    pub held_since: i64,
+}
+
+/// Where a settled offset is remembered between the app's runs. Called on
+/// the live tail's own thread, and only when the offset settles or moves.
+pub trait OffsetMemory: Send + Sync {
+    /// The offset remembered from an earlier run, if any.
+    fn recall(&self) -> Option<RememberedOffset>;
+    /// Remember the offset held now, read live at `confirmed_at` (unix
+    /// seconds).
+    fn remember(&self, offset: RememberedOffset, confirmed_at: i64);
+}
+
+/// The offset remembered in the app's database
+/// (`chat_log_time_base`, one row).
+pub struct StoredOffsetMemory {
+    db: crate::db::Db,
+}
+
+impl StoredOffsetMemory {
+    pub fn new(db: crate::db::Db) -> Self {
+        StoredOffsetMemory { db }
+    }
+}
+
+impl OffsetMemory for StoredOffsetMemory {
+    fn recall(&self) -> Option<RememberedOffset> {
+        use rusqlite::OptionalExtension as _;
+        let recalled = self.db.with_reader_blocking(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT offset_seconds, held_since FROM chat_log_time_base \
+                     WHERE singleton = 1",
+                    [],
+                    |row| {
+                        Ok(RememberedOffset {
+                            offset_seconds: row.get(0)?,
+                            held_since: row.get(1)?,
+                        })
+                    },
+                )
+                .optional()?)
+        });
+        match recalled {
+            Ok(recalled) => recalled,
+            Err(error) => {
+                tracing::warn!(target: "eo::chatlog", %error, "the remembered chat-log time base could not be read");
+                None
+            }
+        }
+    }
+
+    fn remember(&self, offset: RememberedOffset, confirmed_at: i64) {
+        let written = self.db.with_writer_blocking(move |conn| {
+            conn.execute(
+                "INSERT INTO chat_log_time_base \
+                     (singleton, offset_seconds, held_since, confirmed_at) \
+                 VALUES (1, ?1, ?2, ?3) \
+                 ON CONFLICT(singleton) DO UPDATE SET \
+                     offset_seconds = excluded.offset_seconds, \
+                     held_since = excluded.held_since, \
+                     confirmed_at = excluded.confirmed_at",
+                rusqlite::params![offset.offset_seconds, offset.held_since, confirmed_at],
+            )?;
+            Ok(())
+        });
+        if let Err(error) = written {
+            tracing::warn!(target: "eo::chatlog", %error, "the chat-log time base could not be remembered");
+        }
+    }
+}
+
 struct Inner {
     base: Base,
     /// Seconds the server's wall clock runs ahead of UTC. Read on
     /// every resolve, so an atomic rather than a lock.
     offset_seconds: AtomicI64,
+    /// Since when (unix seconds, read on the host's clock) the offset has
+    /// been the one held now: the read that settled it or last moved it.
+    /// The least instant for a pinned offset, which has always held.
+    held_since: AtomicI64,
     settled: AtomicBool,
     candidate: Mutex<Option<Candidate>>,
+    /// Where the settled offset is remembered between runs, if anywhere.
+    memory: Option<Arc<dyn OffsetMemory>>,
 }
 
 /// The shared handle every chat-log consumer resolves through. Cloning
@@ -124,13 +214,20 @@ pub struct ChatLogClock {
 }
 
 impl ChatLogClock {
-    fn with_base(base: Base, offset_seconds: i64, settled: bool) -> Self {
+    fn with_base(
+        base: Base,
+        offset_seconds: i64,
+        settled: bool,
+        memory: Option<Arc<dyn OffsetMemory>>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 base,
                 offset_seconds: AtomicI64::new(offset_seconds),
+                held_since: AtomicI64::new(i64::MIN),
                 settled: AtomicBool::new(settled),
                 candidate: Mutex::new(None),
+                memory,
             }),
         }
     }
@@ -138,13 +235,20 @@ impl ChatLogClock {
     /// The live tail's clock: host-local until its first accepted
     /// sample, then the derived server offset.
     pub fn observed() -> Self {
-        Self::with_base(Base::Observed, 0, false)
+        Self::with_base(Base::Observed, 0, false, None)
+    }
+
+    /// [`ChatLogClock::observed`], remembering what it settles in
+    /// `memory`, and taking an offset that settles at the value remembered
+    /// to have held since the remembered one did.
+    pub fn observed_remembering(memory: Arc<dyn OffsetMemory>) -> Self {
+        Self::with_base(Base::Observed, 0, false, Some(memory))
     }
 
     /// The historical base, for recorded lines and for any surface
     /// where "live" has no meaning.
     pub fn host_local() -> Self {
-        Self::with_base(Base::HostLocal, 0, false)
+        Self::with_base(Base::HostLocal, 0, false, None)
     }
 
     /// A clock pinned to a known server offset from UTC, in seconds.
@@ -152,7 +256,7 @@ impl ChatLogClock {
     /// app derives its offset by observation and exposes no setting
     /// for one.
     pub fn pinned(offset_seconds: i64) -> Self {
-        Self::with_base(Base::Pinned, offset_seconds, true)
+        Self::with_base(Base::Pinned, offset_seconds, true, None)
     }
 
     /// The derived server offset from UTC in seconds, once one has
@@ -160,6 +264,17 @@ impl ChatLogClock {
     pub fn server_offset_seconds(&self) -> Option<i64> {
         (self.inner.base != Base::HostLocal && self.inner.settled.load(Ordering::Acquire))
             .then(|| self.inner.offset_seconds.load(Ordering::Acquire))
+    }
+
+    /// Since when (unix seconds) the offset held now is known to have
+    /// held: the live read that settled it or last moved it, or, when it
+    /// settled at the value an earlier run remembered, since that one had
+    /// held; `None` while no offset has settled. An instant placed in time before it may have
+    /// been logged under another offset (a daylight-saving step on the
+    /// server, or one the app was not running to see).
+    pub fn offset_held_since(&self) -> Option<i64> {
+        self.server_offset_seconds()
+            .map(|_| self.inner.held_since.load(Ordering::Acquire))
     }
 
     /// Feed one live reading and the instant it was read. Samples that
@@ -185,9 +300,24 @@ impl ChatLogClock {
             .lock()
             .expect("chat-log offset candidate");
         if !self.inner.settled.load(Ordering::Acquire) {
+            // Settled at the value an earlier run remembered: taken to have
+            // held since that one had.
+            let recalled = self
+                .inner
+                .memory
+                .as_ref()
+                .and_then(|memory| memory.recall());
+            let held_since = match recalled {
+                Some(kept) if kept.offset_seconds == snapped => {
+                    kept.held_since.min(read_at.timestamp())
+                }
+                _ => read_at.timestamp(),
+            };
             self.inner.offset_seconds.store(snapped, Ordering::Release);
+            self.inner.held_since.store(held_since, Ordering::Release);
             self.inner.settled.store(true, Ordering::Release);
             *candidate = None;
+            self.remember(snapped, held_since, read_at);
             return;
         }
         if snapped == self.inner.offset_seconds.load(Ordering::Acquire) {
@@ -198,8 +328,12 @@ impl ChatLogClock {
             Some(pending) if pending.offset_seconds == snapped => {
                 pending.agreements += 1;
                 if pending.agreements >= CONFIRMATIONS_TO_MOVE {
+                    self.inner
+                        .held_since
+                        .store(read_at.timestamp(), Ordering::Release);
                     self.inner.offset_seconds.store(snapped, Ordering::Release);
                     *candidate = None;
+                    self.remember(snapped, read_at.timestamp(), read_at);
                 }
             }
             _ => {
@@ -208,6 +342,18 @@ impl ChatLogClock {
                     agreements: 1,
                 })
             }
+        }
+    }
+
+    fn remember(&self, offset_seconds: i64, held_since: i64, read_at: DateTime<Utc>) {
+        if let Some(memory) = &self.inner.memory {
+            memory.remember(
+                RememberedOffset {
+                    offset_seconds,
+                    held_since,
+                },
+                read_at.timestamp(),
+            );
         }
     }
 
@@ -412,5 +558,118 @@ mod tests {
             clock.resolve(reading("2026-08-22T10:35:26")),
             instant("2026-08-22T09:35:26")
         );
+    }
+
+    #[test]
+    fn an_offset_is_known_to_hold_from_the_read_that_settled_or_moved_it() {
+        let clock = ChatLogClock::observed();
+        assert_eq!(clock.offset_held_since(), None);
+        let settled_at = instant("2026-08-22T09:35:26");
+        clock.observe(reading("2026-08-22T09:35:26"), settled_at);
+        assert_eq!(clock.offset_held_since(), Some(settled_at.timestamp()));
+        // An agreeing sample later changes nothing.
+        clock.observe(
+            reading("2026-08-22T10:00:00"),
+            instant("2026-08-22T10:00:00"),
+        );
+        assert_eq!(clock.offset_held_since(), Some(settled_at.timestamp()));
+        // A step the samples confirm moves it, from the confirming read.
+        for minute in 1..=3 {
+            clock.observe(
+                reading(&format!("2026-08-22T12:0{minute}:00")),
+                instant(&format!("2026-08-22T11:0{minute}:00")),
+            );
+        }
+        assert_eq!(clock.server_offset_seconds(), Some(3_600));
+        assert_eq!(
+            clock.offset_held_since(),
+            Some(instant("2026-08-22T11:03:00").timestamp())
+        );
+        assert_eq!(ChatLogClock::pinned(0).offset_held_since(), Some(i64::MIN));
+        assert_eq!(ChatLogClock::host_local().offset_held_since(), None);
+    }
+
+    /// A memory held in the test, remembering what it was told.
+    #[derive(Default)]
+    struct Remembered(Mutex<Option<(RememberedOffset, i64)>>);
+
+    impl OffsetMemory for Remembered {
+        fn recall(&self) -> Option<RememberedOffset> {
+            self.0.lock().unwrap().map(|(offset, _)| offset)
+        }
+        fn remember(&self, offset: RememberedOffset, confirmed_at: i64) {
+            *self.0.lock().unwrap() = Some((offset, confirmed_at));
+        }
+    }
+
+    fn remembering(kept: Option<RememberedOffset>) -> (ChatLogClock, Arc<Remembered>) {
+        let memory = Arc::new(Remembered(Mutex::new(kept.map(|offset| (offset, 0)))));
+        (ChatLogClock::observed_remembering(memory.clone()), memory)
+    }
+
+    /// After a restart, an offset that settles at the value remembered has
+    /// held since the remembered one did; a different one, or one with
+    /// nothing remembered, only since it settled. What settles is
+    /// remembered for the next run.
+    #[test]
+    fn a_remembered_offset_carries_across_a_restart_only_at_the_same_value() {
+        let settled_at = instant("2026-08-22T09:35:26");
+        let earlier = instant("2026-08-21T18:00:00").timestamp();
+        let kept = RememberedOffset {
+            offset_seconds: 0,
+            held_since: earlier,
+        };
+
+        let (clock, memory) = remembering(Some(kept));
+        clock.observe(reading("2026-08-22T09:35:26"), settled_at);
+        assert_eq!(clock.offset_held_since(), Some(earlier));
+        assert_eq!(
+            *memory.0.lock().unwrap(),
+            Some((kept, settled_at.timestamp()))
+        );
+
+        // A different offset: an hour ahead of what was remembered.
+        let (clock, memory) = remembering(Some(RememberedOffset {
+            offset_seconds: 3_600,
+            held_since: earlier,
+        }));
+        clock.observe(reading("2026-08-22T09:35:26"), settled_at);
+        assert_eq!(clock.offset_held_since(), Some(settled_at.timestamp()));
+        assert_eq!(
+            memory.0.lock().unwrap().map(|(offset, _)| offset),
+            Some(RememberedOffset {
+                offset_seconds: 0,
+                held_since: settled_at.timestamp(),
+            })
+        );
+
+        // A first run: nothing remembered.
+        let (clock, memory) = remembering(None);
+        clock.observe(reading("2026-08-22T09:35:26"), settled_at);
+        assert_eq!(clock.offset_held_since(), Some(settled_at.timestamp()));
+        assert!(memory.0.lock().unwrap().is_some());
+    }
+
+    /// The database remembers the offset between runs.
+    #[tokio::test]
+    async fn the_database_remembers_the_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Db::open(&dir.path().join("clock.db"))
+            .await
+            .unwrap();
+        let memory = StoredOffsetMemory::new(db);
+        let kept = RememberedOffset {
+            offset_seconds: 7_200,
+            held_since: 1_000,
+        };
+        let recalled = tokio::task::spawn_blocking(move || {
+            let before = memory.recall();
+            memory.remember(kept, 2_000);
+            memory.remember(kept, 3_000);
+            (before, memory.recall())
+        })
+        .await
+        .unwrap();
+        assert_eq!(recalled, (None, Some(kept)));
     }
 }

@@ -2,13 +2,20 @@
 
 import { fireEvent, render, screen, within } from '@testing-library/svelte';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProtectionCostWindow, ProtectionOverview, ProtectionSet } from '$lib/api';
+import type {
+	ProtectionCostWindow,
+	ProtectionOverview,
+	ProtectionSet,
+	ProtectionSetPieces,
+} from '$lib/api';
 
 vi.mock('$lib/api', () => ({
 	PROTECTION_TOPIC: 'protection:updated',
 	archiveProtectionSet: vi.fn(),
+	confirmProtectionSetPieces: vi.fn(),
 	createProtectionSet: vi.fn(),
 	getProtectionOverview: vi.fn(),
+	getProtectionSetPieces: vi.fn(),
 	restoreProtectionSet: vi.fn(),
 	undoProtectionRecording: vi.fn(),
 	updateProtectionSet: vi.fn(),
@@ -102,6 +109,7 @@ describe('the Equipment armour tab', () => {
 						},
 						basisLocked: true,
 						backlog: { lastRecordedAt: 1_756_400_000, sessions: 1, hits: 90 },
+						pieces: [],
 					},
 				],
 			}),
@@ -189,6 +197,95 @@ describe('the Equipment armour tab', () => {
 	});
 });
 
+describe("a limited set's pieces", () => {
+	const HELMET = 'Pegasus Helmet (M,L)';
+	const GLOVES = 'Pegasus Gloves (M,L)';
+	const PLATE = 'Armor Plating Mk. 5B (L)';
+
+	function pieces(overrides: Partial<ProtectionSetPieces> = {}): ProtectionSetPieces {
+		return {
+			setId: '1',
+			confirmed: [],
+			suggested: [],
+			others: [],
+			readingTakenAt: 1_756_400_000,
+			...overrides,
+		};
+	}
+
+	async function openEditor() {
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		return within(screen.getByRole('dialog'));
+	}
+
+	it('says on each set whether its pieces are confirmed', async () => {
+		await renderTab(
+			overview({
+				sets: [limitedSet(), limitedSet({ id: '2', name: 'Hyperion', pieces: [HELMET, GLOVES] })],
+			}),
+		);
+		expect(screen.getByText(/Pieces not confirmed/)).toBeTruthy();
+		expect(screen.getByText(/2 pieces/)).toBeTruthy();
+	});
+
+	it('confirms the suggested pieces in the set editor, once', async () => {
+		mocked.getProtectionSetPieces.mockResolvedValue(
+			pieces({ suggested: [HELMET, GLOVES], others: [PLATE] }),
+		);
+		mocked.confirmProtectionSetPieces.mockResolvedValue(
+			pieces({
+				confirmed: [
+					{ name: GLOVES, confirmedAt: 1 },
+					{ name: HELMET, confirmedAt: 1 },
+				],
+			}),
+		);
+		await renderTab(overview({ sets: [limitedSet()] }));
+		const dialog = await openEditor();
+
+		const section = within(await dialog.findByTestId('set-pieces'));
+		expect(await section.findByText(/From your account reading of/)).toBeTruthy();
+		// The suggestions start ticked; the reading's other limited armour does not.
+		expect((section.getByLabelText(HELMET) as HTMLInputElement).checked).toBe(true);
+		expect((section.getByLabelText(GLOVES) as HTMLInputElement).checked).toBe(true);
+		expect((section.getByLabelText(PLATE) as HTMLInputElement).checked).toBe(false);
+
+		await fireEvent.click(section.getByLabelText(GLOVES));
+		await fireEvent.click(section.getByLabelText(PLATE));
+		await fireEvent.click(section.getByRole('button', { name: 'Confirm pieces' }));
+		expect(mocked.confirmProtectionSetPieces).toHaveBeenCalledWith('1', [HELMET, PLATE]);
+
+		// Confirmed, the section lists the pieces and offers to change them.
+		expect(await section.findByRole('button', { name: 'Change' })).toBeTruthy();
+		expect(section.getByText(GLOVES)).toBeTruthy();
+		expect(section.queryByRole('button', { name: 'Confirm pieces' })).toBeNull();
+		expect(mocked.getProtectionOverview).toHaveBeenCalledTimes(2);
+	});
+
+	it('tells the player how to get suggestions when no reading holds limited armour', async () => {
+		mocked.getProtectionSetPieces.mockResolvedValue(pieces({ readingTakenAt: null }));
+		await renderTab(overview({ sets: [limitedSet()] }));
+		const dialog = await openEditor();
+		expect(
+			await dialog.findByText('Sign in to your account and track a session wearing the set'),
+		).toBeTruthy();
+		expect(dialog.queryByRole('button', { name: 'Confirm pieces' })).toBeNull();
+	});
+
+	it('shows why the pieces were refused and keeps the choice', async () => {
+		mocked.getProtectionSetPieces.mockResolvedValue(pieces({ suggested: [HELMET] }));
+		mocked.confirmProtectionSetPieces.mockRejectedValue(
+			new Error('An item can be a piece of only one set in use'),
+		);
+		await renderTab(overview({ sets: [limitedSet()] }));
+		const dialog = await openEditor();
+		const section = within(await dialog.findByTestId('set-pieces'));
+		await fireEvent.click(await section.findByRole('button', { name: 'Confirm pieces' }));
+		expect(await section.findByText('An item can be a piece of only one set in use')).toBeTruthy();
+		expect((section.getByLabelText(HELMET) as HTMLInputElement).checked).toBe(true);
+	});
+});
+
 function limitedSet(overrides: Partial<ProtectionSet> = {}): ProtectionSet {
 	return {
 		id: '1',
@@ -198,6 +295,7 @@ function limitedSet(overrides: Partial<ProtectionSet> = {}): ProtectionSet {
 		latestObservation: null,
 		basisLocked: false,
 		backlog: { lastRecordedAt: null, sessions: 0, hits: 0 },
+		pieces: [],
 		...overrides,
 	};
 }

@@ -280,11 +280,16 @@ async fn seed_extras(db: &Db) {
                    'Enhancer Shrapnel Rebate', 1.0, 'enhancer', 'x');",
     );
     run(db, sql).await;
-    // Both were read from the account site, their measures sealed whole.
+    // Both were read from the account site, their measures sealed whole,
+    // each with a teleport's travel overhead.
     db.with_writer(move |conn| {
-        use crate::account_facade::{seed_measured, COMPLETE};
-        seed_measured(conn, "x", DAY + 10_000.0, DAY + 14_000.0, COMPLETE);
-        seed_measured(conn, "y", today - 7_200.0, today - 3_600.0, COMPLETE);
+        use crate::account_facade::{seed_measured, Seeded, COMPLETE};
+        let travelled = Seeded {
+            travel: true,
+            ..COMPLETE
+        };
+        seed_measured(conn, "x", DAY + 10_000.0, DAY + 14_000.0, travelled);
+        seed_measured(conn, "y", today - 7_200.0, today - 3_600.0, travelled);
         Ok(())
     })
     .await
@@ -443,6 +448,14 @@ async fn an_excluded_session_reads_as_never_recorded() {
             "the extra sessions do not reach {name}, so its comparison proves nothing"
         );
     }
+    // Their measured overhead reaches the Overview's losses, beside Cycled.
+    let overhead = |world: &BTreeMap<&'static str, Value>| {
+        world["analytics_overview"]["lossesBreakdown"]["overhead"]["travel"]
+            .as_f64()
+            .unwrap()
+    };
+    assert!(overhead(&included[1]) > 0.0);
+    assert_eq!(overhead(&never[1]), 0.0);
 
     let excluded_dir = tempfile::tempdir().unwrap();
     let (excluded, excluded_db) = api_over(excluded_dir.path()).await;
@@ -900,6 +913,8 @@ const OTHER_COMMANDS: &[&str] = &[
     "protection_recording_candidates",
     "protection_observation_confirm",
     "protection_repair_confirm",
+    "protection_set_pieces",
+    "protection_set_pieces_confirm",
     "protection_trade_terminal_scan",
     // Physical stock, sales, and the ledger's own rows: holdings and
     // confirmed transactions are outside both scopes by design.
@@ -913,6 +928,8 @@ const OTHER_COMMANDS: &[&str] = &[
     "stock_private_sale",
     "stock_remove",
     "stock_shrapnel_convert",
+    "stock_conversion_from_account",
+    "stock_sale_from_account",
     "activity_history",
     "auction_sale_revert",
     "auction_listing_undo",
@@ -932,6 +949,13 @@ const OTHER_COMMANDS: &[&str] = &[
     "account_disconnect",
     "account_session_measure",
     "account_measured_sessions",
+    // Where the player places an item the app cannot place: a placement
+    // moves a measured cost between buckets in every session, which the
+    // statistics then read through their own commands; the list of items
+    // awaiting one is a to-do list, not a statistic.
+    "account_cost_placements",
+    "account_cost_place",
+    "account_cost_placement_clear",
     // What the readings propose, and the readings a strongbox run asks
     // for: a proposal is a guess until the player records it through the
     // strongbox and listing commands (classified above), and a run's
@@ -941,6 +965,25 @@ const OTHER_COMMANDS: &[&str] = &[
     "account_proposals_release",
     "account_proposals_link",
     "account_proposal_dismiss",
+    // A session minute by minute: what the readings saw beside what the
+    // chat log said, read for that one session and feeding no statistic;
+    // an arrival recorded as stock of unknown origin (taken back by its
+    // undo), a stock movement outside both scopes like the stock commands
+    // above; and a dismissed arrival offered again, a proposal decision.
+    "account_session_minutes",
+    "account_arrival_unknown_origin",
+    "account_arrival_unignore",
+    "account_arrival_unknown_origin_undo",
+    // A stock reconciliation: planned from a reading or a paste, revised
+    // and applied through the stock writes classified above (a removal, a
+    // conversion, a sale at TT, stock of unknown origin), and undone as a
+    // whole. Stock movements outside both scopes, like those commands.
+    "account_reconciliation_plan",
+    "account_reconciliation_paste",
+    "account_reconciliation_draft",
+    "account_reconciliation_revise",
+    "account_reconciliation_apply",
+    "account_reconciliation_undo",
     "account_run_begin",
     "account_run_done",
     "account_run_cancel",

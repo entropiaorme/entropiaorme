@@ -68,6 +68,8 @@
 				lines={active.cycledBreakdown ?? []}
 				totalPed={active.cost ?? 0}
 				incomplete={render.incomplete}
+				note={render.note}
+				overheadPed={active.overheadCost ?? 0}
 			/>
 		{:else if valued && id === 'loot_mu'}
 			<MarkupStatTip valuation={valued} />
@@ -87,7 +89,8 @@
 					{cycle}
 					basis={liveMarkupSettings.looterBasis}
 					lootMuFactor={valued.lootMuFactor}
-					cycledPed={active.cost ?? 0}
+					cycledPed={active.costsMeasuredThrough ? cycle.cycledPed : (active.cost ?? 0)}
+					trackedCost={Boolean(active.costsMeasuredThrough)}
 					rewardMuPed={valued.reward?.muPed ?? 0}
 				/>
 			{/if}

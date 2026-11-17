@@ -8,12 +8,14 @@ use std::collections::HashSet;
 
 use rusqlite::OptionalExtension;
 
+use super::position::ReadingCache;
 use super::recording::RESET_UNPRICED_REASON;
 use super::{
     sets, ContextShare, CostKind, CostStatus, ObservationSource, ProtectionCostAllocation,
     ProtectionCostWindow, ProtectionError, ProtectionObservation, ProtectionOverview,
     ProtectionSet, UnrecordedProtection,
 };
+use crate::session_costs::{armour_measured_sql, armour_unpriced_sql, ArmourStream};
 
 /// How many recent recordings Equipment lists.
 const RECENT_COST_WINDOWS: i64 = 12;
@@ -36,11 +38,28 @@ pub(super) fn live_allocation(session: &'static str) -> String {
     )
 }
 
+/// Whether the session named by the column `session` has its armour
+/// recorded. One the account readings measured whole is recorded; one
+/// whose limited part waits for a set to be confirmed is recorded once a
+/// limited set's recording reaches it; one they did not measure, once any
+/// live recording reaches it.
+fn armour_recorded(session: &'static str) -> String {
+    let measured = armour_measured_sql(ArmourStream::Unlimited, session);
+    let unpriced = armour_unpriced_sql(session);
+    format!(
+        "(({measured} AND NOT {unpriced}) \
+          OR ({unpriced} AND EXISTS ({} AND w.kind = 'limited_decay')) \
+          OR (NOT {measured} AND EXISTS ({})))",
+        live_allocation(session),
+        live_allocation(session),
+    )
+}
+
 pub(super) fn read_set(
     conn: &rusqlite::Connection,
     id: i64,
 ) -> Result<Option<ProtectionSet>, ProtectionError> {
-    sets::read_set_row(conn, id)
+    sets::read_set_row(conn, id, &mut ReadingCache::default())
 }
 
 pub(super) fn read_observation(
@@ -53,7 +72,9 @@ pub(super) fn read_observation(
                     o.reset_reason, \
                     EXISTS (SELECT 1 FROM protection_cost_windows w \
                             WHERE w.closing_observation_id = o.id \
-                              AND w.superseded_at IS NULL) \
+                              AND w.superseded_at IS NULL), \
+                    EXISTS (SELECT 1 FROM protection_observation_readings r \
+                            WHERE r.observation_id = o.id) \
              FROM protection_observations o WHERE o.id = ?1",
             [id],
             |row| {
@@ -66,16 +87,21 @@ pub(super) fn read_observation(
                     row.get::<_, f64>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, bool>(7)?,
+                    row.get::<_, bool>(8)?,
                 ))
             },
         )
         .optional()?
         .ok_or(ProtectionError::Stored("missing protection observation"))?;
+    let source = match (ObservationSource::parse(&row.3)?, row.8) {
+        (_, true) => ObservationSource::Account,
+        (source, false) => source,
+    };
     Ok(ProtectionObservation {
         id: row.0,
         set_id: row.1,
         tt_value_ped: row.2,
-        source: ObservationSource::parse(&row.3)?,
+        source,
         raw_text: row.4,
         observed_at: row.5,
         reset_reason: row.6,
@@ -255,7 +281,8 @@ pub(super) fn read_cost_window(
 /// Sessions with recorded hits that no protection cost has reached. A
 /// session one stream covers counts as recorded even though another stream
 /// may still add to it: the app cannot know which protection was worn, so
-/// "some cost recorded" is the most it can truthfully say.
+/// "some cost recorded" is the most it can truthfully say. A session whose
+/// armour the account readings measured is recorded.
 pub(super) fn read_unrecorded(
     conn: &rusqlite::Connection,
 ) -> Result<UnrecordedProtection, ProtectionError> {
@@ -264,8 +291,8 @@ pub(super) fn read_unrecorded(
             "SELECT COUNT(DISTINCT d.session_id), COUNT(d.id) \
              FROM protection_defence_events d \
              JOIN tracking_sessions s ON s.id = d.session_id \
-             WHERE NOT EXISTS ({})",
-            live_allocation("d.session_id")
+             WHERE NOT {}",
+            armour_recorded("d.session_id")
         ),
         [],
         |row| {
@@ -289,15 +316,20 @@ fn read_set_ids(conn: &rusqlite::Connection, sql: &str) -> Result<Vec<i64>, Prot
 fn read_sets(
     conn: &rusqlite::Connection,
     ids: Vec<i64>,
+    readings: &mut ReadingCache,
 ) -> Result<Vec<ProtectionSet>, ProtectionError> {
     ids.into_iter()
-        .map(|id| read_set(conn, id)?.ok_or(ProtectionError::Stored("missing set")))
+        .map(|id| {
+            sets::read_set_row(conn, id, readings)?.ok_or(ProtectionError::Stored("missing set"))
+        })
         .collect()
 }
 
 pub(super) fn read_overview(
     conn: &rusqlite::Connection,
 ) -> Result<ProtectionOverview, ProtectionError> {
+    // Every set reads its baseline from the same few account readings.
+    let mut readings = ReadingCache::default();
     let sets = read_sets(
         conn,
         read_set_ids(
@@ -306,6 +338,7 @@ pub(super) fn read_overview(
              WHERE archived_at IS NULL AND economy_kind = 'limited' \
              ORDER BY kind, lower(name), id",
         )?,
+        &mut readings,
     )?;
     let removed_sets = read_sets(
         conn,
@@ -317,6 +350,7 @@ pub(super) fn read_overview(
                  ORDER BY archived_at DESC, id DESC LIMIT {REMOVED_SETS}"
             ),
         )?,
+        &mut readings,
     )?;
 
     let mut window_stmt = conn.prepare(
@@ -333,7 +367,11 @@ pub(super) fn read_overview(
     Ok(ProtectionOverview {
         sets,
         removed_sets,
-        unlimited: super::recording::read_backlog(conn, super::ProtectionStream::Unlimited)?,
+        unlimited: super::recording::read_backlog(
+            conn,
+            super::ProtectionStream::Unlimited,
+            &mut readings,
+        )?,
         recent_cost_windows,
         unrecorded: read_unrecorded(conn)?,
     })
@@ -348,27 +386,41 @@ pub(super) fn session_unrecorded_hits(
     conn.query_row(
         &format!(
             "SELECT COUNT(d.id) FROM protection_defence_events d \
-             WHERE d.session_id = ?1 AND NOT EXISTS ({})",
-            live_allocation("d.session_id")
+             WHERE d.session_id = ?1 AND NOT {}",
+            armour_recorded("d.session_id")
         ),
         [session_id],
         |row| row.get(0),
     )
 }
 
-/// Which of `session_ids` have recorded hits that no protection cost
-/// covers yet, so a session list can read their cost as incomplete.
+/// What counts as covering a session's hits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Covered {
+    /// A recording, or the account readings measuring its armour: the
+    /// session's armour cost is known.
+    Billed,
+    /// A recording alone: the figure the recordings track is complete.
+    Recorded,
+}
+
+/// Which of `session_ids` have recorded hits that nothing `covered` counts
+/// reaches yet, so a session list can read their cost as incomplete.
 pub(super) fn sessions_with_unrecorded_hits(
     conn: &rusqlite::Connection,
     session_ids: &[String],
+    covered: Covered,
 ) -> Result<HashSet<String>, rusqlite::Error> {
+    let covering = match covered {
+        Covered::Billed => armour_recorded("d.session_id"),
+        Covered::Recorded => format!("EXISTS ({})", live_allocation("d.session_id")),
+    };
     let mut unrecorded = HashSet::new();
     for chunk in session_ids.chunks(SESSION_ID_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(", ");
         let sql = format!(
             "SELECT DISTINCT d.session_id FROM protection_defence_events d \
-             WHERE d.session_id IN ({placeholders}) AND NOT EXISTS ({})",
-            live_allocation("d.session_id")
+             WHERE d.session_id IN ({placeholders}) AND NOT {covering}"
         );
         let mut stmt = conn.prepare(&sql)?;
         let ids = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {

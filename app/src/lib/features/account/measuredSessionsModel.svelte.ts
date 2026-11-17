@@ -1,7 +1,8 @@
 /**
  * The review of measured sessions: the whole-history summary, and the
- * sessions the account readings covered, newest first, each beside its
- * tracked figures.
+ * sessions the account readings covered, newest first. Where the readings
+ * cover a session, its measured figures are its costs; the review compares
+ * them with the tracked estimates.
  *
  * Both read through snapshot stores on the account topic: a frame (a
  * reading stored, a measure sealed) re-reads them, overlapping frames

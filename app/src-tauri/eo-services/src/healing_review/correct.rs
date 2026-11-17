@@ -92,9 +92,7 @@ fn adjust_session_heal(
          WHERE id = ?2",
         rusqlite::params![delta, session_id],
     )?;
-    crate::session_summary::write_session_summary(tx, session_id)?;
-    crate::daily_rollup::refresh_session_days(tx, session_id)?;
-    crate::session_rollup::recompute_session(tx, session_id)?;
+    crate::session_costs::refresh_derived(tx, session_id)?;
     Ok(())
 }
 

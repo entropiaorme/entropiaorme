@@ -55,9 +55,10 @@ impl ProtectionService {
         self.active_set(id).await
     }
 
-    /// Rename a set, or correct its markup before its first reading. The
-    /// markup prices every reading taken against it, so it is frozen once
-    /// one exists; a materially new acquisition is a new set.
+    /// Rename a set, or correct its markup before it prices anything. The
+    /// markup prices every reading taken against it and every session the
+    /// account readings bill it in, so it is frozen once either exists; a
+    /// materially new acquisition is a new set.
     pub async fn update_set(
         &self,
         set_id: i64,
@@ -69,7 +70,11 @@ impl ProtectionService {
         let markup = valid_markup(markup_percent)?;
         if existing.basis_locked && (existing.markup_percent - markup).abs() > f64::EPSILON {
             return Err(ProtectionError::Conflict(
-                "A set's markup cannot change after its first reading",
+                if existing.latest_observation.is_some() {
+                    "A set's markup cannot change after its first reading"
+                } else {
+                    "A set's markup cannot change once a session has been billed with it"
+                },
             ));
         }
         self.db
@@ -88,17 +93,26 @@ impl ProtectionService {
     }
 
     /// Retire a set from the recording surface. Its readings and the costs
-    /// they booked keep its name.
+    /// they booked keep its name. Its pieces stop being its pieces from now:
+    /// the sessions billed under it keep its markup, and the items are free
+    /// to be confirmed for another set.
     pub async fn archive_set(&self, set_id: i64) -> Result<(), ProtectionError> {
         self.active_set(set_id).await?;
         let now = self.now();
         self.db
             .with_writer(move |conn| {
-                conn.execute(
+                let tx = conn.transaction()?;
+                tx.execute(
                     "UPDATE protection_sets SET archived_at = ?1 \
                      WHERE id = ?2 AND archived_at IS NULL",
                     rusqlite::params![now, set_id],
                 )?;
+                tx.execute(
+                    "UPDATE protection_set_pieces SET removed_at = ?1 \
+                     WHERE set_id = ?2 AND removed_at IS NULL",
+                    rusqlite::params![now, set_id],
+                )?;
+                tx.commit()?;
                 Ok(())
             })
             .await?;
@@ -106,28 +120,67 @@ impl ProtectionService {
         Ok(())
     }
 
-    /// Return a removed set to the recording surface, its readings and
-    /// markup intact. Refused while an active set holds its name.
+    /// Return a removed set to the recording surface, its readings, markup
+    /// and the pieces it held when removed intact. Refused while an active
+    /// set holds its name, or one of those pieces.
     pub async fn restore_set(&self, set_id: i64) -> Result<ProtectionSet, ProtectionError> {
         let set = self
             .db
             .with_reader(move |conn| read::read_set(conn, set_id).map_err(super::protection_decode))
             .await?
             .ok_or(ProtectionError::NotFound("Protection set not found"))?;
-        if set.archived_at.is_none() {
+        let Some(archived_at) = set.archived_at else {
             return Ok(set);
-        }
-        self.db
+        };
+        let now = self.now();
+        let piece_taken = self
+            .db
             .with_writer(move |conn| {
-                conn.execute(
+                let tx = conn.transaction()?;
+                // The pieces it held when it was removed.
+                let pieces: Vec<String> = {
+                    let mut stmt = tx.prepare(
+                        "SELECT item_name FROM protection_set_pieces \
+                         WHERE set_id = ?1 AND removed_at = ?2",
+                    )?;
+                    let rows = stmt
+                        .query_map(rusqlite::params![set_id, archived_at], |row| row.get(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    rows
+                };
+                for item in &pieces {
+                    let taken: bool = tx.query_row(
+                        "SELECT EXISTS (SELECT 1 FROM protection_set_pieces \
+                                        WHERE item_name = ?1 AND removed_at IS NULL)",
+                        [item],
+                        |row| row.get(0),
+                    )?;
+                    if taken {
+                        return Ok(true);
+                    }
+                }
+                tx.execute(
                     "UPDATE protection_sets SET archived_at = NULL \
                      WHERE id = ?1 AND economy_kind = 'limited'",
                     [set_id],
                 )?;
-                Ok(())
+                for item in &pieces {
+                    tx.execute(
+                        "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at) \
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![set_id, item, now],
+                    )?;
+                }
+                tx.commit()?;
+                Ok(false)
             })
             .await
             .map_err(map_constraint("An active set already uses that name"))?;
+        if piece_taken {
+            return Err(ProtectionError::Conflict(
+                "A piece of this set is now a piece of a set in use",
+            ));
+        }
         self.notify_changed();
         self.active_set(set_id).await
     }
@@ -137,6 +190,7 @@ impl ProtectionService {
 pub(super) fn read_set_row(
     conn: &rusqlite::Connection,
     id: i64,
+    readings: &mut super::position::ReadingCache,
 ) -> Result<Option<ProtectionSet>, ProtectionError> {
     use rusqlite::OptionalExtension;
 
@@ -161,11 +215,12 @@ pub(super) fn read_set_row(
         return Ok(None);
     };
     let latest_observation = read::read_latest_observation(conn, id)?;
-    let backlog = if latest_observation.is_some() {
-        super::recording::read_backlog(conn, super::ProtectionStream::Limited { set_id: id })?
-    } else {
-        super::StreamBacklog::default()
-    };
+    let backlog = super::recording::read_backlog(
+        conn,
+        super::ProtectionStream::Limited { set_id: id },
+        readings,
+    )?;
+    let billed = crate::session_costs::set_billed_from_readings(conn, id)?;
     Ok(Some(ProtectionSet {
         id,
         kind: ProtectionSetKind::parse(&kind)?,
@@ -173,8 +228,11 @@ pub(super) fn read_set_row(
         markup_percent,
         created_at,
         archived_at,
-        basis_locked: latest_observation.is_some(),
+        basis_locked: latest_observation.is_some() || billed,
         latest_observation,
         backlog,
+        pieces: super::pieces::confirmed_names(conn, id)?
+            .into_iter()
+            .collect(),
     }))
 }

@@ -845,6 +845,9 @@ impl TrackerActor {
                 if let Some(active) = self.session.active_mut() {
                     if active.session.id == session_id {
                         active.heal_cost += write.intent.cost_per_use;
+                        active
+                            .heal_times
+                            .push((write.observed_at, write.intent.cost_per_use));
                         let spend = active
                             .heal_spend
                             .entry(write.intent.tool_name.clone())

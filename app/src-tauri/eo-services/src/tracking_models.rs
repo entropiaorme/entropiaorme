@@ -205,12 +205,22 @@ pub struct ActiveSessionView {
     pub damage_dealt_total: f64,
     pub weapon_damage_dealt: f64,
     pub weapon_cost: f64,
-    /// Armour and plate cost recorded against this session so far: it
-    /// arrives when the player records a repair or a Trade Terminal
-    /// reading, not per hit, and is part of `cost`.
+    /// Armour and plate cost against this session so far, part of `cost`:
+    /// what the account readings measured up to their latest reading when
+    /// they measured it, otherwise what the player's repair or Trade
+    /// Terminal recordings spread over it, arriving with each recording.
     pub armour_cost: f64,
     /// `cost` split by what it was spent on, one line per item.
     pub cycled_breakdown: Vec<CycledLine>,
+    /// What the session cost beyond performing its activity, as the
+    /// account readings measured it so far: in `net`, never in `cost`.
+    /// None while none of the costs rests on the readings.
+    pub overhead_cost: Option<f64>,
+    /// When the costs the account readings measured run to (unix
+    /// seconds): `cost` is what they measured up to then and the tracked
+    /// cost of the play since, where they measured it. None while none of
+    /// the costs rests on the readings.
+    pub costs_measured_through: Option<f64>,
     /// Expected loot over the whole `cost`; None until a modelled shot.
     pub expected_cycle: Option<LiveExpectation>,
     /// Community-model offensive-only expected TT return over captured

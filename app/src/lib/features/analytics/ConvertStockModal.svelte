@@ -15,6 +15,7 @@
 	 */
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
+	import AccountRecordHint from '$lib/features/inventory/AccountRecordHint.svelte';
 	import HeldAmountField from '$lib/features/inventory/HeldAmountField.svelte';
 	import type { AmountMode } from '$lib/features/inventory/heldAmount';
 	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
@@ -94,10 +95,16 @@
 					{unitTt}
 					held={item.heldQty}
 					subject="to convert"
+					describedby="recycle-account-record"
 				/>
 				{#if overStock}
 					<p class="text-xs text-warning">More than the {item.itemName} in stock.</p>
 				{/if}
+				<AccountRecordHint
+					kind="conversion"
+					itemName={item.itemName}
+					id="recycle-account-record"
+				/>
 			</div>
 
 			{#if error}

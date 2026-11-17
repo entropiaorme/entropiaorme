@@ -101,6 +101,11 @@ pub fn compute(
     let mut weapons: Vec<WeaponCell> = Vec::new();
     let mut paces: Vec<PaceCell> = Vec::new();
     let mut events: Vec<Event> = Vec::new();
+    // Each kill's spend weighs at the session's resolved scale, so a
+    // measured session's weapons add up to its measured buckets.
+    let costs = crate::session_costs::resolve(conn, session_id)?;
+    let weapon_scale = costs.scale(crate::session_costs::Bucket::Weapon);
+    let enhancer_scale = costs.scale(crate::session_costs::Bucket::Enhancer);
 
     let mut kills = conn.prepare(
         // every-kill: spend (a claimed reward's row adds its weapon's spend
@@ -128,7 +133,8 @@ pub fn compute(
             Some(tool) if tools == 1 && tool != UNKNOWN_TOOL => {
                 let index = weapon_index(&mut weapons, &tool);
                 let cell = &mut weapons[index];
-                cell.cycled_ped += row.get::<_, f64>(7)? + row.get::<_, f64>(1)?;
+                cell.cycled_ped +=
+                    row.get::<_, f64>(7)? * weapon_scale + row.get::<_, f64>(1)? * enhancer_scale;
                 cell.loot_tt += row.get::<_, f64>(2)?;
                 if !counted {
                     events.push(Event {

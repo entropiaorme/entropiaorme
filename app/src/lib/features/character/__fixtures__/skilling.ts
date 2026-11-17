@@ -69,6 +69,7 @@ export function sourceForecast(
 		kills: 900,
 		markup: null,
 		ttCost: 4,
+		overhead: 0,
 		netCost: null,
 		expected: null,
 		skills: [],

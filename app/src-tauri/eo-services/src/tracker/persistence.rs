@@ -59,6 +59,7 @@ impl TrackerActor {
                 // grouping the stop path uses, so a failure mid-recovery
                 // leaves that session untouched and still recoverable.
                 let sid = session_id.clone();
+                let enhancer_tt = self.providers.enhancer_tt.clone();
                 self.db
                     .with_writer(move |conn| {
                         let tx = conn.transaction()?;
@@ -68,6 +69,12 @@ impl TrackerActor {
                         )?;
 
                         let end_dt = epoch_to_instant(ended_at);
+                        // Its kept breaks are priced from their inputs, as
+                        // a stop prices them, before the rebate.
+                        let markups = crate::enhancer_breaks::weapon_markups(&tx)?;
+                        let tt =
+                            |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
+                        crate::enhancer_breaks::reprice_session(&tx, &sid, &tt, &markups)?;
                         Self::create_enhancer_rebate_ledger_entry(&tx, &sid, end_dt)?;
                         write_session_summary(&tx, &sid)?;
                         crate::daily_rollup::refresh_session_days(&tx, &sid)?;
@@ -80,14 +87,33 @@ impl TrackerActor {
             Ok(())
         }
     }
+    /// Price again every ended session's kept enhancer breaks whose TT or
+    /// weapon markup has moved since they were priced. A failure is logged:
+    /// the breaks keep their prices until the next start.
+    pub(super) async fn heal_break_prices(&self) {
+        let enhancer_tt = self.providers.enhancer_tt.clone();
+        let healed = self
+            .db
+            .with_writer(move |conn| {
+                let tt = |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
+                crate::enhancer_breaks::heal_prices(conn, &tt)
+            })
+            .await;
+        if let Err(error) = healed {
+            tracing::warn!(target: "eo::tracker", %error, "enhancer break prices could not be healed");
+        }
+    }
+
     /// Write a finalised kill to the database: the kill row, its weapon
-    /// phases, its loot items, the stored weapon evidence of its shots, and
-    /// (for a kill pinned to a creature on no list) the answer kept for the
-    /// review, under one commit.
+    /// phases, its loot items, the stored weapon evidence of its shots, the
+    /// enhancer breaks whose cost it carries, and (for a kill pinned to a
+    /// creature on no list) the answer kept for the review, under one
+    /// commit.
     pub(super) async fn persist_kill(
         &self,
         kill: &Kill,
         evidence: Vec<super::weapon_evidence::ShotEvidence>,
+        breaks: Vec<crate::enhancer_breaks::EnhancerBreak>,
         carried: Option<Box<super::detection::KillDetection>>,
     ) {
         let kill = kill.clone();
@@ -143,6 +169,9 @@ impl TrackerActor {
                 }
                 for row in &evidence {
                     row.insert(&tx, Some(&kill.id))?;
+                }
+                for enhancer_break in &breaks {
+                    enhancer_break.insert(&tx, Some(&kill.id))?;
                 }
                 if let Some(answer) = &carried {
                     super::detection::write_detection(&tx, answer)?;
@@ -274,24 +303,33 @@ impl TrackerActor {
         let _ = result;
     }
 
-    /// Session-end rebate on enhancer-break Shrapnel (full TT value
-    /// returned by breaks), recorded as a markup ledger gain derived from
-    /// the session.
+    /// Session-end rebate on the enhancer-break Shrapnel that no kept break
+    /// claimed, recorded as a markup ledger gain derived from the session.
+    /// A kept break claims its return from the tagged Shrapnel when it is
+    /// priced (`crate::enhancer_breaks::reprice_session`, run first), so that
+    /// Shrapnel is never rebated as well, whether the break was priced or
+    /// not; the Shrapnel of a break it does not keep (on a weapon not in
+    /// use, or of an enhancer it does not track) is rebated as it always
+    /// was. The two are set against each other over the session, never
+    /// matched break by break.
     pub(super) fn create_enhancer_rebate_ledger_entry(
         conn: &rusqlite::Connection,
         session_id: &str,
         end_time: DateTime<Utc>,
     ) -> Result<(), DbError> {
-        // every-kill: spend (active loot lines of every row).
         let rebate: f64 = conn.query_row(
-            "SELECT COALESCE(SUM(kli.value_ped), 0) \
-             FROM kill_loot_items kli \
-             JOIN kills k ON kli.kill_id = k.id \
-             WHERE k.session_id = ? AND COALESCE(kli.is_enhancer_shrapnel, 0) = 1 \
-             AND kli.deactivated_at IS NULL",
+            // every-kill: spend (active loot lines of every row).
+            "SELECT (SELECT COALESCE(SUM(kli.value_ped), 0) \
+                     FROM kill_loot_items kli \
+                     JOIN kills k ON kli.kill_id = k.id \
+                     WHERE k.session_id = ?1 AND COALESCE(kli.is_enhancer_shrapnel, 0) = 1 \
+                       AND kli.deactivated_at IS NULL) \
+                  - (SELECT COALESCE(SUM(deducted_ped), 0) FROM enhancer_breaks \
+                     WHERE session_id = ?1)",
             rusqlite::params![session_id],
             |row| row.get::<_, f64>(0),
         )?;
+        let rebate = round_half_even(rebate, 4);
         if rebate <= 0.0 {
             return Ok(());
         }
@@ -306,7 +344,7 @@ impl TrackerActor {
                 date,
                 "markup",
                 "Enhancer Shrapnel Rebate",
-                round_half_even(rebate, 4),
+                rebate,
                 "enhancer",
                 session_id,
             ],

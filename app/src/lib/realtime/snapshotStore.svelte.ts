@@ -31,10 +31,18 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 export interface SnapshotStore<T> {
 	/** The latest snapshot, or `null` before the first successful hydration. */
 	readonly current: T | null;
-	/** Re-read the snapshot and publish it; overlapping calls coalesce. */
+	/** Re-read the snapshot and publish it; overlapping calls coalesce, and
+	 * each settles once the read it asked for has landed. */
 	hydrate(): Promise<void>;
 	/** Listen for relayed frames on the topic; returns the detach function. */
 	subscribe(): Promise<UnlistenFn>;
+	/**
+	 * Attach the listener, then read (unless `hydrate` is false, for a
+	 * consumer that reads on its own terms); returns the detach. Detaching
+	 * before the listener has attached detaches it as soon as it does, and a
+	 * listener that cannot attach leaves the store as its reads leave it.
+	 */
+	connect(options?: { hydrate?: boolean }): () => void;
 }
 
 /**
@@ -44,22 +52,30 @@ export interface SnapshotStore<T> {
  */
 export function createSnapshotStore<T>(topic: string, read: () => Promise<T>): SnapshotStore<T> {
 	let current = $state<T | null>(null);
-	let inFlight = false;
+	/** The read cycle running, if any: every call made during it waits on it. */
+	let cycle: Promise<void> | null = null;
 	let refetchQueued = false;
 
 	/**
 	 * Re-read the snapshot and publish it. Overlapping calls coalesce: a frame
 	 * arriving mid-read queues exactly one follow-up read, so the store always
 	 * settles on the latest state and two reads can never race to write out of
-	 * order. A failed read leaves the last good snapshot in place; the next
-	 * frame re-reads.
+	 * order. A call made while a read runs settles with the cycle, after the
+	 * follow-up it queued has landed, so a caller that awaits it (a write
+	 * read back before focus moves, say) always sees what it asked for. A
+	 * failed read leaves the last good snapshot in place; the next frame
+	 * re-reads.
 	 */
-	async function hydrate(): Promise<void> {
-		if (inFlight) {
+	function hydrate(): Promise<void> {
+		if (cycle) {
 			refetchQueued = true;
-			return;
+			return cycle;
 		}
-		inFlight = true;
+		cycle = runCycle();
+		return cycle;
+	}
+
+	async function runCycle(): Promise<void> {
 		try {
 			do {
 				refetchQueued = false;
@@ -74,7 +90,7 @@ export function createSnapshotStore<T>(topic: string, read: () => Promise<T>): S
 				}
 			} while (refetchQueued);
 		} finally {
-			inFlight = false;
+			cycle = null;
 		}
 	}
 
@@ -89,11 +105,30 @@ export function createSnapshotStore<T>(topic: string, read: () => Promise<T>): S
 		});
 	}
 
+	function connect({ hydrate: read = true }: { hydrate?: boolean } = {}): () => void {
+		let detach: UnlistenFn | undefined;
+		let closed = false;
+		subscribe()
+			.then((unlisten) => {
+				if (closed) unlisten();
+				else detach = unlisten;
+			})
+			.catch(() => {
+				// No bus behind this page: the store still reads when asked.
+			});
+		if (read) void hydrate();
+		return () => {
+			closed = true;
+			detach?.();
+		};
+	}
+
 	return {
 		get current() {
 			return current;
 		},
 		hydrate,
 		subscribe,
+		connect,
 	};
 }

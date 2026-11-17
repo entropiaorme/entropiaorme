@@ -22,12 +22,21 @@
 //! weigh, the opening is unsettled, claims nothing, and every arrival of
 //! its step is marked as possibly its contents: nothing is forced to
 //! balance, and nothing that arrived is dropped.
+//!
+//! A span of steps that held nothing but openings (keys and one kind of
+//! box leaving, ammo and other things arriving, nothing else at all) can
+//! instead be read whole ([`whole_opening`]): every arrival is a content,
+//! the ammo is how much Universal Ammo was gained, and the opening settles
+//! when the keys' TT equals the ammo and the contents within one PEC per
+//! row whose value the site truncated. Which rows are new, and rows that
+//! merged as they landed, stop mattering, so a fast run of many boxes
+//! settles as one where weighing it step by step could not.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::amount::{checked, count, Amount, Pec, MICRO_PER_PEC};
+use super::amount::{checked, count, Amount, Pec, Precision, MICRO_PER_PEC};
 use super::diff::{canonical_new_rows, exact_unit, new_row_readings, NewRows, Step, StepSet};
 use super::reading::{Holding, HoldingKey, Reading, Row};
 use super::roles::{is_strongbox, STRONGBOX_KEY, UNIVERSAL_AMMO};
@@ -538,6 +547,151 @@ fn opening(
         settlement,
     };
     Ok(Some((opening, claims)))
+}
+
+/// Whether a step holds an opening and nothing else: keys and zero-TT
+/// strongboxes leaving, Universal Ammo and other things arriving, and no
+/// other change (no Card movement, wear, move, or anything else leaving).
+pub fn only_an_opening(set: &StepSet) -> bool {
+    let mut keys = false;
+    let mut boxes = false;
+    for step in &set.steps {
+        match step {
+            Step::Consumed { key, .. } if key.name == STRONGBOX_KEY => keys = true,
+            Step::Consumed { key, amount, .. }
+                if is_strongbox(&key.name) && amount.micro_ped() == 0 =>
+            {
+                boxes = true
+            }
+            Step::Gained { key, .. } | Step::Appeared { key, .. }
+                if key.name != STRONGBOX_KEY && !is_strongbox(&key.name) => {}
+            _ => return false,
+        }
+    }
+    keys && boxes
+}
+
+/// Read a span of steps that held nothing but openings as one opening:
+/// every arrival is a content, and the ammo is the Universal Ammo gained.
+/// Settled when the keys' TT equals the ammo and the contents within one
+/// PEC per row whose value is truncated (every arrival's rows, and the
+/// ammo's and the keys' when their unit value is not pinned); `None` when
+/// the span is not only openings of one kind of box with a key for each,
+/// or does not balance.
+pub fn whole_opening(set: &StepSet) -> Result<Option<Opening>, AccountError> {
+    if !only_an_opening(set) {
+        return Ok(None);
+    }
+    let mut keys_used: i64 = 0;
+    let mut keys = Amount::NONE;
+    let mut key_rows: usize = 0;
+    let mut boxes: Vec<OpenedBoxes> = Vec::new();
+    let mut ammo_units: i64 = 0;
+    let mut ammo = Amount::NONE;
+    let mut ammo_rows: usize = 0;
+    let mut contents: Vec<OpenedContent> = Vec::new();
+    let mut truncated_rows: usize = 0;
+    for step in &set.steps {
+        match step {
+            Step::Consumed {
+                key,
+                units,
+                amount,
+                rows_touched,
+                ..
+            } if key.name == STRONGBOX_KEY => {
+                keys_used = checked(keys_used.checked_add(*units))?;
+                keys = keys.plus(*amount)?;
+                key_rows += rows_touched;
+            }
+            Step::Consumed { key, units, .. } => {
+                match boxes.iter_mut().find(|held| held.name == key.name) {
+                    Some(held) => held.count = checked(held.count.checked_add(*units))?,
+                    None => boxes.push(OpenedBoxes {
+                        name: key.name.clone(),
+                        count: *units,
+                    }),
+                }
+            }
+            Step::Gained {
+                key,
+                units,
+                amount,
+                new_rows,
+                rows_touched,
+            } if key.name == UNIVERSAL_AMMO => {
+                ammo_units = checked(ammo_units.checked_add(*units))?;
+                ammo = ammo.plus(*amount)?;
+                ammo_rows += new_rows.rows.len();
+                if amount.precision() != Precision::Exact {
+                    truncated_rows += rows_touched;
+                }
+            }
+            Step::Gained {
+                key,
+                units,
+                amount,
+                rows_touched,
+                ..
+            } => {
+                contents.push(OpenedContent {
+                    key: key.clone(),
+                    units: *units,
+                    amount: *amount,
+                });
+                if amount.precision() != Precision::Exact {
+                    truncated_rows += rows_touched;
+                }
+            }
+            Step::Appeared { key, units, value } => {
+                contents.push(OpenedContent {
+                    key: key.clone(),
+                    units: *units,
+                    amount: *value,
+                });
+                truncated_rows += 1;
+            }
+            // `only_an_opening` admits nothing else.
+            _ => return Ok(None),
+        }
+    }
+    let [only] = boxes.as_slice() else {
+        return Ok(None);
+    };
+    if keys_used <= 0 || only.count != keys_used {
+        return Ok(None);
+    }
+    if keys.precision() != Precision::Exact {
+        truncated_rows += key_rows;
+    }
+    let produced = ammo.plus(Amount::total(
+        contents.iter().map(|content| content.amount),
+    )?)?;
+    let tolerance = checked(count(truncated_rows)?.checked_mul(MICRO_PER_PEC))?;
+    let gap = checked(
+        produced
+            .micro_ped()
+            .checked_sub(keys.micro_ped())
+            .and_then(i64::checked_abs),
+    )?;
+    if gap > tolerance {
+        return Ok(None);
+    }
+    let ammo_from_keys = keys.minus(Amount::total(
+        contents.iter().map(|content| content.amount),
+    )?)?;
+    Ok(Some(Opening {
+        boxes,
+        keys_used,
+        keys,
+        ammo_units,
+        ammo_rows,
+        ammo_from_rows: ammo,
+        ammo_from_keys,
+        contents,
+        possible_contents: Vec::new(),
+        settlement: Settlement::Settled,
+    }))
 }
 
 #[cfg(test)]

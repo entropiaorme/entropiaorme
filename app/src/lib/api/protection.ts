@@ -5,7 +5,9 @@ import * as commands from './commands.gen';
 
 export type {
 	ProtectionBacklog,
+	ProtectionBaselineSource,
 	ProtectionCandidateSession,
+	ProtectionConfirmedPiece,
 	ProtectionContextShare,
 	ProtectionCostAllocation,
 	ProtectionCostKind,
@@ -16,6 +18,7 @@ export type {
 	ProtectionObservationOutcome,
 	ProtectionObservationSource,
 	ProtectionOverview,
+	ProtectionReadingSource,
 	ProtectionRecordingCandidates,
 	ProtectionRepairInput,
 	ProtectionRepairOutcome,
@@ -23,6 +26,7 @@ export type {
 	ProtectionSet,
 	ProtectionSetInput,
 	ProtectionSetKind,
+	ProtectionSetPieces,
 	ProtectionSetUpdateInput,
 	ProtectionStream,
 	ProtectionUndoTarget,
@@ -44,6 +48,11 @@ export const updateProtectionSet = (id: string, input: ProtectionSetUpdateInput)
 	commands.protectionSetUpdate(Number(id), input);
 export const archiveProtectionSet = (id: string) => commands.protectionSetArchive(Number(id));
 export const restoreProtectionSet = (id: string) => commands.protectionSetRestore(Number(id));
+/** A limited set's confirmed pieces, and what the latest account reading suggests for it. */
+export const getProtectionSetPieces = (id: string) => commands.protectionSetPieces(Number(id));
+/** Name a limited set's pieces once: the account readings bill the set by them. */
+export const confirmProtectionSetPieces = (id: string, names: string[]) =>
+	commands.protectionSetPiecesConfirm(Number(id), names);
 /** Undo the latest recording of one stream, handing its cost back to its sessions. */
 export const undoProtectionRecording = commands.protectionUndo;
 /** Which of the given sessions still have hits no armour recording covers. */

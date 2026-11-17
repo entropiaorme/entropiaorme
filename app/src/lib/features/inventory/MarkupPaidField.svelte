@@ -8,6 +8,9 @@
 	 *
 	 * An item with no TT is worth its markup alone, so there is no percentage
 	 * to speak of: the field is PED only, and says what each unit cost.
+	 *
+	 * A figure that starts as `null` is one the player has to give: the field
+	 * opens empty, in PED, and stays empty until they type it.
 	 */
 	import { untrack } from 'svelte';
 	import Input from '$lib/components/Input.svelte';
@@ -29,7 +32,7 @@
 		/** How many units the markup is paid for, so a figure with no TT to
 		 * read against can be read per unit instead. */
 		quantity?: number | null;
-		markupPed?: number;
+		markupPed?: number | null;
 		initialMode?: MarkupMode;
 		/** Changes whenever the form opens on something new, so the field
 		 * starts again from the bound figure. */
@@ -45,8 +48,8 @@
 	$effect(() => {
 		void resetKey;
 		untrack(() => {
-			mode = initialMode;
-			markupPercent = ttValue > 0 ? 100 + (markupPed / ttValue) * 100 : 100;
+			mode = markupPed === null ? 'ped' : initialMode;
+			markupPercent = ttValue > 0 && markupPed !== null ? 100 + (markupPed / ttValue) * 100 : 100;
 		});
 	});
 
@@ -63,7 +66,7 @@
 	});
 
 	$effect(() => {
-		if (mode === 'ped' && ttValue > 0) {
+		if (mode === 'ped' && ttValue > 0 && markupPed !== null) {
 			markupPercent = Math.round((100 + (markupPed / ttValue) * 100) * 100) / 100;
 		}
 	});
@@ -120,7 +123,7 @@
 				{#if noTt}
 					{formatPed((markupPed ?? 0) / units)} PED each
 				{:else if shown === 'percent'}
-					{formatPed(markupPed)} PED
+					{formatPed(markupPed ?? 0)} PED
 				{:else}
 					{markupPercent.toFixed(2)}%
 				{/if}

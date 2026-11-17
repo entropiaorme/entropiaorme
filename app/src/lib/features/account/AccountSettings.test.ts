@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AccountStatus } from '$lib/api/commands.gen';
+import type { AccountStatus, CostPlacements } from '$lib/api/commands.gen';
 import { status } from './__fixtures__/measure';
 
 const api = vi.hoisted(() => ({
@@ -12,6 +12,9 @@ const api = vi.hoisted(() => ({
 	getSessionMeasure: vi.fn(),
 	getMeasuredSessions: vi.fn(),
 	getMeasuredSummary: vi.fn(),
+	getCostPlacements: vi.fn(async (): Promise<CostPlacements> => ({ awaiting: [], placed: [] })),
+	placeCostItem: vi.fn(),
+	clearCostPlacement: vi.fn(),
 }));
 const shell = vi.hoisted(() => ({ signInToAccount: vi.fn() }));
 const frames = vi.hoisted(() => ({ handlers: [] as Array<() => void> }));
@@ -95,6 +98,26 @@ describe('the account connection in Settings', () => {
 		expect(screen.getByText(/Reading this session/)).toBeTruthy();
 		expect(screen.getByText(/once a minute/)).toBeTruthy();
 		expect(screen.queryByText(/Finish signing in/)).toBeNull();
+	});
+
+	it('lists the items to place once the player has connected, and not before', async () => {
+		render(AccountSettings);
+		await screen.findByRole('button', { name: 'Connect' });
+		expect(screen.queryByTestId('cost-placements')).toBeNull();
+		current = status({ state: 'connected', hasConnected: true });
+		await frame();
+		expect(await screen.findByText('Nothing to place')).toBeTruthy();
+		expect(api.getCostPlacements).toHaveBeenCalled();
+	});
+
+	it('keeps the items to place reachable after disconnecting while a placement exists', async () => {
+		api.getCostPlacements.mockResolvedValueOnce({
+			awaiting: [],
+			placed: [{ item: 'Mind Essence', category: 'travel', placedAt: '2026-11-16T20:00:00Z' }],
+		});
+		render(AccountSettings);
+		expect(await screen.findByTestId('placed-items')).toBeTruthy();
+		expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy();
 	});
 
 	it('disconnects without a confirmation', async () => {

@@ -1083,9 +1083,7 @@ fn finish_settlement(
             rusqlite::params![creature.species, creature.maturity, now],
         )? > 0;
     }
-    crate::session_summary::write_session_summary(tx, session_id)?;
-    crate::daily_rollup::refresh_session_days(tx, session_id)?;
-    crate::session_rollup::recompute_session(tx, session_id)?;
+    crate::session_costs::refresh_derived(tx, session_id)?;
     Ok(names_changed)
 }
 

@@ -151,6 +151,24 @@ pub(crate) fn data_dir() -> PathBuf {
     )
 }
 
+/// How the account connection reads, decided by the same build seam as
+/// [`data_dir`]: the installed app reads the account whenever the player is
+/// signed in; a development build reads it only for a tracked session or a
+/// strongbox run, so one running beside the installed app never reads the
+/// account twice, nor records the real account into the development
+/// database.
+pub(crate) fn account_reading_mode() -> eo_services::account::ReadingMode {
+    reading_mode_for(!cfg!(debug_assertions))
+}
+
+fn reading_mode_for(frozen: bool) -> eo_services::account::ReadingMode {
+    if frozen {
+        eo_services::account::ReadingMode::Always
+    } else {
+        eo_services::account::ReadingMode::OnDemand
+    }
+}
+
 /// The rolling-log directory: a `logs/` subdirectory of the resolved data
 /// directory, so the structured logs sit beside the database under the same
 /// OS app-data root the backend already owns. Resolved the same way as
@@ -322,6 +340,9 @@ pub struct ProducerState {
     // the watched `chatlog_path` changes. The exit seam still stops it via
     // [`ProducerState::stop`]; `restart`/`stop` take `&self`, so sharing is safe.
     watcher: Arc<ChatlogWatcher>,
+    // The chat-log time base the watcher derives from the live file, shared
+    // with every service that places a logged line in time.
+    chatlog_clock: ChatLogClock,
     tracker: Arc<HuntTracker>,
     // The substrate runtime handle, kept for the synchronous exit seam's
     // one bridge onto the async tracker.
@@ -423,6 +444,17 @@ impl ProducerState {
     /// producer-spine side share one watcher.
     pub fn watcher_handle(&self) -> Arc<ChatlogWatcher> {
         self.watcher.clone()
+    }
+
+    /// The game's chat log as read after the fact: the file the watcher
+    /// tails now (it follows a `chatlog_path` change), placed in time by
+    /// the time base the watcher derives.
+    pub fn chat_log_source(&self) -> eo_services::chatlog_span::ChatLogSource {
+        let watcher = self.watcher.clone();
+        eo_services::chatlog_span::ChatLogSource::new(
+            move || watcher.path(),
+            self.chatlog_clock.clone(),
+        )
     }
 
     /// The composed tracker, for tests asserting its readout.
@@ -1067,8 +1099,10 @@ async fn compose_with(
         (service, radar_confirm)
     };
 
-    // The account connection: reads the player's own account site while a
-    // tracked session needs it, once the player has connected. It hears
+    // The account connection: reads the player's own account site once the
+    // player has connected, always in the installed app and only while a
+    // tracked session or a strongbox run needs it in a development build
+    // (see `account_reading_mode`). It hears
     // session starts and stops on the producer bus and announces its
     // changes there for the frontend. Without a reader it stands down and
     // the account commands answer an internal error.
@@ -1083,6 +1117,9 @@ async fn compose_with(
                     producers.config_service_handle(),
                 )),
                 game_data: Some(game_data.clone()),
+                // The game's chat log shows a gap a session's readings
+                // leave clean, or not.
+                chat_log: Some(producers.chat_log_source()),
                 changed: Some({
                     let bus = producers.bus_handle();
                     let clock = clock.clone();
@@ -1098,6 +1135,7 @@ async fn compose_with(
                         }));
                     })
                 }),
+                mode: account_reading_mode(),
             },
             &tokio::runtime::Handle::current(),
         )),
@@ -1558,7 +1596,12 @@ fn compose_producers(
     // publishes. The log is stamped in the game server's zone, so this
     // is what keeps a logged instant comparable with one the app
     // stamped itself; see `eo_services::chatlog_time`.
-    let chatlog_clock = ChatLogClock::observed();
+    // The offset it settles is remembered between runs, so an instant from
+    // before a restart is still placed by it when it settles again at the
+    // same value.
+    let chatlog_clock = ChatLogClock::observed_remembering(Arc::new(
+        eo_services::chatlog_time::StoredOffsetMemory::new(db.clone()),
+    ));
     let watcher = Arc::new(ChatlogWatcher::new(
         bus.clone(),
         watched_chatlog,
@@ -1616,7 +1659,7 @@ fn compose_producers(
             bus.clone(),
             db.clone(),
             clock.clone(),
-            chatlog_clock,
+            chatlog_clock.clone(),
             Providers {
                 detector: mob_detection.clone(),
                 tool_detector: tool_detection.clone(),
@@ -1625,6 +1668,11 @@ fn compose_producers(
                 // or a declaration of it does; a tool the library does not
                 // hold prices bare from the game data.
                 items: Some(items.clone()),
+                // An enhancer break is priced from the game data's TT for
+                // the enhancer's exact name.
+                enhancer_tt: game_data
+                    .clone()
+                    .map(eo_services::enhancer_breaks::tt_resolver),
                 bundled_tools: game_data.clone().map(|data| {
                     let reader = config_reader.clone();
                     let doses = doses.clone();
@@ -1729,6 +1777,7 @@ fn compose_producers(
 
     Ok(ProducerState {
         watcher,
+        chatlog_clock,
         tracker,
         runtime,
         domain_bus,
@@ -2242,6 +2291,7 @@ fn build_providers(
         cpu_pressure: Arc::new(|| None),
         items: None,
         bundled_tools: None,
+        enhancer_tt: None,
     }
 }
 
@@ -3581,5 +3631,21 @@ mod tests {
             current,
             vec![("Aim".to_string(), 1268.53), ("Rifle".to_string(), 4000.60)]
         );
+    }
+
+    #[test]
+    fn the_installed_app_reads_the_account_always_and_a_development_build_on_demand() {
+        use eo_services::account::ReadingMode;
+        assert_eq!(reading_mode_for(true), ReadingMode::Always);
+        assert_eq!(reading_mode_for(false), ReadingMode::OnDemand);
+        // The same seam that picks the data directory: a test build is a
+        // development build, and reads the dev data directory too.
+        assert_eq!(
+            account_reading_mode(),
+            reading_mode_for(!cfg!(debug_assertions))
+        );
+        if cfg!(debug_assertions) {
+            assert_eq!(account_reading_mode(), ReadingMode::OnDemand);
+        }
     }
 }

@@ -1,25 +1,36 @@
 //! Recording a protection cost and spreading it over sessions.
 //!
-//! Every stream keeps a position on the defence-event stream: the highest
-//! hit id its previous recording reached (for a limited set, the cursor its
-//! current baseline reading was taken at). A new recording weighs each
-//! ticked session by its hits past that position, up to the hits recorded
-//! when it is confirmed. A session entirely before the position can still
-//! be re-included in an unlimited recording (a piece left unrepaired last
+//! A new recording weighs each ticked session by its hits past its stream's
+//! position ([`super::position`]), up to the hits recorded when it is
+//! confirmed. A session entirely before the position can still be
+//! re-included in an unlimited recording (a piece left unrepaired last
 //! time); it is then weighed by all of its hits. A limited reading cannot
 //! reach back past its baseline, because the TT it measured was lost after
 //! the baseline was taken.
+//!
+//! A session whose share of the stream the account readings measured is
+//! already billed, so no recording covers it; and what a recording measures
+//! that those sessions already billed is taken off before it is spread.
+//! A recording with nothing left to bill, or with nothing unmeasured to
+//! cover, is refused with the reason.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::OptionalExtension;
 
+use super::position::{
+    billed_from_account, measured_since, measured_stream, stream_position, unmeasured_since,
+    BaselineOrigin, Billed, ReadingCache, StreamPosition,
+};
 use super::read::{read_cost_window, read_observation};
 use super::{
-    CandidateSession, CostKind, ObservationOutcome, ObservationSource, ProtectionError,
-    ProtectionService, ProtectionStream, RecordingCandidates, RepairOutcome, StreamBacklog,
+    account_error, CandidateSession, CostKind, ObservationOutcome, ObservationSource,
+    ProtectionError, ProtectionService, ProtectionStream, RecordingCandidates, RepairOutcome,
+    StreamBacklog,
 };
+use crate::account::KnownRoles;
 use crate::db::DbError;
+use crate::session_costs::armour_measured_sql;
 
 /// The reason a recording kept its cost off every session.
 pub const UNATTRIBUTED_REASON: &str = "Not attributed to any session";
@@ -33,74 +44,6 @@ pub(super) const RESET_UNPRICED_REASON: &str =
 /// How many sessions from before the previous unlimited repair a recording
 /// may offer to re-include. Older play is not a realistic repair target.
 const EARLIER_SESSIONS: i64 = 20;
-
-/// Where one stream's previous recording left the defence-event stream.
-struct StreamPosition {
-    cursor: i64,
-    since: Option<f64>,
-    baseline: Option<Baseline>,
-}
-
-struct Baseline {
-    observation_id: i64,
-    tt_value_ped: f64,
-}
-
-fn stream_position(
-    conn: &rusqlite::Connection,
-    stream: ProtectionStream,
-) -> Result<StreamPosition, rusqlite::Error> {
-    match stream {
-        ProtectionStream::Unlimited => {
-            let (cursor, since) = conn.query_row(
-                "SELECT COALESCE(MAX(evidence_cursor), 0), MAX(created_at) \
-                 FROM protection_cost_windows \
-                 WHERE kind = 'repair' AND superseded_at IS NULL",
-                [],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<f64>>(1)?)),
-            )?;
-            Ok(StreamPosition {
-                cursor,
-                since,
-                baseline: None,
-            })
-        }
-        ProtectionStream::Limited { set_id } => {
-            let latest = conn
-                .query_row(
-                    "SELECT id, tt_value_ped, observed_at, COALESCE(defence_event_cursor, 0) \
-                     FROM protection_observations \
-                     WHERE set_id = ?1 AND superseded_at IS NULL \
-                     ORDER BY observed_at DESC, id DESC LIMIT 1",
-                    [set_id],
-                    |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, f64>(1)?,
-                            row.get::<_, f64>(2)?,
-                            row.get::<_, i64>(3)?,
-                        ))
-                    },
-                )
-                .optional()?;
-            Ok(match latest {
-                Some((observation_id, tt_value_ped, observed_at, cursor)) => StreamPosition {
-                    cursor,
-                    since: Some(observed_at),
-                    baseline: Some(Baseline {
-                        observation_id,
-                        tt_value_ped,
-                    }),
-                },
-                None => StreamPosition {
-                    cursor: 0,
-                    since: None,
-                    baseline: None,
-                },
-            })
-        }
-    }
-}
 
 /// The newest recorded hit: a recording covers every hit up to here.
 fn current_cursor(conn: &rusqlite::Connection) -> Result<i64, rusqlite::Error> {
@@ -139,19 +82,28 @@ fn candidate_row(row: &rusqlite::Row<'_>) -> Result<CandidateSession, rusqlite::
 pub(super) fn read_candidates(
     conn: &rusqlite::Connection,
     stream: ProtectionStream,
+    roles: &KnownRoles,
 ) -> Result<RecordingCandidates, ProtectionError> {
-    let position = stream_position(conn, stream)?;
+    let position = stream_position(conn, stream, &mut ReadingCache::default())?;
     let baseline_tt_ped = position.baseline.as_ref().map(|b| b.tt_value_ped);
+    let baseline_source = position.baseline.as_ref().map(|b| b.source());
     if matches!(stream, ProtectionStream::Limited { .. }) && position.baseline.is_none() {
         // A first reading is a baseline: there is nothing to spread yet.
         return Ok(RecordingCandidates {
             stream,
             since: None,
             baseline_tt_ped,
+            baseline_source,
+            incomplete_account_reading_at: position.incomplete_reading_at,
+            billed_from_account_ped: 0.0,
+            account_tolerance_ped: 0.0,
+            measured_sessions: 0,
             sessions: Vec::new(),
             earlier: Vec::new(),
         });
     }
+    let measured_sessions = measured_since(conn, stream, &position)?;
+    let billed = billed_from_account(conn, stream, &position, roles)?;
     let covered = format!(
         "EXISTS (SELECT 1 FROM protection_cost_allocations a \
                  JOIN protection_cost_windows w ON w.id = a.window_id \
@@ -159,6 +111,10 @@ pub(super) fn read_candidates(
          NOT EXISTS ({})",
         stream_filter(stream),
         super::read::live_allocation("s.id")
+    );
+    let unmeasured = format!(
+        "NOT {}",
+        armour_measured_sql(measured_stream(stream), "s.id")
     );
 
     // id-order: cursor (hits on the far side of the stream's position).
@@ -168,7 +124,7 @@ pub(super) fn read_candidates(
          FROM protection_defence_events d \
          JOIN tracking_sessions s ON s.id = d.session_id \
          LEFT JOIN session_definitions def ON def.id = s.definition_id \
-         WHERE d.id > ?1 \
+         WHERE d.id > ?1 AND {unmeasured} \
          GROUP BY s.id \
          ORDER BY s.started_at, s.id"
     );
@@ -185,6 +141,7 @@ pub(super) fn read_candidates(
              FROM protection_defence_events d \
              JOIN tracking_sessions s ON s.id = d.session_id \
              LEFT JOIN session_definitions def ON def.id = s.definition_id \
+             WHERE {unmeasured} \
              GROUP BY s.id \
              HAVING MAX(d.id) <= ?1 \
              ORDER BY s.started_at DESC, s.id DESC \
@@ -207,24 +164,36 @@ pub(super) fn read_candidates(
         stream,
         since: position.since,
         baseline_tt_ped,
+        baseline_source,
+        incomplete_account_reading_at: position.incomplete_reading_at,
+        billed_from_account_ped: billed.tt_ped,
+        account_tolerance_ped: billed.tolerance_ped,
+        measured_sessions,
         sessions,
         earlier,
     })
 }
 
 /// How far behind one stream is: when it was last recorded, and the
-/// sessions (and their hits) played since.
+/// sessions (and their hits) the readings did not measure played since.
 pub(super) fn read_backlog(
     conn: &rusqlite::Connection,
     stream: ProtectionStream,
+    readings: &mut ReadingCache,
 ) -> Result<StreamBacklog, ProtectionError> {
-    let position = stream_position(conn, stream)?;
+    let position = stream_position(conn, stream, readings)?;
+    if matches!(stream, ProtectionStream::Limited { .. }) && position.baseline.is_none() {
+        return Ok(StreamBacklog::default());
+    }
     // id-order: cursor (hits on the far side of the stream's position).
     let (sessions, hits) = conn.query_row(
-        "SELECT COUNT(DISTINCT d.session_id), COUNT(d.id) \
-         FROM protection_defence_events d \
-         JOIN tracking_sessions s ON s.id = d.session_id \
-         WHERE d.id > ?1",
+        &format!(
+            "SELECT COUNT(DISTINCT d.session_id), COUNT(d.id) \
+             FROM protection_defence_events d \
+             JOIN tracking_sessions s ON s.id = d.session_id \
+             WHERE d.id > ?1 AND NOT {}",
+            armour_measured_sql(measured_stream(stream), "s.id")
+        ),
         [position.cursor],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
@@ -241,6 +210,19 @@ pub(super) enum Refusal {
     UnknownSession,
     SessionBeforeBaseline,
     SessionWithoutHits,
+    /// The readings measured the chosen session's share: it is billed.
+    SessionMeasured,
+    /// Every session since the previous recording was measured, so the
+    /// recording has nothing to cover.
+    AllMeasured(ProtectionStream),
+    /// A repair below the decay the readings already billed since the last
+    /// one: it cannot have restored that decay.
+    RepairBelowBilled,
+    /// A repair that restored only decay the readings already billed.
+    RepairAllBilled,
+    /// A reading measuring less loss than the sessions the readings billed
+    /// since the baseline lost.
+    ReadingBelowBilled,
     ReadingIncreased,
 }
 
@@ -254,11 +236,44 @@ impl Refusal {
             Self::SessionWithoutHits => {
                 ProtectionError::Invalid("A chosen session has no recorded hits to weigh")
             }
+            Self::SessionMeasured => {
+                ProtectionError::Invalid("A chosen session's armour was measured from your account")
+            }
+            Self::RepairBelowBilled => ProtectionError::Invalid(
+                "This repair is less than the decay already billed from your account since the last repair",
+            ),
+            Self::RepairAllBilled => ProtectionError::Invalid(
+                "Everything this repair restored was already billed from your account",
+            ),
+            Self::ReadingBelowBilled => ProtectionError::Invalid(
+                "This set lost less since its baseline than the sessions already billed from your account",
+            ),
+            Self::AllMeasured(ProtectionStream::Unlimited) => ProtectionError::Invalid(
+                "Every session since the last repair was measured from your account",
+            ),
+            Self::AllMeasured(ProtectionStream::Limited { .. }) => ProtectionError::Invalid(
+                "Every session since this set's last reading was measured from your account",
+            ),
             Self::ReadingIncreased => {
                 ProtectionError::Conflict("TT value increased; reset the baseline instead")
             }
         }
     }
+}
+
+/// Refuse a recording that would cover nothing because the readings
+/// measured every session since the stream's previous recording: none
+/// chosen, none left to choose, and at least one measured.
+fn refuse_all_measured(
+    conn: &rusqlite::Connection,
+    stream: ProtectionStream,
+    position: &StreamPosition,
+    sessions: &[String],
+) -> Result<Option<Refusal>, rusqlite::Error> {
+    if !sessions.is_empty() || unmeasured_since(conn, stream, position)? > 0 {
+        return Ok(None);
+    }
+    Ok((measured_since(conn, stream, position)? > 0).then_some(Refusal::AllMeasured(stream)))
 }
 
 /// One cost about to be written and spread.
@@ -274,6 +289,19 @@ struct Recording {
     created_at: f64,
     stream_cursor: i64,
     evidence_cursor: i64,
+}
+
+/// What a recording leaves to spread once what the readings already billed
+/// is taken off: `measured` less `billed`, nothing when that is within the
+/// readings' tolerance of nothing, and refused with `below` when it is
+/// further below.
+fn left_to_spread(measured: f64, billed: Billed, below: Refusal) -> Result<f64, Refusal> {
+    let left = measured - billed.tt_ped;
+    if left < -(billed.tolerance_ped + 0.000_000_1) {
+        Err(below)
+    } else {
+        Ok(left.max(0.0))
+    }
 }
 
 /// Hits per (session, context key) that one recording weighs.
@@ -294,6 +322,17 @@ fn weigh_sessions(
         )?;
         if !exists {
             return Ok(Err(Refusal::UnknownSession));
+        }
+        let measured: bool = tx.query_row(
+            &format!(
+                "SELECT {}",
+                armour_measured_sql(measured_stream(recording.stream), "?1")
+            ),
+            [session_id],
+            |row| row.get(0),
+        )?;
+        if measured {
+            return Ok(Err(Refusal::SessionMeasured));
         }
         // id-order: cursor (hits between the stream position and now).
         let fresh: i64 = tx.query_row(
@@ -437,16 +476,14 @@ pub(super) fn adjust_session_armour(
     session_id: &str,
     delta: f64,
 ) -> Result<(), DbError> {
-    let Some(started_at) = tx
-        .query_row(
-            "SELECT started_at FROM tracking_sessions WHERE id = ?1",
-            [session_id],
-            |row| row.get::<_, f64>(0),
-        )
-        .optional()?
-    else {
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM tracking_sessions WHERE id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
         return Ok(());
-    };
+    }
     tx.execute(
         "UPDATE tracking_sessions SET armour_cost = \
              CASE WHEN abs(COALESCE(armour_cost, 0) + ?1) < 1e-9 THEN 0 \
@@ -454,9 +491,45 @@ pub(super) fn adjust_session_armour(
          WHERE id = ?2",
         rusqlite::params![delta, session_id],
     )?;
-    crate::daily_rollup::refresh_days(tx, [crate::daily_rollup::epoch_day(started_at)])?;
-    crate::session_summary::write_session_summary(tx, session_id)?;
+    // The resolution first, then the summary, days and rollup cells, so
+    // every figure reads the session's armour as it now resolves.
+    crate::session_costs::refresh_derived(tx, session_id)?;
     Ok(())
+}
+
+/// Keep the account reading a limited set's loss was measured against as
+/// a reading of the set: its pieces' summed TT, dated by the account
+/// reading, at the stream's position, and linked to the account reading.
+fn account_reading_observation(
+    tx: &rusqlite::Transaction<'_>,
+    set_id: i64,
+    closing_token: &str,
+    tt_value_ped: f64,
+    observed_at: f64,
+    cursor: i64,
+    reading_id: i64,
+) -> Result<i64, DbError> {
+    tx.execute(
+        "INSERT INTO protection_observations \
+         (set_id, client_token, tt_value_ped, source, raw_text, observed_at, reset_reason, \
+          defence_event_cursor) \
+         VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, ?6)",
+        rusqlite::params![
+            set_id,
+            format!("account:{closing_token}"),
+            tt_value_ped,
+            ObservationSource::Account.as_str(),
+            observed_at,
+            cursor
+        ],
+    )?;
+    let observation_id = tx.last_insert_rowid();
+    tx.execute(
+        "INSERT INTO protection_observation_readings (observation_id, account_reading_id) \
+         VALUES (?1, ?2)",
+        rusqlite::params![observation_id, reading_id],
+    )?;
+    Ok(observation_id)
 }
 
 enum Written<T> {
@@ -514,6 +587,7 @@ impl ProtectionService {
         let set = self.active_set(set_id).await?;
         let markup = set.markup_percent;
         let now = self.now();
+        let game_data = self.game_data.clone();
         let source_text = source.as_str();
         let raw_text = raw_text
             .map(str::trim)
@@ -538,17 +612,40 @@ impl ProtectionService {
                     return Ok(Written::Replayed(existing));
                 }
                 let stream = ProtectionStream::Limited { set_id };
-                let position = stream_position(conn, stream)?;
+                let tx = conn.transaction()?;
+                let position = stream_position(&tx, stream, &mut ReadingCache::default())
+                    .map_err(super::protection_decode)?;
+                let roles = KnownRoles::read(&tx, game_data.as_deref())
+                    .map_err(account_error)
+                    .map_err(super::protection_decode)?;
+                let billed = billed_from_account(&tx, stream, &position, &roles)
+                    .map_err(super::protection_decode)?;
                 if reset_reason.is_none()
-                    && position
-                        .baseline
-                        .as_ref()
-                        .is_some_and(|b| tt_value_ped > b.tt_value_ped + 0.000_000_1)
+                    && position.baseline.as_ref().is_some_and(|b| {
+                        tt_value_ped > b.tt_value_ped + billed.tolerance_ped + 0.000_000_1
+                    })
                 {
                     return Ok(Written::Refused(Refusal::ReadingIncreased));
                 }
-
-                let tx = conn.transaction()?;
+                // The loss to spread: the baseline's fall to this reading,
+                // less what the sessions the readings measured since already
+                // billed of it.
+                let mut consumed = 0.0;
+                if let (None, Some(baseline)) = (&reset_reason, &position.baseline) {
+                    consumed = match left_to_spread(
+                        (baseline.tt_value_ped - tt_value_ped).max(0.0),
+                        billed,
+                        Refusal::ReadingBelowBilled,
+                    ) {
+                        Ok(left) => left,
+                        Err(refusal) => return Ok(Written::Refused(refusal)),
+                    };
+                    if let Some(refusal) =
+                        refuse_all_measured(&tx, stream, &position, &session_ids)?
+                    {
+                        return Ok(Written::Refused(refusal));
+                    }
+                }
                 let evidence_cursor = current_cursor(&tx)?;
                 tx.execute(
                     "INSERT INTO protection_observations \
@@ -569,11 +666,22 @@ impl ProtectionService {
                 let observation_id = tx.last_insert_rowid();
 
                 if let (None, Some(baseline)) = (&reset_reason, &position.baseline) {
-                    let consumed = (baseline.tt_value_ped - tt_value_ped).max(0.0);
+                    let opening = match baseline.origin {
+                        BaselineOrigin::Observation(id) => id,
+                        BaselineOrigin::Account { reading_id, .. } => account_reading_observation(
+                            &tx,
+                            set_id,
+                            &token,
+                            baseline.tt_value_ped,
+                            position.since.unwrap_or(now),
+                            position.cursor,
+                            reading_id,
+                        )?,
+                    };
                     let recording = Recording {
                         kind: CostKind::LimitedDecay,
                         stream,
-                        opening_observation_id: Some(baseline.observation_id),
+                        opening_observation_id: Some(opening),
                         closing_observation_id: Some(observation_id),
                         consumed_tt_ped: Some(consumed),
                         markup_percent: Some(markup),
@@ -627,6 +735,7 @@ impl ProtectionService {
         }
         let token = format!("repair:{token}");
         let now = self.now();
+        let game_data = self.game_data.clone();
         let written = self
             .db
             .with_writer(move |conn| {
@@ -642,7 +751,27 @@ impl ProtectionService {
                     return Ok(Written::Replayed(id));
                 }
                 let tx = conn.transaction()?;
-                let position = stream_position(&tx, ProtectionStream::Unlimited)?;
+                let stream = ProtectionStream::Unlimited;
+                let position = stream_position(&tx, stream, &mut ReadingCache::default())
+                    .map_err(super::protection_decode)?;
+                let roles = KnownRoles::read(&tx, game_data.as_deref())
+                    .map_err(account_error)
+                    .map_err(super::protection_decode)?;
+                let billed = billed_from_account(&tx, stream, &position, &roles)
+                    .map_err(super::protection_decode)?;
+                // The repair restored the decay the readings already billed
+                // too: only the rest is this recording's to spread.
+                let mut spread = cost_ped;
+                if billed.tt_ped > 0.0 {
+                    spread = match left_to_spread(cost_ped, billed, Refusal::RepairBelowBilled) {
+                        Ok(left) if left > billed.tolerance_ped + 0.000_000_1 => left,
+                        Ok(_) => return Ok(Written::Refused(Refusal::RepairAllBilled)),
+                        Err(refusal) => return Ok(Written::Refused(refusal)),
+                    };
+                }
+                if let Some(refusal) = refuse_all_measured(&tx, stream, &position, &session_ids)? {
+                    return Ok(Written::Refused(refusal));
+                }
                 let recording = Recording {
                     kind: CostKind::Repair,
                     stream: ProtectionStream::Unlimited,
@@ -650,7 +779,7 @@ impl ProtectionService {
                     closing_observation_id: None,
                     consumed_tt_ped: None,
                     markup_percent: None,
-                    cost_ped,
+                    cost_ped: spread,
                     client_token: Some(token.clone()),
                     created_at: now,
                     stream_cursor: position.cursor,

@@ -23,7 +23,7 @@ use eo_api::strongbox::{
 };
 use eo_api::ApiError;
 use eo_services::account::reading::Reading;
-use eo_services::account::recorder::{MemoryFlag, RecorderParts};
+use eo_services::account::recorder::{MemoryFlag, ReadingMode, RecorderParts};
 use eo_services::account::scripted::{
     recorded_hunt_responses, responses, PacedClock, ScriptedRead,
 };
@@ -199,7 +199,9 @@ async fn readings_a_previous_run_stored_are_examined_once_at_start() {
             site: harness.site.clone(),
             flag: Arc::new(MemoryFlag::new(false)),
             game_data: Some(harness.game_data.clone()),
+            chat_log: None,
             changed: None,
+            mode: ReadingMode::OnDemand,
         },
         &tokio::runtime::Handle::current(),
     );
@@ -702,7 +704,9 @@ async fn a_claim_never_linked_is_listed_as_possibly_recorded_after_a_restart() {
             site: harness.site.clone(),
             flag: Arc::new(MemoryFlag::new(false)),
             game_data: Some(harness.game_data.clone()),
+            chat_log: None,
             changed: None,
+            mode: ReadingMode::OnDemand,
         },
         &tokio::runtime::Handle::current(),
     );
@@ -716,4 +720,265 @@ async fn a_claim_never_linked_is_listed_as_possibly_recorded_after_a_restart() {
         .find(|proposal| proposal.id.0 == five.id)
         .expect("still listed");
     assert!(still.claimed);
+}
+
+// ── What the readings record on their own ───────────────────────────
+
+/// A reading of what the player carries, `rows` as (name, quantity, value
+/// in PEC), with `balance` PEC on the Card.
+fn carried(at: f64, balance: i64, rows: &[(&str, i64, i64)]) -> Reading {
+    use eo_services::account::{Container, Holding, HoldingKey, Pec, Row};
+    let mut holdings: std::collections::BTreeMap<HoldingKey, Vec<Row>> =
+        std::collections::BTreeMap::new();
+    for (name, quantity, value) in rows {
+        holdings
+            .entry(HoldingKey {
+                name: (*name).to_string(),
+                container: Container::Carried,
+            })
+            .or_default()
+            .push(Row {
+                quantity: *quantity,
+                value: Pec(*value),
+            });
+    }
+    Reading::new(
+        at,
+        Pec(balance),
+        holdings
+            .into_iter()
+            .map(|(key, rows)| (key, Holding::new(rows).expect("a whole holding")))
+            .collect(),
+    )
+    .expect("a whole reading")
+}
+
+/// Hunted Shrapnel held as stock, and two idle readings a previous run
+/// stored, a minute apart, between which it was all turned into ammo.
+fn shrapnel_converted_while_idle() -> Seed {
+    Box::new(|conn, clock: &PacedClock| {
+        conn.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+             VALUES ('earlier', ?1, ?2, 0)",
+            rusqlite::params![clock.epoch_at(-7_200.0), clock.epoch_at(-3_600.0)],
+        )
+        .expect("a session");
+        conn.execute(
+            "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, timestamp, \
+             shots_fired, damage_dealt, cost_ped, loot_total_ped, is_global, is_hof) \
+             VALUES ('k', 'earlier', 'Atrox', 'Atrox', '', ?1, 1, 1.0, 0.1, 10.0, 0, 0)",
+            [clock.epoch_at(-5_000.0)],
+        )
+        .expect("a kill");
+        conn.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped) \
+             VALUES ('k', 'Shrapnel', 100000, 10.0)",
+            [],
+        )
+        .expect("its loot");
+        let before = carried(
+            clock.epoch_at(-120.0),
+            5_000,
+            &[
+                ("Shrapnel", 100_000, 1_000),
+                ("Universal Ammo", 50_000, 500),
+            ],
+        );
+        let after = carried(
+            clock.epoch_at(-60.0),
+            5_000,
+            &[
+                ("Universal Ammo", 50_000, 500),
+                ("Universal Ammo", 101_000, 1_010),
+            ],
+        );
+        record_reading(conn, &before, Purpose::Ambient, None).expect("stored");
+        record_reading(conn, &after, Purpose::Ambient, None).expect("stored");
+    })
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shrapnel_conversion_the_readings_saw_is_recorded_on_its_own_and_offered_to_the_form() {
+    use eo_api::analytics::{Profession, StockConversionFromAccountInput};
+    let harness = harness_with(Vec::new(), &[], shrapnel_converted_while_idle()).await;
+    settled(&harness).await;
+    let history = harness
+        .api
+        .activity_history(Profession::Inventory)
+        .await
+        .unwrap();
+    let entry = history
+        .iter()
+        .find(|entry| entry.kind == "conversion")
+        .expect("recorded on its own");
+    assert_eq!(entry.item_name, "Shrapnel");
+    let step = entry
+        .recorded_from_account
+        .as_ref()
+        .expect("marked as recorded from the account");
+    assert_eq!(
+        step.to,
+        eo_services::time::to_iso_utc(harness.clock.epoch_at(-60.0))
+    );
+    assert_eq!(
+        step.from,
+        eo_services::time::to_iso_utc(harness.clock.epoch_at(-120.0))
+    );
+    let recent = harness
+        .api
+        .stock_conversion_from_account(StockConversionFromAccountInput {
+            item_name: "Shrapnel".to_string(),
+        })
+        .await
+        .unwrap();
+    let recent = recent.as_ref().expect("within the hour");
+    assert_eq!(recent.id, entry.id);
+    assert!(close(recent.quantity, 100_000.0));
+    assert!(close(recent.tt_value, 10.0));
+    // Nothing of an item the readings never converted.
+    let none = harness
+        .api
+        .stock_conversion_from_account(StockConversionFromAccountInput {
+            item_name: "Iron Stone".to_string(),
+        })
+        .await
+        .unwrap();
+    assert!(none.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_purchase_at_auction_outside_a_session_is_proposed_with_its_markup() {
+    let seed: Seed = Box::new(|conn, clock: &PacedClock| {
+        let before = carried(clock.epoch_at(-120.0), 5_000, &[]);
+        let after = carried(clock.epoch_at(-60.0), 3_800, &[("Garcen Grease", 10, 200)]);
+        record_reading(conn, &before, Purpose::Ambient, None).expect("stored");
+        record_reading(conn, &after, Purpose::Ambient, None).expect("stored");
+    });
+    let harness = harness_with(Vec::new(), &[], seed).await;
+    settled(&harness).await;
+    let found = proposals(&harness, Some(AccountProposalKind::Purchase)).await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    let AccountProposalOutcome::Purchase {
+        item_name,
+        units,
+        tt,
+        paid,
+        markup,
+        arrived_in,
+    } = &found[0].outcome
+    else {
+        panic!("a purchase: {:?}", found[0]);
+    };
+    assert_eq!(item_name, "Garcen Grease");
+    assert_eq!(*units, 10);
+    assert!(close(tt.ped, 2.0));
+    assert!(close(paid.ped, 12.0));
+    assert!(close(markup.ped, 10.0));
+    assert_eq!(*arrived_in, AccountPlace::Carried);
+    assert!(found[0].session_id.is_none());
+
+    // Recorded as a new holding, and linked to the purchase it made: the
+    // asset's highest purchase id.
+    use eo_api::analytics::{AssetPurchaseInput, InventoryItemInput};
+    let created = harness
+        .api
+        .inventory_create(InventoryItemInput {
+            name: "Garcen Grease".to_string(),
+            quantity: Some(10.0),
+            tt_value: 2.0,
+            markup_paid: 10.0,
+            notes: None,
+            acquired_at: None,
+        })
+        .await
+        .unwrap();
+    let purchase = created
+        .purchases
+        .iter()
+        .map(|purchase| purchase.id)
+        .max()
+        .expect("the purchase it made");
+    harness
+        .api
+        .account_proposals_link(AccountProposalsLinkInput {
+            ids: vec![found[0].id],
+            record_id: purchase.to_string(),
+        })
+        .await
+        .unwrap();
+    assert!(proposals(&harness, Some(AccountProposalKind::Purchase))
+        .await
+        .is_empty());
+    // A purchase added to it, dated before the first, is still the highest
+    // id: the one a proposal recorded through it links to.
+    let added = harness
+        .api
+        .inventory_purchase_add(
+            created.id.clone(),
+            AssetPurchaseInput {
+                quantity: 5.0,
+                tt_value: 1.0,
+                markup_paid: 3.0,
+                acquired_at: Some("2026-01-01".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+    let newest = added
+        .purchases
+        .iter()
+        .max_by_key(|purchase| purchase.id)
+        .expect("purchases");
+    assert!(close(newest.quantity, 5.0));
+    assert_ne!(newest.id, purchase);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_trade_terminal_sale_the_readings_saw_is_offered_to_the_trade_form() {
+    use eo_api::analytics::StockSaleFromAccountInput;
+    let seed: Seed = Box::new(|conn, clock: &PacedClock| {
+        conn.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+             VALUES ('earlier', ?1, ?2, 0)",
+            rusqlite::params![clock.epoch_at(-7_200.0), clock.epoch_at(-3_600.0)],
+        )
+        .expect("a session");
+        conn.execute(
+            "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, timestamp, \
+             shots_fired, damage_dealt, cost_ped, loot_total_ped, is_global, is_hof) \
+             VALUES ('k', 'earlier', 'Atrox', 'Atrox', '', ?1, 1, 1.0, 0.1, 10.0, 0, 0)",
+            [clock.epoch_at(-5_000.0)],
+        )
+        .expect("a kill");
+        conn.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped) \
+             VALUES ('k', 'Animal Oil Residue', 1000, 10.0)",
+            [],
+        )
+        .expect("its loot");
+        let before = carried(
+            clock.epoch_at(-120.0),
+            5_000,
+            &[("Animal Oil Residue", 1_000, 1_000)],
+        );
+        let after = carried(clock.epoch_at(-60.0), 6_000, &[]);
+        record_reading(conn, &before, Purpose::Ambient, None).expect("stored");
+        record_reading(conn, &after, Purpose::Ambient, None).expect("stored");
+    });
+    let harness = harness_with(Vec::new(), &[], seed).await;
+    settled(&harness).await;
+    let sold = harness
+        .api
+        .stock_sale_from_account(StockSaleFromAccountInput {
+            item_name: "Animal Oil Residue".to_string(),
+        })
+        .await
+        .unwrap();
+    let sold = sold.as_ref().expect("within the hour");
+    assert!(close(sold.quantity, 1_000.0));
+    assert!(close(sold.tt_value, 10.0));
+    assert_eq!(
+        sold.recorded_at,
+        eo_services::time::to_iso_utc(harness.clock.epoch_at(-60.0))
+    );
 }

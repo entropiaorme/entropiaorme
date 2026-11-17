@@ -108,9 +108,24 @@ pub(super) struct ActiveSession {
     pub(super) heal_spend: std::collections::BTreeMap<String, super::cycled::HealSpend>,
     /// `consumable_cost` per consumable item.
     pub(super) consumable_spend: std::collections::BTreeMap<String, Ped>,
+    /// Each paid heal's time and cost, in the order they were paid: what
+    /// of `heal_cost` came after a given instant.
+    pub(super) heal_times: Vec<(f64, Ped)>,
+    /// Each dose's start and what it costs the session now (corrections
+    /// included), by dose: what of `consumable_cost` came after a given
+    /// instant.
+    pub(super) dose_times: std::collections::BTreeMap<String, (f64, Ped)>,
+    /// When each kill's shots were recorded, by kill: what of its spend
+    /// came after a given instant. In memory only; a kill recorded without
+    /// them is timed whole by when it ended.
+    pub(super) kill_shot_times: std::collections::HashMap<String, Vec<f64>>,
     /// The armour and plate cost recorded against this session so far,
     /// re-read whenever a protection recording or undo reaches it.
     pub(super) armour: super::cycled::SessionArmour,
+    /// What the account readings measured of this session up to their
+    /// latest reading, when the account side has published it; re-read
+    /// whenever the account announces a change.
+    pub(super) measured_so_far: Option<crate::session_costs::MeasuredSoFar>,
     /// The reload speed in effect that shots and heals are priced under
     /// now: equipped sources and running doses, under the game's limits.
     /// Every stored shot and paid heal keeps the value it was charged at.
@@ -184,7 +199,11 @@ impl ActiveSession {
             consumable_cost: Ped::ZERO,
             heal_spend: Default::default(),
             consumable_spend: Default::default(),
+            heal_times: Vec::new(),
+            dose_times: Default::default(),
+            kill_shot_times: Default::default(),
             armour: Default::default(),
+            measured_so_far: None,
             reload_speed_percent: 0.0,
             harvest_warning_emitted: false,
             protection_evidence_warning_emitted: false,
@@ -291,6 +310,10 @@ pub(super) struct SessionAggregate {
     pub(super) weapon_cost: Ped,
     pub(super) armour_cost: Ped,
     pub(super) cycled_breakdown: Vec<crate::tracking_models::CycledLine>,
+    /// The overhead the account readings measured so far, and when the
+    /// measured part of the costs runs to, while any of them rests on the
+    /// readings.
+    pub(super) measured: Option<(Ped, f64)>,
     pub(super) expected_cycle: Option<crate::tracking_models::LiveExpectation>,
     pub(super) expected_tt_rate: Option<f64>,
     pub(super) expected_return_coverage: Option<f64>,
@@ -371,7 +394,7 @@ impl TrackerActor {
             .sum();
         let mut enhancer_cost: Ped = kills.iter().map(|kill| kill.enhancer_cost).sum();
         weapon_cost += active.accumulator.weapon_cost();
-        enhancer_cost += active.accumulator.enhancer_cost;
+        enhancer_cost += active.accumulator.enhancer_cost();
         let heal_cost = active.heal_cost;
         let consumable_cost = active.consumable_cost;
         let armour_cost = active.armour.total;
@@ -409,15 +432,46 @@ impl TrackerActor {
         let harvest_cost: Ped = harvests.iter().map(|harvest| harvest.cost_ped).sum();
         let harvest_loot: Ped = harvests.iter().map(|harvest| harvest.loot_total_ped).sum();
 
-        let cost =
+        let tracked_cost =
             weapon_cost + heal_cost + consumable_cost + enhancer_cost + harvest_cost + armour_cost;
+        // Where the account readings measured the session so far, its
+        // buckets are that and the tracked events since; the rest, and
+        // every figure while nothing is measured, stay tracked exactly.
+        let tracked = crate::session_costs::BucketCosts {
+            weapon: weapon_cost.value(),
+            enhancer: enhancer_cost.value(),
+            armour: armour_cost.value(),
+            heal: heal_cost.value(),
+            consumable: consumable_cost.value(),
+            dangling: 0.0,
+            harvest: harvest_cost.value(),
+        };
+        let so_far = active.measured_so_far.as_ref();
+        let after = so_far
+            .map(|so_far| super::cycled::tracked_after(active, so_far.through))
+            .unwrap_or_default();
+        let live = crate::session_costs::live(so_far, &tracked, &after);
+        let measured = live
+            .measured_through
+            .map(|through| (Ped(live.overhead.total()), through));
+        let tracked_armour = armour_cost;
+        let (cost, armour_cost) = match measured {
+            Some(_) => (Ped(live.cycled.cycled()), Ped(live.cycled.armour)),
+            None => (tracked_cost, tracked_armour),
+        };
         let cycled_breakdown = super::cycled::cycled_breakdown(
             active,
             super::cycled::weapon_lines(active),
             enhancer_cost,
+            &live,
         );
-        let expected_cycle =
-            super::cycled::live_expectation(active, &expected_evidence, transferred_tt, cost);
+        // Expected figures keep their tracked inputs.
+        let expected_cycle = super::cycled::live_expectation(
+            active,
+            &expected_evidence,
+            transferred_tt,
+            tracked_cost,
+        );
         let returns: Ped = kills.iter().map(|kill| kill.loot_total_ped).sum::<Ped>() + harvest_loot;
 
         let damage_total: f64 = kills.iter().map(|kill| kill.damage_dealt).sum();
@@ -459,7 +513,13 @@ impl TrackerActor {
         // Net stat (returns - cost). Harvest swings carry their own
         // exact per-event net (wood TT minus swing decay), so they
         // take no share.
-        let shared_cost = heal_cost + consumable_cost + armour_cost;
+        // What the measured costs move beyond the tracked ones (overhead
+        // included) is shared the same way, so the curve still ends at Net.
+        let measured_shift = match measured {
+            Some((overhead, _)) => cost + overhead - tracked_cost,
+            None => Ped::ZERO,
+        };
+        let shared_cost = heal_cost + consumable_cost + tracked_armour + measured_shift;
         let per_kill_weapon: Vec<Ped> = kills
             .iter()
             .map(|kill| {
@@ -550,6 +610,7 @@ impl TrackerActor {
             weapon_cost,
             armour_cost,
             cycled_breakdown,
+            measured,
             expected_cycle,
             expected_tt_rate: expected_result
                 .as_ref()
@@ -1105,15 +1166,26 @@ impl TrackerActor {
             session_name,
             session_boost,
             dangling_evidence,
+            dangling_breaks,
             attribution_counts,
         ) = {
             let Some(active) = self.session.active_mut() else {
                 return Ok(None);
             };
-            let dangling_cost = active.accumulator.total_cost();
+            // The shots after the last kill are the session's dangling
+            // cost; the enhancer breaks after it stay enhancer cost, carried
+            // by the session itself.
+            let dangling_cost = active.accumulator.weapon_cost();
             // Evidence of the shots after the last kill settles with the
             // session's dangling cost.
             let dangling_evidence = active.accumulator.evidence.clone();
+            // The breaks after the last kill, the Shrapnel returned for
+            // breaks that no kill has kept yet, and the kill to keep it.
+            let dangling_breaks = (
+                active.accumulator.breaks.clone(),
+                active.accumulator.returns.clone(),
+                active.session.kills.last().map(|kill| kill.id.clone()),
+            );
             let attribution_counts = active.weapons.attribution.counts();
             active.session.end_time = Some(resolve_local(self.clock.now()));
             active.session.dangling_cost = dangling_cost;
@@ -1132,6 +1204,7 @@ impl TrackerActor {
                 session_name,
                 session_boost,
                 dangling_evidence,
+                dangling_breaks,
                 attribution_counts,
             )
         };
@@ -1164,6 +1237,7 @@ impl TrackerActor {
             ),
             None => (None, None),
         };
+        let enhancer_tt = self.providers.enhancer_tt.clone();
         let stopped = self
             .db
             .with_writer(move |conn| {
@@ -1193,10 +1267,38 @@ impl TrackerActor {
                 for row in &dangling_evidence {
                     row.insert(&tx, None)?;
                 }
+                let (dangling_breaks, waiting_returns, last_kill) = &dangling_breaks;
+                for enhancer_break in dangling_breaks {
+                    enhancer_break.insert(&tx, None)?;
+                }
+                // Shrapnel returned after the last kill is kept among that
+                // kill's lines, tagged, so never its loot.
+                if let Some(kill_id) = last_kill {
+                    for item in waiting_returns {
+                        tx.execute(
+                            "INSERT INTO kill_loot_items \
+                             (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) \
+                             VALUES (?, ?, ?, ?, 1)",
+                            rusqlite::params![
+                                kill_id,
+                                item.item_name,
+                                item.quantity,
+                                item.value_ped
+                            ],
+                        )?;
+                    }
+                }
                 // A dose's effect ends with the session it was taken in.
                 crate::consumables::end_session_doses(&tx, &sid, end_epoch)?;
-                // Enhancer-break Shrapnel is an immediate cost rebate. Ordinary
-                // Shrapnel remains stock until the player explicitly converts it.
+                // Every kept break is priced from its inputs, its return
+                // settled against the Shrapnel tagged as returns, before the
+                // rebate takes what no kept break claims.
+                let markups = crate::enhancer_breaks::weapon_markups(&tx)?;
+                let tt = |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
+                crate::enhancer_breaks::reprice_session(&tx, &sid, &tt, &markups)?;
+                // Enhancer-break Shrapnel no kept break claims is an immediate
+                // cost rebate. Ordinary Shrapnel remains stock until the player
+                // explicitly converts it.
                 Self::create_enhancer_rebate_ledger_entry(&tx, &sid, end_time)?;
                 crate::session_summary::write_session_summary(&tx, &sid)?;
                 crate::daily_rollup::refresh_session_days(&tx, &sid)?;
@@ -1392,9 +1494,14 @@ impl HuntTracker {
             cost: aggregated.cost.round_half_even(2).value(),
             returns: aggregated.returns.round_half_even(2).value(),
             pes: round_half_even(skill_tt, 2),
-            net: (aggregated.returns - aggregated.cost)
-                .round_half_even(2)
-                .value(),
+            // The overhead the readings measured is in Net, never in Cycled.
+            net: (aggregated.returns
+                - aggregated.cost
+                - aggregated
+                    .measured
+                    .map_or(Ped::ZERO, |(overhead, _)| overhead))
+            .round_half_even(2)
+            .value(),
             return_rate: if aggregated.cost.is_positive() {
                 round_half_even(aggregated.returns / aggregated.cost, 4)
             } else {
@@ -1405,6 +1512,10 @@ impl HuntTracker {
             weapon_cost: aggregated.weapon_cost.round_half_even(6).value(),
             armour_cost: aggregated.armour_cost.round_half_even(4).value() + 0.0,
             cycled_breakdown: aggregated.cycled_breakdown,
+            overhead_cost: aggregated
+                .measured
+                .map(|(overhead, _)| overhead.round_half_even(4).value() + 0.0),
+            costs_measured_through: aggregated.measured.map(|(_, through)| through),
             expected_cycle: aggregated.expected_cycle,
             expected_tt_rate: aggregated.expected_tt_rate,
             expected_return_coverage: aggregated.expected_return_coverage,

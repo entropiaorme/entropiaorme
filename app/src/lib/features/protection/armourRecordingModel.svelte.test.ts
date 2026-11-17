@@ -18,6 +18,11 @@ const NO_CANDIDATES: ProtectionRecordingCandidates = {
 	stream: { kind: 'unlimited' },
 	since: null,
 	baselineTtPed: null,
+	baselineSource: null,
+	incompleteAccountReadingAt: null,
+	billedFromAccountPed: 0,
+	accountTolerancePed: 0,
+	measuredSessions: 0,
 	sessions: [],
 	earlier: [],
 };

@@ -675,7 +675,7 @@ async fn deleting_a_session_leaves_no_heal_elsewhere_pointing_at_its_evidence() 
         .unwrap();
     assert_eq!(output_state(&h.db, "t-tick").await.0, "unattributed");
 
-    crate::tracking_reads::delete_session_impl(&h.db, "s")
+    crate::session_delete::delete_session_impl(&h.db, "s")
         .await
         .unwrap();
 

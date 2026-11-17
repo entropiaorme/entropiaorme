@@ -241,9 +241,7 @@ fn adjust_totals(
 
 /// Recompute everything derived from the session's cost and shots.
 pub(super) fn repair(tx: &rusqlite::Transaction<'_>, session_id: &str) -> Result<(), DbError> {
-    crate::session_summary::write_session_summary(tx, session_id)?;
-    crate::daily_rollup::refresh_session_days(tx, session_id)?;
-    crate::session_rollup::recompute_session(tx, session_id)?;
+    crate::session_costs::refresh_derived(tx, session_id)?;
     Ok(())
 }
 

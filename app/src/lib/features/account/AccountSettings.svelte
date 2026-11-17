@@ -1,14 +1,16 @@
 <script lang="ts">
 	// The Settings cluster for the Entropia Universe account: one row whose
 	// content follows the connection, and, once the player has connected,
-	// one quiet line on what is read and when. Rendered inside a block
-	// already gated on the in-development channel.
+	// one quiet line on what is read and when, and the items the readings
+	// could not place, to place once. Rendered inside a block already gated
+	// on the in-development channel.
 	import { onMount } from 'svelte';
 	import { Button, ErrorNotice, Skeleton } from '$lib/components';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import { InDevelopmentMark } from '$lib/inDevelopment';
 	import { type ConnectionTone, READING_NOTE, SIGN_IN_NOTE } from './connection';
 	import { createConnectionModel } from './connectionModel.svelte';
+	import CostPlacements from './CostPlacements.svelte';
 
 	const model = createConnectionModel();
 	onMount(() => model.connect());
@@ -102,5 +104,6 @@
 				<Skeleton class="h-3 w-72" />
 			{/if}
 		</div>
+		<CostPlacements connected={model.view?.describesReading ?? false} />
 	</div>
 </section>

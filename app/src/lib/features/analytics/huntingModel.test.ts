@@ -52,6 +52,7 @@ function definition(over: Partial<HuntingDefinitionComparison> = {}): HuntingDef
 		returns: 1080,
 		lootRate: 0.9,
 		expected: null,
+		overhead: 0,
 		lootItems: [{ itemName: 'Animal Muscle Oil', quantity: 400, valuePed: 120 }],
 		activities: [],
 		...over,
@@ -77,6 +78,7 @@ function sessionActivity(over: Partial<HuntingActivityComparison> = {}): Hunting
 		cycled: 100,
 		returns: 90,
 		lootRate: 0.9,
+		overhead: 0,
 		expected: null,
 		confirmedRewardPed: 15,
 		realisedRewardMarkup: 0,
@@ -92,7 +94,7 @@ function sessionActivity(over: Partial<HuntingActivityComparison> = {}): Hunting
 
 function activity(over: Partial<AnalyticsHuntingActivity> = {}): AnalyticsHuntingActivity {
 	return {
-		overall: { cycled: 1500, returns: 1350, lootRate: 0.9, expected: null },
+		overall: { cycled: 1500, returns: 1350, lootRate: 0.9, expected: null, overhead: 0 },
 		definitions: [
 			definition(),
 			definition({ definitionId: null, name: 'Unassigned', cycled: 300, returns: 270 }),
@@ -138,7 +140,7 @@ beforeEach(() => {
 	});
 	mocked.getHuntingRealisedMarkup.mockResolvedValue({
 		species: [{ mobSpecies: 'Atrox', netMarkup: 12 }],
-		definitions: [{ definitionId: 1, netMarkup: 18 }],
+		definitions: [{ definitionId: 1, netMarkup: 18, overhead: 0 }],
 		derived: [],
 	});
 });
@@ -167,6 +169,55 @@ describe('createHuntingModel', () => {
 		expect(unassigned.realisedMarkup).toBe(0);
 	});
 
+	it("takes a definition's overhead off its realised figures, and sets its rate against Cycled and it", async () => {
+		// The period's own overhead, on its rows: the definition's, the
+		// unassigned bucket's, and the whole, which the backend gives.
+		mocked.getAnalyticsHuntingActivity.mockResolvedValue(
+			activity({
+				overall: { cycled: 1500, returns: 1350, lootRate: 0.9, expected: null, overhead: 7.5 },
+				definitions: [
+					definition({ overhead: 6 }),
+					definition({
+						definitionId: null,
+						name: 'Unassigned',
+						cycled: 300,
+						returns: 270,
+						overhead: 1.5,
+					}),
+				],
+			}),
+		);
+		// A lifetime figure on the realised read is not the period's.
+		mocked.getHuntingRealisedMarkup.mockResolvedValue({
+			species: [{ mobSpecies: 'Atrox', netMarkup: 12 }],
+			definitions: [{ definitionId: 1, netMarkup: 18, overhead: 99 }],
+			derived: [],
+		});
+		const model = createHuntingModel();
+		await model.loadData();
+
+		const session = required(
+			model.sessionSections.find((section) => section.definitionId === 1),
+			'ARIS session',
+		);
+		// Overhead is a cost beside Cycled: never markup, never in the returns.
+		expect(session.realisedMarkup).toBe(18);
+		expect(session.realisedReturns).toBe(1098);
+		expect(session.overhead).toBe(6);
+		expect(session.realisedRate).toBeCloseTo(1098 / (1200 + 6), 5);
+
+		const unassigned = required(
+			model.sessionSections.find((section) => section.isUnassigned),
+			'unassigned bucket',
+		);
+		expect(unassigned.overhead).toBe(1.5);
+
+		// Overall reads the backend's whole, the unassigned bucket's included.
+		const overall = required(model.overall, 'overall');
+		expect(overall.overhead).toBe(7.5);
+		expect(overall.realisedRate).toBeCloseTo(overall.realisedReturns / (1500 + 7.5), 5);
+	});
+
 	it('keeps 100%-anchored loot MU separate and composes it with expected return', async () => {
 		mocked.getAnalyticsHuntingActivity.mockResolvedValue(
 			activity({
@@ -175,6 +226,7 @@ describe('createHuntingModel', () => {
 					returns: 1350,
 					lootRate: 0.9,
 					expected: expectedEconomics(),
+					overhead: 0,
 				},
 				definitions: [definition({ expected: expectedEconomics() })],
 			}),

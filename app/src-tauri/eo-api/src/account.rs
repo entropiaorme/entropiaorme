@@ -22,8 +22,9 @@ use eo_services::account::diff::{MoveKind, Span};
 use eo_services::account::measure::{
     AmmoSplit, CoverageLevel, Edge, GainMark, ItemUnits, NotableEvent, SessionMeasure,
 };
+use eo_services::account::placement::{Awaiting, Placed, Placement, Placements};
 use eo_services::account::reading::{Container, HoldingKey};
-use eo_services::account::roles::{Role, Stacking};
+use eo_services::account::roles::{CostCategory, Role, Stacking};
 use eo_services::account::sessions::{
     self, AmmoTotal, LeftOutReason, MeasureRead, MeasureTotals, MeasuredSession, SummaryPair,
     TrackedFigures,
@@ -254,7 +255,7 @@ pub enum MeasuredEdge {
     Unread,
 }
 
-fn edge(value: Edge) -> MeasuredEdge {
+pub(crate) fn edge(value: Edge) -> MeasuredEdge {
     match value {
         Edge::Read => MeasuredEdge::Read,
         Edge::Unread => MeasuredEdge::Unread,
@@ -309,7 +310,8 @@ pub(crate) fn span(value: &Span) -> MeasuredSpan {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum MeasuredAmmoSplit {
     /// Every strongbox opening settled: what was burned is the change less
-    /// what openings and converted Shrapnel paid back.
+    /// what openings and converted Shrapnel paid back, over every minute but
+    /// those the ammo was topped up in.
     #[serde(rename_all = "camelCase")]
     Settled {
         burned_units: i64,
@@ -405,9 +407,6 @@ pub enum MeasuredStacking {
 pub enum MeasuredGainMark {
     Arrived,
     PossiblyStrongbox,
-    /// Arrived in a minute whose PED Card movement nothing explains: it
-    /// may have been bought.
-    CardMovedUnexplained,
 }
 
 /// What arrived of one holding.
@@ -535,13 +534,11 @@ pub enum MeasuredEvent {
         units: i64,
         amount: MeasuredAmount,
     },
-    /// The PED Card moved with nothing in the step known to explain it.
+    /// Universal Ammo arrived with no Shrapnel conversion and no strongbox
+    /// opening behind it: topped up. What was fired in this minute is not
+    /// in the ammo's split; the tracked figure stands in for it.
     #[serde(rename_all = "camelCase")]
-    CardChanged {
-        between: MeasuredSpan,
-        from: MeasuredAmount,
-        to: MeasuredAmount,
-    },
+    AmmoToppedUp { between: MeasuredSpan, name: String },
 }
 
 /// A tracked session's measured account.
@@ -723,10 +720,9 @@ fn event(value: &NotableEvent) -> MeasuredEvent {
             units: *units,
             amount: amount(*sold),
         },
-        NotableEvent::CardChanged { between, from, to } => MeasuredEvent::CardChanged {
+        NotableEvent::AmmoToppedUp { between, name } => MeasuredEvent::AmmoToppedUp {
             between: span(between),
-            from: card(*from),
-            to: card(*to),
+            name: name.clone(),
         },
     }
 }
@@ -838,7 +834,6 @@ fn session_measure(
                 mark: match gain.mark {
                     GainMark::Arrived => MeasuredGainMark::Arrived,
                     GainMark::PossiblyStrongbox => MeasuredGainMark::PossiblyStrongbox,
-                    GainMark::CardMovedUnexplained => MeasuredGainMark::CardMovedUnexplained,
                 },
                 units: gain.units,
                 amount: amount(gain.amount),
@@ -860,6 +855,13 @@ pub enum MeasuredAmmoTotal {
     },
     /// An opening did not settle, so the total burned is not known.
     Unsettled,
+    /// What was burned outside the minutes Universal Ammo was topped up in
+    /// (`steps` of them): the ammo fired in those is not measured.
+    #[serde(rename_all = "camelCase")]
+    ToppedUp {
+        burned: MeasuredAmount,
+        steps: i64,
+    },
 }
 
 /// A session's measure, by category.
@@ -895,6 +897,10 @@ fn totals(value: &MeasureTotals) -> MeasuredTotals {
                 burned: amount(burned),
             },
             AmmoTotal::Unsettled => MeasuredAmmoTotal::Unsettled,
+            AmmoTotal::ToppedUp { burned, steps } => MeasuredAmmoTotal::ToppedUp {
+                burned: amount(burned),
+                steps: count(steps),
+            },
         },
         weapon_decay: amount(value.weapon_decay),
         healing_decay: amount(value.healing_decay),
@@ -1193,8 +1199,9 @@ impl Api {
         })
     }
 
-    /// Which of `session_ids` have hits no armour recording covers yet: the
-    /// same reading the session detail marks "not recorded yet" from.
+    /// Which of `session_ids` have hits no armour recording covers yet:
+    /// their tracked armour figure is incomplete, whatever the readings
+    /// measured beside it.
     async fn armour_unrecorded(
         &self,
         session_ids: Vec<String>,
@@ -1203,8 +1210,10 @@ impl Api {
             return Ok(std::collections::HashSet::new());
         }
         Ok(self
-            .protection_unrecorded_sessions(session_ids)
-            .await?
+            .protection
+            .sessions_without_a_recording(session_ids)
+            .await
+            .map_err(crate::protection::protection_error)?
             .into_iter()
             .collect())
     }
@@ -1254,6 +1263,208 @@ impl Api {
     }
 }
 
+/// A category the player may place an item in: what its use costs as in
+/// every session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CostPlacementCategory {
+    Weapon,
+    Amplifier,
+    /// A scope, sight, absorber or extender a weapon carries.
+    Attachment,
+    MindforceImplant,
+    HarvestingTool,
+    HealingTool,
+    /// A healing item used up by the unit.
+    HealingConsumable,
+    UnlimitedArmour,
+    UnlimitedPlate,
+    /// A stimulant or another dose taken by the unit.
+    Consumable,
+    /// Overhead: a vehicle, its fuel, anything spent getting about.
+    Travel,
+    /// Overhead: a convenience tool carried into the field.
+    FieldLogistics,
+    /// No cost at all: its use is left out of every figure.
+    NotACost,
+}
+
+impl CostPlacementCategory {
+    pub const ALL: [CostPlacementCategory; 13] = [
+        CostPlacementCategory::Weapon,
+        CostPlacementCategory::Amplifier,
+        CostPlacementCategory::Attachment,
+        CostPlacementCategory::MindforceImplant,
+        CostPlacementCategory::HarvestingTool,
+        CostPlacementCategory::HealingTool,
+        CostPlacementCategory::HealingConsumable,
+        CostPlacementCategory::UnlimitedArmour,
+        CostPlacementCategory::UnlimitedPlate,
+        CostPlacementCategory::Consumable,
+        CostPlacementCategory::Travel,
+        CostPlacementCategory::FieldLogistics,
+        CostPlacementCategory::NotACost,
+    ];
+
+    fn category(self) -> CostCategory {
+        match self {
+            CostPlacementCategory::Weapon => CostCategory::Weapon,
+            CostPlacementCategory::Amplifier => CostCategory::Amplifier,
+            CostPlacementCategory::Attachment => CostCategory::Attachment,
+            CostPlacementCategory::MindforceImplant => CostCategory::MindforceImplant,
+            CostPlacementCategory::HarvestingTool => CostCategory::HarvestingTool,
+            CostPlacementCategory::HealingTool => CostCategory::HealingTool,
+            CostPlacementCategory::HealingConsumable => CostCategory::HealingConsumable,
+            CostPlacementCategory::UnlimitedArmour => CostCategory::UnlimitedArmour,
+            CostPlacementCategory::UnlimitedPlate => CostCategory::UnlimitedPlate,
+            CostPlacementCategory::Consumable => CostCategory::Consumable,
+            CostPlacementCategory::Travel => CostCategory::Travel,
+            CostPlacementCategory::FieldLogistics => CostCategory::FieldLogistics,
+            CostPlacementCategory::NotACost => CostCategory::NotACost,
+        }
+    }
+
+    /// The wire's name for a stored placement; `None` for a category no
+    /// item may be placed in.
+    fn of(category: CostCategory) -> Option<CostPlacementCategory> {
+        CostPlacementCategory::ALL
+            .into_iter()
+            .find(|placed| placed.category() == category)
+    }
+}
+
+/// An item the measured sessions could not place, awaiting the player's
+/// placement: one that wore, or a stack whose units left.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostPlacementAwaiting {
+    pub item: String,
+    /// How many measured sessions it wore or left in.
+    pub sessions: i64,
+    /// The TT it lost wearing across them, billed as unclassified overhead
+    /// until it is placed; `null` when it never wore.
+    pub lost: Nullable<MeasuredAmount>,
+    /// The units of it that left across them, billed nothing until it is
+    /// placed as used up; `null` when none left.
+    pub units: Nullable<i64>,
+}
+
+/// An item the player placed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostPlacementEntry {
+    pub item: String,
+    pub category: CostPlacementCategory,
+    pub placed_at: String,
+}
+
+/// The items awaiting a placement (most TT lost first) and the placements
+/// made (the latest first).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostPlacements {
+    pub awaiting: Vec<CostPlacementAwaiting>,
+    pub placed: Vec<CostPlacementEntry>,
+}
+
+/// Place an item, by its exact name, in a category for every session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostPlacementInput {
+    pub item: String,
+    pub category: CostPlacementCategory,
+}
+
+/// A placement made or cleared, once the measured sessions' costs have
+/// been rebuilt by it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostPlacementResult {
+    pub placements: CostPlacements,
+    /// The sessions whose costs are still to be rebuilt (one changed
+    /// meanwhile, or the rebuild failed); empty once every one follows the
+    /// placement. They are rebuilt on their next read.
+    pub pending_sessions: Vec<String>,
+}
+
+fn placements_wire(value: &Placements) -> CostPlacements {
+    CostPlacements {
+        awaiting: value
+            .awaiting
+            .iter()
+            .map(|item: &Awaiting| CostPlacementAwaiting {
+                item: item.item.clone(),
+                sessions: count(item.sessions),
+                lost: item.lost.map(amount).into(),
+                units: item.units.into(),
+            })
+            .collect(),
+        placed: value
+            .placed
+            .iter()
+            .filter_map(|placed: &Placed| {
+                Some(CostPlacementEntry {
+                    item: placed.item.clone(),
+                    category: CostPlacementCategory::of(placed.category)?,
+                    placed_at: iso(placed.placed_at),
+                })
+            })
+            .collect(),
+    }
+}
+
+impl Api {
+    /// The items the measured sessions could not place, and the player's
+    /// placements.
+    pub async fn account_cost_placements(&self) -> Result<CostPlacements, ApiError> {
+        let placements = self
+            .account()?
+            .cost_placements()
+            .await
+            .map_err(account_error("account cost placements"))?;
+        Ok(placements_wire(&placements))
+    }
+
+    /// Place an item for every session, and rebuild the measured costs it
+    /// moves. A blank name is a bad request.
+    pub async fn account_cost_place(
+        &self,
+        input: CostPlacementInput,
+    ) -> Result<CostPlacementResult, ApiError> {
+        let placement = Placement::new(&input.item, input.category.category())
+            .ok_or_else(|| ApiError::bad_request("An item name is required"))?;
+        let account = self.account()?;
+        let pending = account
+            .place_cost_item(placement)
+            .await
+            .map_err(account_error("account cost place"))?;
+        self.placement_result(pending).await
+    }
+
+    /// Clear an item's placement, and rebuild the measured costs it moves.
+    pub async fn account_cost_placement_clear(
+        &self,
+        item: String,
+    ) -> Result<CostPlacementResult, ApiError> {
+        let pending = self
+            .account()?
+            .clear_cost_placement(item)
+            .await
+            .map_err(account_error("account cost placement clear"))?;
+        self.placement_result(pending).await
+    }
+
+    async fn placement_result(
+        &self,
+        pending: Vec<String>,
+    ) -> Result<CostPlacementResult, ApiError> {
+        Ok(CostPlacementResult {
+            placements: self.account_cost_placements().await?,
+            pending_sessions: pending,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AccountConnectionState as State, AccountSignal as Signal};
@@ -1271,6 +1482,29 @@ mod tests {
         ];
         for (state, has_connected, signal) in cases {
             assert_eq!(Signal::of(state, has_connected), signal, "{state:?}");
+        }
+    }
+
+    /// Every category an item may be placed in has its name on the wire,
+    /// and the wire names no other.
+    #[test]
+    fn the_wire_places_exactly_the_placeable_categories() {
+        use super::CostPlacementCategory;
+        use eo_services::account::roles::CostCategory;
+        for category in CostCategory::PLACEABLE {
+            assert!(
+                CostPlacementCategory::of(category).is_some(),
+                "{category:?}"
+            );
+        }
+        for placed in CostPlacementCategory::ALL {
+            assert!(placed.category().is_placeable(), "{placed:?}");
+            assert_eq!(CostPlacementCategory::of(placed.category()), Some(placed));
+            // The stored name and the wire's agree.
+            assert_eq!(
+                serde_json::to_value(placed).unwrap(),
+                serde_json::json!(placed.category().as_str())
+            );
         }
     }
 }

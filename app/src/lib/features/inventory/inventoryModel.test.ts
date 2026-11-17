@@ -26,12 +26,28 @@ vi.mock('$lib/api/inventory', () => ({
 	undoInventoryTrade: vi.fn(),
 }));
 
+const frames = vi.hoisted(() => ({ handlers: new Map<string, () => void>() }));
+vi.mock('@tauri-apps/api/event', async (importOriginal) => ({
+	...(await importOriginal<typeof import('@tauri-apps/api/event')>()),
+	listen: vi.fn(async (topic: string, handler: () => void) => {
+		frames.handlers.set(topic, handler);
+		return () => frames.handlers.delete(topic);
+	}),
+}));
+
+vi.mock('$lib/api/account', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/api/account')>()),
+	undoArrivalUnknownOrigin: vi.fn(),
+	undoStockReconciliation: vi.fn(),
+}));
+
 vi.mock('$lib/api/market', () => ({
 	getMarketAuctionPacketThreshold: vi.fn(),
 	getMarketItemMarkups: vi.fn(),
 	MARKET_TOPIC: 'market:updated',
 }));
 
+import * as accountApi from '$lib/api/account';
 import * as inventoryApi from '$lib/api/inventory';
 import * as marketApi from '$lib/api/market';
 
@@ -154,6 +170,81 @@ describe('inventory market valuation', () => {
 		expect(model.loot[0].marketItem?.manual?.kind).toBe('ped_per_unit');
 	});
 
+	it('re-reads the stock and the history shown when the account records something', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		await model.loadHistory();
+		const stop = await model.subscribe();
+		mocked.getLootInventory.mockClear();
+		mocked.getInventoryHistory.mockClear();
+		const recorded = {
+			id: 'conversion-7',
+			recordedFromAccount: { from: '2026-11-17T14:40:00Z', to: '2026-11-17T14:41:00Z' },
+		} as unknown as Awaited<ReturnType<typeof inventoryApi.getInventoryHistory>>[number];
+		mocked.getInventoryHistory.mockResolvedValue([recorded]);
+
+		frames.handlers.get('account:updated')?.();
+
+		await vi.waitFor(() => expect(model.allHistory.map((row) => row.id)).toEqual(['conversion-7']));
+		expect(mocked.getLootInventory).toHaveBeenCalledTimes(1);
+		stop();
+		expect(frames.handlers.has('account:updated')).toBe(false);
+	});
+
+	it('leaves the history unread on an account frame until it is shown', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		await model.subscribe();
+		mocked.getLootInventory.mockClear();
+
+		frames.handlers.get('account:updated')?.();
+
+		await vi.waitFor(() => expect(mocked.getLootInventory).toHaveBeenCalledTimes(1));
+		expect(mocked.getInventoryHistory).not.toHaveBeenCalled();
+	});
+
+	it('never lets an earlier read that answers late overwrite a later one', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		const held = (quantity: number) => [
+			{
+				itemName: 'Animal Oil Residue',
+				quantity,
+				ttValue: quantity / 10,
+				listedQuantity: 0,
+				unitTt: 0.1,
+				paidMarkup: 0,
+				origins: [],
+				derivedFrom: [],
+			},
+		];
+		let answerEarlier!: (rows: ReturnType<typeof held>) => void;
+		mocked.getLootInventory.mockReturnValueOnce(
+			new Promise((resolve) => {
+				answerEarlier = resolve;
+			}),
+		);
+		mocked.getLootInventory.mockResolvedValueOnce(held(4));
+
+		const earlier = model.refresh();
+		const later = model.refresh();
+		await later;
+		answerEarlier(held(10));
+		await earlier;
+
+		expect(model.loot.map((row) => row.heldQty)).toEqual([4]);
+	});
+
+	it('does not keep a listener when another cannot attach', async () => {
+		const { listen } = await import('@tauri-apps/api/event');
+		const stopMarket = vi.fn();
+		vi.mocked(listen).mockResolvedValueOnce(stopMarket).mockRejectedValueOnce(new Error('no bus'));
+		const model = createInventoryModel();
+
+		await expect(model.subscribe()).rejects.toThrow('no bus');
+		expect(stopMarket).toHaveBeenCalledTimes(1);
+	});
+
 	it('re-reads the market when a market write lands', async () => {
 		const model = createInventoryModel();
 		await model.load();
@@ -263,6 +354,67 @@ describe('central inventory model', () => {
 
 		expect(mocked.addAssetPurchase).toHaveBeenCalledWith('strongboxes', purchase);
 		expect(mocked.getEquipmentInventory.mock.calls.length).toBeGreaterThan(reads);
+	});
+
+	it('undoes a stock check as a whole and reads the inventory again', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		const undoCheck = vi.mocked(accountApi.undoStockReconciliation);
+		undoCheck.mockResolvedValue(undefined);
+		const reads = mocked.getLootInventory.mock.calls.length;
+
+		await model.undoCheck('check-1');
+
+		expect(undoCheck).toHaveBeenCalledWith({ id: 'check-1' });
+		expect(mocked.getLootInventory.mock.calls.length).toBeGreaterThan(reads);
+	});
+
+	it('takes back stock of unknown origin through the arrival it came from', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		const undoArrival = vi.mocked(accountApi.undoArrivalUnknownOrigin);
+		undoArrival.mockResolvedValue(undefined);
+		const reads = mocked.getLootInventory.mock.calls.length;
+
+		await model.undo({
+			id: 'unknown-7',
+			subjectKind: 'loot',
+			channel: 'unknownOrigin',
+			kind: 'unknownOrigin',
+			status: 'held',
+			itemName: 'Iron Stone',
+			targetItem: null,
+			occurredAt: '2026-11-17',
+			quantity: 12,
+			ttValue: 1.2,
+			netMarkup: null,
+			activityNetMarkup: null,
+			canRevertSale: false,
+			canDelete: true,
+			undoBlockedReason: null,
+			undone: false,
+			conversionLines: [],
+			pedAmount: null,
+			itemised: false,
+			derivedFrom: [],
+			recordedFromAccount: null,
+			reconciliationId: null,
+		});
+
+		expect(undoArrival).toHaveBeenCalledWith({ id: 'unknown-7' });
+		expect(mocked.undoInventoryRemoval).not.toHaveBeenCalled();
+		expect(mocked.getLootInventory.mock.calls.length).toBeGreaterThan(reads);
+	});
+
+	it('says why a stock check could not be undone', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		vi.mocked(accountApi.undoStockReconciliation).mockRejectedValue(
+			new Error('Nanocube made by it has since been sold'),
+		);
+
+		await expect(model.undoCheck('check-1')).rejects.toThrow();
+		expect(model.error).toBe('Nanocube made by it has since been sold');
 	});
 
 	it('turns a manual loot listing into the same reviewed draft an OCR intake will use', async () => {

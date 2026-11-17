@@ -7,16 +7,25 @@
 	let {
 		lines,
 		totalPed,
-		incomplete
+		incomplete,
+		note,
+		overheadPed = 0
 	}: {
 		lines: readonly CycledLine[];
 		totalPed: number;
 		/** What the figure is known to leave out (unpriced shots). */
 		incomplete?: string;
+		/** Where the costs come from, while they rest on the account
+		 * readings. */
+		note?: string;
+		/** What the account readings measured beyond Cycled: in Net. */
+		overheadPed?: number;
 	} = $props();
 
 	const groups = $derived(groupCycledBreakdown(lines, totalPed));
-	const armourRecorded = $derived(hasArmourLine(lines));
+	// Armour arrives with a recording, or is read from the account, which
+	// gives it a line of its own even before it has cost anything.
+	const armourJoined = $derived(hasArmourLine(lines));
 </script>
 
 <InfoTip label="What this session's Cycled is made of" align="left" width="w-80">
@@ -48,10 +57,19 @@
 			<span class="tabular-nums font-medium text-text">{formatPed(totalPed)} PED</span>
 		</span>
 	{/if}
+	{#if overheadPed > 0}
+		<span class="mt-2 flex items-baseline justify-between gap-3 text-xs" data-testid="cycled-overhead">
+			<span class="text-text-secondary">Overhead, in Net only</span>
+			<span class="tabular-nums text-text">{formatPed(overheadPed)} PED</span>
+		</span>
+	{/if}
 	{#if incomplete}
 		<span class="mt-2 block text-xs leading-relaxed text-warning">{incomplete}.</span>
 	{/if}
-	{#if !armourRecorded}
+	{#if note}
+		<span class="mt-2 block text-[11px] leading-relaxed text-text-tertiary" data-testid="cycled-account-note">{note}.</span>
+	{/if}
+	{#if !armourJoined}
 		<span class="mt-2 block text-[11px] leading-relaxed text-text-tertiary">
 			Armour and plates join once you record a repair or Trade Terminal reading.
 		</span>

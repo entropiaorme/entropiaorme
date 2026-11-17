@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { NO_DATA } from '$lib/utils/format';
 import { carried, exact, gain, measure, totals, tracked, wholePec } from './__fixtures__/measure';
 import {
+	acrossGapNote,
 	armourAside,
 	comparisonRows,
 	coversWhole,
@@ -16,9 +17,10 @@ import {
 	NOTHING_TRACKED,
 	shareOfTracked,
 	sumAmounts,
+	toppedUpAmmoAsides,
 	trackedFromRow,
-	trackedFromSummary,
 	unsettledAmmoAsides,
+	withinPec,
 } from './measure';
 
 describe('precision-aware formatting', () => {
@@ -96,6 +98,26 @@ describe('the pairing', () => {
 		expect(difference(10, measured.weapon)).toBeNull();
 	});
 
+	it('sets no difference against a weapon figure that leaves out a top-up', () => {
+		const topped = totals({
+			ammo: { kind: 'toppedUp', burned: exact(2.5), steps: 1 },
+			weaponDecay: exact(0.5),
+		});
+		const measured = measuredByCategory(topped);
+		expect(measured.weapon).toEqual({ kind: 'amount', amount: exact(3), partial: true });
+		expect(difference(10, measured.weapon)).toBeNull();
+		const [weapon] = comparisonRows(topped, figures, true);
+		expect(weapon.category).toBe('weapon');
+		expect(weapon.difference).toBeNull();
+		// The same figure, settled, is differenced.
+		const settled = comparisonRows(
+			totals({ ammo: { kind: 'settled', burned: exact(2.5) }, weaponDecay: exact(0.5) }),
+			figures,
+			true,
+		);
+		expect(settled[0].difference).not.toBeNull();
+	});
+
 	it('has no difference where nothing was tracked', () => {
 		const rows = comparisonRows(totals({ gained: exact(1) }), NOTHING_TRACKED, true);
 		expect(rows.every((row) => row.difference === null)).toBe(true);
@@ -122,6 +144,9 @@ describe('the pairing', () => {
 	});
 
 	it('reads two figures within a PEC as agreeing', () => {
+		expect(withinPec(1, 1.01)).toBe(true);
+		expect(withinPec(1.01, 1)).toBe(true);
+		expect(withinPec(1, 1.0101)).toBe(false);
 		expect(difference(1, { kind: 'amount', amount: exact(1.01) })?.negligible).toBe(true);
 		expect(difference(1, { kind: 'amount', amount: exact(1.0101) })?.negligible).toBe(false);
 	});
@@ -144,48 +169,6 @@ describe('tracked figures', () => {
 		).toEqual({ weapon: 1, healing: 2, armour: 3, loot: 4 });
 		expect(trackedFromRow(null)).toEqual(NOTHING_TRACKED);
 	});
-
-	const summary = {
-		cost: 10,
-		returns: 9,
-		pes: 0,
-		net: -1,
-		returnRate: 0.9,
-		kills: 10,
-		duration: 600,
-		costBreakdown: {
-			weaponCost: 8,
-			healCost: 1,
-			consumableCost: 0,
-			enhancerCost: 0,
-			armourCost: 0.5,
-			harvestCost: 0,
-		},
-	};
-
-	it('reads a session summary', () => {
-		expect(trackedFromSummary(summary, false)).toEqual({
-			weapon: 8,
-			healing: 1,
-			armour: 0.5,
-			loot: 9,
-		});
-	});
-
-	it('reads one session alike in its detail and in the review while its armour is not recorded', () => {
-		const inDetail = trackedFromSummary(summary, true);
-		const inReview = trackedFromRow(
-			tracked({
-				weaponCost: 8,
-				healingCost: 1,
-				armourCost: 0.5,
-				armourUnrecorded: true,
-				lootTt: 9,
-			}),
-		);
-		expect(inDetail.armour).toBeNull();
-		expect(inReview).toEqual(inDetail);
-	});
 });
 
 describe('the asides', () => {
@@ -196,22 +179,19 @@ describe('the asides', () => {
 		expect(armourAside(1, { kind: 'amount', amount: exact(0) })).toBeNull();
 	});
 
-	it("says how much of what arrived may be a strongbox's contents or came with an unexplained card move", () => {
+	it("says how much of what arrived may be a strongbox's contents", () => {
 		const lines = lootAsides(
 			measure({
 				gained: [
 					gain('Fireworks', exact(2), 'possiblyStrongbox'),
-					gain('Shrapnel', exact(0.01), 'cardMovedUnexplained'),
+					gain('Shrapnel', exact(0.01), 'arrived'),
 				],
 				gainedTotal: exact(2.01),
 				gainedPossiblyStrongbox: exact(2),
 				totals: totals({ gained: exact(2.01), gainedPossiblyStrongbox: exact(2) }),
 			}),
 		);
-		expect(lines).toEqual([
-			"of which 2.0000 PED may be a strongbox's contents",
-			'of which 0.0100 PED arrived in a minute the PED Card moved unexplained',
-		]);
+		expect(lines).toEqual(["of which 2.0000 PED may be a strongbox's contents"]);
 		expect(lootAsides(measure())).toEqual([]);
 	});
 
@@ -242,6 +222,16 @@ describe('the asides', () => {
 		);
 		expect(lines.join(' ')).not.toContain('57000');
 		expect(unsettledAmmoAsides(measure())).toEqual([]);
+	});
+
+	it('says on the weapon row that the ammo fired in a top-up span is not measured', () => {
+		const topped = measure({
+			totals: totals({ ammo: { kind: 'toppedUp', burned: exact(2.5), steps: 1 } }),
+		});
+		expect(toppedUpAmmoAsides(topped)).toEqual([
+			'the ammo fired in the span it was topped up in is not measured',
+		]);
+		expect(toppedUpAmmoAsides(measure())).toEqual([]);
 	});
 });
 
@@ -290,5 +280,22 @@ describe('coverage', () => {
 			"Still being read: these figures may change until the session's closing readings are in.",
 		);
 		expect(describeCoverage(lacking, false, true).text).not.toMatch(/grow/);
+	});
+
+	it('says a session measured across a clean gap was measured, never that its end was missed', () => {
+		const missedEnd = { ...coverage, level: 'partial' as const, closing: 'unread' as const };
+		const across = describeCoverage(missedEnd, true, true, 12);
+		expect(across.state).toBe('complete');
+		// The gap is described once, with the costs; this line points there.
+		expect(across.text).toBe('Complete: measured across the gap noted with the costs.');
+		expect(across.text).not.toMatch(/missed/);
+		// Without the gap, the same coverage is partial.
+		expect(describeCoverage(missedEnd, true, true, null).state).toBe('partial');
+	});
+
+	it('names a gap of one minute in the singular', () => {
+		expect(acrossGapNote(1)).toBe(
+			'Measured across a gap of 1 minute; the chat log shows no other play in it',
+		);
 	});
 });

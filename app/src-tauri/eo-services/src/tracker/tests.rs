@@ -1512,6 +1512,242 @@ fn snapshot_aggregates_and_rounds_the_readout() {
     );
 }
 
+/// A hunt on the clock: a first kill of three shots at 00:00:01 looted at
+/// 00:00:02, a second of one shot at 00:00:03 looted at 00:00:04, and a
+/// shot at 00:00:05 still waiting for its kill; every shot taken in at its
+/// own second, at 0.05 a shot.
+fn a_timed_hunt(rig: &Rig) -> (Arc<HuntTracker>, String) {
+    let tracker = rig.tracker(Providers {
+        equipment: Arc::new(ScriptedEquipment {
+            cost: Some(Arc::new(|name| if name == "Rifle" { 0.05 } else { 0.0 })),
+            ..Default::default()
+        }),
+        player_name: "Hero".to_string(),
+        ..Providers::default()
+    });
+    let session = rig.wait(tracker.start_session()).unwrap();
+    rig.bus
+        .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
+            tool_name: "Rifle".into(),
+            source: None,
+        }));
+    let loot = |at: &str, item: &str, value: f64| {
+        BusEvent::LootGroup(LootGroupPayload {
+            kind: LootTag,
+            source_id: None,
+            arrived_ms: None,
+            timestamp: Some(at.into()),
+            items: vec![LootItem {
+                item_name: item.into(),
+                quantity: 1,
+                value_ped: value,
+                is_enhancer_shrapnel: false,
+            }],
+            total_ped: value,
+        })
+    };
+    rig.clock.advance(1.0).unwrap();
+    for event in [
+        CombatPayload::DamageDealt {
+            amount: 30.0,
+            timestamp: "2026-01-01T00:00:01".into(),
+        },
+        CombatPayload::CriticalHit {
+            amount: 10.0,
+            timestamp: "2026-01-01T00:00:01".into(),
+        },
+        CombatPayload::TargetDodge {
+            timestamp: "2026-01-01T00:00:01".into(),
+        },
+    ] {
+        rig.bus.publish(&BusEvent::Combat(event));
+    }
+    rig.bus
+        .publish(&loot("2026-01-01T00:00:02", "Animal Hide", 5.0));
+    rig.clock.advance(2.0).unwrap();
+    rig.bus
+        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
+            amount: 20.0,
+            timestamp: "2026-01-01T00:00:03".into(),
+        }));
+    rig.bus.publish(&loot("2026-01-01T00:00:04", "Mud", 0.03));
+    rig.clock.advance(2.0).unwrap();
+    rig.bus
+        .publish(&BusEvent::Combat(CombatPayload::DamageDealt {
+            amount: 7.5,
+            timestamp: "2026-01-01T00:00:05".into(),
+        }));
+    (tracker, session.id)
+}
+
+/// What the readings measured up to `through`: the weapon at 1.00, the
+/// armour at 0.40, a teleport's 0.10 of travel; nothing else settled.
+fn measured_hunt(through: f64) -> crate::session_costs::MeasuredSoFar {
+    crate::session_costs::MeasuredSoFar {
+        through,
+        cycled: [Some(1.0), None, None, None, Some(0.4), None],
+        overhead: crate::session_costs::Overhead {
+            travel: 0.1,
+            ..Default::default()
+        },
+    }
+}
+
+#[test]
+fn a_running_sessions_costs_are_measured_up_to_the_latest_reading_and_tracked_since() {
+    let rig = rig();
+    let (tracker, id) = a_timed_hunt(&rig);
+
+    // With nothing measured, the readout is the tracked one and says
+    // nothing of the account.
+    let tracked = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(tracked.cost, 0.25);
+    assert_eq!(tracked.net, 4.78);
+    assert_eq!(tracked.overhead_cost, None);
+    assert_eq!(tracked.costs_measured_through, None);
+    assert_eq!(tracked.cumulative_net_history, vec![4.85, 4.83]);
+
+    // A reading between the two kills: the second kill's shot and the
+    // shot waiting for its kill are both after it.
+    let through = naive_to_epoch(naive("2026-01-01T00:00:02")) + 0.5;
+    let so_far = measured_hunt(through);
+    let kept = id.clone();
+    rig.probe(&tracker, move |actor| {
+        actor.on_measured_so_far(kept, Some(so_far));
+    });
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(active.costs_measured_through, Some(through));
+    assert_eq!(active.cost, 1.5);
+    assert_eq!(active.armour_cost, 0.4);
+    assert_eq!(active.overhead_cost, Some(0.1));
+    // The travel is in Net, never in Cycled or the rate.
+    assert_eq!(active.net, 3.43);
+    assert_eq!(active.return_rate, 3.3533);
+    // Expected figures keep their tracked inputs.
+    assert_eq!(active.expected_cycle, tracked.expected_cycle);
+    // Each line carries its bucket's live figure, and they still sum to
+    // Cycled.
+    let line = |label: &str| {
+        active
+            .cycled_breakdown
+            .iter()
+            .find(|line| line.label == label)
+            .unwrap_or_else(|| panic!("a {label} line"))
+            .clone()
+    };
+    assert!((line("Rifle").cost_ped - 1.10).abs() < 1e-9);
+    let armour = line(super::cycled::FROM_ACCOUNT_LABEL);
+    assert_eq!(armour.bucket, crate::tracking_models::CycledBucket::Armour);
+    assert!((armour.cost_ped - 0.4).abs() < 1e-9);
+    let summed: f64 = active
+        .cycled_breakdown
+        .iter()
+        .map(|line| line.cost_ped)
+        .sum();
+    assert!((summed - 1.5).abs() < 1e-9);
+    // The curve moves by what the measured costs moved.
+    assert_eq!(active.cumulative_net_history, vec![3.84, 3.48]);
+
+    // A reading between the second kill's shot and its loot: that kill
+    // ended after it, but its one shot was fired before, so only the shot
+    // waiting for its kill is after it. Timed by the kill, the fight would
+    // be counted twice.
+    let later = naive_to_epoch(naive("2026-01-01T00:00:03")) + 0.5;
+    let kept = id.clone();
+    rig.probe(&tracker, move |actor| {
+        actor.on_measured_so_far(kept, Some(measured_hunt(later)));
+    });
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(active.cost, 1.45);
+
+    // An older reading's figures arriving late, or none at all, leave the
+    // kept ones standing.
+    let kept = id.clone();
+    let standing = rig.probe(&tracker, move |actor| {
+        actor.on_measured_so_far(kept.clone(), Some(measured_hunt(through)));
+        actor.on_measured_so_far(kept, None);
+        actor.session.active().unwrap().measured_so_far
+    });
+    assert_eq!(standing, Some(measured_hunt(later)));
+    rig.wait(tracker.stop_session()).unwrap();
+}
+
+#[test]
+fn heals_doses_and_swings_count_after_the_reading_only_when_they_came_after_it() {
+    let rig = rig();
+    let tracker = rig.tracker(Providers::default());
+    let session = rig.wait(tracker.start_session()).unwrap();
+    let at = |second: f64| naive_to_epoch(naive("2026-01-01T00:00:00")) + second;
+    let swing = |id: &str, second: f64, cost: f64| crate::tracking_models::HarvestEvent {
+        id: id.to_string(),
+        loot_source_id: None,
+        session_id: session.id.clone(),
+        timestamp: at(second),
+        success: true,
+        tool_name: Some("Cutter".to_string()),
+        yield_tier: HarvestYieldTier::Short,
+        yield_tier_source: None,
+        cost_ped: Ped(cost),
+        loot_total_ped: Ped::ZERO,
+        loot_items: Vec::new(),
+        context_id: None,
+    };
+    // Each bucket has a cost before the reading at 00:00:10 and one after.
+    let swings = vec![swing("early", 5.0, 0.01), swing("late", 15.0, 0.04)];
+    let early = at(5.0);
+    let late = at(15.0);
+    rig.probe(&tracker, move |actor| {
+        let active = actor.session.active_mut().unwrap();
+        active.heal_times = vec![(early, Ped(0.02)), (late, Ped(0.03))];
+        active.heal_cost = Ped(0.05);
+        active.heal_spend.insert(
+            "FAP".to_string(),
+            super::cycled::HealSpend {
+                cost: Ped(0.05),
+                tt: Ped(0.05),
+            },
+        );
+        active
+            .dose_times
+            .insert("first".to_string(), (early, Ped(0.1)));
+        active
+            .dose_times
+            .insert("second".to_string(), (late, Ped(0.2)));
+        active.consumable_cost = Ped(0.3);
+        active.consumable_spend.insert("Stim".to_string(), Ped(0.3));
+        active.session.harvests = swings;
+    });
+    let tracked = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    assert_eq!(tracked.cost, 0.4);
+
+    let so_far = crate::session_costs::MeasuredSoFar {
+        through: at(10.0),
+        cycled: [None, None, Some(0.2), Some(0.5), None, Some(1.0)],
+        overhead: crate::session_costs::Overhead::default(),
+    };
+    let id = session.id.clone();
+    rig.probe(&tracker, move |actor| {
+        actor.on_measured_so_far(id, Some(so_far));
+    });
+    let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
+    // Healing 0.50 and the later heal's 0.03; consumables 1.00 and the
+    // later dose's 0.20; harvesting 0.20 and the later swing's 0.04.
+    assert_eq!(active.cost, 1.97);
+    let bucket = |bucket: crate::tracking_models::CycledBucket| -> f64 {
+        active
+            .cycled_breakdown
+            .iter()
+            .filter(|line| line.bucket == bucket)
+            .map(|line| line.cost_ped)
+            .sum()
+    };
+    use crate::tracking_models::CycledBucket;
+    assert!((bucket(CycledBucket::Healing) - 0.53).abs() < 1e-9);
+    assert!((bucket(CycledBucket::Consumable) - 1.2).abs() < 1e-9);
+    assert!((bucket(CycledBucket::Harvesting) - 0.24).abs() < 1e-9);
+    rig.wait(tracker.stop_session()).unwrap();
+}
+
 #[test]
 fn shots_before_the_first_press_are_never_repriced_by_it() {
     let rig = rig();
@@ -2810,6 +3046,420 @@ fn enhancer_breaks_filter_and_deplete_stacks() {
             vec![75, 75]
         );
     });
+}
+
+/// A session holding "Rifle", fitted with two damage enhancers whose markup
+/// is `markup` (unset when None), and the game data listing `tt` for
+/// "Weapon Damage Enhancer 1" (and no other enhancer).
+fn enhanced_rifle(markup: Option<i64>, tt: Option<f64>) -> (Rig, Arc<HuntTracker>) {
+    let rig = rig();
+    let tracker = rig.tracker(Providers {
+        equipment: Arc::new(ScriptedEquipment {
+            profile: Some(Arc::new(move |name| {
+                (name == "Rifle").then(|| {
+                    let mut profile = json!({
+                        "damage_enhancers": 2,
+                        "weapon_entity": {"name": "Rifle Prime"},
+                    });
+                    if let Some(markup) = markup {
+                        profile["enhancer_markup"] = json!(markup);
+                    }
+                    profile.as_object().unwrap().clone()
+                })
+            })),
+            ..Default::default()
+        }),
+        enhancer_tt: Some(Arc::new(move |name: &str| {
+            tt.filter(|_| name == "Weapon Damage Enhancer 1").map(Ped)
+        })),
+        ..Providers::default()
+    });
+    // The library entry the profile above stands for, which prices the
+    // session's breaks again when it ends.
+    let mut props = json!({"weapon_entity": {"name": "Rifle Prime"}, "damage_enhancers": 2});
+    if let Some(markup) = markup {
+        props["enhancer_markup"] = json!(markup);
+    }
+    let props = props.to_string();
+    rig.wait(rig.db.with_writer(move |conn| {
+        conn.execute(
+            "INSERT INTO equipment_library (name, item_type, properties_json) \
+             VALUES ('Rifle Prime', 'weapon', ?1)",
+            [props],
+        )?;
+        Ok(())
+    }))
+    .unwrap();
+    rig.wait(tracker.start_session()).unwrap();
+    rig.bus
+        .publish(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
+            tool_name: "Rifle".into(),
+            source: None,
+        }));
+    (rig, tracker)
+}
+
+/// A break of `enhancer` on the rifle returning 0.80 PED of Shrapnel, and
+/// the tick's loot: a hide and the tagged return.
+fn break_with_its_return(rig: &Rig, enhancer: &str) {
+    rig.bus
+        .publish(&BusEvent::EnhancerBreak(EnhancerBreakPayload {
+            kind: EnhancerBreakTag,
+            timestamp: "2026-01-01T00:00:04".into(),
+            enhancer_name: enhancer.into(),
+            item_name: "Rifle Prime".into(),
+            remaining: 150,
+            shrapnel_ped: 0.8,
+        }));
+    rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
+        kind: LootTag,
+        source_id: None,
+        arrived_ms: None,
+        timestamp: Some("2026-01-01T00:00:04".into()),
+        items: vec![
+            LootItem {
+                item_name: "Animal Hide".into(),
+                quantity: 1,
+                value_ped: 2.0,
+                is_enhancer_shrapnel: false,
+            },
+            LootItem {
+                item_name: "Shrapnel".into(),
+                quantity: 8000,
+                value_ped: 0.8,
+                is_enhancer_shrapnel: true,
+            },
+        ],
+        total_ped: 2.8,
+    }));
+    // A session of some length, so its summary is kept.
+    rig.clock.advance(10.0).unwrap();
+}
+
+fn close(actual: f64, expected: f64) {
+    assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+}
+
+#[test]
+fn a_break_costs_its_tt_and_markup_less_its_return_and_the_return_is_not_loot() {
+    let (rig, tracker) = enhanced_rifle(Some(150), Some(1.0));
+    break_with_its_return(&rig, "Weapon Damage Enhancer 1");
+    let session = rig.wait(tracker.stop_session()).unwrap().unwrap();
+
+    // 1.00 TT + 0.50 markup - 0.80 returned, on the kill its shots went to.
+    close(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        0.7,
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM session_summaries WHERE session_id = ?",
+            &[&session.id],
+        ),
+        0.7,
+    );
+    // The tagged return is no loot: the hide alone is.
+    close(
+        rig.scalar_f64(
+            "SELECT loot_total_ped FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        2.0,
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT loot_tt FROM session_summaries WHERE session_id = ?",
+            &[&session.id],
+        ),
+        2.0,
+    );
+    // The break is kept on its kill, dated by its chat line, with its parts.
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT b.pricing || '|' || b.weapon_name || '|' || b.enhancer_name \
+             FROM enhancer_breaks b JOIN kills k ON k.id = b.kill_id \
+             WHERE b.session_id = ? AND b.observed_at = k.timestamp",
+            &[&session.id],
+        ),
+        "priced|Rifle Prime|Weapon Damage Enhancer 1"
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT tt_ped + markup_ped - returned_ped - cost_ped FROM enhancer_breaks",
+            &[],
+        ),
+        0.0,
+    );
+    // Its return is netted in its cost, so it is not rebated as well.
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM ledger_entries WHERE tag = 'enhancer'",
+            &[],
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_break_with_no_markup_set_costs_its_tt_less_its_return_and_says_so() {
+    let (rig, tracker) = enhanced_rifle(None, Some(1.0));
+    break_with_its_return(&rig, "Weapon Damage Enhancer 1");
+    let session = rig.wait(tracker.stop_session()).unwrap().unwrap();
+    close(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM session_summaries WHERE session_id = ?",
+            &[&session.id],
+        ),
+        0.2,
+    );
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT pricing || '|' || COALESCE(markup_ped, 'absent') FROM enhancer_breaks",
+            &[],
+        ),
+        "markupNotSet|absent"
+    );
+}
+
+#[test]
+fn a_break_of_an_enhancer_of_unknown_tt_has_no_cost_and_says_why() {
+    let (rig, tracker) = enhanced_rifle(Some(150), Some(1.0));
+    break_with_its_return(&rig, "Weapon Damage Enhancer 7");
+    let session = rig.wait(tracker.stop_session()).unwrap().unwrap();
+    assert_eq!(
+        rig.scalar_string(
+            "SELECT pricing || '|' || COALESCE(cost_ped, 'absent') FROM enhancer_breaks",
+            &[],
+        ),
+        "ttUnknown|absent"
+    );
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        0.0
+    );
+    // An unpriced break has no cost, yet claims its return: the Shrapnel
+    // stays out of loot and is not rebated either.
+    close(
+        rig.scalar_f64(
+            "SELECT loot_total_ped FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        2.0,
+    );
+    close(
+        rig.scalar_f64("SELECT deducted_ped FROM enhancer_breaks", &[]),
+        0.8,
+    );
+    // A kept break's return is its own, priced or not: it is no rebate.
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM ledger_entries WHERE tag = 'enhancer'",
+            &[],
+        ),
+        0
+    );
+}
+
+/// A loot tick at `at` of the given (name, PED, tagged as a return) lines.
+fn loot_tick(rig: &Rig, at: &str, lines: &[(&str, f64, bool)]) {
+    rig.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
+        kind: LootTag,
+        source_id: None,
+        arrived_ms: None,
+        timestamp: Some(at.into()),
+        items: lines
+            .iter()
+            .map(|(name, value, tagged)| LootItem {
+                item_name: (*name).into(),
+                quantity: 1,
+                value_ped: *value,
+                is_enhancer_shrapnel: *tagged,
+            })
+            .collect(),
+        total_ped: lines.iter().map(|(_, value, _)| value).sum(),
+    }));
+}
+
+fn damage_break(rig: &Rig, at: &str) {
+    rig.bus
+        .publish(&BusEvent::EnhancerBreak(EnhancerBreakPayload {
+            kind: EnhancerBreakTag,
+            timestamp: at.into(),
+            enhancer_name: "Weapon Damage Enhancer 1".into(),
+            item_name: "Rifle Prime".into(),
+            remaining: 150,
+            shrapnel_ped: 0.8,
+        }));
+}
+
+#[test]
+fn a_tick_of_returned_shrapnel_alone_is_no_kill_and_the_next_kill_keeps_it() {
+    let (rig, tracker) = enhanced_rifle(Some(150), Some(1.0));
+    // As play produces it: the break, its return alone in the same second,
+    // then the mob's loot.
+    damage_break(&rig, "2026-01-01T00:00:04");
+    loot_tick(&rig, "2026-01-01T00:00:04", &[("Shrapnel", 0.8, true)]);
+    loot_tick(&rig, "2026-01-01T00:00:06", &[("Animal Hide", 2.0, false)]);
+    rig.clock.advance(10.0).unwrap();
+    let session = rig.wait(tracker.stop_session()).unwrap().unwrap();
+
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM kills WHERE session_id = ?",
+            &[&session.id]
+        ),
+        1
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        0.7,
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT loot_total_ped FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        2.0,
+    );
+    // The return is kept, tagged, among the kill's lines.
+    close(
+        rig.scalar_f64(
+            "SELECT SUM(li.value_ped) FROM kill_loot_items li JOIN kills k ON k.id = li.kill_id \
+             WHERE k.session_id = ? AND li.is_enhancer_shrapnel = 1",
+            &[&session.id],
+        ),
+        0.8,
+    );
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM ledger_entries WHERE tag = 'enhancer'",
+            &[]
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_return_waiting_at_the_stop_is_kept_by_the_last_kill_and_deducted() {
+    let (rig, tracker) = enhanced_rifle(Some(150), Some(1.0));
+    loot_tick(&rig, "2026-01-01T00:00:02", &[("Animal Hide", 2.0, false)]);
+    damage_break(&rig, "2026-01-01T00:00:04");
+    loot_tick(&rig, "2026-01-01T00:00:04", &[("Shrapnel", 0.8, true)]);
+    rig.clock.advance(10.0).unwrap();
+    let session = rig.wait(tracker.stop_session()).unwrap().unwrap();
+
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM kills WHERE session_id = ?",
+            &[&session.id]
+        ),
+        1
+    );
+    // The break after the last kill is the session's: 1.00 + 0.50 - 0.80.
+    close(
+        rig.scalar_f64(
+            "SELECT cost_ped FROM enhancer_breaks WHERE kill_id IS NULL",
+            &[],
+        ),
+        0.7,
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM session_summaries WHERE session_id = ?",
+            &[&session.id],
+        ),
+        0.7,
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT loot_tt FROM session_summaries WHERE session_id = ?",
+            &[&session.id],
+        ),
+        2.0,
+    );
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM ledger_entries WHERE tag = 'enhancer'",
+            &[]
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_return_that_stayed_loot_is_not_deducted_as_well() {
+    let (rig, tracker) = enhanced_rifle(Some(150), Some(1.0));
+    // The return arrives a second after its break, untagged: it is loot.
+    damage_break(&rig, "2026-01-01T00:00:04");
+    loot_tick(
+        &rig,
+        "2026-01-01T00:00:05",
+        &[("Animal Hide", 2.0, false), ("Shrapnel", 0.8, false)],
+    );
+    rig.clock.advance(10.0).unwrap();
+    let session = rig.wait(tracker.stop_session()).unwrap().unwrap();
+
+    // The whole TT and markup, nothing deducted; the Shrapnel is loot.
+    close(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        1.5,
+    );
+    close(
+        rig.scalar_f64("SELECT deducted_ped FROM enhancer_breaks", &[]),
+        0.0,
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT loot_total_ped FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        2.8,
+    );
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM ledger_entries WHERE tag = 'enhancer'",
+            &[]
+        ),
+        0
+    );
+}
+
+#[test]
+fn a_break_the_tracker_does_not_apply_is_not_kept_and_its_return_stays_a_rebate() {
+    let (rig, tracker) = enhanced_rifle(Some(150), Some(1.0));
+    break_with_its_return(&rig, "Weapon Accuracy Enhancer 1");
+    let session = rig.wait(tracker.stop_session()).unwrap().unwrap();
+    assert_eq!(
+        rig.scalar_i64("SELECT COUNT(*) FROM enhancer_breaks", &[]),
+        0
+    );
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM kills WHERE session_id = ?",
+            &[&session.id],
+        ),
+        0.0
+    );
+    close(
+        rig.scalar_f64(
+            "SELECT amount FROM ledger_entries WHERE tag = 'enhancer' \
+             AND description = 'Enhancer Shrapnel Rebate'",
+            &[],
+        ),
+        0.8,
+    );
 }
 
 #[test]
@@ -4278,7 +4928,15 @@ fn helper_pins() {
 #[test]
 fn snapshot_prices_enhancer_cost_and_skips_costless_multipliers() {
     let rig = rig();
-    let tracker = rig.tracker(Providers::default());
+    // The game data lists each break's enhancer at the TT it costs here.
+    let tracker = rig.tracker(Providers {
+        enhancer_tt: Some(Arc::new(|name: &str| match name {
+            "Enhancer 0.25" => Some(Ped(0.25)),
+            "Enhancer 0.5" => Some(Ped(0.5)),
+            _ => None,
+        })),
+        ..Providers::default()
+    });
     rig.wait(tracker.start_session()).unwrap();
 
     let loot = |ts: &str, name: &str, value: f64| {
@@ -4308,25 +4966,30 @@ fn snapshot_prices_enhancer_cost_and_skips_costless_multipliers() {
     assert_eq!(active.multiplier_max, None);
     assert!(active.multiplier_history.is_empty());
 
-    // Enhancer cost flows from the accumulator into the kill and
+    // Enhancer cost flows from the accumulator's breaks into the kill and
     // the live readout arithmetic.
-    rig.probe(&tracker, |actor| {
-        actor
-            .session
-            .active_mut()
-            .unwrap()
+    fn pending_break(actor: &mut TrackerActor, cost: f64) {
+        let active = actor.session.active_mut().unwrap();
+        let session_id = active.session.id.clone();
+        active
             .accumulator
-            .enhancer_cost = Ped(0.25);
-    });
+            .breaks
+            .push(crate::enhancer_breaks::EnhancerBreak {
+                id: format!("b{cost}"),
+                session_id,
+                context_id: None,
+                observed_at: 0.0,
+                enhancer_name: format!("Enhancer {cost}"),
+                weapon_name: "Rifle".into(),
+                returned: Ped::ZERO,
+                deducted: Ped::ZERO,
+                markup_percent: None,
+                pricing: crate::enhancer_breaks::BreakPricing::MarkupNotSet { tt: Ped(cost) },
+            });
+    }
+    rig.probe(&tracker, |actor| pending_break(actor, 0.25));
     rig.bus.publish(&loot("2026-01-01T00:00:05", "Mud", 1.0));
-    rig.probe(&tracker, |actor| {
-        actor
-            .session
-            .active_mut()
-            .unwrap()
-            .accumulator
-            .enhancer_cost = Ped(0.5);
-    });
+    rig.probe(&tracker, |actor| pending_break(actor, 0.5));
     let active = rig.wait(tracker.snapshot()).unwrap().active.unwrap();
     assert_eq!(active.cost, 0.75);
     assert_eq!(active.returns, 3.0);
@@ -4334,9 +4997,25 @@ fn snapshot_prices_enhancer_cost_and_skips_costless_multipliers() {
     assert_eq!(active.return_rate, 4.0);
     assert_eq!(active.cumulative_net_history, vec![2.0, 2.75]);
 
-    // The unresolved enhancer cost is the dangling remainder.
+    // A break after the last kill is no dangling weapon spend: the session
+    // carries it as enhancer cost.
+    rig.clock.advance(10.0).unwrap();
     let stopped = rig.wait(tracker.stop_session()).unwrap().unwrap();
-    assert_eq!(stopped.dangling_cost, Ped(0.5));
+    assert_eq!(stopped.dangling_cost, Ped::ZERO);
+    assert_eq!(
+        rig.scalar_f64(
+            "SELECT enhancer_cost FROM session_summaries WHERE session_id = ?",
+            &[&stopped.id]
+        ),
+        0.75
+    );
+    assert_eq!(
+        rig.scalar_i64(
+            "SELECT COUNT(*) FROM enhancer_breaks WHERE kill_id IS NULL",
+            &[]
+        ),
+        1
+    );
 }
 
 #[test]

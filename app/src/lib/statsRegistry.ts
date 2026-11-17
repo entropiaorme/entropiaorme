@@ -7,7 +7,7 @@ import {
 	type LooterBasis,
 	looterBasisInitial,
 } from './looterBasis.svelte';
-import { formatMultiplier, formatPed, formatPercent } from './utils/format';
+import { formatMultiplier, formatPed, formatPercent, formatTime } from './utils/format';
 
 export type StatId =
 	| 'cycled'
@@ -52,6 +52,9 @@ export type StatRender = {
 	/** What the figure is read at, for a surface with no control to show
 	 * it (the overlay names an expected figure's looter basis this way). */
 	qualifier?: string;
+	/** A quiet word on where the figure comes from, for its tooltip: a
+	 * cost figure resting on the account readings says up to when. */
+	note?: string;
 };
 
 /**
@@ -146,6 +149,32 @@ function liveCost(
 			: EMPTY;
 }
 
+/**
+ * Where the live costs come from, while they rest on the account readings:
+ * what the readings measured up to their latest reading, and the tracked
+ * play since. Nothing while they do not (the player is not signed in, or
+ * no reading after the session's first has measured it yet).
+ */
+function accountCostsNote(status: TrackingStatus | null): string | undefined {
+	const through = isActive(status) ? status.costsMeasuredThrough : null;
+	return through
+		? `Costs from your account up to ${formatTime(through)}, tracked since`
+		: undefined;
+}
+
+/** A live figure built on the session's Cycled or Net: the account note
+ * rides on it while the costs rest on the readings and a figure is drawn. */
+function accountCost(
+	render: (status: TrackingStatus, context: StatContext) => StatRender,
+): (status: TrackingStatus | null, context?: StatContext) => StatRender {
+	const live = liveCost(render);
+	return (status, context = {}) => {
+		const rendered = live(status, context);
+		const note = rendered.value !== EMPTY.value ? accountCostsNote(status) : undefined;
+		return note ? { ...rendered, note } : rendered;
+	};
+}
+
 /** The live valuation for the session in the snapshot, or none: a
  * valuation left over from a previous session never stands for this one. */
 function liveValuation(status: TrackingStatus, context: StatContext): LiveValuationView | null {
@@ -186,7 +215,7 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'cycled',
 		label: 'Cycled',
 		defaultEnabled: true,
-		render: liveCost((status) => ({ value: formatPed(status.cost ?? 0), color: PLAIN })),
+		render: accountCost((status) => ({ value: formatPed(status.cost ?? 0), color: PLAIN })),
 		renderLifetime: lifetimeCost((l) => ({ value: formatPed(l.cycled), color: PLAIN })),
 	},
 	loot_tt: {
@@ -203,14 +232,21 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		label: 'Net',
 		defaultEnabled: true,
 		defaultOverlayEnabled: true,
-		render: liveCost((status) => signedNet((status.returns ?? 0) - (status.cost ?? 0))),
+		// The overhead the account readings measured is in Net, never in
+		// Cycled.
+		render: accountCost((status) =>
+			signedNet((status.returns ?? 0) - (status.cost ?? 0) - (status.overheadCost ?? 0)),
+		),
 		renderLifetime: lifetimeCost((l) => signedNet(l.net)),
 	},
 	rate: {
 		id: 'rate',
 		label: 'Rate',
 		defaultEnabled: true,
-		render: liveCost((status) => ({ value: formatPercent(status.returnRate ?? 0), color: PLAIN })),
+		render: accountCost((status) => ({
+			value: formatPercent(status.returnRate ?? 0),
+			color: PLAIN,
+		})),
 		// Already the ratio of the summed parts, computed backend-side;
 		// never the mean of the per-instance rates.
 		renderLifetime: lifetimeCost((l) => ({ value: formatPercent(l.returnRate), color: PLAIN })),
@@ -228,7 +264,7 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'pes_per_100',
 		label: 'PES/100',
 		defaultEnabled: false,
-		render: liveCost((status) => {
+		render: accountCost((status) => {
 			const cost = status.cost ?? 0;
 			if (cost <= 0) return EMPTY;
 			return { value: (((status.pes ?? 0) / cost) * 100).toFixed(2), color: PLAIN };
@@ -259,7 +295,7 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'avg_cost_per_kill',
 		label: 'Avg cost/kill',
 		defaultEnabled: false,
-		render: liveCost((status) => {
+		render: accountCost((status) => {
 			const kills = status.kill_count ?? 0;
 			if (kills <= 0) return EMPTY;
 			return { value: formatPed((status.cost ?? 0) / kills), color: PLAIN };
@@ -467,7 +503,7 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		id: 'mu_rate',
 		label: 'Loot MU Rate',
 		defaultEnabled: false,
-		render: liveCost((status, context) => {
+		render: accountCost((status, context) => {
 			const valuation = liveValuation(status, context);
 			const cost = status.cost ?? 0;
 			if (!valuation || valuation.lootTt <= 0 || cost <= 0) return EMPTY;
@@ -493,7 +529,10 @@ export const STAT_DEFS: Record<StatId, StatDef> = {
 		render: liveCost((status, context) => {
 			const valuation = liveValuation(status, context);
 			const cycle = status.expectedCycle ?? null;
-			const cost = status.cost ?? 0;
+			// Over the Cycled the expected loot was modelled on: the tracked
+			// one, whatever the account readings measured. Without them the
+			// two are the session's Cycled.
+			const cost = status.costsMeasuredThrough ? (cycle?.cycledPed ?? 0) : (status.cost ?? 0);
 			const factor = valuation?.lootMuFactor ?? null;
 			if (!cycle || factor === null || cost <= 0) return EMPTY;
 			const basis = context.looterBasis ?? DEFAULT_LOOTER_BASIS;

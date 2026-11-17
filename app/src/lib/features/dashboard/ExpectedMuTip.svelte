@@ -19,6 +19,7 @@
 		lootMuFactor,
 		cycledPed,
 		rewardMuPed = 0,
+		trackedCost = false,
 	}: {
 		cycle: LiveExpectedCycle;
 		basis: LooterBasis;
@@ -26,7 +27,13 @@
 		cycledPed: number;
 		/** The confirmed quest rewards at market, PED; 0 before a hand-in. */
 		rewardMuPed?: number;
+		/** The session's Cycled comes from the account readings: the figure
+		 * here stays over the tracked cost the model was given, and says
+		 * so, so it never contradicts the Cycled tile. */
+		trackedCost?: boolean;
 	} = $props();
+
+	const over = $derived(trackedCost ? 'the tracked cost' : 'Cycled');
 
 	const at = $derived(atLooterBasis(cycle.bases, basis));
 	const rewardRate = $derived(cycledPed > 0 ? rewardMuPed / cycledPed : 0);
@@ -52,12 +59,12 @@
 <InfoTip label="What Expected MU Rate rests on" align="left" width="w-96">
 	<span class="block text-xs font-medium text-text">
 		{rewardMuPed > 0
-			? 'Expected loot at its markup, and the quest rewards, over Cycled'
-			: 'Expected loot at its markup, over Cycled'}
+			? `Expected loot at its markup, and the quest rewards, over ${over}`
+			: `Expected loot at its markup, over ${over}`}
 	</span>
 	<span class="mt-1 block text-xs leading-relaxed text-text-secondary tabular-nums">
 		{formatPed(at.expectedLootTtPed)} PED expected TT at {formatPercent(lootMuFactor)} Loot MU, over
-		{formatPed(cycledPed)} PED cycled. Range {formatPercent(rate(at.lowPed))} to
+		{formatPed(cycledPed)} PED {trackedCost ? 'of the tracked cost' : 'cycled'}. Range {formatPercent(rate(at.lowPed))} to
 		{formatPercent(rate(at.highPed))}.
 	</span>
 	{#if rewardMuPed > 0}

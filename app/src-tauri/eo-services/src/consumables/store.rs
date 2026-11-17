@@ -352,9 +352,7 @@ pub fn adjust_session_consumable_cost(
         rusqlite::params![delta, session_id],
     )?;
     if ended {
-        crate::session_summary::write_session_summary(conn, session_id)?;
-        crate::daily_rollup::refresh_session_days(conn, session_id)?;
-        crate::session_rollup::recompute_session(conn, session_id)?;
+        crate::session_costs::refresh_derived(conn, session_id)?;
     }
     Ok(())
 }

@@ -17,6 +17,7 @@ pub mod bundled_tools;
 pub mod bus_events;
 pub mod character_calc;
 pub mod chatlog_parser;
+pub mod chatlog_span;
 pub mod chatlog_time;
 pub mod chatlog_watcher;
 pub mod clock;
@@ -29,6 +30,7 @@ pub mod cost_engine;
 pub mod daily_rollup;
 pub mod db;
 pub mod difflib;
+pub mod enhancer_breaks;
 pub mod equipment_pricing;
 pub mod eu_window;
 pub mod event_bus;
@@ -73,7 +75,9 @@ pub mod scan_completion;
 pub mod scan_drift;
 pub mod screen_capture;
 pub mod screen_watch;
+pub mod session_costs;
 pub mod session_definitions;
+pub mod session_delete;
 pub mod session_expectation;
 pub mod session_rollup;
 pub mod session_scope;
@@ -105,6 +109,10 @@ pub fn crate_name() -> &'static str {
 
 #[cfg(test)]
 mod cycled_reconciliation_tests;
+#[cfg(test)]
+mod session_costs_live_tests;
+#[cfg(test)]
+mod session_costs_tests;
 
 #[cfg(test)]
 mod tests {

@@ -46,6 +46,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use eo_services::session_delete::delete_session_impl;
 use eo_services::tracking_reads::*;
 
 use crate::activities::ActivitySummary;
@@ -58,7 +59,7 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 59] = [
+const SNAPSHOT_FIELDS: [&str; 61] = [
     "status",
     "hotbarListenerActive",
     "hotbarKeysEnabled",
@@ -90,6 +91,8 @@ const SNAPSHOT_FIELDS: [&str; 59] = [
     "weaponCost",
     "armourCost",
     "cycledBreakdown",
+    "overheadCost",
+    "costsMeasuredThrough",
     "expectedCycle",
     "expectedTtRate",
     "expectedReturnCoverage",
@@ -234,8 +237,10 @@ pub struct TrackingSession {
     pub duration: i64,
     pub primary_mobs: Vec<String>,
     pub primary_weapons: Vec<String>,
+    /// Cycled.
     pub cost: f64,
     pub returns: f64,
+    /// Returns less Cycled and the session's overhead.
     pub net: f64,
     pub return_rate: f64,
     pub globals: i64,
@@ -255,7 +260,238 @@ pub struct SessionPage {
     pub total: i64,
 }
 
-/// The session-detail cost split.
+/// What a cost figure rests on: the account readings' measurement, the
+/// chat log's tracking, or, for a figure summed from several, both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CostBasis {
+    Measured,
+    Tracked,
+    Mixed,
+}
+
+/// Why a cost bucket's figure is not what the account readings measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CostReason {
+    /// The session has no current measured costs: still running, never
+    /// read, its readings still being weighed, or read by rules since
+    /// replaced.
+    NoMeasuredCosts,
+    /// The readings do not read one of the session's ends.
+    PartialCoverage,
+    /// Two consecutive readings are too far apart.
+    Gap,
+    /// How much of the ammo's change was burned is not known.
+    AmmoUnsettled,
+    /// Universal Ammo was topped up mid-session: the ammo fired in the
+    /// span it arrived in is the tracked figure, and anything else the
+    /// readings measured of the weapon is in the figure beside it; when that
+    /// span runs past the last kill, the whole weapon is the tracked figure.
+    AmmoToppedUp,
+    /// A limited piece lost TT, and pricing it needs its set's pieces
+    /// confirmed. For armour whose other parts were measured, those parts
+    /// are in the figure and the limited part is what the recordings say.
+    LimitedSetUnconfirmed,
+    /// The readings never measure this bucket.
+    TrackedOnly,
+    /// An end is unread across a gap, and the chat log shows play outside
+    /// the session in it.
+    PlayInGap,
+    /// An end is unread across a gap the chat log does not cover.
+    ChatLogMissesGap,
+    /// An end is unread across a gap the chat log could not be checked
+    /// over.
+    ChatLogUnchecked,
+    /// An end is unread across a gap whose readings hold a repair, or a
+    /// cost of a kind the session's own play never had.
+    GapUnaccounted,
+    /// Overhead only: the session was measured across a gap, and this
+    /// category changed in the gap, so it may be the player's after the
+    /// session and is not billed to it.
+    OverheadInGap,
+}
+
+/// Why each bucket of a session's cost split is not measured; `null` for a
+/// measured bucket.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostBreakdownReasons {
+    pub weapon_cost: Nullable<CostReason>,
+    pub heal_cost: Nullable<CostReason>,
+    pub consumable_cost: Nullable<CostReason>,
+    pub enhancer_cost: Nullable<CostReason>,
+    pub armour_cost: Nullable<CostReason>,
+    pub harvest_cost: Nullable<CostReason>,
+}
+
+/// A session's overhead by category, PED: what it cost beyond performing
+/// its activity, as the account readings measured it. Zero where nothing
+/// was measured: overhead has no tracked figure.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOverhead {
+    /// Teleport chips, Mind Essence, vehicles and their fuel.
+    pub travel: f64,
+    /// Portable repair and Trade Terminal units, and their like.
+    pub field_logistics: f64,
+    /// What was used up that the app cannot place yet.
+    pub unclassified: f64,
+    /// Why each category is withheld from the figures above, where it is.
+    pub reasons: SessionOverheadReasons,
+}
+
+/// Why each overhead category of a session the readings measured is not
+/// billed: `null` for a category measured (its figure above is the
+/// measurement, zero included), and for every category of a session the
+/// readings never measured, which has no overhead.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOverheadReasons {
+    pub travel: Nullable<CostReason>,
+    pub field_logistics: Nullable<CostReason>,
+    pub unclassified: Nullable<CostReason>,
+}
+
+/// A group of measured cost lines: one of Cycled's buckets, or one of the
+/// overhead categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostBucket {
+    Weapon,
+    Enhancer,
+    Harvesting,
+    Healing,
+    Armour,
+    Consumables,
+    Travel,
+    FieldLogistics,
+    Unclassified,
+}
+
+/// What a measured cost line measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostLineKind {
+    /// Ammo burned, in units at TT.
+    AmmoBurned,
+    /// An item's TT falls, summed.
+    Decay,
+    /// A limited piece's TT falls, summed: what it lost, which its set's
+    /// markup prices.
+    LimitedDecay,
+    /// A consumable's units used up.
+    Consumed,
+}
+
+/// Why a measured line is no cost of the session's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostUnpriced {
+    /// The player accounts for the item through the ledger, where its
+    /// purchase is recorded.
+    BoughtThroughLedger,
+    /// A limited piece no confirmed set holds: pricing it needs its set's
+    /// pieces confirmed.
+    LimitedSetUnconfirmed,
+    /// Units of a stack nothing names left: whether they were used up or
+    /// traded away is the player's to say. No cost until they place it.
+    NotPlaced,
+}
+
+/// How exactly a measured amount is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostPrecision {
+    Exact,
+    /// It rests on values the account site truncated to the whole PEC.
+    WholePec,
+}
+
+/// One item's measured use within a bucket.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredCostLine {
+    pub kind: MeasuredCostLineKind,
+    pub item: String,
+    /// The units, for ammo burned and a consumable used up.
+    pub units: Nullable<i64>,
+    /// What the line measured, PED: its cost, except for a limited piece,
+    /// whose amount is the TT it lost (its set's markup prices it).
+    /// `null` for a line charged nothing.
+    pub amount: Nullable<f64>,
+    pub precision: Nullable<MeasuredCostPrecision>,
+    /// The markup applied, percent of TT: the acquisition markup recorded
+    /// for a consumable, or a limited piece's set markup.
+    pub markup_percent: Nullable<f64>,
+    /// Units used up of an item bought at markup, billed at TT: the
+    /// markup paid for them is not included.
+    pub markup_not_included: bool,
+    /// Why the line is no cost of the session's; `null` when it is one.
+    pub unpriced: Nullable<MeasuredCostUnpriced>,
+    /// For an overhead line, a ledger expense pegged to the session whose
+    /// description names the item: it may repeat this measured cost.
+    /// Neither figure is adjusted.
+    pub pegged_ledger_entry_id: Nullable<String>,
+    /// That entry's description, as the player wrote it.
+    pub pegged_ledger_entry_description: Nullable<String>,
+}
+
+/// The measured lines of one bucket.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredCostGroup {
+    pub bucket: MeasuredCostBucket,
+    pub lines: Vec<MeasuredCostLine>,
+}
+
+/// One part of a session's measured armour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredArmourPartKind {
+    /// Unlimited armour and plates, billed at the TT they lost.
+    Unlimited,
+    /// A confirmed limited set's pieces, at the TT they lost times its
+    /// markup.
+    LimitedSet,
+    /// What limited pieces no confirmed set holds lost: no price yet.
+    Unconfirmed,
+}
+
+/// One part of a session's measured armour, and what it billed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredArmourPart {
+    pub part: MeasuredArmourPartKind,
+    /// The limited set, for a set's part.
+    pub set_id: Nullable<i64>,
+    pub set_name: Nullable<String>,
+    pub markup_percent: Nullable<f64>,
+    /// The TT the part's pieces lost.
+    pub lost: f64,
+    pub lost_precision: MeasuredCostPrecision,
+    /// What the part billed; `null` while unpriced.
+    pub cost: Nullable<f64>,
+    pub cost_precision: Nullable<MeasuredCostPrecision>,
+}
+
+/// A session's measured costs, item by item, as the account readings
+/// measured them.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredCostDetail {
+    /// Cycled's buckets, then the overhead categories; only those holding
+    /// a line.
+    pub buckets: Vec<MeasuredCostGroup>,
+    /// Unlimited first, then each confirmed set by id, then what no
+    /// confirmed set holds.
+    pub armour_parts: Vec<MeasuredArmourPart>,
+}
+
+/// The session-detail cost split. A bucket the account readings measured
+/// is the measured amount (the weapon's whole, shots after the last kill
+/// included); the rest are tracked. The buckets add up to Cycled; the
+/// session's overhead is beside them, in its Net and never in Cycled.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CostBreakdown {
@@ -267,6 +503,54 @@ pub struct CostBreakdown {
     pub armour_cost: f64,
     /// Harvesting (tree cutting) swing decay.
     pub harvest_cost: f64,
+    /// The same buckets as the chat log tracked them, whatever the
+    /// readings measured: what a measured figure is compared with.
+    pub tracked: TrackedCostBreakdown,
+    /// What each bucket above rests on.
+    pub basis: CostBreakdownBasis,
+    /// When the measured buckets were measured across a gap in the
+    /// session's readings (a sign-in dropped, the app closed), shown clean
+    /// by the chat log: how long the gap was, in whole minutes (at least
+    /// one). Absent for any other session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_across_gap_minutes: Option<i64>,
+    /// Why each bucket above is not measured.
+    pub reasons: CostBreakdownReasons,
+    /// The session's overhead, every category added up.
+    pub overhead_cost: f64,
+    pub overhead: SessionOverhead,
+    /// The measured lines behind the figures; `null` unless the readings
+    /// measured the session.
+    pub measured: Nullable<MeasuredCostDetail>,
+    /// The session has hits no armour recording covers: its tracked armour
+    /// figure is not a figure to show.
+    pub armour_unrecorded: bool,
+}
+
+/// A session's cost buckets as the chat log tracked them. The weapon's is
+/// every shot fired: its kills' spend and the shots after the last kill,
+/// as the measured weapon counts them.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedCostBreakdown {
+    pub weapon_cost: f64,
+    pub heal_cost: f64,
+    pub consumable_cost: f64,
+    pub enhancer_cost: f64,
+    pub armour_cost: f64,
+    pub harvest_cost: f64,
+}
+
+/// What each bucket of a session's cost split rests on.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostBreakdownBasis {
+    pub weapon_cost: CostBasis,
+    pub heal_cost: CostBasis,
+    pub consumable_cost: CostBasis,
+    pub enhancer_cost: CostBasis,
+    pub armour_cost: CostBasis,
+    pub harvest_cost: CostBasis,
 }
 
 /// The session-detail headline summary.
@@ -280,6 +564,8 @@ pub struct SessionSummary {
     pub return_rate: f64,
     pub kills: i64,
     pub duration: i64,
+    /// What the session's cost rests on.
+    pub cost_basis: CostBasis,
     pub cost_breakdown: CostBreakdown,
 }
 
@@ -613,6 +899,46 @@ pub struct SessionDetail {
     pub skill_gains: Vec<SkillGain>,
     pub weapon_attribution: WeaponAttributionSummary,
     pub healing: HealingSessionSummary,
+    /// Each enhancer break the session kept, in the order they broke. A
+    /// priced break's cost is inside the enhancer bucket; an unpriced one
+    /// is in no figure, and says why.
+    pub enhancer_breaks: Vec<SessionEnhancerBreak>,
+}
+
+/// One enhancer break a session kept, and what it cost.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionEnhancerBreak {
+    pub enhancer_name: String,
+    /// The weapon the enhancer was fitted to.
+    pub weapon_name: String,
+    /// When it broke, epoch seconds.
+    pub observed_at: f64,
+    /// The Shrapnel the game returned for it, PED.
+    pub returned_ped: f64,
+    pub pricing: EnhancerBreakPricing,
+    /// The enhancer's TT, PED, where the game data lists it.
+    pub tt_ped: Nullable<f64>,
+    /// The markup it consumed, PED, where the player set one.
+    pub markup_ped: Nullable<f64>,
+    /// What it cost, PED: its TT and markup less the return. Null when it
+    /// is unpriced.
+    pub cost_ped: Nullable<f64>,
+}
+
+/// How far an enhancer break's cost is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum EnhancerBreakPricing {
+    /// Its TT and markup are known.
+    Priced,
+    /// Its TT is known and no markup is set: it costs its TT less the
+    /// return, without the markup.
+    MarkupNotSet,
+    /// The game data lists no TT for the enhancer: it has no cost.
+    TtUnknown,
+    /// The return exceeds the TT the game data lists: it has no cost.
+    ReturnAboveTt,
 }
 
 /// One catalogue mob name, as the declared-mob picker offers it.
@@ -719,6 +1045,7 @@ pub struct LifetimeStats {
     pub instance_count: i64,
     pub cycled: f64,
     pub loot_tt: f64,
+    /// Loot less Cycled and the instances' overhead.
     pub net: f64,
     pub return_rate: f64,
     pub pes: f64,
@@ -891,9 +1218,10 @@ pub struct TrackingSnapshot {
     pub weapon_damage_dealt: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weapon_cost: Option<f64>,
-    /// Armour and plate cost recorded against the session so far; part
-    /// of `cost`. It arrives when a repair or Trade Terminal reading is
-    /// recorded, not per hit.
+    /// Armour and plate cost against the session so far; part of `cost`.
+    /// What the account readings measured up to their latest reading when
+    /// they measured it; otherwise it arrives when a repair or Trade
+    /// Terminal reading is recorded, not per hit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub armour_cost: Option<f64>,
     /// `cost` split by what it was spent on, one line per weapon, healing
@@ -901,6 +1229,19 @@ pub struct TrackingSnapshot {
     /// to `cost`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cycled_breakdown: Option<Vec<CycledLine>>,
+    /// What the session cost beyond performing its activity (travel, field
+    /// logistics, what the app cannot place yet), as the account readings
+    /// measured it so far: in `net`, never in `cost`. Absent while none of
+    /// the costs rests on the readings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overhead_cost: Option<f64>,
+    /// When the costs the account readings measured run to: where they
+    /// measured a bucket, `cost` holds what they measured up to then and
+    /// the tracked cost of the play since. Absent while none of the costs
+    /// rests on the readings (the player is not signed in, or no reading
+    /// after the session's first has measured it yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub costs_measured_through: Option<String>,
     /// Expected loot over the whole `cost` at every looter basis; absent
     /// until a modelled shot.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2040,7 +2381,7 @@ async fn lifetime_stats(
         instance_count: family.instance_count,
         cycled: round_half_even(family.cycled, 2),
         loot_tt: round_half_even(family.loot_tt, 2),
-        net: round_half_even(family.loot_tt - family.cycled, 2),
+        net: round_half_even(family.loot_tt - family.cycled - family.overhead, 2),
         // The ratio of the summed parts, never the mean of the
         // per-instance rates. Zero spend reads as zero, matching the
         // instance figure's own rule.
@@ -2280,6 +2621,10 @@ pub(crate) async fn build_snapshot_value(
                     .iter()
                     .map(CycledLine::from)
                     .collect::<Vec<_>>(),
+                "overheadCost": active.overhead_cost,
+                "costsMeasuredThrough": active
+                    .costs_measured_through
+                    .map(eo_services::time::to_iso_utc),
                 "expectedCycle": active.expected_cycle.as_ref().map(LiveExpectedCycle::from),
                 "expectedTtRate": active.expected_tt_rate,
                 "expectedReturnCoverage": active.expected_return_coverage,
@@ -2353,4 +2698,36 @@ pub(crate) async fn build_snapshot_value(
         }
     };
     Ok(project(&value, &SNAPSHOT_FIELDS))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CostReason;
+    use eo_services::session_costs::TrackedReason;
+
+    /// Every reason the resolver gives a bucket or an overhead category,
+    /// stored or not, is one the wire names, and the wire names no other: a reason added on one side
+    /// alone fails here, never at a session's detail.
+    #[test]
+    fn every_resolved_reason_is_one_wire_reason() {
+        // The overhead's own reason beside them: a category changed in the
+        // gap a session was measured across.
+        let resolved: Vec<&str> = std::iter::once(TrackedReason::NoMeasuredCosts)
+            .chain(TrackedReason::STORED)
+            .map(TrackedReason::as_str)
+            .chain(["overheadInGap"])
+            .collect();
+        for reason in &resolved {
+            let wire: CostReason = serde_json::from_value(serde_json::json!(reason))
+                .unwrap_or_else(|_| panic!("{reason} has no wire reason"));
+            assert_eq!(serde_json::to_value(wire).unwrap(), *reason);
+        }
+        let schema = serde_json::to_value(schemars::schema_for!(CostReason)).unwrap();
+        let named = schema["enum"]
+            .as_array()
+            .map(|values| values.len())
+            .or_else(|| schema["oneOf"].as_array().map(|values| values.len()))
+            .expect("a closed set");
+        assert_eq!(named, resolved.len());
+    }
 }

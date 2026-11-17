@@ -6,7 +6,12 @@
  */
 
 import { getAnalyticsOverview } from '$lib/api';
-import type { MonthlyEntry, OverviewStats, TimelineDay } from '$lib/types/analytics';
+import type {
+	LossesBreakdown,
+	MonthlyEntry,
+	OverviewStats,
+	TimelineDay,
+} from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
 import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyticsRange';
 
@@ -48,6 +53,45 @@ export function labelFor(key: string): string {
 
 function colorFor(key: string): string {
 	return segmentColors[key] || '#94a3b8';
+}
+
+/** The sessions' overhead in the window, by category: what they cost
+ * beyond performing their activities. A band of the losses of its own,
+ * beside Cycled and never inside it. */
+export interface OverheadBand {
+	total: number;
+	categories: { key: OverheadKey; label: string; ped: number }[];
+}
+
+type OverheadKey = 'travel' | 'fieldLogistics' | 'unclassified';
+
+const OVERHEAD_CATEGORIES: { key: OverheadKey; label: string }[] = [
+	{ key: 'travel', label: 'Travel' },
+	{ key: 'fieldLogistics', label: 'Field logistics' },
+	{ key: 'unclassified', label: 'Unclassified' },
+];
+
+/** The overhead band of a window's losses, its categories in a fixed
+ * order and only those holding something; `null` when the window has no
+ * overhead. */
+export function overheadBand(losses: LossesBreakdown): OverheadBand | null {
+	if (losses.overhead.total <= 0) return null;
+	return {
+		total: losses.overhead.total,
+		categories: OVERHEAD_CATEGORIES.map(({ key, label }) => ({
+			key,
+			label,
+			ped: losses.overhead[key],
+		})).filter((category) => category.ped > 0),
+	};
+}
+
+/** The cumulative breakdown's totals, honouring the same tag toggles as
+ * the donut, so its Costs are the donut's losses and its Returns the
+ * donut's gains. */
+export interface BreakdownTotals {
+	returns: number;
+	costs: number;
 }
 
 export interface PieView {
@@ -120,8 +164,10 @@ export function createOverviewModel() {
 		total += sumRecord(d.ledgerGains, config.gainTags);
 		return total;
 	}
+	// Losses are Cycled, the sessions' overhead, and the enabled ledger
+	// expenses; overhead is never part of Cycled.
 	function dayLosses(d: TimelineDay): number {
-		return d.trackingCost + sumRecord(d.ledgerLosses, config.lossTags);
+		return d.trackingCost + d.overheadCost + sumRecord(d.ledgerLosses, config.lossTags);
 	}
 	function monthGains(m: MonthlyEntry): number {
 		let total = m.lootTt + m.questItemTt;
@@ -129,8 +175,22 @@ export function createOverviewModel() {
 		return total;
 	}
 	function monthLosses(m: MonthlyEntry): number {
-		return m.trackingCost + sumRecord(m.ledgerLosses, config.lossTags);
+		return m.trackingCost + m.overheadCost + sumRecord(m.ledgerLosses, config.lossTags);
 	}
+
+	// The window's returns and costs under the current toggles: the donut
+	// and the cumulative breakdown both read these, so they cannot part.
+	const totals = $derived.by((): BreakdownTotals | null => {
+		if (!data) return null;
+		const rb = data.returnsBreakdown;
+		const lb = data.lossesBreakdown;
+		let returns = rb.lootTt + rb.questItemTt;
+		for (const [tag, amount] of Object.entries(rb.ledger)) {
+			if (config.gainTags[tag] && amount > 0) returns += amount;
+		}
+		const costs = lb.trackingCost + lb.overhead.total + sumRecord(lb.ledger, config.lossTags);
+		return { returns, costs };
+	});
 
 	const pieView = $derived.by((): PieView | null => {
 		if (!data) return null;
@@ -146,12 +206,7 @@ export function createOverviewModel() {
 		}
 
 		const gains = sources.reduce((sum, s) => sum + s.ped, 0);
-
-		// Build losses from config
-		let losses = data.lossesBreakdown.trackingCost;
-		for (const [tag, amount] of Object.entries(data.lossesBreakdown.ledger)) {
-			if (config.lossTags[tag]) losses += amount;
-		}
+		const losses = totals?.costs ?? 0;
 
 		if (losses <= 0 || gains <= 0) return null;
 
@@ -269,6 +324,14 @@ export function createOverviewModel() {
 		},
 		get pieView() {
 			return pieView;
+		},
+		/** The cumulative breakdown's totals: the donut's gains and losses. */
+		get totals() {
+			return totals;
+		},
+		/** The window's overhead band; `null` when it has none. */
+		get overheadBand() {
+			return data ? overheadBand(data.lossesBreakdown) : null;
 		},
 		get chartPoints() {
 			return chartPoints;

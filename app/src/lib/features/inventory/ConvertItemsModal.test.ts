@@ -2,6 +2,18 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+
+// The account reminder beside a conversion's amount reads the backend; here
+// the account has recorded nothing.
+vi.mock('$lib/api/inventory', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/api/inventory')>()),
+	getConversionFromAccount: vi.fn(async () => null),
+}));
+vi.mock('@tauri-apps/api/event', async (importOriginal) => ({
+	...(await importOriginal<typeof import('@tauri-apps/api/event')>()),
+	listen: vi.fn(async () => () => {}),
+}));
+
 import ConvertItemsModal from './ConvertItemsModal.svelte';
 import type { ConvertibleItem } from './conversionDraft';
 

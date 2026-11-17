@@ -47,14 +47,15 @@ const PROJECTIONS: [Projection; 12] = [
              expected_tt_mean_high, expected_tt_animal, expected_tt_animal_low, \
              expected_tt_animal_high, expected_tt_mutant, expected_tt_mutant_low, \
              expected_tt_mutant_high, expected_tt_robot, expected_tt_robot_low, \
-             expected_tt_robot_high \
+             expected_tt_robot_high, overhead_cost \
              FROM session_summaries ORDER BY session_id",
     },
     Projection {
         table: "daily_rollups",
         snapshot_sql: "SELECT day, rollup_version, dirty, has_rows, loot_tt, weapon_cost, \
              enhancer_cost, armour_cost, heal_cost, dangling_cost, skill_tt, codex_pes, \
-             quest_pes, harvest_loot_tt, harvest_cost, consumable_cost FROM daily_rollups \
+             quest_pes, harvest_loot_tt, harvest_cost, consumable_cost, overhead_travel, \
+             overhead_field_logistics, overhead_unclassified FROM daily_rollups \
              ORDER BY day",
     },
     Projection {

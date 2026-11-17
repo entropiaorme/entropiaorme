@@ -34,9 +34,15 @@ fn is_missing_table(error: &rusqlite::Error) -> bool {
 // hit count; to 6 when consumed doses joined cycledPed as their own bucket;
 // to 7 when a mob's shown name became the game's own (name, then maturity),
 // so the dominant and primary mob names read as the kills now do; to 8 when a
-// quest reward claimed at a hand-in stopped counting as a kill.
+// quest reward claimed at a hand-in stopped counting as a kill; to 9 when a
+// bucket the account readings measured became the session's cost
+// (`crate::session_costs`); to 10 when an enhancer break became a cost (its
+// TT and markup less its returned Shrapnel), carried by its kill or, after
+// the last kill, by the session (`crate::enhancer_breaks`); to 11 when the
+// session's measured overhead (`overhead_cost`) joined it beside Cycled,
+// for the readers that show its Costs and Net.
 // A below-version row heals on the next read.
-pub const SUMMARY_VERSION: i64 = 8;
+pub const SUMMARY_VERSION: i64 = 11;
 pub const DOMINANCE_THRESHOLD: f64 = 0.6;
 
 /// What a session's kills add up to: the sums and per-kill extremes a
@@ -49,7 +55,6 @@ pub const DOMINANCE_THRESHOLD: f64 = 0.6;
 struct KillTotals {
     kills: i64,
     loot_tt: f64,
-    enhancer_cost: f64,
     damage_total: f64,
     damage_max: f64,
     shots: i64,
@@ -64,11 +69,11 @@ struct KillTotals {
 impl KillTotals {
     fn read(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<Self> {
         conn.query_row(
-            // every-kill: spend (loot, enhancer, damage, shots and crits sum
+            // every-kill: spend (loot, damage, shots and crits sum
             // every row; the count, the per-kill extremes, the globals and
             // the multipliers take only the rows still counted as kills).
             "SELECT COUNT(CASE WHEN counted THEN 1 END), COALESCE(SUM(loot_total_ped), 0), \
-               COALESCE(SUM(enhancer_cost), 0), COALESCE(SUM(damage_dealt), 0), \
+               COALESCE(SUM(damage_dealt), 0), \
                COALESCE(MAX(CASE WHEN counted THEN damage_dealt END), 0), \
                COALESCE(SUM(shots_fired), 0), COALESCE(SUM(critical_hits), 0), \
                COALESCE(SUM(CASE WHEN counted THEN is_global END), 0), \
@@ -84,16 +89,15 @@ impl KillTotals {
                 Ok(Self {
                     kills: row.get(0)?,
                     loot_tt: row.get(1)?,
-                    enhancer_cost: row.get(2)?,
-                    damage_total: row.get(3)?,
-                    damage_max: row.get(4)?,
-                    shots: row.get(5)?,
-                    crits: row.get(6)?,
-                    globals: row.get(7)?,
-                    hofs: row.get(8)?,
-                    multiplier_sum: row.get(9)?,
-                    multiplier_count: row.get(10)?,
-                    multiplier_max: row.get(11)?,
+                    damage_total: row.get(2)?,
+                    damage_max: row.get(3)?,
+                    shots: row.get(4)?,
+                    crits: row.get(5)?,
+                    globals: row.get(6)?,
+                    hofs: row.get(7)?,
+                    multiplier_sum: row.get(8)?,
+                    multiplier_count: row.get(9)?,
+                    multiplier_max: row.get(10)?,
                 })
             },
         )
@@ -138,36 +142,20 @@ pub fn compute_session_summary(
 ) -> Result<Option<Map<String, Value>>, DbError> {
     let session = conn
         .query_row(
-            "SELECT started_at, ended_at, \
-             COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0), \
-             session_name, skill_boost_percent, COALESCE(consumable_cost, 0) \
+            "SELECT started_at, ended_at, session_name, skill_boost_percent \
              FROM tracking_sessions WHERE id = ? AND ended_at IS NOT NULL",
             rusqlite::params![session_id],
             |row| {
                 Ok((
                     row.get::<_, f64>(0)?,
                     row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, f64>(3)?,
-                    row.get::<_, f64>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
-                    row.get::<_, f64>(7)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
                 ))
             },
         )
         .optional()?;
-    let Some((
-        started_at,
-        ended_at,
-        armour_cost,
-        heal_cost,
-        dangling_cost,
-        session_name,
-        skill_boost_percent,
-        consumable_cost,
-    )) = session
-    else {
+    let Some((started_at, ended_at, session_name, skill_boost_percent)) = session else {
         return Ok(None);
     };
 
@@ -195,20 +183,22 @@ pub fn compute_session_summary(
     }
 
     let kill_totals = KillTotals::read(conn, session_id)?;
-    let (kills, kill_loot_tt, enhancer_cost) = (
-        kill_totals.kills,
-        kill_totals.loot_tt,
-        kill_totals.enhancer_cost,
-    );
+    let (kills, kill_loot_tt) = (kill_totals.kills, kill_totals.loot_tt);
+    // The session's costs, bucket by bucket, as resolved: a bucket the
+    // account readings measured is the measured amount. Its overhead is
+    // kept beside Cycled, never in it.
+    let resolution = crate::session_costs::resolve(conn, session_id)?;
+    let costs = resolution.resolved;
+    let overhead = resolution.overhead.total();
     let last_kill = LastKill::read(conn, session_id)?;
 
     // Harvesting (tree cutting) swings: wood TT is liquid loot and
     // swing decay is cycled spend, so both join the session economy
     // (`lootTt` / `cycledPed`) beside their own explicit columns.
-    let (harvest_swings, harvest_successes, harvest_loot_tt, harvest_cost) = conn.query_row(
+    let (harvest_swings, harvest_successes, harvest_loot_tt) = conn.query_row(
         "SELECT COUNT(*), \
            COALESCE(SUM(CASE WHEN success != 0 THEN 1 ELSE 0 END), 0), \
-           COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(cost_ped), 0) \
+           COALESCE(SUM(loot_total_ped), 0) \
          FROM harvest_events WHERE session_id = ?",
         rusqlite::params![session_id],
         |row| {
@@ -216,21 +206,10 @@ pub fn compute_session_summary(
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, f64>(2)?,
-                row.get::<_, f64>(3)?,
             ))
         },
     )?;
     let loot_tt = kill_loot_tt + harvest_loot_tt;
-
-    let weapon_cost: f64 = conn.query_row(
-        // every-kill: spend (a claimed arrival's shots are real spend).
-        "SELECT COALESCE(SUM(COALESCE(ts.cost_per_shot, 0) * COALESCE(ts.shots_fired, 0)), 0) \
-         FROM kill_tool_stats ts \
-         JOIN kills k ON k.id = ts.kill_id \
-         WHERE k.session_id = ?",
-        rusqlite::params![session_id],
-        |row| row.get::<_, f64>(0),
-    )?;
 
     // Mob dominance is computed over species-bearing stamps only: a legacy
     // tag-mode kill carries the tag in mob_name with an empty species, and
@@ -378,17 +357,13 @@ pub fn compute_session_summary(
     }
 
     let duration_hours = ((ended_at - started_at) / 3600.0).max(0.0);
-    let cycled_ped = weapon_cost
-        + enhancer_cost
-        + armour_cost
-        + heal_cost
-        + consumable_cost
-        + dangling_cost
-        + harvest_cost;
+    let cycled_ped = costs.cycled();
     let regular_skill_tt: f64 = regular_skill_ped.values().filter_map(Value::as_f64).sum();
     let attribute_levels_total: f64 = attribute_levels.values().filter_map(Value::as_f64).sum();
 
-    if cycled_ped <= 0.0 || duration_hours <= 0.0 {
+    // A session that cost anything is summarised: Cycled, or overhead alone
+    // (a trip that fought nothing still cost its teleports).
+    if (cycled_ped <= 0.0 && overhead <= 0.0) || duration_hours <= 0.0 {
         return Ok(None);
     }
 
@@ -397,12 +372,12 @@ pub fn compute_session_summary(
     summary.insert("startedAt".into(), Value::from(started_at));
     summary.insert("endedAt".into(), Value::from(ended_at));
     summary.insert("durationHours".into(), Value::from(duration_hours));
-    summary.insert("armourCost".into(), Value::from(armour_cost));
-    summary.insert("healCost".into(), Value::from(heal_cost));
-    summary.insert("consumableCost".into(), Value::from(consumable_cost));
-    summary.insert("danglingCost".into(), Value::from(dangling_cost));
-    summary.insert("weaponCost".into(), Value::from(weapon_cost));
-    summary.insert("enhancerCost".into(), Value::from(enhancer_cost));
+    summary.insert("armourCost".into(), Value::from(costs.armour));
+    summary.insert("healCost".into(), Value::from(costs.heal));
+    summary.insert("consumableCost".into(), Value::from(costs.consumable));
+    summary.insert("danglingCost".into(), Value::from(costs.dangling));
+    summary.insert("weaponCost".into(), Value::from(costs.weapon));
+    summary.insert("enhancerCost".into(), Value::from(costs.enhancer));
     summary.insert("kills".into(), Value::from(kills));
     summary.insert("lootTt".into(), Value::from(loot_tt));
     summary.insert("regularSkillPed".into(), Value::Object(regular_skill_ped));
@@ -430,6 +405,10 @@ pub fn compute_session_summary(
         "cycledPed".into(),
         Value::from(round_half_even(cycled_ped, 4)),
     );
+    summary.insert(
+        "overheadCost".into(),
+        Value::from(round_half_even(overhead, 4)),
+    );
     // Activity/session-list read columns (SUMMARY_VERSION 2).
     summary.insert("dominantMobKills".into(), Value::from(dominant_mob_kills));
     summary.insert("dominantTagKills".into(), Value::from(0));
@@ -453,7 +432,7 @@ pub fn compute_session_summary(
     );
     summary.insert(
         "harvestCost".into(),
-        Value::from(round_half_even(harvest_cost, 4)),
+        Value::from(round_half_even(costs.harvest, 4)),
     );
     // Session facets (SUMMARY_VERSION 4), copied from the session row.
     summary.insert(
@@ -513,6 +492,9 @@ pub fn compute_session_summary(
 /// orphan-recovery paths run this inside their write transaction, so
 /// the computation reads the not-yet-committed session end stamp.
 pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> Result<(), DbError> {
+    // What the session's costs resolve to follows every write that moves
+    // them, tracked or measured.
+    crate::session_costs::refresh(conn, session_id)?;
     let Some(summary) = compute_session_summary(conn, session_id)? else {
         conn.execute(
             "DELETE FROM session_summaries WHERE session_id = ?",
@@ -529,7 +511,7 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
     let expected = expected_columns(crate::session_expectation::compute(
         conn,
         session_id,
-        summary["cycledPed"].as_f64().unwrap_or(0.0),
+        tracked_cycled(conn, session_id)?,
     )?);
     conn.execute(
         "INSERT OR REPLACE INTO session_summaries (\
@@ -547,11 +529,12 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
          expected_tt_mean, expected_tt_mean_low, expected_tt_mean_high, \
          expected_tt_animal, expected_tt_animal_low, expected_tt_animal_high, \
          expected_tt_mutant, expected_tt_mutant_low, expected_tt_mutant_high, \
-         expected_tt_robot, expected_tt_robot_low, expected_tt_robot_high, computed_at) \
+         expected_tt_robot, expected_tt_robot_low, expected_tt_robot_high, overhead_cost, \
+         computed_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             summary["id"].as_str(),
             SUMMARY_VERSION,
@@ -611,9 +594,20 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
             expected[9],
             expected[10],
             expected[11],
+            summary["overheadCost"].as_f64(),
         ],
     )?;
     Ok(())
+}
+
+/// The Cycled a session's expected loot is bounded by: the tracked one,
+/// as the summary rounds Cycled, so an expected figure rests on the model's
+/// inputs alone and never moves with what the readings measured.
+fn tracked_cycled(conn: &rusqlite::Connection, session_id: &str) -> Result<f64, DbError> {
+    Ok(round_half_even(
+        crate::session_costs::tracked(conn, session_id)?.cycled(),
+        4,
+    ))
 }
 
 /// The session's expected loot as its twelve summary columns, in column
@@ -660,18 +654,18 @@ pub fn write_session_expectation(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<(), DbError> {
-    let cycled: Option<f64> = conn
-        .query_row(
-            "SELECT cycled_ped FROM session_summaries WHERE session_id = ?",
-            rusqlite::params![session_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(cycled) = cycled else {
+    let summarised: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM session_summaries WHERE session_id = ?)",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )?;
+    if !summarised {
         return Ok(());
-    };
+    }
     let expected = expected_columns(crate::session_expectation::compute(
-        conn, session_id, cycled,
+        conn,
+        session_id,
+        tracked_cycled(conn, session_id)?,
     )?);
     conn.execute(
         "UPDATE session_summaries SET \
@@ -706,27 +700,20 @@ pub fn write_session_expectation(
 /// the Activity / session-list reads); once the rows converge it finds nothing
 /// and is cheap.
 pub fn heal_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
+    // A session whose measured costs moved since its summary was written
+    // is rewritten first, with everything else derived from its costs.
+    crate::session_costs::heal(conn)?;
     let missing: Vec<String> = {
-        // every-kill: spend (whether a session spent anything, every row's).
-        let mut stmt = conn.prepare(
+        // An ended session is owed a summary when it cost anything,
+        // tracked or measured.
+        let mut stmt = conn.prepare(&format!(
             "SELECT s.id FROM tracking_sessions s \
              LEFT JOIN session_summaries ss ON ss.session_id = s.id \
              WHERE s.ended_at IS NOT NULL \
              AND (ss.summary_version < ?1 OR (ss.session_id IS NULL \
-               AND s.ended_at > s.started_at \
-               AND (COALESCE(s.armour_cost, 0) > 0 \
-                 OR COALESCE(s.heal_cost, 0) > 0 \
-                 OR COALESCE(s.consumable_cost, 0) > 0 \
-                 OR COALESCE(s.dangling_cost, 0) > 0 \
-                 OR EXISTS (SELECT 1 FROM kills k \
-                            WHERE k.session_id = s.id AND k.enhancer_cost > 0) \
-                 OR EXISTS (SELECT 1 FROM kills k JOIN kill_tool_stats ts ON ts.kill_id = k.id \
-                            WHERE k.session_id = s.id \
-                              AND COALESCE(ts.cost_per_shot, 0) \
-                                  * COALESCE(ts.shots_fired, 0) > 0) \
-                 OR EXISTS (SELECT 1 FROM harvest_events h \
-                            WHERE h.session_id = s.id AND h.cost_ped > 0))))",
-        )?;
+               AND s.ended_at > s.started_at AND {}))",
+            crate::session_costs::spent_anything_sql("s")
+        ))?;
         let rows = stmt.query_map(rusqlite::params![SUMMARY_VERSION], |row| {
             row.get::<_, String>(0)
         })?;

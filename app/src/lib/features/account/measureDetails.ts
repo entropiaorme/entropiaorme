@@ -1,7 +1,8 @@
 /**
- * A session measure's details in plain words: wear item by item, repairs,
- * other consumption, the ammo by type, what left with nothing to explain
- * it, and the notable events in time order.
+ * A session measure's details in plain words: wear item by item, repairs
+ * (which settle wear and are never a cost), other consumption, the ammo by
+ * type, what left with nothing to explain it, and the notable events in
+ * time order.
  *
  * Times are those of the reading that saw the change, local, shown by the
  * app's time format, with the date as well when they span several days.
@@ -124,8 +125,8 @@ export function eventSentence(event: MeasuredEvent): string {
 			return `Converted ${formatUnits(event.shrapnelUnits)} Shrapnel (${ped(event.shrapnel)}) into ${formatUnits(event.ammoUnits)} ammo (${ped(event.ammo)})`;
 		case 'listingSold':
 			return `Sold on the auction: ${quantityOf(event.item.name, event.units)}, ${ped(event.amount)}`;
-		case 'cardChanged':
-			return `The PED Card went from ${ped(event.from)} to ${ped(event.to)} with nothing to explain it`;
+		case 'ammoToppedUp':
+			return `${event.name} topped up: what was fired in that span is the tracked figure`;
 	}
 }
 
@@ -200,22 +201,24 @@ export interface RepairLine {
 	at: string;
 	what: string;
 	restored: string;
-	cost: string;
+	/** What the PED Card paid for it, as a cross-check against what it
+	 * restored; `null` when the Card does not show it. */
+	paid: string | null;
 }
 
-/** One repair: when, what it restored, and what it cost as far as the PED
- * Card shows it. */
+/** One repair: when, and what it restored. A repair settles wear the
+ * session already counts, so it is never a cost; what the PED Card paid
+ * for it is kept only as a cross-check. */
 export function repairLine(repair: MeasuredRepair, clock: ReadingClock): RepairLine {
 	const names = repair.items.map((item) => item.item.name);
-	let cost: string;
-	if (repair.cost.kind === 'paid') cost = ped(repair.cost.amount);
-	else if (repair.cost.kind === 'derived') cost = `about ${ped(repair.cost.amount)}`;
-	else cost = 'cost unknown';
+	let paid: string | null = null;
+	if (repair.cost.kind === 'paid') paid = `${ped(repair.cost.amount)} paid`;
+	else if (repair.cost.kind === 'derived') paid = `about ${ped(repair.cost.amount)} paid`;
 	return {
 		at: seenAt(repair.between, clock),
 		what: names.length > 0 ? listNames(names) : 'Repair',
 		restored: ped(repair.restored),
-		cost,
+		paid,
 	};
 }
 
@@ -254,7 +257,13 @@ export interface AmmoLine {
 
 /** Each ammo type: what burned and what else moved it, or, unsettled, its
  * net change and why no burned figure is shown. */
-export function ammoLines(ammo: readonly MeasuredAmmo[]): AmmoLine[] {
+export function ammoLines(
+	ammo: readonly MeasuredAmmo[],
+	events: readonly MeasuredEvent[] = [],
+): AmmoLine[] {
+	const toppedUp = new Set(
+		events.flatMap((event) => (event.kind === 'ammoToppedUp' ? [event.name] : [])),
+	);
 	return ammo.map((used) => {
 		if (used.split.kind === 'unsettled') {
 			return {
@@ -267,7 +276,11 @@ export function ammoLines(ammo: readonly MeasuredAmmo[]): AmmoLine[] {
 			};
 		}
 		const split = used.split;
-		const parts = [`${formatUnits(split.burnedUnits)} burned`];
+		const parts = [
+			toppedUp.has(used.name)
+				? `${formatUnits(split.burnedUnits)} burned outside the span it was topped up in, which is not measured`
+				: `${formatUnits(split.burnedUnits)} burned`,
+		];
 		if (split.strongboxUnits !== 0) {
 			parts.push(
 				`${formatUnits(split.strongboxUnits)} paid out by strongboxes (${ped(split.strongbox)})`,
@@ -280,7 +293,20 @@ export function ammoLines(ammo: readonly MeasuredAmmo[]): AmmoLine[] {
 	});
 }
 
-/** Whether a measure has anything to show under Details. */
+/** Whether any amount the details list rests on values the site rounds
+ * down to the PEC, so the list says each may be up to a PEC out. */
+export function listsWholePec(measure: AccountSessionMeasure): boolean {
+	const amounts: MeasuredAmount[] = [
+		...measure.decay.map((item) => item.decay),
+		...measure.otherConsumption.map((item) => item.amount),
+		...measure.unexplainedDepartures.map((item) => item.amount),
+		...measure.repairs.map((repair) => repair.restored),
+		...measure.ammo.flatMap((used) => (used.split.kind === 'settled' ? [used.split.burned] : [])),
+	];
+	return amounts.some((amount) => amount.precision === 'wholePec');
+}
+
+/** Whether a measure has anything to list item by item. */
 export function hasDetails(measure: AccountSessionMeasure): boolean {
 	return (
 		measure.ammo.length > 0 ||

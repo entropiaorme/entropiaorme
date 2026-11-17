@@ -56,7 +56,7 @@ export async function anchorBelow(
  * physical window origin is descaled to logical instead, and nothing is
  * rounded: the satellite re-centres against this as it resizes, so it keeps
  * the fractional precision. Field names (`centerX`, `top`) match the
- * existing armour-cost popup contract (`lib/windows/overlayArmourCost.ts`).
+ * sub-window contract (`lib/windows/subWindow.ts`).
  */
 export async function anchorCentreBelow(
 	anchor: HTMLElement,

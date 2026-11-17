@@ -634,8 +634,8 @@
 					{#if showsBucket(breakdown, 'armourCost')}
 						<span>Armour: <span class="text-text tabular-nums">{formatPed(breakdown.armourCost)}</span><CostBasisNote {breakdown} sessionBasis={costBasis} bucket="armourCost" /></span>
 					{:else if unrecordedHits > 0}
-						<span title={`${unrecordedHits} ${unrecordedHits === 1 ? 'hit awaits' : 'hits await'} an armour repair or reading, recorded from the overlay's Cost button`}>
-							Armour: <span class="text-warning">not recorded yet</span>
+						<span title={`Armour is billed from your account readings, and none were taken for this session's ${unrecordedHits} ${unrecordedHits === 1 ? 'hit' : 'hits'}`}>
+							Armour: <span class="text-warning">not measured</span>
 						</span>
 					{/if}
 					{#if showsBucket(breakdown, 'harvestCost')}

@@ -19,13 +19,6 @@ import { subWindowChannel } from './subWindow';
 /** The overlay's sub-window for menus and panels: one window, showing one
  * of the kinds below at a time (see `subWindow.ts` for how they behave). */
 export const OVERLAY_MENU_CHANNEL = subWindowChannel('overlay-menu', '/overlay-menu');
-/** The overlay's sub-window for an armour recording, which stays while the
- * player goes to the game: a window of its own, so a menu opened meanwhile
- * does not take its place. */
-export const OVERLAY_ARMOUR_COST_CHANNEL = subWindowChannel(
-	'overlay-armour-cost',
-	'/overlay-armour-cost',
-);
 /** What the player chose in a menu or panel. */
 export const OVERLAY_MENU_SELECT_EVENT = 'overlay-menu:select';
 
@@ -98,11 +91,6 @@ export function buildHeldToolState(
 		actions: display.actions,
 		declaring,
 	};
-}
-
-/** What an armour recording is opened with. */
-export interface OverlayArmourCostState {
-	repairOcrEnabled: boolean;
 }
 
 /** Where the session's mob comes from: what the screen reads now, what

@@ -36,10 +36,7 @@
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { PhysicalPosition } from '@tauri-apps/api/dpi';
 	import { listen } from '@tauri-apps/api/event';
-	import {
-		ARMOUR_COST_SUB_WINDOW as ARMOUR_COST,
-		createOverlaySubWindows
-	} from '$lib/windows/overlaySubWindows.svelte';
+	import { createOverlaySubWindows } from '$lib/windows/overlaySubWindows.svelte';
 	import { createWindowSizeSync } from '$lib/windows/windowSize';
 	import {
 		OVERLAY_MENU_SELECT_EVENT,
@@ -49,7 +46,6 @@
 		buildMobSourceState,
 		buildQuestHandInMenuState,
 		buildDefinitionMenuState,
-		type OverlayArmourCostState,
 		type OverlayMenuKind,
 		type OverlayMenuSelection,
 		type OverlayMenuState,
@@ -410,17 +406,6 @@
 		}
 	}
 
-	/** The armour recording: it stays while the player goes to the game to
-	 * repair or to place items in a terminal, centred under its control. */
-	function toggleArmourCost(event: MouseEvent) {
-		const anchor = event.currentTarget as HTMLElement | null;
-		if (!anchor) return;
-		return subWindows.toggleWith(
-			{ slot: 'armour', id: ARMOUR_COST, anchor, stays: true, align: 'centre' },
-			(): OverlayArmourCostState => ({ repairOcrEnabled: data.repairOcrEnabled === true })
-		);
-	}
-
 	/** The player's call on a standing weapon mismatch. A stale control (the
 	 * cue already resolved by a press) changes nothing; either way the
 	 * readout re-reads. */
@@ -768,7 +753,6 @@
 		selectingMob={mobEntry.selecting}
 		{mobSource}
 		{decidingWeapon}
-		armourCostOpen={subWindows.isOpen(ARMOUR_COST)}
 		definitionMenuOpen={overlayMenuKind === 'definition'}
 		savingDefinition={facets.savingDefinition}
 		definitionEditable={facets.definitionEditable}
@@ -785,7 +769,6 @@
 		onDefinitionTrigger={toggleDefinitionMenu}
 		onActivitiesTrigger={toggleActivitiesMenu}
 		onWeaponDecision={handleWeaponDecision}
-		onArmourCostToggle={toggleArmourCost}
 		{doses}
 		dosesMenuOpen={overlayMenuKind === 'consumables'}
 		onDosesTrigger={toggleDosesMenu}

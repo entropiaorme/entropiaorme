@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use eo_api::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
 use eo_api::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
     CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage,
@@ -1106,6 +1107,21 @@ pub async fn account_cost_placement_clear(
     item: String,
 ) -> Result<CostPlacementResult, ApiError> {
     facade(&app)?.account_cost_placement_clear(item).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_armour_pieces(
+    app: tauri::AppHandle,
+) -> Result<ArmourPiecesView, ApiError> {
+    facade(&app)?.account_armour_pieces().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_armour_piece_markup(
+    app: tauri::AppHandle,
+    input: ArmourPieceMarkupInput,
+) -> Result<ArmourPiecesView, ApiError> {
+    facade(&app)?.account_armour_piece_markup(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

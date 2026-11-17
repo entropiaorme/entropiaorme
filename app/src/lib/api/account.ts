@@ -73,6 +73,12 @@ export const placeCostItem = commands.accountCostPlace;
 /** Clear an item's placement; answered once the measured costs it moves
  * have been rebuilt. */
 export const clearCostPlacement = commands.accountCostPlacementClear;
+/** The limited armour and plates held, each with the markup it is billed
+ * at, and the items that may be declared one. */
+export const getArmourPieces = commands.accountArmourPieces;
+/** Set a limited piece's markup from now on (`null`: billed at TT); the
+ * first one set covers its wear from the start. */
+export const setArmourPieceMarkup = commands.accountArmourPieceMarkup;
 
 /** Plan a stock reconciliation from the latest account reading: the app's
  * quantity of each loose stackable beside the account's, kept as the draft

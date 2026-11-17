@@ -151,23 +151,6 @@
 				disabled={model.saving}
 			/>
 
-			<div class="border-y border-border/60 py-4">
-				<div class="flex items-start justify-between gap-6">
-					<div>
-						<p class="text-sm font-medium text-text">Armour costs</p>
-						<p class="mt-1 max-w-lg text-sm leading-6 text-text-secondary">
-							Record hits taken, so armour repairs and readings can be spread over this session.
-						</p>
-					</div>
-					<Toggle
-						checked={model.trackProtectionCosts}
-						label="Track armour costs"
-						disabled={model.saving}
-						onchange={(checked) => (model.trackProtectionCosts = checked)}
-					/>
-				</div>
-			</div>
-
 			<!-- Activities: the roster and its on-the-fly option, folded away
 				 behind one disclosure. What is authored here is what the
 				 overlay's Activities control offers while the session runs. -->

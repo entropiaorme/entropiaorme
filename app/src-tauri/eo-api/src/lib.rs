@@ -47,6 +47,7 @@ use eo_services::tracker::HuntTracker;
 use eo_services::weapon_review::WeaponReviewService;
 
 pub mod account;
+pub mod account_armour;
 pub mod account_minutes;
 pub mod account_proposals;
 pub mod account_reconciliation;

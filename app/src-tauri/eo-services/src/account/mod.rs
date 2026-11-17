@@ -45,6 +45,7 @@
 
 pub mod adoption;
 pub mod amount;
+pub mod armour;
 pub mod composite;
 pub mod costs;
 pub mod diff;

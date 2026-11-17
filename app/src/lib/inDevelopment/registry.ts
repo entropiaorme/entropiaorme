@@ -25,8 +25,8 @@ export const IN_DEVELOPMENT_SURFACES: readonly InDevelopmentSurface[] = [
 	{
 		id: 'limited-protection',
 		summary:
-			'Armour costs can be recorded, reviewed, undone and re-recorded, but recording has not yet been walked in live play.',
-		graduates: 'Recording has been walked in live play.',
+			'Limited armour and plates are read from the account and billed at the markup set for each piece, but this has not yet been walked in live play.',
+		graduates: 'Setting a markup and seeing a session billed by it has been walked in live play.',
 	},
 	{
 		id: 'account-readings',

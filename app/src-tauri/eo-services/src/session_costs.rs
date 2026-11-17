@@ -1710,6 +1710,14 @@ pub enum MeasuredArmourPart {
     },
     /// What limited pieces no confirmed set holds lost: no price yet.
     Unconfirmed { lost: (f64, MeasuredPrecision) },
+    /// One limited piece: the TT it lost, billed at the markup the player
+    /// set for it (in percent), or at that TT when none was set.
+    Piece {
+        item: String,
+        markup_percent: Option<f64>,
+        lost: (f64, MeasuredPrecision),
+        cost: (f64, MeasuredPrecision),
+    },
 }
 
 /// A session's measured costs item by item, as the readings measured them.
@@ -1717,8 +1725,7 @@ pub enum MeasuredArmourPart {
 pub struct MeasuredDetail {
     /// In the stored order: by bucket, kind and item.
     pub lines: Vec<MeasuredLine>,
-    /// Unlimited first, then each confirmed set by id, then what no
-    /// confirmed set holds.
+    /// Unlimited first, then each limited piece by name.
     pub armour: Vec<MeasuredArmourPart>,
 }
 
@@ -1765,16 +1772,18 @@ pub fn measured_detail(
         Option<i64>,
         Option<String>,
         Option<i64>,
+        bool,
         Option<i64>,
     );
     let raw: Vec<RawLine> = {
         let mut stmt = conn.prepare_cached(
             "SELECT l.bucket, l.kind, l.item_name, l.units, l.amount_micro_ped, l.precision, \
-                    l.markup_hundredths, l.reason, l.set_id, p.markup_hundredths \
+                    l.markup_hundredths, l.reason, l.set_id, q.item_name IS NOT NULL, \
+                    q.markup_hundredths \
              FROM account_session_cost_lines l \
-             LEFT JOIN account_session_cost_armour_parts p \
-                    ON p.session_id = l.session_id AND p.part = 'limitedSet' \
-                   AND p.set_id = l.set_id \
+             LEFT JOIN account_session_cost_armour_pieces q \
+                    ON q.session_id = l.session_id AND q.item_name = l.item_name \
+                   AND l.kind = 'limitedDecay' \
              WHERE l.session_id = ?1 ORDER BY l.position",
         )?;
         let rows = stmt.query_map([session_id], |row| {
@@ -1789,6 +1798,7 @@ pub fn measured_detail(
                 row.get(7)?,
                 row.get(8)?,
                 row.get(9)?,
+                row.get(10)?,
             ))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -1803,7 +1813,8 @@ pub fn measured_detail(
         markup,
         reason,
         set_id,
-        set_markup,
+        priced_as_piece,
+        piece_markup,
     ): RawLine|
      -> Result<MeasuredLine, String> {
         let bucket = StoredBucket::parse(&bucket).ok_or_else(|| unknown("bucket", &bucket))?;
@@ -1821,13 +1832,17 @@ pub fn measured_detail(
                 LinePricing::Unpriced(Unpriced::NotPlaced)
             }
             (_, Some(markup), None, None) => LinePricing::AtMarkup(markup as f64 / 100.0),
-            (MeasuredLineKind::LimitedDecay, None, None, None) => {
-                LinePricing::Unpriced(Unpriced::LimitedSetUnconfirmed)
+            // A limited piece is priced at the markup set for it, or at
+            // the TT it lost when none was.
+            (MeasuredLineKind::LimitedDecay, None, None, None) if priced_as_piece => {
+                match piece_markup {
+                    Some(markup) => LinePricing::AtMarkup(markup as f64 / 100.0),
+                    None => LinePricing::AtTt,
+                }
             }
-            (MeasuredLineKind::LimitedDecay, None, None, Some(_)) => match set_markup {
-                Some(markup) => LinePricing::AtMarkup(markup as f64 / 100.0),
-                None => return Err("a limited line's set has no part".to_string()),
-            },
+            (MeasuredLineKind::LimitedDecay, None, None, _) => {
+                return Err("a limited piece's line has no piece".to_string())
+            }
             (_, None, None, None) => LinePricing::AtTt,
             (_, _, Some(reason), _) => return Err(unknown("line reason", reason)),
             _ => return Err("a line's pricing is not one this module knows".to_string()),
@@ -1851,25 +1866,23 @@ pub fn measured_detail(
             }
         }
     }
-    type RawPart = (
-        String,
-        Option<i64>,
-        Option<String>,
-        i64,
-        String,
-        Option<i64>,
-        Option<i64>,
-        Option<String>,
-    );
-    let raw: Vec<RawPart> = {
+    // Unlimited armour first, then each limited piece by name.
+    let unlimited: Vec<(String, i64, String)> = {
         let mut stmt = conn.prepare_cached(
-            "SELECT p.part, p.set_id, s.name, p.lost_micro_ped, p.lost_precision, \
-                    p.markup_hundredths, p.amount_micro_ped, p.precision \
-             FROM account_session_cost_armour_parts p \
-             LEFT JOIN protection_sets s ON s.id = p.set_id \
-             WHERE p.session_id = ?1 \
-             ORDER BY CASE p.part WHEN 'unlimited' THEN 0 WHEN 'limitedSet' THEN 1 ELSE 2 END, \
-                      p.set_id",
+            "SELECT part, lost_micro_ped, lost_precision \
+             FROM account_session_cost_armour_parts WHERE session_id = ?1",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    type RawPiece = (String, i64, String, Option<i64>, i64, String);
+    let pieces: Vec<RawPiece> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT item_name, lost_micro_ped, lost_precision, markup_hundredths, \
+                    amount_micro_ped, precision \
+             FROM account_session_cost_armour_pieces WHERE session_id = ?1 ORDER BY item_name",
         )?;
         let rows = stmt.query_map([session_id], |row| {
             Ok((
@@ -1879,40 +1892,37 @@ pub fn measured_detail(
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
-                row.get(6)?,
-                row.get(7)?,
             ))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let decode_part = |(part, set_id, name, lost, lost_precision, markup, cost, precision): RawPart|
-     -> Result<MeasuredArmourPart, String> {
-        let lost = stored_amount(lost, &lost_precision, "armour lost")?;
-        Ok(match (part.as_str(), set_id, markup, cost, precision) {
-            ("unlimited", None, None, Some(_), Some(_)) => MeasuredArmourPart::Unlimited { lost },
-            ("limitedSet", Some(set_id), Some(markup), Some(cost), Some(precision)) => {
-                MeasuredArmourPart::Set {
-                    set_id,
-                    name,
-                    markup_percent: markup as f64 / 100.0,
-                    lost,
-                    cost: stored_amount(cost, &precision, "armour cost")?,
-                }
+    let decode = || -> Result<Vec<MeasuredArmourPart>, String> {
+        let mut armour = Vec::with_capacity(unlimited.len() + pieces.len());
+        for (part, lost, precision) in &unlimited {
+            if part != "unlimited" {
+                return Err(unknown("armour part", part));
             }
-            ("unconfirmed", None, None, None, None) => MeasuredArmourPart::Unconfirmed { lost },
-            _ => return Err(unknown("armour part", &part)),
-        })
-    };
-    let mut armour = Vec::with_capacity(raw.len());
-    for row in raw {
-        match decode_part(row) {
-            Ok(part) => armour.push(part),
-            Err(problem) => {
-                unreadable(session_id, &problem);
-                return Ok(None);
-            }
+            armour.push(MeasuredArmourPart::Unlimited {
+                lost: stored_amount(*lost, precision, "armour lost")?,
+            });
         }
-    }
+        for (item, lost, lost_precision, markup, cost, precision) in &pieces {
+            armour.push(MeasuredArmourPart::Piece {
+                item: item.clone(),
+                markup_percent: markup.map(|markup| markup as f64 / 100.0),
+                lost: stored_amount(*lost, lost_precision, "piece lost")?,
+                cost: stored_amount(*cost, precision, "piece cost")?,
+            });
+        }
+        Ok(armour)
+    };
+    let armour = match decode() {
+        Ok(armour) => armour,
+        Err(problem) => {
+            unreadable(session_id, &problem);
+            return Ok(None);
+        }
+    };
     Ok(Some(MeasuredDetail { lines, armour }))
 }
 

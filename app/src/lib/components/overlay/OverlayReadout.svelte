@@ -51,7 +51,6 @@
 		savingActivity = false,
 		activitiesMenuOpen = false,
 		decidingWeapon = false,
-		armourCostOpen = false,
 		definitionMenuOpen = false,
 		doses = null,
 		dosesMenuOpen = false,
@@ -69,7 +68,6 @@
 		onDefinitionTrigger = noop,
 		onActivitiesTrigger = noop,
 		onWeaponDecision = noop,
-		onArmourCostToggle = noop,
 		onDosesTrigger = noop,
 		onEquipmentTrigger = noop,
 		openPanel = null,
@@ -88,7 +86,6 @@
 		savingActivity?: boolean;
 		activitiesMenuOpen?: boolean;
 		decidingWeapon?: boolean;
-		armourCostOpen?: boolean;
 		definitionMenuOpen?: boolean;
 		/** The live dose readout, when this window shows one. */
 		doses?: DosesModel | null;
@@ -109,7 +106,6 @@
 		onDefinitionTrigger?: (anchor: HTMLButtonElement) => void | Promise<void>;
 		onActivitiesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 		onWeaponDecision?: (decision: WeaponMismatchDecision) => void | Promise<void>;
-		onArmourCostToggle?: (event: MouseEvent) => void | Promise<void>;
 		onDosesTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 		onEquipmentTrigger?: (anchor: HTMLElement) => void | Promise<void>;
 		/** The panel whose sub-window is open, if any. */
@@ -270,11 +266,6 @@
 {#snippet iconPill()}
 	<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
 		<rect x="3" y="8" width="18" height="8" rx="4" transform="rotate(-35 12 12)" /><path d="M9.4 8.2l5.2 7.6" />
-	</svg>
-{/snippet}
-{#snippet iconShield()}
-	<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true">
-		<path d="M12 3l7.5 2.8v5.4c0 4.6-3 8.2-7.5 9.8-4.500-1.600-7.500-5.200-7.500-9.800V5.800z" />
 	</svg>
 {/snippet}
 {#snippet iconCross()}
@@ -537,19 +528,6 @@
 				onToggle={(anchor) => onPanelTrigger('screenUnread', anchor)}
 			/>
 		{/if}
-		<!-- Armour cost: recorded when repairing or scanning, so it needs no
-			 running session. Quiet until reached for. -->
-		<button
-			type="button"
-			class="handle armour {armourCostOpen ? 'handle-on' : ''}"
-			aria-haspopup="dialog"
-			aria-expanded={armourCostOpen}
-			aria-label="Armour cost"
-			title="Record an armour repair or a limited set's reading"
-			onclick={onArmourCostToggle}
-		>
-			{@render iconShield()}
-		</button>
 	</div>
 
 	<!-- ============ The mob ============ -->
@@ -952,10 +930,6 @@
 	.decide:disabled {
 		opacity: 0.4;
 		cursor: default;
-	}
-	.armour {
-		margin-left: auto;
-		flex: none;
 	}
 
 	/* A name line that opens a sub-window: the toggle's own padding is

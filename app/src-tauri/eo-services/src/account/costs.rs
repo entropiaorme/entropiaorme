@@ -94,7 +94,7 @@ use crate::game_data_store::GameDataStore;
 // that priced it. Bumped to 5 when the PED Card stopped holding a
 // consumable's bucket back, and a weapon bucket whose ammo was topped up
 // came to be measured but for the steps it was topped up in.
-pub const COSTS_VERSION: i64 = 5;
+pub const COSTS_VERSION: i64 = 6;
 
 /// A group of costs, as the tracked figures group them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -608,10 +608,6 @@ pub struct CostLine {
     /// The units, for a line that counts them.
     pub units: Option<i64>,
     pub charge: Charge,
-    /// For a limited piece's line, the confirmed set whose markup prices
-    /// it; `None` while no confirmed set holds the piece, so the line has
-    /// no price yet.
-    pub set_id: Option<i64>,
 }
 
 impl CostLine {
@@ -622,30 +618,27 @@ impl CostLine {
 }
 
 /// One part of a session's armour as its readings bill it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArmourPart {
     /// Unlimited armour and plates, billed at the TT they lost.
     Unlimited { lost: Amount },
-    /// One limited set's confirmed pieces: the TT they lost, billed at the
-    /// set's markup, in hundredths of a percent.
-    Set {
-        set_id: i64,
+    /// One limited piece: the TT it lost, billed at the markup the player
+    /// set for it (in hundredths of a percent) when the session started,
+    /// or at that TT when none was set.
+    Piece {
+        item: String,
         lost: Amount,
-        markup_hundredths: i64,
+        markup_hundredths: Option<i64>,
         cost: Amount,
     },
-    /// The TT lost by limited pieces no confirmed set holds, which has no
-    /// price until their set is confirmed.
-    Unconfirmed { lost: Amount },
 }
 
 impl ArmourPart {
-    /// What the part bills, when it is priced.
-    pub fn cost(self) -> Option<Amount> {
+    /// What the part bills.
+    pub fn cost(&self) -> Amount {
         match self {
-            ArmourPart::Unlimited { lost } => Some(lost),
-            ArmourPart::Set { cost, .. } => Some(cost),
-            ArmourPart::Unconfirmed { .. } => None,
+            ArmourPart::Unlimited { lost } => *lost,
+            ArmourPart::Piece { cost, .. } => *cost,
         }
     }
 }
@@ -919,12 +912,6 @@ impl SessionCosts {
                 }
                 _ => Charge::AtTt(amount),
             };
-            let set_id = match kind {
-                LineKind::LimitedDecay => {
-                    roles.set_piece(&item, started_at).map(|piece| piece.set_id)
-                }
-                _ => None,
-            };
             charged.push(CostLine {
                 bucket,
                 category,
@@ -932,7 +919,6 @@ impl SessionCosts {
                 item,
                 units: kind.counts_units().then_some(units),
                 charge,
-                set_id,
             });
         }
         let lines = charged;
@@ -941,9 +927,6 @@ impl SessionCosts {
         } else {
             Vec::new()
         };
-        let unconfirmed = armour
-            .iter()
-            .any(|part| matches!(part, ArmourPart::Unconfirmed { .. }));
         let mut buckets = Vec::with_capacity(CostBucket::ALL.len());
         for bucket in CostBucket::ALL {
             let in_bucket = || lines.iter().filter(move |line| line.bucket == bucket);
@@ -953,8 +936,6 @@ impl SessionCosts {
                 Status::Measured | Status::AcrossGap(_) => {
                     if bucket == CostBucket::Weapon && ammo_unsettled {
                         Some(Unmeasured::AmmoUnsettled)
-                    } else if bucket == CostBucket::Armour && unconfirmed {
-                        Some(Unmeasured::LimitedSetUnconfirmed)
                     } else {
                         None
                     }
@@ -962,10 +943,10 @@ impl SessionCosts {
             };
             let basis = match reason {
                 Some(reason) => Basis::Unmeasured(reason),
-                // The armour is what its parts bill: a limited set's pieces
-                // at the set's markup, not at the TT their lines list.
+                // The armour is what its parts bill: a limited piece at its
+                // markup, not at the TT its line lists.
                 None if bucket == CostBucket::Armour => {
-                    Basis::Measured(Amount::total(armour.iter().filter_map(|part| part.cost()))?)
+                    Basis::Measured(Amount::total(armour.iter().map(ArmourPart::cost))?)
                 }
                 // Measured but for the steps the ammo was topped up in.
                 None if bucket == CostBucket::Weapon && !top_ups.is_empty() => {
@@ -996,51 +977,42 @@ impl SessionCosts {
 }
 
 /// A measured session's armour in parts, from its armour lines: the
-/// unlimited pieces' loss; each confirmed set's pieces' loss at its markup,
-/// for every set a piece belonged to when the session started (`at`), at
-/// nothing when none of its pieces fell; and the loss of limited pieces no
-/// confirmed set held then, when any fell.
+/// unlimited pieces' loss, at TT; then each limited piece's loss, at the
+/// markup the player set for it as it stood when the session started
+/// (`at`), or at TT when none was set, by name.
 fn armour_parts(
     lines: &[CostLine],
     roles: &KnownRoles,
     at: f64,
 ) -> Result<Vec<ArmourPart>, AccountError> {
     let mut unlimited = Amount::NONE;
-    let mut sets: BTreeMap<i64, (Amount, i64)> = roles
-        .confirmed_sets(at)
-        .into_iter()
-        .map(|(set_id, markup)| (set_id, (Amount::NONE, markup)))
-        .collect();
-    let mut unconfirmed: Option<Amount> = None;
+    let mut pieces: BTreeMap<String, Amount> = BTreeMap::new();
     for line in lines
         .iter()
         .filter(|line| line.bucket == CostBucket::Armour)
     {
         let lost = line.charge.amount().unwrap_or(Amount::NONE);
         match line.kind {
-            LineKind::LimitedDecay => match roles.set_piece(&line.item, at) {
-                Some(piece) => {
-                    let entry = sets
-                        .entry(piece.set_id)
-                        .or_insert((Amount::NONE, piece.markup_hundredths));
-                    entry.0 = entry.0.plus(lost)?;
-                }
-                None => unconfirmed = Some(unconfirmed.unwrap_or(Amount::NONE).plus(lost)?),
-            },
+            LineKind::LimitedDecay => {
+                let entry = pieces.entry(line.item.clone()).or_insert(Amount::NONE);
+                *entry = entry.plus(lost)?;
+            }
             _ => unlimited = unlimited.plus(lost)?,
         }
     }
     let mut parts = vec![ArmourPart::Unlimited { lost: unlimited }];
-    for (set_id, (lost, markup_hundredths)) in sets {
-        parts.push(ArmourPart::Set {
-            set_id,
+    for (item, lost) in pieces {
+        let markup_hundredths = roles.piece_markup(&item, at);
+        let cost = match markup_hundredths {
+            Some(markup) => at_markup(lost, markup)?,
+            None => lost,
+        };
+        parts.push(ArmourPart::Piece {
+            item,
             lost,
             markup_hundredths,
-            cost: at_markup(lost, markup_hundredths)?,
+            cost,
         });
-    }
-    if let Some(lost) = unconfirmed {
-        parts.push(ArmourPart::Unconfirmed { lost });
     }
     Ok(parts)
 }
@@ -1095,6 +1067,7 @@ pub fn clear(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<
         "account_session_cost_top_ups",
         "account_session_cost_gaps",
         "account_session_cost_armour_parts",
+        "account_session_cost_armour_pieces",
         "account_session_cost_lines",
         "account_session_cost_buckets",
         "account_session_costs",
@@ -1239,8 +1212,8 @@ pub fn store_costs(
     let mut insert = conn.prepare(
         "INSERT INTO account_session_cost_lines \
              (session_id, position, bucket, category, kind, item_name, units, \
-              amount_micro_ped, precision, markup_hundredths, reason, set_id) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              amount_micro_ped, precision, markup_hundredths, reason) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
     for (position, line) in costs.lines.iter().enumerate() {
         let (markup, reason) = match line.charge {
@@ -1263,7 +1236,6 @@ pub fn store_costs(
             amount.map(|amount| precision_str(amount.precision())),
             markup,
             reason,
-            line.set_id,
         ])?;
     }
     let mut insert = conn.prepare(
@@ -1273,34 +1245,44 @@ pub fn store_costs(
     for top_up in &costs.top_ups {
         insert.execute(rusqlite::params![session_id, top_up.from_ms, top_up.to_ms])?;
     }
-    let mut insert = conn.prepare(
+    let mut unlimited = conn.prepare(
         "INSERT INTO account_session_cost_armour_parts \
              (session_id, part, set_id, lost_micro_ped, lost_precision, markup_hundredths, \
               amount_micro_ped, precision) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, 'unlimited', NULL, ?2, ?3, NULL, ?2, ?3)",
+    )?;
+    let mut piece = conn.prepare(
+        "INSERT INTO account_session_cost_armour_pieces \
+             (session_id, item_name, lost_micro_ped, lost_precision, markup_hundredths, \
+              amount_micro_ped, precision) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )?;
     for part in &costs.armour {
-        let (kind, set_id, lost, markup) = match *part {
-            ArmourPart::Unlimited { lost } => ("unlimited", None, lost, None),
-            ArmourPart::Set {
-                set_id,
+        match part {
+            ArmourPart::Unlimited { lost } => {
+                unlimited.execute(rusqlite::params![
+                    session_id,
+                    lost.micro_ped(),
+                    precision_str(lost.precision()),
+                ])?;
+            }
+            ArmourPart::Piece {
+                item,
                 lost,
                 markup_hundredths,
-                ..
-            } => ("limitedSet", Some(set_id), lost, Some(markup_hundredths)),
-            ArmourPart::Unconfirmed { lost } => ("unconfirmed", None, lost, None),
-        };
-        let cost = part.cost();
-        insert.execute(rusqlite::params![
-            session_id,
-            kind,
-            set_id,
-            lost.micro_ped(),
-            precision_str(lost.precision()),
-            markup,
-            cost.map(Amount::micro_ped),
-            cost.map(|amount| precision_str(amount.precision())),
-        ])?;
+                cost,
+            } => {
+                piece.execute(rusqlite::params![
+                    session_id,
+                    item,
+                    lost.micro_ped(),
+                    precision_str(lost.precision()),
+                    markup_hundredths,
+                    cost.micro_ped(),
+                    precision_str(cost.precision()),
+                ])?;
+            }
+        }
     }
     Ok(true)
 }
@@ -1461,12 +1443,11 @@ fn read_stored(
         Option<String>,
         Option<i64>,
         Option<String>,
-        Option<i64>,
     );
     let raw_lines: Vec<RawLine> = {
         let mut stmt = conn.prepare(
             "SELECT bucket, category, kind, item_name, units, amount_micro_ped, precision, \
-                    markup_hundredths, reason, set_id \
+                    markup_hundredths, reason \
              FROM account_session_cost_lines WHERE session_id = ?1 ORDER BY position",
         )?;
         let rows = stmt
@@ -1481,16 +1462,13 @@ fn read_stored(
                     row.get(6)?,
                     row.get(7)?,
                     row.get(8)?,
-                    row.get(9)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
     let mut lines = Vec::with_capacity(raw_lines.len());
-    for (bucket, category, kind, item, units, amount, precision, markup, reason, set_id) in
-        raw_lines
-    {
+    for (bucket, category, kind, item, units, amount, precision, markup, reason) in raw_lines {
         let (Some(bucket), Some(category), Some(kind)) = (
             CostBucket::parse(&bucket),
             CostCategory::parse(&category),
@@ -1515,9 +1493,6 @@ fn read_stored(
             (None, None, Some(Some(reason))) => Charge::Nothing(reason),
             _ => return Ok(None),
         };
-        if set_id.is_some() && kind != LineKind::LimitedDecay {
-            return Ok(None);
-        }
         lines.push(CostLine {
             bucket,
             category,
@@ -1525,7 +1500,6 @@ fn read_stored(
             item,
             units,
             charge,
-            set_id,
         });
     }
     let Some(armour) = read_armour_parts(conn, session_id)? else {
@@ -1623,20 +1597,36 @@ fn read_armour_parts(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<Option<Vec<ArmourPart>>, AccountError> {
-    type RawPart = (
-        String,
-        Option<i64>,
-        i64,
-        String,
-        Option<i64>,
-        Option<i64>,
-        Option<String>,
-    );
-    let raw: Vec<RawPart> = {
+    let unlimited: Vec<(String, i64, String, Option<i64>, Option<i64>)> = {
         let mut stmt = conn.prepare(
-            "SELECT part, set_id, lost_micro_ped, lost_precision, markup_hundredths, \
-                    amount_micro_ped, precision \
+            "SELECT part, lost_micro_ped, lost_precision, set_id, amount_micro_ped \
              FROM account_session_cost_armour_parts WHERE session_id = ?1",
+        )?;
+        let rows = stmt
+            .query_map([session_id], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    let mut parts = Vec::with_capacity(unlimited.len());
+    for (part, lost, precision, set_id, amount) in unlimited {
+        let Some(lost) = amount_of(lost, &precision) else {
+            return Ok(None);
+        };
+        // Only unlimited armour is kept here; anything else is another
+        // version's, so the costs are rebuilt.
+        if part != "unlimited" || set_id.is_some() || amount != Some(lost.micro_ped()) {
+            return Ok(None);
+        }
+        parts.push(ArmourPart::Unlimited { lost });
+    }
+    type RawPiece = (String, i64, String, Option<i64>, i64, String);
+    let pieces: Vec<RawPiece> = {
+        let mut stmt = conn.prepare(
+            "SELECT item_name, lost_micro_ped, lost_precision, markup_hundredths, \
+                    amount_micro_ped, precision \
+             FROM account_session_cost_armour_pieces WHERE session_id = ?1 ORDER BY item_name",
         )?;
         let rows = stmt
             .query_map([session_id], |row| {
@@ -1647,42 +1637,25 @@ fn read_armour_parts(
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
-                    row.get(6)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
-    let mut parts = Vec::with_capacity(raw.len());
-    for (part, set_id, lost, lost_precision, markup, amount, precision) in raw {
-        let Some(lost) = amount_of(lost, &lost_precision) else {
+    for (item, lost, lost_precision, markup_hundredths, cost, precision) in pieces {
+        let (Some(lost), Some(cost)) = (
+            amount_of(lost, &lost_precision),
+            amount_of(cost, &precision),
+        ) else {
             return Ok(None);
         };
-        let cost = match (amount, precision) {
-            (Some(amount), Some(precision)) => match amount_of(amount, &precision) {
-                Some(amount) => Some(amount),
-                None => return Ok(None),
-            },
-            (None, None) => None,
-            _ => return Ok(None),
-        };
-        parts.push(match (part.as_str(), set_id, markup, cost) {
-            ("unlimited", None, None, Some(cost)) if cost == lost => ArmourPart::Unlimited { lost },
-            ("limitedSet", Some(set_id), Some(markup_hundredths), Some(cost)) => ArmourPart::Set {
-                set_id,
-                lost,
-                markup_hundredths,
-                cost,
-            },
-            ("unconfirmed", None, None, None) => ArmourPart::Unconfirmed { lost },
-            _ => return Ok(None),
+        parts.push(ArmourPart::Piece {
+            item,
+            lost,
+            markup_hundredths,
+            cost,
         });
     }
-    parts.sort_by_key(|part| match part {
-        ArmourPart::Unlimited { .. } => (0, 0),
-        ArmourPart::Set { set_id, .. } => (1, *set_id),
-        ArmourPart::Unconfirmed { .. } => (2, 0),
-    });
     Ok(Some(parts))
 }
 

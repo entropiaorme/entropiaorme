@@ -11,7 +11,6 @@
 import { listen } from '@tauri-apps/api/event';
 import { anchorForSubWindow, currentScreenBounds } from './anchor';
 import {
-	OVERLAY_ARMOUR_COST_CHANNEL,
 	OVERLAY_MENU_CHANNEL,
 	OVERLAY_MENU_MIN_WIDTH,
 } from './overlayMenu';
@@ -21,9 +20,6 @@ import { createSubWindowHost, type SubWindowRequest } from './subWindowHost.svel
 
 /** The gap between the overlay and a sub-window hung from it. */
 export const OVERLAY_SUB_WINDOW_GAP = 6;
-
-/** The armour recording's sub-window. */
-export const ARMOUR_COST_SUB_WINDOW = 'armourCost';
 
 export interface OverlaySubWindowDeps {
 	/** A sub-window could not be opened: say so. */
@@ -59,14 +55,9 @@ export function createOverlaySubWindows(deps: OverlaySubWindowDeps) {
 		creationTimeout: 'Popup window creation timed out',
 		readyTimeout: 'Popup route did not become ready',
 	});
-	const armourCostWindow = windowFor(OVERLAY_ARMOUR_COST_CHANNEL, 320, 64, {
-		creationTimeout: 'Armour cost popup creation timed out',
-		readyTimeout: 'Armour cost popup did not become ready',
-	});
 	const host = createSubWindowHost({
 		slots: {
 			menu: { window: menuWindow, channel: OVERLAY_MENU_CHANNEL },
-			armour: { window: armourCostWindow, channel: OVERLAY_ARMOUR_COST_CHANNEL },
 		},
 		gap: OVERLAY_SUB_WINDOW_GAP,
 		anchorOf: anchorForSubWindow,

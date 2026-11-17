@@ -16,24 +16,26 @@
 //! 2. the bundled game data (the weapon, amplifier, medical tool,
 //!    attachment, absorber, implant, harvesting tool, stimulant and
 //!    enhancer collections);
-//! 3. the item's own name: Universal Ammo is ammo, a name starting
-//!    `Armor Plating` is plating, `Mind Essence` is the mindforce fuel, a
+//! 3. the item's own name: Universal Ammo is ammo; a name ending in a
+//!    gender tag (`(M)`, `(F)`, `(M,L)`, `(F,L)`) is armour, the only worn
+//!    gear the game tags so (clothes carry the tag too, and never wear, so
+//!    they never cost anything); a name carrying `Armor Plating` or `Armor
+//!    Plate` is a plate; `Mind Essence` is the mindforce fuel, a
 //!    `Teleportation Chip` is one, and the portable repair and TT units are
 //!    field logistics;
-//! 4. the player's protection sets, whose names name a family of pieces
-//!    (`Pegasus` names `Pegasus Helmet (M,L)`);
-//! 5. how the reading holds it: the parent of an attached plate is armour,
+//! 4. how the reading holds it: the parent of an attached plate is armour,
 //!    and an item attached to a weapon is its amplifier or an attachment;
-//! 6. otherwise, a single item that wears is other equipment, and anything
+//! 5. otherwise, a single item that wears is other equipment, and anything
 //!    else is a material; neither has a category, so both cost as
-//!    unclassified.
+//!    unclassified. A plate the name does not show is placed by the player
+//!    (declared from the Armour tab), as any item nothing else places.
 //!
-//! Exact names (the library and the game data) answer before the
-//! protection sets' family names, so a set named after a maker cannot
-//! claim that maker's weapons. Armour and plates are limited when their
-//! name's tag says so (`(L)`, `(M,L)`) or their set is a limited one.
-//! Resolution only reads: nothing here writes the library, the sets, or
-//! the game data.
+//! A blueprint is never armour or a plate, whatever its name carries
+//! (`Pegasus Helmet (M,L) Blueprint (L)` is what a crafter holds, not what
+//! the avatar wears). Armour and plates are limited when their name's tag
+//! says so (`(L)`, `(M,L)`); each limited piece is priced at the markup the
+//! player set for it (see [`KnownRoles::piece_markup`]). Resolution only
+//! reads: nothing here writes the library, the markups, or the game data.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -46,7 +48,6 @@ use super::AccountError;
 use crate::bundled_tools::entity_name;
 use crate::consumables::consumable_profile_from_props;
 use crate::game_data_store::GameDataStore;
-use crate::protection::ProtectionSetKind;
 
 /// The one ammunition every weapon and chip now fires.
 pub const UNIVERSAL_AMMO: &str = "Universal Ammo";
@@ -63,8 +64,28 @@ pub fn is_strongbox(name: &str) -> bool {
     name.trim().to_ascii_lowercase().ends_with("strongbox")
 }
 
-/// The prefix every armour plate's name carries.
-const PLATING_PREFIX: &str = "Armor Plating";
+/// What an armour plate's name carries, lower-cased: `Armor Plating Mk.
+/// 5B (L)`, `Cyrene Acid Armor Plate (L)`.
+const PLATE_MARKS: &[&str] = &["armor plating", "armor plate"];
+
+/// Whether a name ends in the gender tag only armour and clothes carry:
+/// `(M)`, `(F)`, `(M,L)` or `(F,L)`, spaced or not.
+pub fn has_gender_tag(name: &str) -> bool {
+    let Some(inner) = name.trim().strip_suffix(')') else {
+        return false;
+    };
+    let Some(open) = inner.rfind('(') else {
+        return false;
+    };
+    let marks: Vec<&str> = inner[open + 1..].split(',').map(str::trim).collect();
+    matches!(marks.as_slice(), ["M" | "F"] | ["M" | "F", "L"])
+}
+
+/// Whether a name is an armour plate's by what it carries.
+fn names_a_plate(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    PLATE_MARKS.iter().any(|mark| lower.contains(mark))
+}
 
 /// The fuel mindforce chips burn.
 pub const MIND_ESSENCE: &str = "Mind Essence";
@@ -170,7 +191,7 @@ impl CostCategory {
     /// costs know but ammo (read from its own split), an enhancer (costed
     /// from the chat log) and limited armour (priced through its set's
     /// confirmed pieces); travel; field logistics; and no cost.
-    pub const PLACEABLE: [CostCategory; 13] = [
+    pub const PLACEABLE: [CostCategory; 15] = [
         CostCategory::Weapon,
         CostCategory::Amplifier,
         CostCategory::Attachment,
@@ -180,6 +201,8 @@ impl CostCategory {
         CostCategory::HealingConsumable,
         CostCategory::UnlimitedArmour,
         CostCategory::UnlimitedPlate,
+        CostCategory::LimitedArmour,
+        CostCategory::LimitedPlate,
         CostCategory::Consumable,
         CostCategory::Travel,
         CostCategory::FieldLogistics,
@@ -323,8 +346,6 @@ pub trait RoleSource {
     fn library_category(&self, name: &str) -> Option<CostCategory>;
     /// The category the bundled game data gives this exact name.
     fn catalogue_category(&self, name: &str) -> Option<CostCategory>;
-    /// The category a protection set's family name gives this name.
-    fn protection_category(&self, name: &str) -> Option<CostCategory>;
 
     /// The role the player's equipment library gives this exact name.
     fn library_role(&self, name: &str) -> Option<Role> {
@@ -333,10 +354,6 @@ pub trait RoleSource {
     /// The role the bundled game data gives this exact name.
     fn catalogue_role(&self, name: &str) -> Option<Role> {
         self.catalogue_category(name).map(CostCategory::role)
-    }
-    /// The role a protection set's family name gives this name.
-    fn protection_role(&self, name: &str) -> Option<Role> {
-        self.protection_category(name).map(CostCategory::role)
     }
     /// What the player chose for this consumable in the library, when the
     /// library holds it as one.
@@ -355,45 +372,29 @@ pub trait RoleSource {
     }
 }
 
-/// A confirmed piece of a limited set: the set, and the markup its pieces
-/// are billed at, in hundredths of a percent of TT.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SetPiece {
-    pub set_id: i64,
-    pub markup_hundredths: i64,
-}
-
-/// One confirmation of a piece as stored: the item's exact name, its set,
-/// the set's markup in percent, when it was confirmed, and when it ended
-/// (the piece removed, or its set taken out of use), if it has.
+/// One markup the player set for a limited piece, as stored: the item's
+/// exact name, the markup in percent (`None` returns the piece to its TT),
+/// when it applies from (`None` for the first one set, which covers the
+/// piece's wear from the start), and when it was set.
 #[derive(Debug, Clone, PartialEq)]
-pub struct PieceRow {
+pub struct PieceMarkup {
     pub item: String,
-    pub set_id: i64,
-    pub markup_percent: f64,
-    pub confirmed_at: f64,
-    pub removed_at: Option<f64>,
+    pub markup_percent: Option<f64>,
+    pub effective_from: Option<f64>,
+    pub set_at: f64,
 }
 
-/// One confirmation of a piece, as resolution reads it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct PieceSpan {
-    piece: SetPiece,
-    confirmed_at: f64,
-    removed_at: Option<f64>,
-}
-
-/// The player's library and sets and the bundled game data, read once.
+/// The player's library, placements and piece markups and the bundled
+/// game data, read once.
 #[derive(Debug, Clone)]
 pub struct KnownRoles {
     library: HashMap<String, CostCategory>,
     catalogue: HashMap<String, CostCategory>,
-    /// Lower-cased family name and the category its pieces take.
-    sets: Vec<(String, CostCategory)>,
     /// The library's consumables, by name, and how their doses book.
     doses: HashMap<String, DosePricing>,
-    /// Every confirmation of each piece, by exact name, oldest first.
-    pieces: HashMap<String, Vec<PieceSpan>>,
+    /// Every markup set for each limited piece, by exact name, in the
+    /// order they apply.
+    markups: HashMap<String, Vec<PieceMarkup>>,
     /// The player's own placements, by exact name.
     placements: HashMap<String, CostCategory>,
     /// The names the app has recorded as loot or holds as stock.
@@ -404,16 +405,15 @@ pub struct KnownRoles {
 }
 
 impl Default for KnownRoles {
-    /// Nothing known: no library, no sets, no game data.
+    /// Nothing known: no library, no markups, no game data.
     fn default() -> KnownRoles {
-        KnownRoles::from_parts(&[], &[], None)
+        KnownRoles::from_parts(&[], None)
     }
 }
 
 impl KnownRoles {
-    /// Read the equipment library and the protection sets (archived ones
-    /// too: they still name gear the player may hold), beside the bundled
-    /// game data when there is one.
+    /// Read the equipment library, the player's placements and the limited
+    /// pieces' markups, beside the bundled game data when there is one.
     pub fn read(
         conn: &rusqlite::Connection,
         game_data: Option<&GameDataStore>,
@@ -430,34 +430,22 @@ impl KnownRoles {
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        let sets = {
-            let mut stmt = conn.prepare("SELECT kind, name, economy_kind FROM protection_sets")?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
         let placements = super::placement::read_all(conn)?
             .into_iter()
             .map(|placed| (placed.item, placed.category))
             .collect::<Vec<_>>();
-        let pieces = {
+        let markups = {
             let mut stmt = conn.prepare(
-                "SELECT p.item_name, p.set_id, s.markup_percent, p.confirmed_at, p.removed_at \
-                 FROM protection_set_pieces p JOIN protection_sets s ON s.id = p.set_id \
-                 WHERE s.economy_kind = 'limited' AND s.markup_percent IS NOT NULL",
+                // id-order: insertion (values set at one instant keep their order)
+                "SELECT item_name, markup_percent, effective_from, set_at \
+                 FROM limited_piece_markups ORDER BY set_at, id",
             )?;
             let rows = stmt.query_map([], |row| {
-                Ok(PieceRow {
+                Ok(PieceMarkup {
                     item: row.get(0)?,
-                    set_id: row.get(1)?,
-                    markup_percent: row.get(2)?,
-                    confirmed_at: row.get(3)?,
-                    removed_at: row.get(4)?,
+                    markup_percent: row.get(1)?,
+                    effective_from: row.get(2)?,
+                    set_at: row.get(3)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -476,7 +464,7 @@ impl KnownRoles {
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
         Ok(
-            KnownRoles::with_placements(&library, &sets, &pieces, &placements, game_data)
+            KnownRoles::with_placements(&library, &markups, &placements, game_data)
                 .with_held(held),
         )
     }
@@ -505,42 +493,38 @@ impl KnownRoles {
         self
     }
 
-    /// Build from library rows `(name, item type, properties)`, protection
-    /// sets `(kind, name, economy kind)`, and the game data.
+    /// Build from library rows `(name, item type, properties)` and the game
+    /// data.
     pub fn from_parts(
         library: &[(String, String, String)],
-        sets: &[(String, String, String)],
         game_data: Option<&GameDataStore>,
     ) -> KnownRoles {
-        KnownRoles::with_pieces(library, sets, &[], game_data)
+        KnownRoles::with_markups(library, &[], game_data)
     }
 
-    /// [`KnownRoles::from_parts`], with every confirmation of the limited
-    /// sets' pieces.
-    pub fn with_pieces(
+    /// [`KnownRoles::from_parts`], with every markup set for a limited
+    /// piece.
+    pub fn with_markups(
         library: &[(String, String, String)],
-        sets: &[(String, String, String)],
-        pieces: &[PieceRow],
+        markups: &[PieceMarkup],
         game_data: Option<&GameDataStore>,
     ) -> KnownRoles {
-        KnownRoles::with_placements(library, sets, pieces, &[], game_data)
+        KnownRoles::with_placements(library, markups, &[], game_data)
     }
 
-    /// [`KnownRoles::with_pieces`], with the player's own placements
+    /// [`KnownRoles::with_markups`], with the player's own placements
     /// `(exact name, category)`.
     pub fn with_placements(
         library: &[(String, String, String)],
-        sets: &[(String, String, String)],
-        pieces: &[PieceRow],
+        markups: &[PieceMarkup],
         placements: &[(String, CostCategory)],
         game_data: Option<&GameDataStore>,
     ) -> KnownRoles {
         let mut known = KnownRoles {
             library: HashMap::new(),
             catalogue: HashMap::new(),
-            sets: Vec::new(),
             doses: HashMap::new(),
-            pieces: HashMap::new(),
+            markups: HashMap::new(),
             placements: placements
                 .iter()
                 .map(|(item, category)| (item.trim().to_string(), *category))
@@ -551,21 +535,6 @@ impl KnownRoles {
         for (name, item_type, properties) in library {
             known.add_library_entry(name, item_type, properties);
         }
-        for (kind, name, economy) in sets {
-            let category = if kind == ProtectionSetKind::Armour.as_str() {
-                CostCategory::UnlimitedArmour
-            } else if kind == ProtectionSetKind::Plates.as_str() {
-                CostCategory::UnlimitedPlate
-            } else {
-                continue;
-            };
-            let family = name.trim().to_lowercase();
-            if !family.is_empty() {
-                known
-                    .sets
-                    .push((family, category.limited_when(economy == "limited")));
-            }
-        }
         if let Some(store) = game_data {
             for (endpoint, category) in CATALOGUE_CATEGORIES {
                 for entity in store.get_entities(endpoint) {
@@ -575,56 +544,42 @@ impl KnownRoles {
                 }
             }
         }
-        for row in pieces {
+        for row in markups {
             known
-                .pieces
+                .markups
                 .entry(row.item.trim().to_string())
                 .or_default()
-                .push(PieceSpan {
-                    piece: SetPiece {
-                        set_id: row.set_id,
-                        markup_hundredths: (row.markup_percent * 100.0).round() as i64,
-                    },
-                    confirmed_at: row.confirmed_at,
-                    removed_at: row.removed_at,
-                });
+                .push(row.clone());
         }
-        for spans in known.pieces.values_mut() {
-            spans.sort_by(|a, b| {
-                a.confirmed_at
-                    .total_cmp(&b.confirmed_at)
-                    .then(a.piece.set_id.cmp(&b.piece.set_id))
+        // The first value set applies from the start; the rest in turn.
+        for rows in known.markups.values_mut() {
+            rows.sort_by(|a, b| {
+                a.effective_from
+                    .unwrap_or(f64::NEG_INFINITY)
+                    .total_cmp(&b.effective_from.unwrap_or(f64::NEG_INFINITY))
+                    .then(a.set_at.total_cmp(&b.set_at))
             });
         }
-        known.fingerprint = fingerprint(library, sets, pieces, placements, &known.catalogue);
+        known.fingerprint = fingerprint(library, markups, placements, &known.catalogue);
         known
     }
 
-    /// The set a name is a piece of for a session that started at `at`:
-    /// the earliest of its confirmations not ended by then. A session
-    /// played before a piece was first confirmed belongs to that first
-    /// confirmation, and one played after a confirmation ended to the next
-    /// one made, so a piece that moves to a new set leaves the sessions
-    /// billed under the old one with the old set.
-    pub fn set_piece(&self, name: &str, at: f64) -> Option<SetPiece> {
-        self.pieces
+    /// The markup a limited piece is billed at, in hundredths of a percent,
+    /// for wear in a session that started at `at`: the value in force then
+    /// (the first one set covers everything before it). `None` when no
+    /// markup was set for it, or the one in force returned it to TT: it is
+    /// billed at the TT it lost.
+    pub fn piece_markup(&self, name: &str, at: f64) -> Option<i64> {
+        self.markups
             .get(name.trim())?
             .iter()
-            .find(|span| span.removed_at.is_none_or(|removed| removed > at))
-            .map(|span| span.piece)
+            .rev()
+            .find(|row| row.effective_from.is_none_or(|from| from <= at))
+            .and_then(|row| row.markup_percent)
+            .map(|percent| (percent * 100.0).round() as i64)
     }
 
-    /// Every limited set some piece belongs to for a session that started
-    /// at `at`, by id, with its markup in hundredths of a percent.
-    pub fn confirmed_sets(&self, at: f64) -> BTreeMap<i64, i64> {
-        self.pieces
-            .keys()
-            .filter_map(|name| self.set_piece(name, at))
-            .map(|piece| (piece.set_id, piece.markup_hundredths))
-            .collect()
-    }
-
-    /// The digest of the library, sets and game data these roles were read
+    /// The digest of the library, markups and game data these roles were read
     /// from: what a figure derived from them names, so a later change to
     /// any of them shows it was derived from other roles.
     pub fn fingerprint(&self) -> &str {
@@ -680,8 +635,7 @@ impl KnownRoles {
 /// data's categories, each in a fixed order.
 fn fingerprint(
     library: &[(String, String, String)],
-    sets: &[(String, String, String)],
-    pieces: &[PieceRow],
+    markups: &[PieceMarkup],
     placements: &[(String, CostCategory)],
     catalogue: &HashMap<String, CostCategory>,
 ) -> String {
@@ -703,19 +657,13 @@ fn fingerprint(
             .collect(),
     );
     feed(
-        "sets",
-        sets.iter()
-            .map(|(kind, name, economy)| joined([kind, name, economy]))
-            .collect(),
-    );
-    feed(
-        "pieces",
-        pieces
+        "markups",
+        markups
             .iter()
             .map(|row| {
                 format!(
-                    "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{:?}",
-                    row.item, row.set_id, row.markup_percent, row.confirmed_at, row.removed_at
+                    "{}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
+                    row.item, row.markup_percent, row.effective_from, row.set_at
                 )
             })
             .collect(),
@@ -763,37 +711,6 @@ impl RoleSource for KnownRoles {
         self.catalogue.get(name.trim()).copied()
     }
 
-    /// The longest family name the item's name is, or starts with followed
-    /// by a space; none when two families of that length disagree.
-    fn protection_category(&self, name: &str) -> Option<CostCategory> {
-        let mut best: Option<(usize, Option<CostCategory>)> = None;
-        for (family, category) in &self.sets {
-            if !family_names(family, name) {
-                continue;
-            }
-            best = match best {
-                Some((length, _)) if family.len() < length => best,
-                Some((length, Some(held))) if family.len() == length && held != *category => {
-                    Some((length, None))
-                }
-                Some((length, None)) if family.len() == length => best,
-                _ => Some((family.len(), Some(*category))),
-            };
-        }
-        best.and_then(|(_, category)| category)
-    }
-}
-
-/// Whether a protection set's family name names an item: the item's name
-/// is the family, or starts with it followed by a space, ignoring case.
-pub fn family_names(family: &str, name: &str) -> bool {
-    let family = family.trim().to_lowercase();
-    let name = name.trim().to_lowercase();
-    !family.is_empty()
-        && (name == family
-            || name
-                .strip_prefix(family.as_str())
-                .is_some_and(|rest| rest.starts_with(' ')))
 }
 
 /// What the readings show about one name.
@@ -955,27 +872,36 @@ fn direct_role(source: &dyn RoleSource, name: &str) -> Option<Role> {
     known_category(source, name).map(CostCategory::role)
 }
 
+/// Whether a name is a blueprint's: it names one wherever the word stands.
+pub fn is_blueprint(name: &str) -> bool {
+    name.to_lowercase().contains("blueprint")
+}
+
 /// The category a name has from evidence about the name alone: the
-/// library, then the game data, then the name itself, then a protection
-/// set (limited when the set is or the name's tag says so).
+/// library, then the game data, then the name itself. A blueprint
+/// takes only what the library or the game data say of it, and never
+/// armour or a plate.
 pub fn known_category(source: &dyn RoleSource, name: &str) -> Option<CostCategory> {
+    if is_blueprint(name) {
+        return source
+            .library_category(name)
+            .or_else(|| source.catalogue_category(name))
+            .filter(|category| !matches!(category.role(), Role::Armour | Role::Plating));
+    }
     source
         .library_category(name)
         .or_else(|| source.catalogue_category(name))
         .or_else(|| name_category(name))
-        .or_else(|| {
-            source
-                .protection_category(name)
-                .map(|category| category.limited_when(name_is_limited(name)))
-        })
 }
 
 /// The category an item's own name gives it.
 fn name_category(name: &str) -> Option<CostCategory> {
     if name == UNIVERSAL_AMMO {
         Some(CostCategory::Ammo)
-    } else if name.starts_with(PLATING_PREFIX) {
+    } else if names_a_plate(name) {
         Some(CostCategory::UnlimitedPlate.limited_when(name_is_limited(name)))
+    } else if has_gender_tag(name) {
+        Some(CostCategory::UnlimitedArmour.limited_when(name_is_limited(name)))
     } else if name == MIND_ESSENCE {
         Some(CostCategory::MindEssence)
     } else if name.starts_with(TELEPORT_CHIP_PREFIX) {
@@ -1191,6 +1117,37 @@ mod tests {
         );
         assert_eq!(book.role("Frontier Combat Knife"), Role::Weapon);
         assert_eq!(book.role("Frontier Gloves, Adjusted (M)"), Role::Armour);
+    }
+
+    #[test]
+    fn a_blueprint_is_never_armour_or_a_plate_whatever_its_name_carries() {
+        let stand = Stand {
+            protection: vec![
+                ("Hyperion", CostCategory::LimitedArmour),
+                ("Cyrene Acid Armor Plate", CostCategory::LimitedPlate),
+            ],
+            ..Stand::default()
+        };
+        let book = RoleBook::resolve(
+            &stand,
+            &[reading(
+                0.0,
+                &[
+                    ("Hyperion Aurora GR-10 (L) Blueprint (L)", Container::Carried, 1, 1),
+                    ("Cyrene Acid Armor Plate (L) Blueprint", Container::Carried, 1, 1),
+                    ("Armor Plating Mk. 5B Blueprint (L)", Container::Carried, 1, 1),
+                    ("Hyperion Aurora GR-10 (L)", Container::Carried, 1, 400),
+                ],
+            )],
+        );
+        for name in [
+            "Hyperion Aurora GR-10 (L) Blueprint (L)",
+            "Cyrene Acid Armor Plate (L) Blueprint",
+            "Armor Plating Mk. 5B Blueprint (L)",
+        ] {
+            assert_eq!(book.role(name), Role::Material, "{name}");
+        }
+        assert_eq!(book.role("Hyperion Aurora GR-10 (L)"), Role::Armour);
     }
 
     #[test]

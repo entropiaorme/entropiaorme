@@ -456,6 +456,9 @@ pub enum MeasuredArmourPartKind {
     LimitedSet,
     /// What limited pieces no confirmed set holds lost: no price yet.
     Unconfirmed,
+    /// One limited piece, at the TT it lost times the markup set for it,
+    /// or at that TT when none was set.
+    LimitedPiece,
 }
 
 /// One part of a session's measured armour, and what it billed.
@@ -466,6 +469,9 @@ pub struct MeasuredArmourPart {
     /// The limited set, for a set's part.
     pub set_id: Nullable<i64>,
     pub set_name: Nullable<String>,
+    /// The limited piece, for a piece's part.
+    #[serde(default)]
+    pub item: Nullable<String>,
     pub markup_percent: Nullable<f64>,
     /// The TT the part's pieces lost.
     pub lost: f64,
@@ -483,8 +489,7 @@ pub struct MeasuredCostDetail {
     /// Cycled's buckets, then the overhead categories; only those holding
     /// a line.
     pub buckets: Vec<MeasuredCostGroup>,
-    /// Unlimited first, then each confirmed set by id, then what no
-    /// confirmed set holds.
+    /// Unlimited first, then each limited piece by name.
     pub armour_parts: Vec<MeasuredArmourPart>,
 }
 

@@ -23,7 +23,19 @@ use super::{
     account_error, map_constraint, ConfirmedPiece, ProtectionError, ProtectionService, SetPieces,
 };
 use crate::account::reading::Container;
-use crate::account::roles::{cost_category, family_names, name_is_limited, CostCategory, Use};
+use crate::account::roles::{cost_category, name_is_limited, CostCategory, Use};
+
+/// Whether a set's family name names an item: the item's name is the
+/// family, or starts with it followed by a space, ignoring case.
+fn family_names(family: &str, name: &str) -> bool {
+    let family = family.trim().to_lowercase();
+    let name = name.trim().to_lowercase();
+    !family.is_empty()
+        && (name == family
+            || name
+                .strip_prefix(family.as_str())
+                .is_some_and(|rest| rest.starts_with(' ')))
+}
 use crate::account::{KnownRoles, RoleBook};
 use crate::game_data_store::GameDataStore;
 

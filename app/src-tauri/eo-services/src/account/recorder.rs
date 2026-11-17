@@ -625,6 +625,37 @@ impl AccountRecorder {
         .await;
     }
 
+    /// The limited armour and plates the player holds, each with the
+    /// markup it is billed at, and the items that may be declared one.
+    pub async fn armour_pieces(&self) -> Result<super::armour::ArmourPieces, AccountError> {
+        let game_data = self.game_data.clone();
+        joined(
+            on_reader(&self.db, move |conn| {
+                let roles = super::roles::KnownRoles::read(conn, game_data.as_deref())?;
+                super::armour::pieces(conn, &roles)
+            })
+            .await,
+        )
+    }
+
+    /// Set the markup a limited piece is billed at from now on (`None`:
+    /// at TT), then rebuild every session's costs it left stale, as a
+    /// placement does. The caller has checked the markup.
+    pub async fn set_piece_markup(
+        &self,
+        item: String,
+        markup_percent: Option<f64>,
+    ) -> Result<Vec<String>, AccountError> {
+        let now = naive_to_epoch(self.clock.now());
+        joined(
+            on_writer(&self.db, move |conn| {
+                super::armour::set_markup(conn, &item, markup_percent, now)
+            })
+            .await,
+        )?;
+        self.rebuild_after_placement().await
+    }
+
     /// The items the measured sessions could not place, and the player's
     /// placements.
     pub async fn cost_placements(&self) -> Result<Placements, AccountError> {

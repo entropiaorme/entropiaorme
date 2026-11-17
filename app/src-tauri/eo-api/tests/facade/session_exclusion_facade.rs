@@ -956,6 +956,11 @@ const OTHER_COMMANDS: &[&str] = &[
     "account_cost_placements",
     "account_cost_place",
     "account_cost_placement_clear",
+    // The limited pieces held, each with the markup it is billed at: a
+    // markup moves a measured armour cost, which the statistics read
+    // through their own commands.
+    "account_armour_pieces",
+    "account_armour_piece_markup",
     // What the readings propose, and the readings a strongbox run asks
     // for: a proposal is a guess until the player records it through the
     // strongbox and listing commands (classified above), and a run's

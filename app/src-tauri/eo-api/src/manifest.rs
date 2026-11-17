@@ -13,6 +13,7 @@
 use schemars::schema_for;
 use serde_json::Value;
 
+use crate::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
 use crate::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
     CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage,
@@ -1310,6 +1311,19 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(CostPlacementResult))),
+        },
+        CommandSpec {
+            name: "account_armour_pieces",
+            args: vec![],
+            returns: Some(schema(schema_for!(ArmourPiecesView))),
+        },
+        CommandSpec {
+            name: "account_armour_piece_markup",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ArmourPieceMarkupInput)),
+            }],
+            returns: Some(schema(schema_for!(ArmourPiecesView))),
         },
         CommandSpec {
             name: "account_proposals",

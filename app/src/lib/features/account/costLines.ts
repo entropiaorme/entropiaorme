@@ -171,6 +171,13 @@ export function armourPartLine(part: MeasuredArmourPart): {
 		case 'unconfirmed':
 			label = 'Limited pieces in no confirmed set';
 			break;
+		case 'limitedPiece':
+			label = part.item ?? 'A limited piece';
+			detail +=
+				part.markupPercent !== null
+					? `, at ${markup(part.markupPercent)}`
+					: ', no markup set: billed at TT';
+			break;
 	}
 	const cost =
 		part.cost === null
@@ -244,6 +251,12 @@ export const PLACE_CHOICES: readonly PlaceChoice[] = [
 		group: 'cycled',
 		covers: ['unlimitedArmour', 'unlimitedPlate'],
 	},
+	{
+		label: 'Limited armour',
+		category: 'limitedArmour',
+		group: 'cycled',
+		covers: ['limitedArmour', 'limitedPlate'],
+	},
 	{ label: 'Consumable', category: 'consumable', group: 'cycled', covers: ['consumable'] },
 	{ label: 'Travel', category: 'travel', group: 'overhead', covers: ['travel'] },
 	{
@@ -266,6 +279,8 @@ export const PLACEMENT_LABELS: Record<CostPlacementCategory, string> = {
 	healingConsumable: 'Healing',
 	unlimitedArmour: 'Armour',
 	unlimitedPlate: 'Armour (plate)',
+	limitedArmour: 'Limited armour',
+	limitedPlate: 'Limited armour (plate)',
 	consumable: 'Consumable',
 	travel: 'Travel',
 	fieldLogistics: 'Field logistics',

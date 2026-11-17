@@ -9,8 +9,8 @@
 	import NotTracked from '$lib/features/equipment/NotTracked.svelte';
 	import HotbarPresetSwitcher from '$lib/features/equipment/HotbarPresetSwitcher.svelte';
 	import { createLibraryModel } from '$lib/features/equipment/libraryModel.svelte';
-	import ProtectionTab from '$lib/features/protection/ProtectionTab.svelte';
-	import { createProtectionModel } from '$lib/features/protection/protectionModel.svelte';
+	import ArmourTab from '$lib/features/armour/ArmourTab.svelte';
+	import { createArmourModel } from '$lib/features/armour/armourModel.svelte';
 	import { inDevelopment } from '$lib/inDevelopment';
 	import GuardrailsTab from './GuardrailsTab.svelte';
 	import EffectsTab from './EffectsTab.svelte';
@@ -18,7 +18,7 @@
 	import MobsTab from './MobsTab.svelte';
 
 	const model = createLibraryModel();
-	const protection = createProtectionModel();
+	const armour = createArmourModel();
 
 	const tabs = $derived([
 		{ id: 'library', label: 'Library' },
@@ -31,10 +31,9 @@
 	]);
 	let activeTab = $state('library');
 
-	// Load on mount, and the Armour tab's data once it is visible.
+	// Load on mount; the Armour tab reads its own once shown.
 	$effect(() => {
 		void model.loadData();
-		if (inDevelopment.visible) void protection.load();
 	});
 
 	// A dose starting or ending moves the reload speed every figure here is
@@ -134,7 +133,7 @@
 	{:else if activeTab === 'compare'}
 		<CompareTab />
 	{:else if activeTab === 'protection' && inDevelopment.visible}
-		<ProtectionTab model={protection} />
+		<ArmourTab model={armour} />
 	{:else}
 		<EquipmentListView {model} />
 		<NotTracked readingOn={model.toolReading} />

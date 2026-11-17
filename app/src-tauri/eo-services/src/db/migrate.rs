@@ -552,6 +552,10 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         version: 103,
         description: "stock reconciliations",
         sql: include_str!("../../migrations/0103_stock_reconciliations.sql"),
+    },    Migration {
+        version: 104,
+        description: "limited piece markups",
+        sql: include_str!("../../migrations/0104_limited_piece_markups.sql"),
     },
 ];
 

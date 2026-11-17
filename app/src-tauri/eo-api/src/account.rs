@@ -1306,6 +1306,11 @@ pub enum CostPlacementCategory {
     HealingConsumable,
     UnlimitedArmour,
     UnlimitedPlate,
+    /// A limited armour piece: billed at the markup set for it on the
+    /// Armour tab, or at TT.
+    LimitedArmour,
+    /// A limited plate, likewise.
+    LimitedPlate,
     /// A stimulant or another dose taken by the unit.
     Consumable,
     /// Overhead: a vehicle, its fuel, anything spent getting about.
@@ -1317,7 +1322,7 @@ pub enum CostPlacementCategory {
 }
 
 impl CostPlacementCategory {
-    pub const ALL: [CostPlacementCategory; 13] = [
+    pub const ALL: [CostPlacementCategory; 15] = [
         CostPlacementCategory::Weapon,
         CostPlacementCategory::Amplifier,
         CostPlacementCategory::Attachment,
@@ -1327,6 +1332,8 @@ impl CostPlacementCategory {
         CostPlacementCategory::HealingConsumable,
         CostPlacementCategory::UnlimitedArmour,
         CostPlacementCategory::UnlimitedPlate,
+        CostPlacementCategory::LimitedArmour,
+        CostPlacementCategory::LimitedPlate,
         CostPlacementCategory::Consumable,
         CostPlacementCategory::Travel,
         CostPlacementCategory::FieldLogistics,
@@ -1344,6 +1351,8 @@ impl CostPlacementCategory {
             CostPlacementCategory::HealingConsumable => CostCategory::HealingConsumable,
             CostPlacementCategory::UnlimitedArmour => CostCategory::UnlimitedArmour,
             CostPlacementCategory::UnlimitedPlate => CostCategory::UnlimitedPlate,
+            CostPlacementCategory::LimitedArmour => CostCategory::LimitedArmour,
+            CostPlacementCategory::LimitedPlate => CostCategory::LimitedPlate,
             CostPlacementCategory::Consumable => CostCategory::Consumable,
             CostPlacementCategory::Travel => CostCategory::Travel,
             CostPlacementCategory::FieldLogistics => CostCategory::FieldLogistics,

@@ -991,6 +991,7 @@ const OTHER_COMMANDS: &[&str] = &[
     "account_reconciliation_undo",
     "account_run_begin",
     "account_run_done",
+    "account_run_whole",
     "account_run_cancel",
     "ledger_list",
     "ledger_create",

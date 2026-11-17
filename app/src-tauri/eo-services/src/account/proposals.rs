@@ -29,9 +29,10 @@
 //! - **An opening** is proposed whenever a step holds one, settled or not.
 //!   An unsettled one carries why it did not settle and no ammo figure;
 //!   what arrived that may be its contents is listed apart, never claimed.
-//! - **Openings seen across consecutive steps outside a session and a
-//!   strongbox run** (the readings taken while signed in and otherwise
-//!   idle) are read as one. When a reading's step held nothing but an
+//! - **Openings seen across consecutive steps outside a session** (the
+//!   readings taken while signed in and otherwise idle, or for a strongbox
+//!   run) are read as one, and so is a single such step whose opening the
+//!   step-by-step reading cannot settle. When a reading's step held nothing but an
 //!   opening, and so did the steps before it back to where the opening
 //!   began, each still proposed and neither decided nor claimed, the whole
 //!   span is read as one opening (see [`super::composite::whole_opening`]).
@@ -639,7 +640,23 @@ fn found_in_step(
     };
     let mut found = Vec::new();
     if let Some(opening) = &outcomes.opening {
-        found.push(opening_found(opening)?);
+        // Outside a session, a step that holds nothing but an opening the
+        // step-by-step reading cannot settle (its ammo merged into a stack
+        // already held, say) is read whole: every arrival a content, the
+        // ammo as the Universal Ammo gained.
+        let whole = if session.is_none() && opening.settlement == Settlement::Unsettled {
+            let set = step_between(before, after, roles)?;
+            match whole_opening(&set)? {
+                Some(whole) => {
+                    let rows = new_ammo_rows(&set, before, after, &[])?;
+                    Some(opening_proposal(&whole, &rows))
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        found.push(opening_found(whole.as_ref().unwrap_or(opening))?);
     }
     // A purchase only outside every tracked session, and never of an item
     // a session looted meanwhile: loot arriving beside a repair or a fee
@@ -707,10 +724,10 @@ struct Whole {
     found: Found,
 }
 
-/// Whether a reading was taken while signed in and otherwise idle: no
-/// session, no strongbox run.
+/// Whether a reading was taken outside every tracked session: while signed
+/// in and otherwise idle, or for a strongbox run.
 fn is_idle_reading(header: &store::ReadingHeader) -> bool {
-    header.purpose == Purpose::Ambient && header.session_id.is_none()
+    matches!(header.purpose, Purpose::Ambient | Purpose::Run) && header.session_id.is_none()
 }
 
 /// The step from `before` to `after`, its items' stacking resolved from
@@ -1005,6 +1022,113 @@ pub fn commit(
     )?;
     tx.commit()?;
     Ok(added)
+}
+
+/// What reading a strongbox run whole came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunWhole {
+    /// An opening read whole across the run was stored (or stood already).
+    pub read_whole: bool,
+    /// How many of the run's box the last reading still holds, outside the
+    /// auction: none left means no more can have been opened.
+    pub boxes_left: i64,
+}
+
+/// Read a strongbox run whole, from the reading before its boxes (`from`)
+/// to its latest (`to`): every arrival a content and the ammo as the
+/// Universal Ammo gained, so a run whose step-by-step reading cannot
+/// settle (its ammo merged into a stack, or its boxes opened across
+/// minutes) still does. Stored as one opening proposal across the span
+/// when it holds nothing but an opening, balances, lies outside every
+/// tracked session and spans more than one step (a single step is read
+/// whole as it is examined), and while every opening proposal inside it is
+/// still pending and unclaimed; it then takes their place. Reading it
+/// again adds nothing.
+pub fn read_run_whole(
+    conn: &mut rusqlite::Connection,
+    from: ReadingId,
+    to: ReadingId,
+    box_item: &str,
+    roles: &dyn RoleSource,
+    now: f64,
+) -> Result<RunWhole, AccountError> {
+    let (Some(before), Some(after)) = (store::load_reading(conn, from)?, store::load_reading(conn, to)?)
+    else {
+        return Ok(RunWhole {
+            read_whole: false,
+            boxes_left: 0,
+        });
+    };
+    let wanted = box_item.trim();
+    let boxes_left = after
+        .reading
+        .holdings()
+        .iter()
+        .filter(|(key, _)| key.name.trim() == wanted && key.container != Container::Auction)
+        .map(|(_, holding)| holding.quantity())
+        .sum();
+    let unread = RunWhole {
+        read_whole: false,
+        boxes_left,
+    };
+    if steps_between(conn, from, to)? < 2 {
+        return Ok(unread);
+    }
+    let tagged: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM account_readings                         WHERE id > ?1 AND id <= ?2 AND session_id IS NOT NULL)",
+        [from.0, to.0],
+        |row| row.get(0),
+    )?;
+    if tagged {
+        return Ok(unread);
+    }
+    let set = step_between(&before.reading, &after.reading, roles)?;
+    let Some(opening) = whole_opening(&set)? else {
+        return Ok(unread);
+    };
+    let rows = new_ammo_rows(&set, &before.reading, &after.reading, &[])?;
+    let mut found = opening_found(&opening_proposal(&opening, &rows))?;
+    found.subject = format!("{} after reading {}", found.subject, from.0);
+    let tx = conn.transaction()?;
+    // Every opening proposal inside the span must still be open for the
+    // whole to take their place.
+    let inside: Vec<i64> = {
+        let mut stmt = tx.prepare(
+            "SELECT DISTINCT reading_id FROM account_proposals              WHERE kind = ?1 AND reading_id > ?2 AND reading_id <= ?3 AND prev_reading_id >= ?2                AND subject != ?4",
+        )?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![ProposalKind::Opening.as_str(), from.0, to.0, found.subject],
+                |row| row.get(0),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for reading in inside {
+        if open_opening_at(&tx, ReadingId(reading))?.is_none() {
+            return Ok(unread);
+        }
+    }
+    tx.execute(
+        "INSERT INTO account_proposals              (kind, reading_id, prev_reading_id, seen_from, seen_to, session_id,               subject, payload_version, payload_json, status, detected_at)          VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10)          ON CONFLICT (kind, reading_id, subject) DO NOTHING",
+        rusqlite::params![
+            found.kind.as_str(),
+            to.0,
+            from.0,
+            before.reading.taken_at(),
+            after.reading.taken_at(),
+            found.subject,
+            PAYLOAD_VERSION,
+            found.payload,
+            Decision::Pending.as_str(),
+            now,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(RunWhole {
+        read_whole: true,
+        boxes_left,
+    })
 }
 
 /// Examine one stored reading whether or not it was examined before:

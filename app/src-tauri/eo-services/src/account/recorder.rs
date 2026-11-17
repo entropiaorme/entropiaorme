@@ -625,6 +625,30 @@ impl AccountRecorder {
         .await;
     }
 
+    /// Read a strongbox run whole, from the reading before its boxes to
+    /// its latest (see [`proposals::read_run_whole`]), and announce any
+    /// proposal it stored.
+    pub async fn run_whole(
+        &self,
+        from: super::store::ReadingId,
+        to: super::store::ReadingId,
+        box_item: String,
+    ) -> Result<proposals::RunWhole, AccountError> {
+        let game_data = self.game_data.clone();
+        let now = naive_to_epoch(self.clock.now());
+        let read = joined(
+            on_writer(&self.db, move |conn| {
+                let roles = super::roles::KnownRoles::read(conn, game_data.as_deref())?;
+                proposals::read_run_whole(conn, from, to, &box_item, &roles, now)
+            })
+            .await,
+        )?;
+        if read.read_whole {
+            let _ = self.sender.send(Msg::ProposalsChanged);
+        }
+        Ok(read)
+    }
+
     /// The limited armour and plates the player holds, each with the
     /// markup it is billed at, and the items that may be declared one.
     pub async fn armour_pieces(&self) -> Result<super::armour::ArmourPieces, AccountError> {

@@ -22,10 +22,7 @@ use crate::account::{
 use crate::account_minutes::{
     AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
 };
-use crate::account_proposals::{
-    AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
-    AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading,
-};
+use crate::account_proposals::{AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput, AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading, AccountRunWhole, AccountRunWholeInput};
 use crate::account_reconciliation::{
     StockReconciliationApplied, StockReconciliationApplyInput, StockReconciliationDraft,
     StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
@@ -1462,6 +1459,14 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "account_run_done",
             args: vec![],
             returns: Some(schema(schema_for!(AccountRunReading))),
+        },
+        CommandSpec {
+            name: "account_run_whole",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountRunWholeInput)),
+            }],
+            returns: Some(schema(schema_for!(AccountRunWhole))),
         },
         CommandSpec {
             name: "account_run_cancel",

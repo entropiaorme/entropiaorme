@@ -189,10 +189,9 @@ export function contentLine(
 		itemName: itemName.trim(),
 		quantity,
 		ttValue,
-		// Cube only what the item's own reading says is worth no more as
-		// itself; anything unvalued is kept, since cubing cannot be taken
-		// back in game.
-		recycle: estimate.sellsAsCubes && ttValue >= NANOCUBE_UNIT_TT,
+		// Every content is kept: recycling is done in game, and the
+		// account readings record it when it happens.
+		recycle: false,
 		estimate,
 	};
 }

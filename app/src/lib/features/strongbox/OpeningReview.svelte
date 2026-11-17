@@ -3,8 +3,10 @@
 	 * What a run came to, before it is recorded. The keys always pay back
 	 * their TT, so the headline is the count and the markup the run might
 	 * fetch: an estimate from the player's market data, never realised until
-	 * something sells. Each item is kept to sell or turned into Nanocubes,
-	 * and the hits lead.
+	 * something sells. Every item is kept: recycling one into Nanocubes is
+	 * done in game, and your account readings record it when it happens.
+	 * The hits lead. A run read from your account can ask for a later
+	 * reading while boxes remain, in case the site had not shown them all.
 	 */
 	import Button from '$lib/components/Button.svelte';
 	import InfoTip from '$lib/components/InfoTip.svelte';
@@ -22,11 +24,9 @@
 	import CompositionBar from './CompositionBar.svelte';
 	import {
 		boxCost,
-		type ContentLine,
 		isHit,
 		lineMarkup,
 		ammoNote,
-		NANOCUBE_UNIT_TT,
 		paidAloneSentence,
 		planTotal,
 		summarise,
@@ -49,11 +49,6 @@
 		if (model.planRefusal) editingSources = true;
 	});
 
-	const decisions = [
-		{ id: 'keep', label: 'Keep' },
-		{ id: 'cube', label: 'Nanocube' },
-	];
-
 	function signed(value: number): string {
 		return `${value >= 0 ? '+' : '−'}${formatPed(Math.abs(value))}`;
 	}
@@ -74,10 +69,6 @@
 	function count(value: unknown): number {
 		const parsed = Number(value);
 		return Number.isFinite(parsed) ? parsed : 0;
-	}
-
-	function cubes(line: ContentLine): string {
-		return formatQuantity(Math.round(line.ttValue / NANOCUBE_UNIT_TT));
 	}
 
 	/** How far the estimate goes towards what the boxes cost. */
@@ -164,20 +155,15 @@
 	<section aria-label="What came out" class="space-y-3">
 		<div class="flex items-baseline justify-between gap-4">
 			<span class="eyebrow">What came out</span>
-			{#if result.lines.length > 1}
-				<span class="flex gap-4 text-xs">
-					<button type="button" class="text-accent hover:text-text" onclick={() => model.applyDefaults('keep')}>
-						Keep all
-					</button>
-					<button
-						type="button"
-						class="text-accent hover:text-text"
-						title="Cube what its own market reading puts at or below Nanocubes"
-						onclick={() => model.applyDefaults('suggested')}
-					>
-						Suggested
-					</button>
-				</span>
+			{#if model.runFollowUp && model.runFollowUp.boxesLeft > 0}
+				<button
+					type="button"
+					class="text-xs text-accent hover:text-text disabled:opacity-50"
+					disabled={model.run.phase === 'reading'}
+					onclick={() => void model.checkNextReading()}
+				>
+					{model.run.phase === 'reading' ? 'Reading your account...' : 'Opened more than these? Check the next reading'}
+				</button>
 			{/if}
 		</div>
 
@@ -195,7 +181,7 @@
 					{@const hit = isHit(line)}
 					{@const markup = lineMarkup(line)}
 					<li
-						class="row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 py-3 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_7.5rem_auto]"
+						class="row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1 py-3 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_7.5rem]"
 						style="animation-delay: {Math.min(index, 12) * 35}ms"
 					>
 						<span class="flex min-w-0 items-center gap-2.5">
@@ -222,23 +208,12 @@
 									{signed(markup)}
 								</span>
 								<span class="block text-[11px] tabular-nums text-text-tertiary">
-									{#if line.recycle}
-										as {cubes(line)} cubes
-									{:else if line.estimate.markupPct !== null}
+									{#if line.estimate.markupPct !== null}
 										{formatPercent(line.estimate.markupPct / 100)}
 									{/if}
 								</span>
 							{/if}
 						</span>
-						<SegmentedControl
-							options={decisions.map((option) => ({
-								...option,
-								disabled: option.id === 'cube' && line.ttValue < NANOCUBE_UNIT_TT,
-							}))}
-							active={line.recycle ? 'cube' : 'keep'}
-							label={`What to do with ${line.itemName}`}
-							onchange={(id) => model.setRecycle(line.itemName, id === 'cube')}
-						/>
 					</li>
 				{/each}
 			</ul>
@@ -250,7 +225,7 @@
 			<span class="eyebrow">Arrived at the same time, maybe not from the boxes</span>
 			<ul class="divide-y divide-border/50 border-y border-border/50">
 				{#each result.possible as line, index (line.itemName)}
-					<li class="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 py-2.5">
+					<li class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-1 py-2.5">
 						<input
 							id={`possible-${index}`}
 							type="checkbox"
@@ -272,19 +247,6 @@
 								</span>
 							{/if}
 						</label>
-						{#if line.included}
-							<SegmentedControl
-								options={decisions.map((option) => ({
-									...option,
-									disabled: option.id === 'cube' && line.ttValue < NANOCUBE_UNIT_TT,
-								}))}
-								active={line.recycle ? 'cube' : 'keep'}
-								label={`What to do with ${line.itemName}`}
-								onchange={(id) => model.setRecycle(line.itemName, id === 'cube')}
-							/>
-						{:else}
-							<span></span>
-						{/if}
 					</li>
 				{/each}
 			</ul>

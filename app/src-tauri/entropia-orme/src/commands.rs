@@ -20,10 +20,7 @@ use eo_api::account::{
 use eo_api::account_minutes::{
     AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
 };
-use eo_api::account_proposals::{
-    AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
-    AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading,
-};
+use eo_api::account_proposals::{AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput, AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading, AccountRunWhole, AccountRunWholeInput};
 use eo_api::account_reconciliation::{
     StockReconciliationApplied, StockReconciliationApplyInput, StockReconciliationDraft,
     StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
@@ -1268,6 +1265,14 @@ pub async fn account_run_begin(app: tauri::AppHandle) -> Result<AccountRunReadin
 #[tauri::command(rename_all = "snake_case")]
 pub async fn account_run_done(app: tauri::AppHandle) -> Result<AccountRunReading, ApiError> {
     facade(&app)?.account_run_done().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_whole(
+    app: tauri::AppHandle,
+    input: AccountRunWholeInput,
+) -> Result<AccountRunWhole, ApiError> {
+    facade(&app)?.account_run_whole(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

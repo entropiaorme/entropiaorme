@@ -64,6 +64,10 @@ export const beginAccountRun = commands.accountRunBegin;
 export const finishAccountRun = commands.accountRunDone;
 /** Close a strongbox run without another reading. */
 export const cancelAccountRun = commands.accountRunCancel;
+/** Read a strongbox run whole, from the reading before its boxes to its
+ * latest; an opening that balances stands among the proposals in place of
+ * the steps it spans. */
+export const readRunWhole = commands.accountRunWhole;
 /** The items the measured sessions could not place, and the player's
  * placements. */
 export const getCostPlacements = commands.accountCostPlacements;

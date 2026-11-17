@@ -246,6 +246,29 @@ pub enum AccountRunReading {
     Interrupted,
 }
 
+/// A strongbox run to read whole, from the reading before its boxes to
+/// its latest.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRunWholeInput {
+    pub from_reading_id: i64,
+    pub to_reading_id: i64,
+    /// The box the run opens, as the account names it.
+    pub box_item: String,
+}
+
+/// What reading a run whole came to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountRunWhole {
+    /// An opening read whole across the run stands among the proposals,
+    /// in place of the steps it spans.
+    pub read_whole: bool,
+    /// How many of the run's box the latest reading still holds: none left
+    /// means no more can have been opened.
+    pub boxes_left: i64,
+}
+
 fn doubt(value: Doubt) -> AccountOpeningDoubt {
     match value {
         Doubt::SeveralKinds => AccountOpeningDoubt::SeveralKinds,
@@ -444,6 +467,33 @@ impl Api {
     /// floor allows, then reading for it stops.
     pub async fn account_run_done(&self) -> Result<AccountRunReading, ApiError> {
         Ok(run_reading(self.account()?.run_done().await))
+    }
+
+    /// Read a strongbox run whole, from the reading before its boxes to
+    /// its latest: every arrival a content, the ammo as the Universal Ammo
+    /// gained. Stored as one opening proposal across the run when it
+    /// balances; the run's proposals are then read as before. A later
+    /// reading read whole replaces the result rather than adding to it.
+    pub async fn account_run_whole(
+        &self,
+        input: AccountRunWholeInput,
+    ) -> Result<AccountRunWhole, ApiError> {
+        if input.to_reading_id < input.from_reading_id {
+            return Err(ApiError::bad_request("A run ends after it begins"));
+        }
+        let read = self
+            .account()?
+            .run_whole(
+                eo_services::account::ReadingId(input.from_reading_id),
+                eo_services::account::ReadingId(input.to_reading_id),
+                input.box_item,
+            )
+            .await
+            .map_err(account_error("account run whole"))?;
+        Ok(AccountRunWhole {
+            read_whole: read.read_whole,
+            boxes_left: read.boxes_left,
+        })
     }
 
     /// Close a strongbox run without another reading: its view went away.

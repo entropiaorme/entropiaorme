@@ -27,6 +27,7 @@ import {
 	dismissProposal,
 	finishAccountRun,
 	getProposals,
+	readRunWhole,
 	linkProposals,
 	releaseProposals,
 } from '$lib/api/account';
@@ -88,8 +89,8 @@ export type RunState =
 	| { phase: 'open'; from: number }
 	/** The reading after the boxes is being taken. */
 	| { phase: 'reading'; from: number }
-	/** The readings show no opening in the run. */
-	| { phase: 'nothing' }
+	/** The readings show no opening in the run yet: the next reading may. */
+	| { phase: 'nothing'; from: number }
 	| { phase: 'failed'; message: string };
 
 const RUN_FAILED: Record<Exclude<AccountRunReading['outcome'], 'read'>, string> = {
@@ -154,6 +155,10 @@ export function createOpeningModel() {
 		getProposals('opening'),
 	);
 	let run = $state<RunState>({ phase: 'idle' });
+	/** A result read from a run: the reading before its boxes, and how many
+	 * of the box the latest reading still holds, so a later reading can be
+	 * asked for while any are left. */
+	let runFollowUp = $state<{ from: number; boxesLeft: number } | null>(null);
 	/** Moves on whenever the run being read is left, so a reading that
 	 * answers after the player moved on is dropped. */
 	let runGeneration = 0;
@@ -235,11 +240,53 @@ export function createOpeningModel() {
 		openedAt = localDateOf(found[found.length - 1].between.to);
 	}
 
+	/** Take the run's next reading and read the run whole, from the reading
+	 * before its boxes to that one, then review what it holds: every
+	 * arrival a content, the ammo as the Universal Ammo gained. */
+	async function readRun(from: number, box: string) {
+		runGeneration += 1;
+		const generation = runGeneration;
+		run = { phase: 'reading', from };
+		try {
+			const answer = await finishAccountRun();
+			if (generation !== runGeneration) return;
+			if (answer.outcome !== 'read') {
+				run = { phase: 'failed', message: RUN_FAILED[answer.outcome] };
+				return;
+			}
+			const whole = await readRunWhole({
+				fromReadingId: from,
+				toReadingId: answer.readingId,
+				boxItem: box,
+			});
+			const found = runProposals(await getProposals('opening'), from, answer.readingId);
+			if (generation !== runGeneration) return;
+			if (found.length === 0) {
+				run = { phase: 'nothing', from };
+				return;
+			}
+			const refusal = proposalRefusal(found, box);
+			if (refusal) {
+				run = { phase: 'failed', message: refusal };
+				return;
+			}
+			market = await marketFor(proposedNames(found));
+			if (generation !== runGeneration) return;
+			run = { phase: 'idle' };
+			runFollowUp = { from, boxesLeft: whole.boxesLeft };
+			adoptProposals(found, box, 'open');
+		} catch (err) {
+			if (generation !== runGeneration) return;
+			run = { phase: 'failed', message: describeError(err, 'Could not read your account') };
+		}
+	}
+
 	/** Stop reading for the run: the view, or the way the result comes in,
 	 * has moved on. */
 	/** Stop reading for the run; resolves once the backend has been told. */
 	function closeRun(): Promise<void> {
 		runGeneration += 1;
+		runFollowUp = null;
 		// Whatever state the run is in, failed included: closing a run the
 		// backend already closed changes nothing.
 		const cancelled =
@@ -435,37 +482,22 @@ export function createOpeningModel() {
 		 * the readings found in the run. */
 		async finishRun() {
 			if (run.phase !== 'open' || !boxItem) return;
-			const from = run.from;
-			const box = boxItem;
-			runGeneration += 1;
-			const generation = runGeneration;
-			run = { phase: 'reading', from };
-			try {
-				const answer = await finishAccountRun();
-				if (generation !== runGeneration) return;
-				if (answer.outcome !== 'read') {
-					run = { phase: 'failed', message: RUN_FAILED[answer.outcome] };
-					return;
-				}
-				const found = runProposals(await getProposals('opening'), from, answer.readingId);
-				if (generation !== runGeneration) return;
-				if (found.length === 0) {
-					run = { phase: 'nothing' };
-					return;
-				}
-				const refusal = proposalRefusal(found, box);
-				if (refusal) {
-					run = { phase: 'failed', message: refusal };
-					return;
-				}
-				market = await marketFor(proposedNames(found));
-				if (generation !== runGeneration) return;
-				run = { phase: 'idle' };
-				adoptProposals(found, box, 'open');
-			} catch (err) {
-				if (generation !== runGeneration) return;
-				run = { phase: 'failed', message: describeError(err, 'Could not read your account') };
-			}
+			await readRun(run.from, boxItem);
+		},
+
+		/** The site may not show every box opened yet: read the account once
+		 * more and read the whole run again, from the reading before its
+		 * boxes. The result replaces the one shown. */
+		async checkNextReading() {
+			const from = run.phase === 'nothing' ? run.from : runFollowUp?.from;
+			if (from === undefined || !boxItem) return;
+			await readRun(from, boxItem);
+		},
+
+		/** How many of the box the run's latest reading still holds, when the
+		 * result shown was read from a run. */
+		get runFollowUp() {
+			return runFollowUp;
 		},
 
 		/** Review an opening the readings found, as a pasted export. */

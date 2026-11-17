@@ -89,18 +89,24 @@
 				<p class="text-sm text-text-secondary" role="status">
 					Reading your account, which can take up to a minute...
 				</p>
-			{:else if run.phase === 'nothing' || run.phase === 'failed'}
+			{:else if run.phase === 'nothing'}
+				<div class="space-y-3" role="status">
+					<p class="text-sm text-text-secondary">
+						Your account does not show any {model.boxItem} opened yet. The site can take a minute or
+						two to show them: check the next reading, or paste the export or enter the result by hand.
+					</p>
+					<div class="flex flex-wrap items-center gap-3">
+						<Button size="sm" onclick={() => void model.checkNextReading()}>Check the next reading</Button>
+						<Button size="sm" variant="ghost" onclick={() => void model.readAccountAgain()}>
+							Start again
+						</Button>
+					</div>
+				</div>
+			{:else if run.phase === 'failed'}
 				<div class="flex flex-wrap items-start justify-between gap-4" role="status">
-					{#if run.phase === 'nothing'}
-						<p class="text-sm text-text-secondary">
-							Your account shows no {model.boxItem} opened. Paste the export or enter the result
-							by hand instead.
-						</p>
-					{:else}
-						<p class="text-sm text-error">
-							{run.message} Paste the export or enter the result by hand instead.
-						</p>
-					{/if}
+					<p class="text-sm text-error">
+						{run.message} Paste the export or enter the result by hand instead.
+					</p>
 					<Button size="sm" variant="ghost" onclick={() => void model.readAccountAgain()}>
 						Start again
 					</Button>

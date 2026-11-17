@@ -303,6 +303,27 @@ pub struct MeasuredSpan {
     pub to: String,
 }
 
+/// What is new to the player in what the account did on its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountActivityMarks {
+    /// How far the player has seen: a record made, or a proposal found,
+    /// after this is new.
+    pub seen_through: String,
+    /// The events the readings recorded or found since, each a step's
+    /// recycling, its Shrapnel conversion, its sales together, a listing's
+    /// outcome, or a proposal still open.
+    pub unseen: i64,
+}
+
+/// How far the player has now seen what the account did.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountActivitySeenInput {
+    /// The newest event the player was shown, as the wire dates it.
+    pub through: String,
+}
+
 fn wire_state(state: ConnectionState) -> AccountConnectionState {
     match state {
         ConnectionState::Disconnected => AccountConnectionState::Disconnected,
@@ -1156,6 +1177,35 @@ impl Api {
             status.has_connected,
             status.failures_in_a_row,
         ))
+    }
+
+    /// What is new to the player in what the account did on its own. A
+    /// read.
+    pub async fn account_activity_marks(&self) -> Result<AccountActivityMarks, ApiError> {
+        let marks = self
+            .account()?
+            .activity_marks()
+            .await
+            .map_err(account_error("account activity marks"))?;
+        Ok(AccountActivityMarks {
+            seen_through: iso(marks.seen_through),
+            unseen: marks.unseen,
+        })
+    }
+
+    /// The player has seen what the account did up to `through`: what was
+    /// recorded or found by then is no longer new. Moves only forward.
+    pub async fn account_activity_seen(
+        &self,
+        input: AccountActivitySeenInput,
+    ) -> Result<(), ApiError> {
+        let through = chrono::DateTime::parse_from_rfc3339(input.through.trim())
+            .map_err(|_| ApiError::bad_request("a seen instant is an ISO 8601 date and time"))?;
+        let seconds = through.timestamp() as f64 + f64::from(through.timestamp_subsec_micros()) / 1e6;
+        self.account()?
+            .mark_activity_seen(seconds)
+            .await
+            .map_err(account_error("account activity seen"))
     }
 
     /// Drop the session and stop reading. The shell's disconnect closes

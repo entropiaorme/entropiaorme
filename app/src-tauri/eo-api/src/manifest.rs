@@ -15,10 +15,7 @@ use serde_json::Value;
 
 use crate::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
 use crate::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
-use crate::account::{
-    AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
-    CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage,
-};
+use crate::account::{AccountActivityMarks, AccountActivitySeenInput, AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus, CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage};
 use crate::account_minutes::{
     AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
 };
@@ -1270,6 +1267,19 @@ pub fn manifest() -> Vec<CommandSpec> {
         CommandSpec {
             name: "account_disconnect",
             args: vec![],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_activity_marks",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountActivityMarks))),
+        },
+        CommandSpec {
+            name: "account_activity_seen",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountActivitySeenInput)),
+            }],
             returns: None,
         },
         CommandSpec {

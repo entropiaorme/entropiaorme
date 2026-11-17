@@ -698,7 +698,6 @@ pub struct AuctionListing {
     /// When the account readings settled its outcome on their own, the
     /// step they saw it in; `null` for one the player resolved, and while
     /// it waits on the auction.
-    #[serde(default)]
     pub recorded_from_account: Nullable<RecordedFromAccount>,
 }
 
@@ -765,8 +764,28 @@ pub struct ActivityHistoryEntry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordedFromAccount {
+    /// The step's later reading: what one step recorded belongs together.
+    pub reading_id: i64,
     pub from: String,
     pub to: String,
+    /// When the record was made, which may be after the step ended.
+    pub recorded_at: String,
+    /// How far the PED Card moved across the step, in PED; `null` once the
+    /// readings are gone.
+    pub card_change: Nullable<f64>,
+}
+
+/// The step a record from the account was seen in, for the wire.
+fn recorded_from_account_dto(
+    step: eo_services::analytics::RecordedFromAccount,
+) -> RecordedFromAccount {
+    RecordedFromAccount {
+        reading_id: step.reading_id,
+        from: eo_services::time::to_iso_utc(step.seen_from),
+        to: eo_services::time::to_iso_utc(step.seen_to),
+        recorded_at: eo_services::time::to_iso_utc(step.recorded_at),
+        card_change: step.card_change.into(),
+    }
 }
 
 /// The item a conversion form is about to convert.
@@ -1578,10 +1597,7 @@ impl Api {
                     .collect(),
                 recorded_from_account: row
                     .from_account
-                    .map(|step| RecordedFromAccount {
-                        from: eo_services::time::to_iso_utc(step.seen_from),
-                        to: eo_services::time::to_iso_utc(step.seen_to),
-                    })
+                    .map(recorded_from_account_dto)
                     .into(),
                 reconciliation_id: row.reconciliation_id.into(),
             })
@@ -2262,13 +2278,7 @@ pub(crate) fn auction_listing_dto(
         expires_at: row.expires_at.into(),
         activity_net_markup: row.activity_net_markup.into(),
         gross_markup: row.gross_markup.into(),
-        recorded_from_account: row
-            .from_account
-            .map(|step| RecordedFromAccount {
-                from: eo_services::time::to_iso_utc(step.seen_from),
-                to: eo_services::time::to_iso_utc(step.seen_to),
-            })
-            .into(),
+        recorded_from_account: row.from_account.map(recorded_from_account_dto).into(),
     }
 }
 

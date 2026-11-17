@@ -20,6 +20,7 @@
 	import { substrate, whenSubstrateReady } from '$lib/api/readiness.svelte';
 	import StartupFailure from '$lib/features/startup/StartupFailure.svelte';
 	import StartupIndicator from '$lib/features/startup/StartupIndicator.svelte';
+	import { activityMarks } from '$lib/features/account/activityMarks.svelte';
 	import {
 		NavDashboard,
 		NavAnalytics,
@@ -127,14 +128,38 @@
 		onboardingChecked = true;
 	});
 
-	const navItems = [
+	// Something new from the account marks the Inventory until the player
+	// opens what the account did (see `activityMarks`).
+	let navItems = $derived([
 		{ id: '/', label: 'Dashboard', icon: NavDashboard },
 		{ id: '/analytics', label: 'Analytics', icon: NavAnalytics },
-		{ id: '/inventory', label: 'Inventory', icon: NavInventory },
+		{
+			id: '/inventory',
+			label: 'Inventory',
+			icon: NavInventory,
+			...(activityMarks.anyNew ? { indicator: 'attention' as const } : {}),
+		},
 		{ id: '/character', label: 'Character', icon: NavCharacter },
 		{ id: '/quests', label: 'Quests', icon: NavQuests },
 		{ id: '/equipment', label: 'Equipment', icon: NavEquipment },
-	];
+	]);
+
+	// The marks are read only where the sidebar shows: the main window,
+	// once past onboarding. Every other window is refused the account's
+	// commands.
+	const showsShell = $derived(
+		onboardingChecked &&
+			!page.url.pathname.startsWith('/welcome') &&
+			!page.url.pathname.startsWith('/overlay') &&
+			!page.url.pathname.startsWith('/scan-overlay') &&
+			!page.url.pathname.startsWith('/cartography-overlay') &&
+			!page.url.pathname.startsWith('/navigation-hud') &&
+			!page.url.pathname.startsWith('/radar-guidance'),
+	);
+	$effect(() => {
+		if (!showsShell) return;
+		return activityMarks.connect();
+	});
 
 	let footerNavItems = $derived([
 		...(newsOptIn.current

@@ -70,6 +70,9 @@ export const confirmInventoryListing = commands.auctionListingConfirm;
 export const expireInventoryListing = commands.auctionListingExpire;
 export const revertInventorySale = commands.auctionSaleRevert;
 export const undoInventoryListing = commands.auctionListingUndo;
+/** Put a listing that came back from the auction on it again: an expiry
+ * taken back, the stock returned to the auction. Loot listings only. */
+export const reopenInventoryListing = commands.auctionListingReopen;
 export const undoInventoryConversion = commands.stockConversionUndo;
 export const undoInventoryTrade = commands.privateSaleUndo;
 export const undoInventoryRemoval = commands.stockRemovalUndo;

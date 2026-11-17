@@ -142,6 +142,8 @@ macro_rules! app_command_surface {
             account_status,
             account_signal,
             account_disconnect,
+            account_activity_marks,
+            account_activity_seen,
             account_session_measure,
             account_measured_sessions,
             account_measured_summary,
@@ -401,6 +403,8 @@ pub const NAVIGATION_COMMANDS: &[&str] = &[
 pub const ACCOUNT_COMMANDS: &[&str] = &[
     "account_status",
     "account_disconnect",
+    "account_activity_marks",
+    "account_activity_seen",
     "account_session_measure",
     "account_measured_sessions",
     "account_measured_summary",

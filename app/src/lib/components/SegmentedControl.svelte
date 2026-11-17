@@ -6,6 +6,9 @@
 		ariaLabel?: string;
 		title?: string;
 		labelClass?: string;
+		/** Something here asks for the reader's attention: shown as a count
+		 * beside the label while above zero. */
+		attention?: number;
 	};
 	type Size = 'sm' | 'md';
 	/** `segmented`: options share one track. `keys`: each option is its own
@@ -68,7 +71,7 @@
 	{#each options as option (option.id)}
 		<button
 			type="button"
-			aria-label={option.ariaLabel ?? option.label}
+			aria-label={`${option.ariaLabel ?? option.label}${option.attention ? `, ${option.attention} new or waiting` : ''}`}
 			aria-pressed={option.id === active}
 			title={option.title}
 			class={optionClass(option.id)}
@@ -76,6 +79,14 @@
 			onclick={() => onchange(option.id)}
 		>
 			<span class={option.labelClass}>{option.label}</span>
+			{#if option.attention && option.attention > 0}
+				<span
+					data-testid="segment-attention"
+					class="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-warning/15 px-1
+						text-[0.625rem] font-semibold tabular-nums leading-4 text-warning"
+					aria-hidden="true">{option.attention}</span
+				>
+			{/if}
 		</button>
 	{/each}
 </div>

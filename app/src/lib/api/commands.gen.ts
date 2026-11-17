@@ -52,6 +52,24 @@ export interface AcceptResult {
 }
 
 /**
+ * What is new to the player in what the account did on its own.
+ */
+export interface AccountActivityMarks {
+	/** How far the player has seen: a record made, or a proposal found, after this is new. */
+	seenThrough: string;
+	/** The events the readings recorded or found since, each a step's recycling, its Shrapnel conversion, its sales together, a listing's outcome, or a proposal still open. */
+	unseen: number;
+}
+
+/**
+ * How far the player has now seen what the account did.
+ */
+export interface AccountActivitySeenInput {
+	/** The newest event the player was shown, as the wire dates it. */
+	through: string;
+}
+
+/**
  * An arrival proposal, by its id.
  */
 export interface AccountArrivalId {
@@ -155,6 +173,8 @@ export interface AccountProposal {
 	sessionId: string | null;
 	/** Claimed for a recording that was never linked (the app closed between the two, or the link failed): it may be recorded already. */
 	possiblyRecorded: boolean;
+	/** When the readings found it: new to the player while later than what they have seen of the account's activity. */
+	detectedAt: string;
 	outcome: AccountProposalOutcome;
 }
 
@@ -289,6 +309,27 @@ export type AccountRunReading = {
 	};
 
 /**
+ * What reading a run whole came to.
+ */
+export interface AccountRunWhole {
+	/** An opening read whole across the run stands among the proposals, in place of the steps it spans. */
+	readWhole: boolean;
+	/** How many of the run's box the latest reading still holds: none left means no more can have been opened. */
+	boxesLeft: number;
+}
+
+/**
+ * A strongbox run to read whole, from the reading before its boxes to
+ * its latest.
+ */
+export interface AccountRunWholeInput {
+	fromReadingId: number;
+	toReadingId: number;
+	/** The box the run opens, as the account names it. */
+	boxItem: string;
+}
+
+/**
  * A tracked session's measured account.
  */
 export interface AccountSessionMeasure {
@@ -331,7 +372,7 @@ export interface AccountSessionMinutes {
  * and on the overlay. One answer for every surface, so they never
  * disagree.
  */
-export type AccountSignal = 'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'signedOut';
+export type AccountSignal = 'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'failing' | 'signedOut';
 
 /**
  * The account connection as it stands.
@@ -354,6 +395,8 @@ export interface AccountStatus {
 	signingIn: boolean;
 	/** Whether any reading has ever been stored, connected or not: the measures stay reviewable after a disconnect. */
 	hasReadings: boolean;
+	/** While connected and the readings keep failing, when the first of the failures in a row came; `null` otherwise. */
+	failingSince: string | null;
 }
 
 /**
@@ -616,11 +659,72 @@ export interface AppSettings {
 }
 
 /**
+ * Why an item is offered first when declaring a piece.
+ */
+export type ArmourCandidateHint = 'other' | 'awaitingPlacement' | 'attached' | 'tagged';
+
+/**
+ * An item of the latest reading that may be declared a piece.
+ */
+export interface ArmourCandidateRow {
+	item: string;
+	hint: ArmourCandidateHint;
+}
+
+/**
  * The armour-cost result (echoes the submitted value, not the new total).
  */
 export interface ArmourCostResult {
 	sessionId: string;
 	armourCost: number;
+}
+
+/**
+ * Which list a piece is shown in: for the player's order only, since both
+ * bill alike.
+ */
+export type ArmourPieceList = 'armour' | 'plates';
+
+/**
+ * A piece's markup, set from now on.
+ */
+export interface ArmourPieceMarkupInput {
+	item: string;
+	/** In percent, from 100; `null` bills the piece at TT from now on. */
+	markupPercent?: number | null;
+}
+
+/**
+ * One limited piece.
+ */
+export interface ArmourPieceRow {
+	/** The item's exact name, as the account names it. */
+	item: string;
+	list: ArmourPieceList;
+	/** Whether the latest reading holds it. */
+	held: boolean;
+	/** Its TT in PED in the latest reading; `null` when not held. */
+	ttPed: number | null;
+	/** The markup it is billed at from now on, in percent; `null` bills it at the TT it loses. */
+	markupPercent: number | null;
+	/** When that markup was set; `null` when none was. */
+	markupSetAt: string | null;
+	/** Whether the player declared it a piece (it can be taken back off the list); otherwise its own name makes it one. */
+	declared: boolean;
+	/** When a reading showed its TT rise after its markup was set: a new piece of the same name, whose markup may differ. */
+	replacedAt: string | null;
+}
+
+/**
+ * The Armour tab.
+ */
+export interface ArmourPiecesView {
+	/** Held first, then by list and name. */
+	pieces: ArmourPieceRow[];
+	/** The likeliest first, then by name. */
+	candidates: ArmourCandidateRow[];
+	/** When the latest reading was taken; `null` before any. */
+	readAt: string | null;
 }
 
 /**
@@ -769,6 +873,8 @@ export interface AuctionListing {
 	activityNetMarkup: number | null;
 	/** Sale proceeds above the listing's TT, before fees. */
 	grossMarkup: number | null;
+	/** When the account readings settled its outcome on their own, the step they saw it in; `null` for one the player resolved, and while it waits on the auction. */
+	recordedFromAccount: RecordedFromAccount | null;
 }
 
 /**
@@ -1389,7 +1495,7 @@ export interface CostPlacementAwaiting {
  * A category the player may place an item in: what its use costs as in
  * every session.
  */
-export type CostPlacementCategory = 'weapon' | 'amplifier' | 'mindforceImplant' | 'harvestingTool' | 'healingTool' | 'unlimitedArmour' | 'unlimitedPlate' | 'attachment' | 'healingConsumable' | 'consumable' | 'travel' | 'fieldLogistics' | 'notACost';
+export type CostPlacementCategory = 'weapon' | 'amplifier' | 'mindforceImplant' | 'harvestingTool' | 'healingTool' | 'unlimitedArmour' | 'unlimitedPlate' | 'attachment' | 'healingConsumable' | 'limitedArmour' | 'limitedPlate' | 'consumable' | 'travel' | 'fieldLogistics' | 'notACost';
 
 /**
  * An item the player placed.
@@ -1574,6 +1680,43 @@ export interface DraftName {
 export type EnhancerBreakPricing = 'priced' | 'markupNotSet' | 'ttUnknown' | 'returnAboveTt';
 
 /**
+ * A kind of enhancer whose markup is set per tier.
+ */
+export type EnhancerMarkupKind = 'weaponDamage';
+
+/**
+ * Every tier of every kind whose markup is set per tier.
+ */
+export interface EnhancerMarkups {
+	/** By kind, then tier. */
+	tiers: EnhancerTierMarkup[];
+}
+
+/**
+ * One tier of one kind.
+ */
+export interface EnhancerTierMarkup {
+	kind: EnhancerMarkupKind;
+	tier: number;
+	/** The enhancer's TT in PED, from the game data; `null` when unlisted. */
+	ttPed: number | null;
+	/** The markup paid, in percent of TT, in force from now on; `null` prices its breaks at TT. */
+	markupPercent: number | null;
+	/** When it was set; `null` when it never was. */
+	setAt: string | null;
+}
+
+/**
+ * One tier's markup, set from now on.
+ */
+export interface EnhancerTierMarkupInput {
+	kind: EnhancerMarkupKind;
+	tier: number;
+	/** In percent, from 100; `null` prices the tier's breaks at TT from now on. */
+	markupPercent?: number | null;
+}
+
+/**
  * One configured component of a stored weapon setup.
  */
 export interface EquipmentComponent {
@@ -1611,8 +1754,6 @@ export interface EquipmentDetail {
 	attackRate: WeaponAttackRate | null;
 	/** A consumable's dose; null for every other kind. */
 	consumable: ConsumableSettings | null;
-	/** The markup of the enhancers fitted to a weapon, in percent of TT, as the player set it: what an enhancer break consumes beyond its TT. Null when it is not set, and for every other kind. */
-	enhancerMarkupPercent: number | null;
 }
 
 export interface EquipmentEffectiveEfficiency {
@@ -1713,8 +1854,6 @@ export interface EquipmentRequest {
 	damage_enhancers?: number;
 	implant_catalog_id?: string | null;
 	implant_markup?: number;
-	/** A weapon's enhancer markup, in percent of TT; absent when the player has not set one. */
-	enhancer_markup?: number | null;
 	healing_mode?: HealingMode;
 	heal_min?: number | null;
 	heal_max?: number | null;
@@ -2967,6 +3106,8 @@ export interface MeasuredArmourPart {
 	/** The limited set, for a set's part. */
 	setId: number | null;
 	setName: string | null;
+	/** The limited piece, for a piece's part. */
+	item?: string | null;
 	markupPercent: number | null;
 	/** The TT the part's pieces lost. */
 	lost: number;
@@ -2979,7 +3120,7 @@ export interface MeasuredArmourPart {
 /**
  * One part of a session's measured armour.
  */
-export type MeasuredArmourPartKind = 'unlimited' | 'limitedSet' | 'unconfirmed';
+export type MeasuredArmourPartKind = 'unlimited' | 'limitedSet' | 'unconfirmed' | 'limitedPiece';
 
 /**
  * Boxes of one kind an opening used.
@@ -3012,7 +3153,7 @@ export type MeasuredCostBucket = 'weapon' | 'enhancer' | 'harvesting' | 'healing
 export interface MeasuredCostDetail {
 	/** Cycled's buckets, then the overhead categories; only those holding a line. */
 	buckets: MeasuredCostGroup[];
-	/** Unlimited first, then each confirmed set by id, then what no confirmed set holds. */
+	/** Unlimited first, then each limited piece by name. */
 	armourParts: MeasuredArmourPart[];
 }
 
@@ -3651,8 +3792,10 @@ export interface MonthlyEntry {
 	questPes: number;
 	ledgerGains: Record<string, number>;
 	trackingCost: number;
-	/** The overhead of the sessions started in it: in its losses, never in `trackingCost`. */
+	/** The overhead of the sessions started in it, and what was billed between sessions on its days: in its losses, never in `trackingCost`. */
 	overheadCost: number;
+	/** Of `overheadCost`, what was billed between sessions: credited to no activity, and left out of every rate. */
+	betweenSessionsCost: number;
 	ledgerLosses: Record<string, number>;
 }
 
@@ -3767,11 +3910,14 @@ export interface OptimizerAttribute {
 }
 
 /**
- * The sessions' overhead by category: what they cost beyond performing
- * their activities, as the account readings measured it.
+ * The overhead by category: what the sessions cost beyond performing
+ * their activities, and what was spent between them, as the account
+ * readings measured it.
  */
 export interface OverheadBreakdown {
 	total: number;
+	/** Of the total, what the readings billed between sessions: on the day it happened, credited to no activity, and left out of every rate. */
+	betweenSessions: number;
 	/** Teleport chips, Mind Essence, vehicles and their fuel. */
 	travel: number;
 	/** Portable repair and Trade Terminal units, and their like. */
@@ -4709,8 +4855,14 @@ export type RecommenderTargetKind = 'hp' | 'profession';
  * between `from` and `to`.
  */
 export interface RecordedFromAccount {
+	/** The step's later reading: what one step recorded belongs together. */
+	readingId: number;
 	from: string;
 	to: string;
+	/** When the record was made, which may be after the step ended. */
+	recordedAt: string;
+	/** How far the PED Card moved across the step, in PED; `null` once the readings are gone. */
+	cardChange: number | null;
 }
 
 /**
@@ -5723,6 +5875,8 @@ export interface StockReconciliationDraft {
 	groups: StockReconciliationGroup[];
 	/** `null` when there is nothing to say. */
 	caution: StockReconciliationCaution | null;
+	/** Lines whose difference a standing reconciliation accepted, standing as they were: left as they are unless brought back into review. */
+	previouslyAccepted: StockReconciliationLine[];
 }
 
 /**
@@ -5738,7 +5892,7 @@ export interface StockReconciliationExcluded {
 /**
  * Why an item is left out of a reconciliation.
  */
-export type StockReconciliationExclusion = 'equipment' | 'armour' | 'plate' | 'universalAmmo' | 'ammo' | 'attached' | 'auction' | 'auctionWithoutListing' | 'pendingProposal' | 'consumable' | 'strongbox' | 'singleItem' | 'sharedName' | 'heldAsAsset';
+export type StockReconciliationExclusion = 'equipment' | 'armour' | 'plate' | 'universalAmmo' | 'ammo' | 'attached' | 'auction' | 'auctionWithoutListing' | 'pendingProposal' | 'consumable' | 'strongbox' | 'singleItem' | 'sharedName' | 'ttDiffers' | 'heldAsAsset';
 
 /**
  * One conversion group's figures: the TT that went in and came out.
@@ -5771,6 +5925,8 @@ export interface StockReconciliationLine {
 	disposition: StockReconciliationDisposition;
 	/** A record the account readings made of this item was taken back and no reconciliation has settled the item since: why it is left as it is unless the player says otherwise. */
 	takenBack: boolean;
+	/** When a standing reconciliation accepted this same difference, if one did. */
+	acceptedAt: string | null;
 }
 
 /**
@@ -5822,6 +5978,9 @@ export type StockReconciliationRevision = {
 	} | {
 		items: string[];
 		kind: 'group';
+	} | {
+		items: string[];
+		kind: 'reconsider';
 	};
 
 /**
@@ -6090,8 +6249,10 @@ export interface TimelineDay {
 	questPes: number;
 	ledgerGains: Record<string, number>;
 	trackingCost: number;
-	/** The overhead of the sessions started in it: in its losses, never in `trackingCost`. */
+	/** The overhead of the sessions started in it, and what was billed between sessions on its days: in its losses, never in `trackingCost`. */
 	overheadCost: number;
+	/** Of `overheadCost`, what was billed between sessions: credited to no activity, and left out of every rate. */
+	betweenSessionsCost: number;
 	ledgerLosses: Record<string, number>;
 }
 
@@ -6970,6 +7131,14 @@ export async function equipmentDelete(itemId: number): Promise<void> {
 	return invokeCommand('equipment_delete', { item_id: itemId });
 }
 
+export async function enhancerMarkups(): Promise<EnhancerMarkups> {
+	return invokeCommand('enhancer_markups', {});
+}
+
+export async function enhancerMarkupSet(input: EnhancerTierMarkupInput): Promise<EnhancerMarkups> {
+	return invokeCommand('enhancer_markup_set', { input });
+}
+
 export async function equipmentDismissedTools(): Promise<DismissedToolName[]> {
 	return invokeCommand('equipment_dismissed_tools', {});
 }
@@ -7451,6 +7620,10 @@ export async function auctionSaleRevert(input: ActivityUndoInput): Promise<Aucti
 	return invokeCommand('auction_sale_revert', { input });
 }
 
+export async function auctionListingReopen(input: ActivityUndoInput): Promise<AuctionListing> {
+	return invokeCommand('auction_listing_reopen', { input });
+}
+
 export async function auctionListingUndo(input: ActivityUndoInput): Promise<void> {
 	return invokeCommand('auction_listing_undo', { input });
 }
@@ -7487,12 +7660,20 @@ export async function accountStatus(): Promise<AccountStatus> {
 	return invokeCommand('account_status', {});
 }
 
-export async function accountSignal(): Promise<'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'signedOut'> {
+export async function accountSignal(): Promise<'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'failing' | 'signedOut'> {
 	return invokeCommand('account_signal', {});
 }
 
 export async function accountDisconnect(): Promise<void> {
 	return invokeCommand('account_disconnect', {});
+}
+
+export async function accountActivityMarks(): Promise<AccountActivityMarks> {
+	return invokeCommand('account_activity_marks', {});
+}
+
+export async function accountActivitySeen(input: AccountActivitySeenInput): Promise<void> {
+	return invokeCommand('account_activity_seen', { input });
 }
 
 export async function accountSessionMeasure(sessionId: string): Promise<AccountSessionMeasure | null> {
@@ -7517,6 +7698,14 @@ export async function accountCostPlace(input: CostPlacementInput): Promise<CostP
 
 export async function accountCostPlacementClear(item: string): Promise<CostPlacementResult> {
 	return invokeCommand('account_cost_placement_clear', { item });
+}
+
+export async function accountArmourPieces(): Promise<ArmourPiecesView> {
+	return invokeCommand('account_armour_pieces', {});
+}
+
+export async function accountArmourPieceMarkup(input: ArmourPieceMarkupInput): Promise<ArmourPiecesView> {
+	return invokeCommand('account_armour_piece_markup', { input });
 }
 
 export async function accountProposals(kind: AccountProposalKind | null): Promise<AccountProposal[]> {
@@ -7619,6 +7808,10 @@ export async function accountRunDone(): Promise<{
 		outcome: 'interrupted';
 	}> {
 	return invokeCommand('account_run_done', {});
+}
+
+export async function accountRunWhole(input: AccountRunWholeInput): Promise<AccountRunWhole> {
+	return invokeCommand('account_run_whole', { input });
 }
 
 export async function accountRunCancel(): Promise<void> {

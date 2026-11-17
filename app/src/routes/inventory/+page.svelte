@@ -5,7 +5,6 @@
 	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
 	import Tabs from '$lib/components/Tabs.svelte';
-	import ActivityHistory from '$lib/features/analytics/ActivityHistory.svelte';
 	import AdjustStockModal from '$lib/features/analytics/AdjustStockModal.svelte';
 	import AuctionListings from '$lib/features/analytics/AuctionListings.svelte';
 	import ConvertStockModal from '$lib/features/analytics/ConvertStockModal.svelte';
@@ -16,8 +15,9 @@
 	import ConvertItemsModal from '$lib/features/inventory/ConvertItemsModal.svelte';
 	import CreateListingModal from '$lib/features/inventory/CreateListingModal.svelte';
 	import EquipmentSaleModal from '$lib/features/inventory/EquipmentSaleModal.svelte';
+	import InventoryHistory from '$lib/features/inventory/InventoryHistory.svelte';
 	import InventoryHoldings from '$lib/features/inventory/InventoryHoldings.svelte';
-	import PurchaseProposals from '$lib/features/inventory/PurchaseProposals.svelte';
+	import { activityMarks } from '$lib/features/account/activityMarks.svelte';
 	import { createPurchaseProposals } from '$lib/features/inventory/purchaseProposals.svelte';
 	import {
 		createInventoryModel,
@@ -62,11 +62,13 @@
 		{ id: 'loot', label: 'Loot' },
 		{ id: 'equipment', label: 'Assets' },
 	];
-	const tabs = [
+	// Something new from the account marks History until the player opens
+	// what the account did.
+	const tabs = $derived([
 		{ id: 'holdings', label: 'Assets' },
 		{ id: 'listings', label: 'Listings' },
-		{ id: 'history', label: 'History' },
-	];
+		{ id: 'history', label: 'History', attention: activityMarks.anyNew },
+	]);
 
 	onMount(() => {
 		void model.load();
@@ -140,11 +142,6 @@
 			<p class="py-16 text-center text-sm text-text-tertiary">Reading inventory...</p>
 		{:else if model.view === 'holdings'}
 			<div class="flex h-full min-h-0 flex-col gap-5">
-				<PurchaseProposals
-					model={purchaseProposals}
-					assets={model.equipment}
-					onrecord={forms.recordProposal}
-				/>
 				<div class="min-h-0 flex-1">
 					<InventoryHoldings
 						kind={model.kind}
@@ -191,20 +188,12 @@
 			embedded
 			/>
 		{:else}
-			<div class="py-3">
-			<SegmentedControl
-				options={kindOptions}
-				active={model.kind}
-				size="md"
-				onchange={(id) => (model.kind = id as InventoryKind)}
-			/>
-			</div>
-			<ActivityHistory
-			entries={model.history}
-			loading={model.historyLoading}
-			onundo={model.undo}
-			onundocheck={model.undoCheck}
-			embedded
+			<InventoryHistory
+				{model}
+				purchases={purchaseProposals}
+				assets={model.equipment}
+				onrecordpurchase={forms.recordProposal}
+				onlistings={() => selectView('listings')}
 			/>
 		{/if}
 	</div>

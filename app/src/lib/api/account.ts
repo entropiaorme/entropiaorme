@@ -45,6 +45,12 @@ export const releaseProposals = commands.accountProposalsRelease;
 /** Link proposals, as one, to the record they became. */
 export const linkProposals = commands.accountProposalsLink;
 export const dismissProposal = commands.accountProposalDismiss;
+/** What is new to the player in what the account did on its own: how far
+ * they have seen it, and how many events came after. */
+export const getActivityMarks = commands.accountActivityMarks;
+/** The player has seen what the account did up to an instant; the mark
+ * only moves forward. */
+export const markActivitySeen = commands.accountActivitySeen;
 /** A measured session minute by minute: what was looted beside what
  * arrived, and the measured spend beside the tracked. Reading it offers
  * each arrival nothing explains as a proposal, so each carries its handle. */

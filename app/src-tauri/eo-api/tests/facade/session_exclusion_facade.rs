@@ -948,6 +948,10 @@ const OTHER_COMMANDS: &[&str] = &[
     "account_status",
     "account_signal",
     "account_disconnect",
+    // Reads how far the player has seen the account's own activity.
+    "account_activity_marks",
+    // Moves the seen watermark forward; touches no session.
+    "account_activity_seen",
     "account_session_measure",
     "account_measured_sessions",
     // Where the player places an item the app cannot place: a placement

@@ -189,6 +189,9 @@ pub struct AccountProposal {
     /// Claimed for a recording that was never linked (the app closed
     /// between the two, or the link failed): it may be recorded already.
     pub possibly_recorded: bool,
+    /// When the readings found it: new to the player while later than
+    /// what they have seen of the account's activity.
+    pub detected_at: String,
     pub outcome: AccountProposalOutcome,
 }
 
@@ -349,6 +352,7 @@ fn proposal(value: &Proposal) -> Option<AccountProposal> {
         between: span(&value.between),
         session_id: value.session_id.clone().into(),
         possibly_recorded: value.claimed,
+        detected_at: iso(value.detected_at),
         outcome,
     })
 }

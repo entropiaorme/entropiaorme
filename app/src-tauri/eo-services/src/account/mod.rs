@@ -43,6 +43,7 @@
 //! micro-PED amounts that carry whether they are exact or rest on the
 //! site's truncated values (see [`amount`]).
 
+pub mod activity;
 pub mod adoption;
 pub mod amount;
 pub mod armour;

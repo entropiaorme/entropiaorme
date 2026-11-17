@@ -26,12 +26,15 @@
 		model,
 		assets,
 		onrecord,
+		isNew = () => false,
 	}: {
 		model: PurchaseProposals;
 		/** The assets held now, to say where each purchase would go. */
 		assets: InventoryItem[];
 		/** Open the asset form for a proposal, filled in. */
 		onrecord: (proposal: PurchaseProposal, target: PurchaseTarget) => void;
+		/** Found since the player last looked: marked until they leave. */
+		isNew?: (proposal: PurchaseProposal) => boolean;
 	} = $props();
 
 	const now = new Date();
@@ -66,7 +69,11 @@
 					>
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-sm text-text-secondary" title={what}>
-								<span class="text-text">{what}</span>, {formatSeenAt(proposal.between.to, now)}
+								{#if isNew(proposal)}<span
+										class="mr-1.5 inline-block h-1.5 w-1.5 -translate-y-px rounded-full bg-warning align-middle"
+										data-testid="proposal-new"
+										><span class="sr-only">New: </span></span
+									>{/if}<span class="text-text">{what}</span>, {formatSeenAt(proposal.between.to, now)}
 							</p>
 							<p class="text-xs tabular-nums text-text-tertiary">
 								{formatTt(proposal.outcome.tt.ped)} PED TT, {formatPed(proposal.outcome.markup.ped)}

@@ -13,6 +13,7 @@ import type {
 	ListingFieldSourceInput,
 	MarketHarvestData,
 	StockPosition,
+	StrongboxOpeningEntry,
 } from '$lib/api/commands.gen';
 import {
 	addAssetPurchase,
@@ -29,7 +30,9 @@ import {
 	getInventoryHistory,
 	getInventoryListings,
 	getLootInventory,
+	getStrongboxOpenings,
 	removeLoot,
+	reopenInventoryListing,
 	resolveInventoryDraft,
 	revertInventorySale,
 	takeSaleWindowCapture,
@@ -37,6 +40,7 @@ import {
 	undoInventoryListing,
 	undoInventoryRemoval,
 	undoInventoryTrade,
+	undoStrongboxOpening,
 	updateAssetPurchase,
 } from '$lib/api/inventory';
 import {
@@ -59,6 +63,7 @@ import {
 } from '$lib/features/analytics/treeCuttingModel.svelte';
 import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
 import { describeError } from '$lib/view/errorState';
+import { entryShowsUnder } from './accountActivity';
 import type { ConvertibleItem } from './conversionDraft';
 import type { ListingDraftFields } from './listingIntake';
 
@@ -164,6 +169,9 @@ export function createInventoryModel() {
 	let equipment = $state<InventoryItem[]>([]);
 	let listings = $state<AuctionListing[]>([]);
 	let history = $state<ActivityHistoryEntry[]>([]);
+	/** The strongbox openings recorded, read with the history: each is an
+	 * event the player applied after a review. */
+	let openings = $state<StrongboxOpeningEntry[]>([]);
 	let packetThresholdRequest = 0;
 	/** Each moves on with every read of its part (the stock, listings and
 	 * assets; the history), so a read that answers after a later one
@@ -218,9 +226,10 @@ export function createInventoryModel() {
 		error = null;
 		const request = ++historyRequest;
 		try {
-			const rows = await getInventoryHistory();
+			const [rows, opened] = await Promise.all([getInventoryHistory(), getStrongboxOpenings()]);
 			if (request !== historyRequest) return;
 			history = rows;
+			openings = opened;
 			historyLoaded = true;
 		} catch (cause) {
 			error = describeError(cause, 'Failed to load inventory history');
@@ -233,13 +242,15 @@ export function createInventoryModel() {
 	async function refresh(includeHistory = historyLoaded) {
 		const request = ++stockRequest;
 		const asked = includeHistory ? ++historyRequest : null;
-		const [positionRows, equipmentRows, listingRows, historyRows] = await Promise.all([
+		const [positionRows, equipmentRows, listingRows, historyRows, opened] = await Promise.all([
 			getLootInventory(),
 			getEquipmentInventory(),
 			getInventoryListings(),
 			includeHistory ? getInventoryHistory() : Promise.resolve(null),
+			includeHistory ? getStrongboxOpenings() : Promise.resolve(null),
 		]);
 		if (historyRows && asked === historyRequest) history = historyRows;
+		if (opened && asked === historyRequest) openings = opened;
 		if (request !== stockRequest) return;
 		// A sale or conversion can bring an item into holdings or take
 		// the last of one out, so the market is read for what is held now.
@@ -460,6 +471,23 @@ export function createInventoryModel() {
 		);
 	}
 
+	/** Take a strongbox opening back whole: the boxes and keys return and
+	 * everything they became is unmade. */
+	async function undoOpening(openingId: string) {
+		await withRefresh(
+			() => undoStrongboxOpening({ id: openingId }),
+			'Failed to undo the opening',
+		);
+	}
+
+	/** Put a listing that came back from the auction on it again. */
+	async function reopenListing(listingId: string) {
+		await withRefresh(
+			() => reopenInventoryListing({ id: listingId }),
+			'Failed to put the listing back on auction',
+		);
+	}
+
 	async function recycle(itemName: string, quantity: number) {
 		await withRefresh(
 			() =>
@@ -525,16 +553,7 @@ export function createInventoryModel() {
 	);
 	// A conversion can span both sides of Inventory, so it shows on either
 	// side it touched.
-	const visibleHistory = $derived(
-		history.filter(
-			(row) =>
-				row.subjectKind === kind ||
-				(kind === 'equipment' &&
-					row.conversionLines.some(
-						(line) => line.holding === 'asset' || line.acquisition === 'asset',
-					)),
-		),
-	);
+	const visibleHistory = $derived(history.filter((row) => entryShowsUnder(row, kind)));
 	const convertibleItems = $derived<ConvertibleItem[]>([
 		...positions.map((row) => ({
 			name: row.itemName,
@@ -641,6 +660,14 @@ export function createInventoryModel() {
 		get allHistory() {
 			return history;
 		},
+		/** Every listing, on either side: the history's events read their
+		 * price and fees from it. */
+		get allListings() {
+			return listings;
+		},
+		get openings() {
+			return openings;
+		},
 		get lootTt() {
 			return loot.reduce((sum, row) => sum + row.heldTt, 0);
 		},
@@ -667,6 +694,8 @@ export function createInventoryModel() {
 		resolveListing,
 		undo,
 		undoCheck,
+		undoOpening,
+		reopenListing,
 		recycle,
 		convert,
 		remove,

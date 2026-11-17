@@ -805,6 +805,29 @@ impl AccountRecorder {
             .await
     }
 
+    /// What is new to the player in what the account did on its own (see
+    /// [`super::activity`]). A read.
+    pub async fn activity_marks(&self) -> Result<super::activity::ActivityMarks, AccountError> {
+        joined(on_reader(&self.db, |conn| super::activity::marks(conn)).await)
+    }
+
+    /// The player has seen what the account did up to `through` (unix
+    /// seconds); announced when the watermark moved, so every view of the
+    /// marks follows.
+    pub async fn mark_activity_seen(&self, through: f64) -> Result<(), AccountError> {
+        let now = naive_to_epoch(self.clock.now());
+        let moved = joined(
+            on_writer(&self.db, move |conn| {
+                super::activity::mark_seen(conn, through, now)
+            })
+            .await,
+        )?;
+        if moved {
+            let _ = self.sender.send(Msg::ProposalsChanged);
+        }
+        Ok(())
+    }
+
     /// One tracked session minute by minute (see [`super::minutes`]), read
     /// on a reader. The arrivals it offers that are not proposed yet are
     /// stored as proposals, and the pending ones whose flag is gone

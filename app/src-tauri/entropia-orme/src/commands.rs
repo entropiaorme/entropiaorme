@@ -13,10 +13,7 @@ use std::sync::Arc;
 
 use eo_api::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
 use eo_api::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
-use eo_api::account::{
-    AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
-    CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage,
-};
+use eo_api::account::{AccountActivityMarks, AccountActivitySeenInput, AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus, CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage};
 use eo_api::account_minutes::{
     AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
 };
@@ -1064,6 +1061,21 @@ pub async fn account_signal(app: tauri::AppHandle) -> Result<AccountSignal, ApiE
 pub async fn account_disconnect(app: tauri::AppHandle) -> Result<(), ApiError> {
     crate::account_window::disconnect(&app).await;
     Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_activity_marks(
+    app: tauri::AppHandle,
+) -> Result<AccountActivityMarks, ApiError> {
+    facade(&app)?.account_activity_marks().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_activity_seen(
+    app: tauri::AppHandle,
+    input: AccountActivitySeenInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_activity_seen(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

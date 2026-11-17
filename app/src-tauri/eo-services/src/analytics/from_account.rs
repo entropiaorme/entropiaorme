@@ -173,8 +173,37 @@ pub enum FromAccount {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordedFromAccount {
+    /// The later reading of the step: what one step recorded belongs
+    /// together.
+    pub reading_id: i64,
     pub seen_from: f64,
     pub seen_to: f64,
+    /// When the record was made (unix seconds), which may be after the step
+    /// ended: stock still landing is waited for.
+    pub recorded_at: f64,
+    /// How far the PED Card moved across the step, in PED; `None` once
+    /// either reading is gone.
+    pub card_change: Option<f64>,
+}
+
+/// The columns a [`RecordedFromAccount`] is read from, off a provenance
+/// row aliased `s`: the step, when it was recorded, and the Card's move
+/// across the step from the two readings' balances.
+const STEP_COLUMNS: &str = "s.reading_id, s.seen_from, s.seen_to, s.created_at, \
+     (SELECT a.balance_pec FROM account_readings a WHERE a.id = s.reading_id) \
+       - (SELECT b.balance_pec FROM account_readings b WHERE b.id = s.prev_reading_id)";
+
+/// A [`RecordedFromAccount`] from [`STEP_COLUMNS`], starting at `first`.
+fn step_from(row: &rusqlite::Row, first: usize) -> rusqlite::Result<RecordedFromAccount> {
+    Ok(RecordedFromAccount {
+        reading_id: row.get(first)?,
+        seen_from: row.get(first + 1)?,
+        seen_to: row.get(first + 2)?,
+        recorded_at: row.get(first + 3)?,
+        card_change: row
+            .get::<_, Option<i64>>(first + 4)?
+            .map(|pec| pec as f64 / 100.0),
+    })
 }
 
 /// A conversion or a sale of an item recorded from the account lately.
@@ -270,18 +299,11 @@ pub(super) fn held(conn: &rusqlite::Connection, item: &str) -> Result<f64, DbErr
 
 /// Every record from the account, by its record's id.
 fn sources(conn: &rusqlite::Connection) -> Result<HashMap<String, RecordedFromAccount>, DbError> {
-    let mut stmt =
-        conn.prepare("SELECT record_id, seen_from, seen_to FROM stock_records_from_account")?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT s.record_id, {STEP_COLUMNS} FROM stock_records_from_account s"
+    ))?;
     let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                RecordedFromAccount {
-                    seen_from: row.get(1)?,
-                    seen_to: row.get(2)?,
-                },
-            ))
-        })?
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, step_from(row, 1)?)))?
         .collect::<rusqlite::Result<HashMap<_, _>>>()?;
     Ok(rows)
 }
@@ -484,25 +506,17 @@ fn record_listing_in(
 pub(super) fn listing_sources(
     conn: &rusqlite::Connection,
 ) -> Result<HashMap<String, RecordedFromAccount>, DbError> {
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         // id-order: insertion (a later outcome of the same listing replaces an earlier)
-        "SELECT o.listing_id, o.seen_from, o.seen_to \
-         FROM listing_outcomes_from_account o \
-         JOIN auction_listings l ON l.id = o.listing_id \
+        "SELECT s.listing_id, {STEP_COLUMNS} \
+         FROM listing_outcomes_from_account s \
+         JOIN auction_listings l ON l.id = s.listing_id \
          WHERE l.undone_at IS NULL \
-           AND l.status = CASE o.outcome WHEN 'sold' THEN 'sold' ELSE 'expired' END \
-         ORDER BY o.id",
-    )?;
+           AND l.status = CASE s.outcome WHEN 'sold' THEN 'sold' ELSE 'expired' END \
+         ORDER BY s.id"
+    ))?;
     let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                RecordedFromAccount {
-                    seen_from: row.get(1)?,
-                    seen_to: row.get(2)?,
-                },
-            ))
-        })?
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, step_from(row, 1)?)))?
         .collect::<rusqlite::Result<HashMap<_, _>>>()?;
     Ok(rows)
 }
@@ -1066,13 +1080,13 @@ mod tests {
             .expect("on the history");
         // Dated by the day its step ended, not by the clock's.
         assert_eq!(entry.occurred_at, epoch_to_iso(step(2).seen_to));
+        let source = entry.from_account.expect("from the account");
         assert_eq!(
-            entry.from_account,
-            Some(RecordedFromAccount {
-                seen_from: step(2).seen_from,
-                seen_to: step(2).seen_to,
-            })
+            (source.reading_id, source.seen_from, source.seen_to),
+            (2, step(2).seen_from, step(2).seen_to)
         );
+        assert_eq!(source.recorded_at, noon(), "recorded when the clock says");
+        assert_eq!(source.card_change, None, "no readings are stored here");
     }
 
     #[tokio::test]

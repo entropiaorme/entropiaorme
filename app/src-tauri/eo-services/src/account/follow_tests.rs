@@ -10,7 +10,7 @@ use super::follow::{follow, next_unrecognised, FollowPass, STOCK_SETTLES};
 use super::reading::{Container, Reading};
 use super::store::{record_reading, Purpose, ReadingId};
 use super::test_support::reading;
-use crate::analytics::{AnalyticsService, Profession, RecordedFromAccount};
+use crate::analytics::{AnalyticsService, Profession};
 use crate::clock::{Clock, MockClock};
 use crate::db::Db;
 use crate::time::naive_to_epoch;
@@ -241,12 +241,10 @@ async fn each_record_carries_the_step_it_came_from_and_is_dated_by_it() {
         .into_iter()
         .find(|row| row.kind == "conversion")
         .expect("recorded");
+    let source = entry.from_account.expect("from the account");
     assert_eq!(
-        entry.from_account,
-        Some(RecordedFromAccount {
-            seen_from: hour_ago() - 60.0,
-            seen_to: hour_ago(),
-        })
+        (source.seen_from, source.seen_to),
+        (hour_ago() - 60.0, hour_ago())
     );
     let day = chrono::DateTime::from_timestamp(hour_ago().floor() as i64, 0)
         .unwrap()

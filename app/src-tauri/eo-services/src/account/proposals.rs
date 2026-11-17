@@ -289,6 +289,9 @@ pub struct Proposal {
     /// Claimed for a recording that was never linked: it may be recorded
     /// already.
     pub claimed: bool,
+    /// When it was found (unix seconds): what the player has seen of the
+    /// account's activity is read against it.
+    pub detected_at: f64,
     pub detail: Detail,
 }
 
@@ -1176,7 +1179,8 @@ pub fn read_run_whole(
         return Ok(unread);
     }
     let tagged: bool = conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM account_readings                         WHERE id > ?1 AND id <= ?2 AND session_id IS NOT NULL)",
+        "SELECT EXISTS (SELECT 1 FROM account_readings \
+                        WHERE id > ?1 AND id <= ?2 AND session_id IS NOT NULL)",
         [from.0, to.0],
         |row| row.get(0),
     )?;
@@ -1195,7 +1199,9 @@ pub fn read_run_whole(
     // whole to take their place.
     let inside: Vec<i64> = {
         let mut stmt = tx.prepare(
-            "SELECT DISTINCT reading_id FROM account_proposals              WHERE kind = ?1 AND reading_id > ?2 AND reading_id <= ?3 AND prev_reading_id >= ?2                AND subject != ?4",
+            "SELECT DISTINCT reading_id FROM account_proposals \
+             WHERE kind = ?1 AND reading_id > ?2 AND reading_id <= ?3 AND prev_reading_id >= ?2 \
+               AND subject != ?4",
         )?;
         let rows = stmt
             .query_map(
@@ -1211,7 +1217,11 @@ pub fn read_run_whole(
         }
     }
     tx.execute(
-        "INSERT INTO account_proposals              (kind, reading_id, prev_reading_id, seen_from, seen_to, session_id,               subject, payload_version, payload_json, status, detected_at)          VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10)          ON CONFLICT (kind, reading_id, subject) DO NOTHING",
+        "INSERT INTO account_proposals \
+             (kind, reading_id, prev_reading_id, seen_from, seen_to, session_id, \
+              subject, payload_version, payload_json, status, detected_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10) \
+         ON CONFLICT (kind, reading_id, subject) DO NOTHING",
         rusqlite::params![
             found.kind.as_str(),
             to.0,
@@ -1385,11 +1395,12 @@ struct Row {
     decision: String,
     record: Option<String>,
     claimed_at: Option<f64>,
+    detected_at: f64,
 }
 
 const ROW_COLUMNS: &str = "id, kind, reading_id, prev_reading_id, seen_from, seen_to, \
                            session_id, subject, payload_version, payload_json, status, \
-                           record_id, claimed_at";
+                           record_id, claimed_at, detected_at";
 
 fn raw(row: &rusqlite::Row) -> rusqlite::Result<Row> {
     Ok(Row {
@@ -1406,6 +1417,7 @@ fn raw(row: &rusqlite::Row) -> rusqlite::Result<Row> {
         decision: row.get(10)?,
         record: row.get(11)?,
         claimed_at: row.get(12)?,
+        detected_at: row.get(13)?,
     })
 }
 
@@ -1839,6 +1851,7 @@ fn open_proposals(conn: &rusqlite::Connection) -> Result<Vec<(Proposal, bool)>, 
                     },
                     session_id: row.session,
                     claimed: row.claimed_at.is_some(),
+                    detected_at: row.detected_at,
                     detail,
                 },
                 row.claimed_at.is_some(),

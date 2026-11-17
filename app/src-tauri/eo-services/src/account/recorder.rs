@@ -86,6 +86,7 @@ use super::minutes::{self, SessionMinutes};
 use super::placement::{self, Placement, Placements};
 use super::proposals::{self, Decided, Examined, Proposal, ProposalId, ProposalKind};
 use super::reading::{Holding, HoldingKey, Reading, SiteResponse};
+use super::adoption::SessionStore;
 use super::sessions::{self, MeasureRead, MeasuredPage, ToSeal};
 use super::site::{SessionSecret, SharedSite, SiteFailure, SiteOutcome};
 use super::store::{self, Purpose, ReadingHeader, ReadingId};
@@ -202,6 +203,12 @@ pub struct ConnectionStatus {
     pub signing_in: bool,
     /// Whether any reading has ever been stored, connected or not.
     pub has_readings: bool,
+    /// When the readings that keep failing began to fail, while connected:
+    /// the first of the failures in a row. Cleared by the next reading
+    /// that succeeds.
+    pub failing_since: Option<f64>,
+    /// How many readings in a row have failed while connected.
+    pub failures_in_a_row: u32,
 }
 
 /// What a connect came to.
@@ -291,6 +298,9 @@ pub struct RecorderParts {
     pub changed: Option<ChangedSink>,
     /// Whether the account is read while nothing else asks for a reading.
     pub mode: ReadingMode,
+    /// Where a session the player signed in with is kept for the next
+    /// launch: written once the site accepts it.
+    pub store: Arc<dyn SessionStore>,
 }
 
 /// Where a session handed to the connection comes from.
@@ -377,6 +387,8 @@ impl AccountRecorder {
             confirming: None,
             signing_in: false,
             has_readings: false,
+            failing_since: None,
+            failures_in_a_row: 0,
         };
         let (status, status_rx) = watch::channel(initial);
         let epoch = Arc::new(AtomicU64::new(0));
@@ -392,6 +404,7 @@ impl AccountRecorder {
             chat_log: parts.chat_log.clone(),
             changed: parts.changed,
             mode: parts.mode,
+            store: parts.store,
             status,
             epoch: epoch.clone(),
             connection,
@@ -410,6 +423,11 @@ impl AccountRecorder {
             keep_alive_due: false,
             idle_due: false,
             idle_failures: 0,
+            failing_since: None,
+            failures_in_a_row: 0,
+            connect_reading_at: None,
+            connect_reading_due: false,
+            connected_since: None,
             floor_from_idle: false,
             confirming: Confirming::Checking,
             signing_in: false,
@@ -1231,6 +1249,7 @@ enum Event {
     RunExpired,
     KeepAliveDue,
     IdleReadingDue,
+    ConnectReadingDue,
 }
 
 /// Whether a reading was started through the gate.
@@ -1292,6 +1311,7 @@ struct Actor {
     chat_log: Option<ChatLogSource>,
     changed: Option<ChangedSink>,
     mode: ReadingMode,
+    store: Arc<dyn SessionStore>,
     status: watch::Sender<ConnectionStatus>,
     /// Moved on by every disconnect (in the handle, before the message).
     epoch: Arc<AtomicU64>,
@@ -1325,6 +1345,18 @@ struct Actor {
     idle_due: bool,
     /// Failed readings while idle in a row.
     idle_failures: u32,
+    /// When the failures in a row of any reading began, while connected.
+    failing_since: Option<f64>,
+    /// Failed readings of any kind in a row, while connected.
+    failures_in_a_row: u32,
+    /// A connect made inside the floor takes its reading once the floor
+    /// passes, at this instant.
+    connect_reading_at: Option<Instant>,
+    /// The connect's reading fell due and waits for the work in flight.
+    connect_reading_due: bool,
+    /// When the current connection was made: a full reading begun since
+    /// is the connect's reading.
+    connected_since: Option<Instant>,
     /// Whether the latest full reading began while idle: a session's
     /// baseline is never held back by its floor.
     floor_from_idle: bool,
@@ -1395,6 +1427,11 @@ impl Actor {
             } else {
                 self.idle_reading_at()
             };
+            let connect_at = if self.connect_reading_due {
+                None
+            } else {
+                self.connect_reading_at
+            };
             // Messages first: a disconnect that arrives with a result is
             // applied before the result is looked at.
             let event = tokio::select! {
@@ -1408,6 +1445,7 @@ impl Actor {
                 () = at(run_closes) => Event::RunExpired,
                 () = at(keep_alive_at) => Event::KeepAliveDue,
                 () = at(idle_at) => Event::IdleReadingDue,
+                () = at(connect_at) => Event::ConnectReadingDue,
             };
             match event {
                 Event::Message(None) => break,
@@ -1433,6 +1471,10 @@ impl Actor {
                 Event::RunExpired => self.close_run(RunReading::Interrupted),
                 Event::KeepAliveDue => self.keep_alive_due = true,
                 Event::IdleReadingDue => self.idle_due = true,
+                Event::ConnectReadingDue => {
+                    self.connect_reading_at = None;
+                    self.connect_reading_due = true;
+                }
             }
             self.advance();
             self.publish_status();
@@ -1533,6 +1575,15 @@ impl Actor {
                 .then_some(self.confirming),
             signing_in: self.signing_in,
             has_readings: self.latest.is_some(),
+            failing_since: self
+                .is_connected()
+                .then_some(self.failing_since)
+                .flatten(),
+            failures_in_a_row: if self.is_connected() {
+                self.failures_in_a_row
+            } else {
+                0
+            },
         };
         self.status.send_if_modified(|current| {
             if *current == status {
@@ -1756,6 +1807,11 @@ impl Actor {
         self.keep_alive_due = false;
         self.idle_due = false;
         self.idle_failures = 0;
+        self.failing_since = None;
+        self.failures_in_a_row = 0;
+        self.connect_reading_at = None;
+        self.connect_reading_due = false;
+        self.connected_since = None;
         self.baseline_for = None;
         self.failures = 0;
         if let Tracking::Grace { session, .. } = &self.tracking {
@@ -1916,6 +1972,13 @@ impl Actor {
         if self.run_due {
             self.run_due = false;
             self.run_attempt();
+            if self.work.is_some() {
+                return;
+            }
+        }
+        if self.connect_reading_due {
+            self.connect_reading_due = false;
+            self.connect_reading();
             if self.work.is_some() {
                 return;
             }
@@ -2165,14 +2228,31 @@ impl Actor {
         self.generation += 1;
         self.failures = 0;
         self.idle_failures = 0;
+        self.failing_since = None;
+        self.failures_in_a_row = 0;
+        self.connect_reading_at = None;
+        self.connect_reading_due = false;
+        self.connected_since = Some(started);
         self.last_answer = Some(Instant::now());
         self.connection = Connection::Connected {
             session: session.clone(),
             connected_at: self.now_epoch(),
         };
+        // A session the player signed in with is kept for the next launch.
+        if source == ConnectSource::SignIn {
+            let store = self.store.clone();
+            let keeping = session.clone();
+            tokio::task::spawn_blocking(move || store.save(&keeping));
+        }
         // The check's balance is the connect reading's: one item read
-        // completes it, unless a reading started inside the floor stands.
-        if self.floor_end().is_none_or(|end| started >= end) {
+        // completes it. Inside the floor of a reading begun before (one
+        // the site may have refused, under an earlier sign-in), the
+        // connect reading is taken in full the moment the floor passes:
+        // a sign-in always gets its reading.
+        let floor_stands = self.floor_end().filter(|end| started < *end);
+        if let Some(end) = floor_stands {
+            self.connect_reading_at = Some(end);
+        } else {
             let floor_before = FloorStart {
                 at: self.last_full_start,
                 idle: self.floor_from_idle,
@@ -2260,7 +2340,9 @@ impl Actor {
         match outcome {
             SiteOutcome::Read(reading) => {
                 self.last_answer = Some(Instant::now());
-                if idle {
+                self.failing_since = None;
+                self.failures_in_a_row = 0;
+                if idle || ticket.purpose == ReadingFor::Connect {
                     self.idle_failures = 0;
                 }
                 if minute {
@@ -2292,11 +2374,16 @@ impl Actor {
             SiteOutcome::Failed(failure) => {
                 tracing::warn!(target: "eo::account", ?failure, "an account reading failed; the next falls due as usual");
                 self.unreadable(&ticket);
-                if idle {
-                    // Read again no sooner than if nothing had changed,
-                    // and less often once failures run on.
+                self.failures_in_a_row += 1;
+                if self.failing_since.is_none() {
+                    self.failing_since = Some(self.now_epoch());
+                }
+                self.mark_changed();
+                if idle || ticket.purpose == ReadingFor::Connect {
+                    // Read again a minute on, never pushed out to the idle
+                    // interval by the failure; every fifth minute once
+                    // failures run on.
                     self.idle_failures += 1;
-                    self.latest_changed = false;
                 }
                 if closing {
                     self.closing_done(None);
@@ -2427,7 +2514,7 @@ impl Actor {
         }
         let every = if self.idle_failures >= FAILURES_BEFORE_BACKING_OFF {
             READ_EVERY_WHILE_FAILING.max(IDLE_READ_EVERY)
-        } else if self.latest_changed {
+        } else if self.latest_changed || self.idle_failures > 0 {
             READ_EVERY
         } else {
             IDLE_READ_EVERY
@@ -2447,6 +2534,26 @@ impl Actor {
             .is_some_and(|due| due <= Instant::now())
         {
             let _ = self.begin_reading(ReadingFor::Idle, None);
+        }
+    }
+
+    /// The reading a connect made inside the floor is owed, once the floor
+    /// has passed: unless a full reading has begun since the connect (it
+    /// is the connect's), or a tracked session or a strongbox run reads
+    /// the account itself.
+    fn connect_reading(&mut self) {
+        if !self.is_connected() || !matches!(self.tracking, Tracking::Idle) || self.run.is_some() {
+            return;
+        }
+        let read_since = match (self.last_full_start, self.connected_since) {
+            (Some(start), Some(since)) => start >= since,
+            _ => false,
+        };
+        if read_since {
+            return;
+        }
+        if let Began::Floor(end) = self.begin_reading(ReadingFor::Connect, None) {
+            self.connect_reading_at = Some(end);
         }
     }
 

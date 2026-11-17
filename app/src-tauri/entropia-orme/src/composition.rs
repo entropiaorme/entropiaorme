@@ -1117,6 +1117,8 @@ async fn compose_with(
                     producers.config_service_handle(),
                 )),
                 game_data: Some(game_data.clone()),
+                // A sign-in the site accepts is kept for the next launch.
+                store: crate::account_window::session_store(),
                 // The game's chat log shows a gap a session's readings
                 // leave clean, or not.
                 chat_log: Some(producers.chat_log_source()),

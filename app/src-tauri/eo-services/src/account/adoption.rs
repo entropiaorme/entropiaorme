@@ -10,9 +10,11 @@
 //! once whenever a tracked session starts. Trying ends on a connection, a
 //! refusal, a disconnect, or the app closing.
 //!
-//! The app keeps the session in memory only, so its store today holds
-//! nothing ([`MemoryOnly`]); a store that keeps it between runs (an
-//! operating-system keychain) slots in behind the same seam.
+//! The installed app keeps the session in the operating system's keyring
+//! (see [`super::keyring_store`]), written when the site accepts a
+//! sign-in and forgotten on a disconnect or when the site refuses it at
+//! launch; a store that keeps nothing ([`MemoryOnly`]) stands in where no
+//! keyring can be used, and readings then wait on a sign-in.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,6 +27,9 @@ use super::site::SessionSecret;
 pub trait SessionStore: Send + Sync + 'static {
     /// The stored session, if there is one. May block.
     fn load(&self) -> Option<SessionSecret>;
+    /// Keep `session` in place of any stored before. May block; a store
+    /// that cannot keep it says so in the log and keeps nothing.
+    fn save(&self, session: &SessionSecret);
     /// Forget the stored session. May block.
     fn forget(&self);
 }
@@ -37,6 +42,8 @@ impl SessionStore for MemoryOnly {
     fn load(&self) -> Option<SessionSecret> {
         None
     }
+
+    fn save(&self, _session: &SessionSecret) {}
 
     fn forget(&self) {}
 }
@@ -84,7 +91,13 @@ pub async fn confirm_stored_session(recorder: Arc<AccountRecorder>, store: Arc<d
             recorder.confirming_stored_session();
         }
         match recorder.connect_stored(epoch, session).await {
-            ConnectOutcome::Connected | ConnectOutcome::NotAccepted => return,
+            ConnectOutcome::Connected => return,
+            ConnectOutcome::NotAccepted => {
+                // The site will not take it again: it is not kept.
+                let forgetting = store.clone();
+                let _ = tokio::task::spawn_blocking(move || forgetting.forget()).await;
+                return;
+            }
             ConnectOutcome::Unreachable(_) | ConnectOutcome::Interrupted => {}
         }
         tries += 1;

@@ -50,6 +50,8 @@ pub mod costs;
 pub mod diff;
 pub mod follow;
 pub mod gap;
+#[cfg(feature = "session-keyring")]
+pub mod keyring_store;
 pub mod live;
 pub mod measure;
 pub mod minutes;

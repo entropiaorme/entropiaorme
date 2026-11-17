@@ -77,6 +77,11 @@ pub struct Recognised {
     pub recycled: Vec<ItemOut>,
     /// Sold to the Trade Terminal, one entry for each item.
     pub sold: Vec<ItemOut>,
+    /// Whether what is recognised is everything the step holds: every
+    /// change in it is one of the patterns above, closed one way, with
+    /// nothing left over but moves between the player's own places. Such a
+    /// step holds no play the readings did not see, however long it is.
+    pub whole: bool,
 }
 
 /// Something that left in a step that a sale or a recycling may take.
@@ -285,6 +290,8 @@ pub fn recognise_step(
     }
 
     let mut candidates: Vec<Candidate> = Vec::new();
+    // The step each candidate was read from.
+    let mut candidate_steps: Vec<usize> = Vec::new();
     let mut rise: Option<Target> = None;
     let mut nanocubes: Option<Target> = None;
     for (index, step) in set.steps.iter().enumerate() {
@@ -295,21 +302,26 @@ pub fn recognise_step(
                 amount,
                 rows_touched,
                 ..
-            } if may_leave_so(key) && !conversions.iter().any(|c| c.index == index) => candidates
-                .push(Candidate {
+            } if may_leave_so(key) && !conversions.iter().any(|c| c.index == index) => {
+                candidate_steps.push(index);
+                candidates.push(Candidate {
                     name: key.name.clone(),
                     units: *units,
                     amount: *amount,
                     rows: (*rows_touched).max(1),
                     recyclable: key.name != NANOCUBE,
-                }),
-            Step::Left { key, units, value } if may_leave_so(key) => candidates.push(Candidate {
-                name: key.name.clone(),
-                units: *units,
-                amount: *value,
-                rows: 1,
-                recyclable: key.name != NANOCUBE,
-            }),
+                });
+            }
+            Step::Left { key, units, value } if may_leave_so(key) => {
+                candidate_steps.push(index);
+                candidates.push(Candidate {
+                    name: key.name.clone(),
+                    units: *units,
+                    amount: *value,
+                    rows: 1,
+                    recyclable: key.name != NANOCUBE,
+                });
+            }
             Step::Gained {
                 key,
                 amount,
@@ -332,20 +344,88 @@ pub fn recognise_step(
             _ => {}
         }
     }
-    if candidates.is_empty() || (rise.is_none() && nanocubes.is_none()) {
-        return Ok(recognised);
+    // Which candidates are sold and which recycled, as every way agrees.
+    let mut sold = vec![false; candidates.len()];
+    let mut recycled = vec![false; candidates.len()];
+    if !candidates.is_empty() && (rise.is_some() || nanocubes.is_some()) {
+        let mut settled = false;
+        if let (Some(rise), None) = (&rise, &nanocubes) {
+            if let Some(every_way) = sold_in_every_way(&candidates, rise)? {
+                sold = every_way;
+                settled = true;
+            }
+        }
+        if !settled {
+            if let Some((sold_mask, recycled_mask)) =
+                agreed(&candidates, rise.as_ref(), nanocubes.as_ref())?
+            {
+                for bit in 0..candidates.len() {
+                    sold[bit] = sold_mask & (1 << bit) != 0;
+                    recycled[bit] = recycled_mask & (1 << bit) != 0;
+                }
+            }
+        }
+        recognised.sold = items(&candidates, |index| sold[index])?;
+        recognised.recycled = items(&candidates, |index| recycled[index])?;
     }
-    if let (Some(rise), None) = (&rise, &nanocubes) {
-        if let Some(sold) = sold_in_every_way(&candidates, rise)? {
-            recognised.sold = items(&candidates, |index| sold[index])?;
-            return Ok(recognised);
+    recognised.whole = accounts_for_everything(
+        set,
+        &conversions,
+        &candidate_steps,
+        &sold,
+        &recycled,
+        &recognised,
+    )?;
+    Ok(recognised)
+}
+
+/// Whether the patterns recognised account for every change in the step:
+/// each Shrapnel conversion with the ammo it paid and no other ammo, every
+/// item that left sold or recycled, the Nanocubes' arrival only beside a
+/// recycling and the Card's rise only beside a sale, and nothing else but
+/// moves between the player's own places.
+fn accounts_for_everything(
+    set: &StepSet,
+    conversions: &[super::measure::Conversion],
+    candidate_steps: &[usize],
+    sold: &[bool],
+    recycled: &[bool],
+    recognised: &Recognised,
+) -> Result<bool, AccountError> {
+    if recognised.shrapnel.is_none() && recognised.sold.is_empty() && recognised.recycled.is_empty()
+    {
+        return Ok(false);
+    }
+    let mut ammo_paid: i64 = 0;
+    for conversion in conversions {
+        ammo_paid = checked(ammo_paid.checked_add(conversion.ammo_units))?;
+    }
+    let mut ammo_gained: i64 = 0;
+    for (index, step) in set.steps.iter().enumerate() {
+        if conversions.iter().any(|c| c.index == index) {
+            continue;
+        }
+        if let Some(at) = candidate_steps.iter().position(|step| *step == index) {
+            if sold[at] || recycled[at] {
+                continue;
+            }
+            return Ok(false);
+        }
+        let accounted = match step {
+            Step::Gained { key, units, .. } if key.name == UNIVERSAL_AMMO => {
+                ammo_gained = checked(ammo_gained.checked_add(*units))?;
+                true
+            }
+            Step::Gained { key, .. } if key.name == NANOCUBE => !recognised.recycled.is_empty(),
+            Step::BalanceChanged { from, to } => to.0 > from.0 && !recognised.sold.is_empty(),
+            Step::Moved { from, to, .. } => MoveKind::of(from, to) == MoveKind::Transfer,
+            _ => false,
+        };
+        if !accounted {
+            return Ok(false);
         }
     }
-    if let Some((sold, recycled)) = agreed(&candidates, rise.as_ref(), nanocubes.as_ref())? {
-        recognised.sold = items(&candidates, |bit| sold & (1 << bit) != 0)?;
-        recognised.recycled = items(&candidates, |bit| recycled & (1 << bit) != 0)?;
-    }
-    Ok(recognised)
+    Ok(ammo_gained == ammo_paid)
 }
 
 /// An item that arrived for more than its TT: a purchase at auction, with

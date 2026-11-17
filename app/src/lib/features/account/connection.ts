@@ -2,10 +2,11 @@
  * The account connection as the Settings row shows it: what the player
  * reads, what they can do, and nothing of the connection's mechanics.
  *
- * The session lives in memory only, so the usual state at launch, for a
- * player who has connected before, is simply not signed in: nothing went
- * wrong, and the row asks for a sign-in without a warning. Only the site
- * ending the session during a run is a warning.
+ * A sign-in is kept in the operating system's keyring, so a launch takes
+ * it up while the site still accepts it. The app leans on a connected
+ * account: not being signed in, being signed out by the site, and readings
+ * that keep failing are all lapses, shown as warnings with the last
+ * reading's time.
  */
 
 import type { AccountStatus } from '$lib/api/commands.gen';
@@ -33,7 +34,7 @@ export const SIGN_IN_NOTE =
 
 /** What is read and when, in one sentence. */
 export const READING_NOTE =
-	'While a session is tracked, the app reads your inventory and PED Card once a minute; it never changes anything.';
+	'The app reads your inventory and PED Card every five minutes, and once a minute while a session is tracked; it never changes anything. Your sign-in is kept in your system keyring until you disconnect.';
 
 /** The line while the sign-in window is open. */
 export const FINISH_SIGNING_IN = 'Finish signing in through the window the app opened.';
@@ -67,9 +68,12 @@ export function connectionView(status: AccountStatus): ConnectionView {
 	switch (status.state) {
 		case 'connected':
 			return {
-				tone: 'positive',
+				tone: status.failingSince ? 'warning' : 'positive',
 				title: 'Connected',
 				lines: [
+					...(status.failingSince
+						? [`Readings failing since ${formatTime(status.failingSince)}; still trying`]
+						: []),
 					...(status.readingSession ? ['Reading this session'] : []),
 					lastReading(status.lastReadingAt),
 				],
@@ -82,7 +86,7 @@ export function connectionView(status: AccountStatus): ConnectionView {
 			return {
 				tone: 'warning',
 				title: 'Signed out by the site',
-				lines: waiting,
+				lines: [...waiting, lastReading(status.lastReadingAt)],
 				signIn: status.signingIn ? reopen : 'Sign in again',
 				disconnect: true,
 				explainsSignIn: false,
@@ -100,9 +104,11 @@ export function connectionView(status: AccountStatus): ConnectionView {
 			};
 		case 'disconnected':
 			return {
-				tone: 'none',
-				title: 'Account readings',
-				lines: waiting,
+				tone: status.hasConnected ? 'warning' : 'none',
+				title: status.hasConnected ? 'Readings paused: not signed in' : 'Account readings',
+				lines: status.hasConnected
+					? [...waiting, lastReading(status.lastReadingAt)]
+					: waiting,
 				signIn: status.signingIn ? reopen : status.hasConnected ? 'Sign in' : 'Connect',
 				disconnect: false,
 				explainsSignIn: true,
@@ -122,5 +128,11 @@ export function offersReview(status: AccountStatus | null): boolean {
 /** What of a status the row shows, as one key: an action's error belongs
  * to the status it was taken in. */
 export function rowKey(status: AccountStatus): string {
-	return [status.state, status.signingIn, status.confirming, status.hasConnected].join('|');
+	return [
+		status.state,
+		status.signingIn,
+		status.confirming,
+		status.hasConnected,
+		status.failingSince !== null,
+	].join('|');
 }

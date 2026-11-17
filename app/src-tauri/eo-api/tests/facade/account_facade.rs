@@ -136,6 +136,7 @@ pub(crate) async fn harness_with(
             chat_log: None,
             changed: None,
             mode: ReadingMode::OnDemand,
+            store: Arc::new(eo_services::account::MemoryOnly),
         },
         &tokio::runtime::Handle::current(),
     );

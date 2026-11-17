@@ -13,8 +13,10 @@
 //!
 //! The window runs on a private, in-memory profile: the session cookie the
 //! site sets lives only in that window's own context, which ends with the
-//! window, and in the connection's memory. Nothing is written to disk and
-//! no other window can use the session. The player signs in once per run.
+//! window, and in the connection's memory; no other window can use the
+//! session. Once the site accepts it, the connection keeps it in the
+//! operating system's keyring (never a plain file), so the next launch
+//! takes it up without a sign-in while the site still accepts it.
 //!
 //! While it is open, the window's own address and cookies are checked
 //! every two seconds. Once it shows the signed-in area, a session value is
@@ -30,8 +32,9 @@ use std::time::Duration;
 
 use eo_api::ApiError;
 use eo_services::account::site::{SESSION_COOKIE, SITE_ORIGIN};
+use eo_services::account::keyring_store::KeyringStore;
 use eo_services::account::{
-    AccountRecorder, ConnectEpoch, ConnectOutcome, MemoryOnly, SessionSecret, SessionStore,
+    AccountRecorder, ConnectEpoch, ConnectOutcome, SessionSecret, SessionStore,
 };
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -132,10 +135,10 @@ pub fn existing(found: Option<Option<u64>>, opened: Option<Option<u64>>) -> Exis
     }
 }
 
-/// The store the shell keeps the session in: memory only, so nothing is
-/// kept between runs.
+/// The store the shell keeps the session in: this build's entry in the
+/// operating system's keyring.
 pub fn session_store() -> std::sync::Arc<dyn SessionStore> {
-    std::sync::Arc::new(MemoryOnly)
+    std::sync::Arc::new(KeyringStore::for_this_build())
 }
 
 fn https_host(url: &Url, host: &str) -> bool {
@@ -469,8 +472,8 @@ fn close_owned(app: &AppHandle, number: u64) {
 }
 
 /// At launch, when the player has connected before, take up the session
-/// kept through the store. The app keeps it in memory only, so today this
-/// finds nothing and the connection stays disconnected.
+/// kept in the keyring. With nothing kept (or no keyring) the connection
+/// stays disconnected and the readings wait on a sign-in.
 pub fn adopt_stored_session(app: &AppHandle) {
     let Some(recorder) = recorder(app) else {
         return;
@@ -684,10 +687,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_session_is_kept_in_memory_only() {
-        assert!(session_store().load().is_none());
-    }
 
     /// Every capability Tauri would load for this app: the files under
     /// `capabilities/` (any depth; one capability, an array of them, or an

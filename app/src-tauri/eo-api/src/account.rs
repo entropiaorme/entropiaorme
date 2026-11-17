@@ -60,21 +60,39 @@ pub enum AccountSignal {
     /// The player has not connected, or disconnected: nothing to show
     /// beyond the offer to sign in.
     Off,
-    /// The player connected before and is not signed in in this run of the
-    /// app: their usual state at launch.
+    /// The player connected before and is not signed in now (no kept
+    /// sign-in, or one the site no longer takes): the readings wait on a
+    /// sign-in.
     NotSignedIn,
     /// A kept sign-in is being confirmed with the site.
     Checking,
     SignedIn,
+    /// Signed in, but the readings keep failing: the site is not
+    /// answering for them.
+    Failing,
     /// The site ended the sign-in while the app was running.
     SignedOut,
 }
 
+/// How many readings in a row may fail before the signal says so: a single
+/// failure is retried a minute on and is no lapse yet.
+pub const FAILURES_BEFORE_SIGNALLING: u32 = 2;
+
 impl AccountSignal {
     /// The signal of a connection's state, for a player who has or has not
-    /// connected.
-    pub fn of(state: AccountConnectionState, has_connected: bool) -> AccountSignal {
+    /// connected, with `failures_in_a_row` readings failed since the last
+    /// that succeeded.
+    pub fn of(
+        state: AccountConnectionState,
+        has_connected: bool,
+        failures_in_a_row: u32,
+    ) -> AccountSignal {
         match state {
+            AccountConnectionState::Connected
+                if failures_in_a_row >= FAILURES_BEFORE_SIGNALLING =>
+            {
+                AccountSignal::Failing
+            }
             AccountConnectionState::Connected => AccountSignal::SignedIn,
             AccountConnectionState::Expired => AccountSignal::SignedOut,
             AccountConnectionState::Unconfirmed => AccountSignal::Checking,
@@ -111,6 +129,9 @@ pub struct AccountStatus {
     /// Whether any reading has ever been stored, connected or not: the
     /// measures stay reviewable after a disconnect.
     pub has_readings: bool,
+    /// While connected and the readings keep failing, when the first of
+    /// the failures in a row came; `null` otherwise.
+    pub failing_since: Nullable<String>,
 }
 
 /// How confirming a kept session stands.
@@ -1103,7 +1124,7 @@ impl Api {
         let state = wire_state(status.state);
         Ok(AccountStatus {
             state,
-            signal: AccountSignal::of(state, status.has_connected),
+            signal: AccountSignal::of(state, status.has_connected, status.failures_in_a_row),
             connected_at: status.connected_at.map(iso).into(),
             last_reading_at: status.last_reading_at.map(iso).into(),
             reading_session: status.reading_session.is_some(),
@@ -1117,6 +1138,11 @@ impl Api {
                 .into(),
             signing_in: status.signing_in,
             has_readings: status.has_readings,
+            failing_since: status
+                .failing_since
+                .filter(|_| status.failures_in_a_row >= FAILURES_BEFORE_SIGNALLING)
+                .map(iso)
+                .into(),
         })
     }
 
@@ -1128,6 +1154,7 @@ impl Api {
         Ok(AccountSignal::of(
             wire_state(status.state),
             status.has_connected,
+            status.failures_in_a_row,
         ))
     }
 
@@ -1472,16 +1499,24 @@ mod tests {
     #[test]
     fn every_state_reads_as_one_signal() {
         let cases = [
-            (State::Connected, true, Signal::SignedIn),
-            (State::Expired, true, Signal::SignedOut),
-            (State::Unconfirmed, true, Signal::Checking),
-            // At launch, a player who connected before is simply not
-            // signed in yet; one who never connected sees nothing.
-            (State::Disconnected, true, Signal::NotSignedIn),
-            (State::Disconnected, false, Signal::Off),
+            (State::Connected, true, 0, Signal::SignedIn),
+            // One failure is retried a minute on; two in a row are a lapse.
+            (State::Connected, true, 1, Signal::SignedIn),
+            (State::Connected, true, 2, Signal::Failing),
+            (State::Expired, true, 0, Signal::SignedOut),
+            (State::Unconfirmed, true, 0, Signal::Checking),
+            // A player who connected before and is not signed in now:
+            // the readings wait on a sign-in. One who never connected
+            // sees nothing.
+            (State::Disconnected, true, 0, Signal::NotSignedIn),
+            (State::Disconnected, false, 0, Signal::Off),
         ];
-        for (state, has_connected, signal) in cases {
-            assert_eq!(Signal::of(state, has_connected), signal, "{state:?}");
+        for (state, has_connected, failures, signal) in cases {
+            assert_eq!(
+                Signal::of(state, has_connected, failures),
+                signal,
+                "{state:?} {failures}"
+            );
         }
     }
 

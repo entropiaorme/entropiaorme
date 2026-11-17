@@ -202,6 +202,7 @@ async fn readings_a_previous_run_stored_are_examined_once_at_start() {
             chat_log: None,
             changed: None,
             mode: ReadingMode::OnDemand,
+            store: Arc::new(eo_services::account::MemoryOnly),
         },
         &tokio::runtime::Handle::current(),
     );
@@ -707,6 +708,7 @@ async fn a_claim_never_linked_is_listed_as_possibly_recorded_after_a_restart() {
             chat_log: None,
             changed: None,
             mode: ReadingMode::OnDemand,
+            store: Arc::new(eo_services::account::MemoryOnly),
         },
         &tokio::runtime::Handle::current(),
     );

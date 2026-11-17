@@ -9,11 +9,16 @@
 //!   of what the player recorded by hand since [`HAND_ENTRY_LOOK_BACK`]
 //!   before the step began, and carries the step it came from (see
 //!   [`crate::analytics::AnalyticsService::record_from_account`]).
-//! - **Only short steps, and never history.** A step longer than
+//! - **Short steps, or whole ones, and never history.** A step longer than
 //!   [`LONGEST_STEP`] may hold anything (a session the app did not track,
-//!   trades, crafting) and is left to the reconciliation; so is a step from
-//!   a reading stored before the app recorded from the account at all
-//!   (`account_recognition_boundary`), which may reach back days.
+//!   trades, crafting) and is left to the reconciliation, unless every
+//!   change in it closes exactly one way with nothing left over
+//!   ([`Recognised::whole`]): untracked play shows as change no pattern
+//!   closes, so such a step is safe at any length (a restart that kept the
+//!   readings away while the player recycled, say). A step from a reading
+//!   stored before the app recorded from the account at all
+//!   (`account_recognition_boundary`), which may reach back days, is never
+//!   looked at.
 //! - **Stock still landing is waited for.** While a step is younger than
 //!   [`STOCK_SETTLES`], a part the app's stock cannot yet cover in full is
 //!   not recorded: the pass stops there with the step unmarked and tries
@@ -23,8 +28,10 @@
 //!   one since undone) is never recorded again, so a step looked at twice
 //!   records nothing twice. The marks are always the oldest readings, so the
 //!   next step is the first reading after the latest mark.
-//! - What a strongbox run read is the run's own flow's: the steps of its
-//!   readings are marked and nothing in them is recorded. The connection
+//! - What a strongbox run read is the run's own flow's: the steps between
+//!   its readings are marked and nothing in them is recorded. The step that
+//!   ends at a run's first reading is not the run's (that reading is taken
+//!   before any box is opened) and is read like any other. The connection
 //!   never runs a pass while a run is open.
 //! - A step whose own content cannot be read is marked and passed. A
 //!   database failure stops the pass with the step unmarked, so the next
@@ -194,10 +201,6 @@ pub fn prepare(
     let Some(after) = store::load_reading(conn, reading)? else {
         return Ok(Following::nothing(reading));
     };
-    // A strongbox run's own flow records what its readings show.
-    if after.header.purpose == Purpose::Run {
-        return Ok(Following::nothing(reading));
-    }
     let Some(prev) = after.header.prev else {
         return Ok(Following::nothing(reading));
     };
@@ -208,16 +211,27 @@ pub fn prepare(
     }
     let before = store::load_reading(conn, prev)?
         .ok_or(AccountError::Stored("a reading's predecessor is missing"))?;
+    // A strongbox run's own flow records what happens between its
+    // readings; the step up to its first is no part of the run.
+    if after.header.purpose == Purpose::Run && before.header.purpose == Purpose::Run {
+        return Ok(Following::nothing(reading));
+    }
     let between = Span {
         from: before.reading.taken_at(),
         to: after.reading.taken_at(),
     };
     let length = between.to - between.from;
-    if !(0.0..=LONGEST_STEP).contains(&length) {
+    if length < 0.0 {
         return Ok(Following::nothing(reading));
     }
     let set = step_between(&before.reading, &after.reading, roles)?;
-    let records = records_of(&recognise_step(&set, &before.reading, &after.reading)?);
+    let recognised = recognise_step(&set, &before.reading, &after.reading)?;
+    // A long step may hold play no reading saw, unless everything in it
+    // closes exactly.
+    if length > LONGEST_STEP && !recognised.whole {
+        return Ok(Following::nothing(reading));
+    }
+    let records = records_of(&recognised);
     Ok(Following {
         reading,
         step: (!records.is_empty()).then_some(AccountStep {

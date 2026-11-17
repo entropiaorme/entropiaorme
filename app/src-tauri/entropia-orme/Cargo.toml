@@ -26,7 +26,7 @@ thiserror = { workspace = true }
 eo-api = { workspace = true }
 # The composition root constructs the domain services the typed-command
 # facade reads through.
-eo-services = { workspace = true }
+eo-services = { workspace = true, features = ["session-keyring"] }
 # The composition root owns the SSE fan-out hub and bridges the producer
 # bus's domain topics onto it (the `/api/events` stream serves over it).
 eo-wire = { workspace = true }

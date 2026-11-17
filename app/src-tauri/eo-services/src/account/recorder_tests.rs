@@ -152,6 +152,7 @@ async fn rig_built(
                 counted.fetch_add(1, Ordering::SeqCst);
             })),
             mode,
+            store: Arc::new(super::adoption::MemoryOnly),
         },
         &tokio::runtime::Handle::current(),
     );
@@ -315,6 +316,8 @@ impl super::adoption::SessionStore for FakeStore {
         self.value
             .map(|value| SessionSecret::new(value.to_string()).unwrap())
     }
+
+    fn save(&self, _session: &SessionSecret) {}
 
     fn forget(&self) {}
 }
@@ -1546,6 +1549,7 @@ async fn whether_any_reading_was_ever_stored_outlives_the_connection() {
             chat_log: None,
             changed: None,
             mode: ReadingMode::OnDemand,
+            store: Arc::new(super::adoption::MemoryOnly),
         },
         &tokio::runtime::Handle::current(),
     );

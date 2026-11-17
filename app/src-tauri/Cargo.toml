@@ -123,6 +123,11 @@ x11rb = { version = "0.13", features = ["xinput"] }
 # runtime dependency via WebKitGTK's media backend, so binding to it adds
 # no new package dependency.
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# The operating system's keyring for the kept account sign-in: the Windows
+# Credential Manager and the Linux Secret Service over D-Bus (the `dbus`
+# crate the windowing stack already links). No macOS backend: no build
+# ships there.
+keyring = { version = "3.6", default-features = false, features = ["windows-native", "sync-secret-service"] }
 gstreamer = "0.24"
 gstreamer-app = "0.24"
 gstreamer-video = "0.24"

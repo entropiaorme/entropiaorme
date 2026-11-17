@@ -1293,7 +1293,7 @@ impl TrackerActor {
                 // Every kept break is priced from its inputs, its return
                 // settled against the Shrapnel tagged as returns, before the
                 // rebate takes what no kept break claims.
-                let markups = crate::enhancer_breaks::weapon_markups(&tx)?;
+                let markups = crate::enhancer_breaks::TierMarkups::read(&tx)?;
                 let tt = |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
                 crate::enhancer_breaks::reprice_session(&tx, &sid, &tt, &markups)?;
                 // Enhancer-break Shrapnel no kept break claims is an immediate

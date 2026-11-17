@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use eo_api::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
 use eo_api::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
 use eo_api::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
@@ -166,6 +167,21 @@ pub async fn equipment_set_enabled(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn equipment_delete(app: tauri::AppHandle, item_id: i64) -> Result<(), ApiError> {
     facade(&app)?.equipment_delete(item_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn enhancer_markups(
+    app: tauri::AppHandle,
+) -> Result<EnhancerMarkups, ApiError> {
+    facade(&app)?.enhancer_markups().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn enhancer_markup_set(
+    app: tauri::AppHandle,
+    input: EnhancerTierMarkupInput,
+) -> Result<EnhancerMarkups, ApiError> {
+    facade(&app)?.enhancer_markup_set(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

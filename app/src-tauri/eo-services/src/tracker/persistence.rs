@@ -71,7 +71,7 @@ impl TrackerActor {
                         let end_dt = epoch_to_instant(ended_at);
                         // Its kept breaks are priced from their inputs, as
                         // a stop prices them, before the rebate.
-                        let markups = crate::enhancer_breaks::weapon_markups(&tx)?;
+                        let markups = crate::enhancer_breaks::TierMarkups::read(&tx)?;
                         let tt =
                             |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
                         crate::enhancer_breaks::reprice_session(&tx, &sid, &tt, &markups)?;

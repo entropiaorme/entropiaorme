@@ -13,6 +13,7 @@
 use schemars::schema_for;
 use serde_json::Value;
 
+use crate::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
 use crate::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
 use crate::account::{
     AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus,
@@ -187,6 +188,19 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(i64)),
             }],
             returns: None,
+        },
+        CommandSpec {
+            name: "enhancer_markups",
+            args: vec![],
+            returns: Some(schema(schema_for!(EnhancerMarkups))),
+        },
+        CommandSpec {
+            name: "enhancer_markup_set",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(EnhancerTierMarkupInput)),
+            }],
+            returns: Some(schema(schema_for!(EnhancerMarkups))),
         },
         CommandSpec {
             name: "equipment_dismissed_tools",

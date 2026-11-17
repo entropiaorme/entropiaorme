@@ -5,7 +5,7 @@
 use eo_wire::domain_events::{TrackingReason, TrackingStatus};
 
 use crate::bus_events::{BusEvent, CombatPayload, HotbarItemKind};
-use crate::enhancer_breaks::{markup_percent, BreakPricing, EnhancerBreak};
+use crate::enhancer_breaks::{BreakPricing, EnhancerBreak};
 use crate::expected_hunting::OffensiveLoadoutEvidence;
 use crate::ped::Ped;
 use crate::tracking_models::ToolStats;
@@ -670,7 +670,11 @@ impl TrackerActor {
             .enhancer_tt
             .as_ref()
             .and_then(|resolve| resolve(enhancer_name));
-        let markup = markup_percent(&state.props);
+        // The markup in force for its kind and tier as it broke.
+        let markup = providers
+            .enhancer_markup
+            .as_ref()
+            .and_then(|resolve| resolve(enhancer_name, observed_at));
         let pricing = BreakPricing::price(tt, markup, returned);
         let weapon_name = state.tool_name.clone();
         let session_id = active.session.id.clone();

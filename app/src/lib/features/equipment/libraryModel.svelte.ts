@@ -120,9 +120,6 @@ export function createLibraryModel() {
 	let scopeMarkupPercent = $state(100);
 	let absorberMarkupPercent = $state(100);
 	let damageEnhancers = $state(0);
-	// The markup of the enhancers fitted to the weapon: what a break costs
-	// beyond its TT. Null while the player has not set one.
-	let enhancerMarkupPercent = $state<number | null>(null);
 	let implantMarkupPercent = $state(100);
 	let healingMode = $state<HealingMode>('direct');
 	let healMin = $state<number | null>(null);
@@ -411,7 +408,6 @@ export function createLibraryModel() {
 		scopeMarkupPercent = 100;
 		absorberMarkupPercent = 100;
 		damageEnhancers = 0;
-		enhancerMarkupPercent = null;
 		implantMarkupPercent = 100;
 		healingMode = 'direct';
 		healMin = null;
@@ -503,7 +499,6 @@ export function createLibraryModel() {
 		absorberMarkupPercent = detail.absorber?.markupPercent ?? 100;
 		implantMarkupPercent = detail.implant?.markupPercent ?? 100;
 		damageEnhancers = detail.weapon.damageEnhancers;
-		enhancerMarkupPercent = detail.enhancerMarkupPercent ?? null;
 		healingMode = detail.healingProfile?.mode ?? 'direct';
 		healMin = detail.healingProfile?.directMin ?? null;
 		healMax = detail.healingProfile?.directMax ?? null;
@@ -671,8 +666,6 @@ export function createLibraryModel() {
 					scope_markup: scopePicker.selected?.isLimited ? scopeMarkupPercent : 100,
 					absorber_markup: absorberPicker.selected?.isLimited ? absorberMarkupPercent : 100,
 					damage_enhancers: damageEnhancers,
-					// Kept only for a weapon fitted with enhancers.
-					enhancer_markup: damageEnhancers > 0 ? enhancerMarkupPercent : null,
 					implant_catalog_id: implantPicker.selected?.catalogId ?? null,
 					implant_markup: implantPicker.selected?.isLimited ? implantMarkupPercent : 100,
 					weapon_effect: effectRequest(weaponEffectFields),
@@ -918,12 +911,6 @@ export function createLibraryModel() {
 		},
 		set damageEnhancers(value: number) {
 			damageEnhancers = value;
-		},
-		get enhancerMarkupPercent() {
-			return enhancerMarkupPercent;
-		},
-		set enhancerMarkupPercent(value: number | null) {
-			enhancerMarkupPercent = value;
 		},
 		get liveCostPreview() {
 			return liveCostPreview;

@@ -51,6 +51,7 @@ pub mod account_armour;
 pub mod account_minutes;
 pub mod account_proposals;
 pub mod account_reconciliation;
+pub mod enhancer_markups;
 pub mod activities;
 pub mod analytics;
 pub mod character;

@@ -15,6 +15,8 @@ macro_rules! app_command_surface {
             equipment_update,
             equipment_set_enabled,
             equipment_delete,
+            enhancer_markups,
+            enhancer_markup_set,
             equipment_dismissed_tools,
             equipment_track_again,
             equipment_detail,

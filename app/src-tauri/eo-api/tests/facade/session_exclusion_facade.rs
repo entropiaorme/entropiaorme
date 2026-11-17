@@ -1083,6 +1083,10 @@ const OTHER_COMMANDS: &[&str] = &[
     "equipment_update",
     "equipment_set_enabled",
     "equipment_delete",
+    // The markup paid per enhancer tier: it prices an enhancer break,
+    // which the statistics read through their own commands.
+    "enhancer_markups",
+    "enhancer_markup_set",
     "equipment_dismissed_tools",
     "equipment_track_again",
     "equipment_detail",

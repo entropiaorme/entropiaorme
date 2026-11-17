@@ -557,6 +557,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "limited piece markups",
         sql: include_str!("../../migrations/0104_limited_piece_markups.sql"),
     },
+    Migration {
+        version: 105,
+        description: "enhancer tier markups",
+        sql: include_str!("../../migrations/0105_enhancer_tier_markups.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second

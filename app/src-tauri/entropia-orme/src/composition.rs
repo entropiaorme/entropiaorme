@@ -1675,6 +1675,19 @@ fn compose_producers(
                 enhancer_tt: game_data
                     .clone()
                     .map(eo_services::enhancer_breaks::tt_resolver),
+                // And at the markup set for its kind and tier, read when it
+                // breaks (rarely), through the synchronous reader core.
+                enhancer_markup: Some({
+                    let db = db.clone();
+                    Arc::new(move |name: &str, at: f64| {
+                        let name = name.to_string();
+                        db.with_reader_blocking(move |conn| {
+                            Ok(eo_services::enhancer_breaks::TierMarkups::read(conn)?.at(&name, at))
+                        })
+                        .ok()
+                        .flatten()
+                    })
+                }),
                 bundled_tools: game_data.clone().map(|data| {
                     let reader = config_reader.clone();
                     let doses = doses.clone();
@@ -2294,6 +2307,7 @@ fn build_providers(
         items: None,
         bundled_tools: None,
         enhancer_tt: None,
+        enhancer_markup: None,
     }
 }
 

@@ -61,6 +61,10 @@ export const getDismissedTools = commands.equipmentDismissedTools;
 /** Bring a name set aside back, so the held-tool reader matches it again;
  * answers the names still set aside. */
 export const trackToolAgain = commands.equipmentTrackAgain;
+/** The markup paid per enhancer kind and tier. */
+export const getEnhancerMarkups = commands.enhancerMarkups;
+/** Set one tier's markup from now on (`null`: breaks cost TT). */
+export const setEnhancerMarkup = commands.enhancerMarkupSet;
 /** Turn a library entry on or off; answers the entry as it now stands. */
 export async function setLibraryEnabled(id: string, enabled: boolean) {
 	return commands.equipmentSetEnabled(Number(id), enabled);

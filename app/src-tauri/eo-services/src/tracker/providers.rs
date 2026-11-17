@@ -224,6 +224,10 @@ pub struct Providers {
     /// An enhancer's TT by its exact name, from the game data, for pricing
     /// a break. None knows no enhancer, so every break is unpriced.
     pub enhancer_tt: Option<crate::enhancer_breaks::EnhancerTtResolver>,
+    /// The markup set for an enhancer's kind and tier as it stood when it
+    /// broke, for pricing a break as it happens. None knows no markup, so
+    /// a break is priced at its TT until its session ends.
+    pub enhancer_markup: Option<crate::enhancer_breaks::EnhancerMarkupResolver>,
 }
 
 impl Default for Providers {
@@ -240,6 +244,7 @@ impl Default for Providers {
             items: None,
             bundled_tools: None,
             enhancer_tt: None,
+            enhancer_markup: None,
         }
     }
 }

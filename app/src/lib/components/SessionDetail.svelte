@@ -626,7 +626,7 @@
 						<span>
 							Enhancers: {#if enhancerFigure}<span class="text-text tabular-nums">{formatPed(breakdown.enhancerCost)}</span><CostBasisNote {breakdown} sessionBasis={costBasis} bucket="enhancerCost" />{/if}{#if enhancerNote}<span
 									class="text-warning"
-									title="An enhancer break costs its TT and the markup set on its weapon in the library, less the Shrapnel it returns"
+									title="An enhancer break costs its TT and the markup set for its tier on the Enhancers tab, less the Shrapnel it returns"
 								>{enhancerFigure ? '; ' : ''}{enhancerNote}</span
 								>{/if}
 						</span>

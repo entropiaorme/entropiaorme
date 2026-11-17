@@ -10,6 +10,7 @@
 	import HotbarPresetSwitcher from '$lib/features/equipment/HotbarPresetSwitcher.svelte';
 	import { createLibraryModel } from '$lib/features/equipment/libraryModel.svelte';
 	import ArmourTab from '$lib/features/armour/ArmourTab.svelte';
+	import EnhancersTab from '$lib/features/enhancers/EnhancersTab.svelte';
 	import { createArmourModel } from '$lib/features/armour/armourModel.svelte';
 	import { inDevelopment } from '$lib/inDevelopment';
 	import GuardrailsTab from './GuardrailsTab.svelte';
@@ -24,6 +25,7 @@
 		{ id: 'library', label: 'Library' },
 		{ id: 'compare', label: 'Compare' },
 		...(inDevelopment.visible ? [{ id: 'protection', label: 'Armour' }] : []),
+		{ id: 'enhancers', label: 'Enhancers' },
 		{ id: 'effects', label: 'Effects' },
 		{ id: 'hotbar', label: 'Hotbar' },
 		{ id: 'guardrails', label: 'Guardrails' },
@@ -132,6 +134,8 @@
 		<MobsTab />
 	{:else if activeTab === 'compare'}
 		<CompareTab />
+	{:else if activeTab === 'enhancers'}
+		<EnhancersTab />
 	{:else if activeTab === 'protection' && inDevelopment.visible}
 		<ArmourTab model={armour} />
 	{:else}

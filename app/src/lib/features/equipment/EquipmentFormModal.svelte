@@ -139,12 +139,9 @@
 								<Input id="equipment-damage-enhancers" type="number" bind:value={model.damageEnhancers} min={0} class="w-full" />
 							</div>
 							{#if model.damageEnhancers > 0}
-								<div>
-									<label for="equipment-enhancer-markup" class="block eyebrow mb-1.5">
-										Enhancer markup %
-									</label>
-									<Input id="equipment-enhancer-markup" type="number" bind:value={model.enhancerMarkupPercent} min={100} max={10000} placeholder="Not set" class="w-full" />
-								</div>
+								<p class="self-end pb-2 text-xs text-text-tertiary">
+									What you paid for enhancers is set per tier, on the Enhancers tab.
+								</p>
 							{/if}
 						</div>
 						{#if model.weaponPicker.selected?.isLimited || model.ampPicker.selected?.isLimited || model.scopePicker.selected?.isLimited || model.absorberPicker.selected?.isLimited || model.implantPicker.selected?.isLimited}

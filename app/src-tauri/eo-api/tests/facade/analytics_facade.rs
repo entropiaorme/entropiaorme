@@ -16,7 +16,8 @@ use std::sync::Arc;
 
 use eo_api::analytics::{
     ActivityUndoInput, AuctionConfirmInput, AuctionExpireInput, AuctionListingInput,
-    InventorySellInput, LedgerEntryInput, LedgerPresetInput, Profession,
+    InventorySellInput, LedgerEntryInput, LedgerPresetInput, Profession, ShrapnelConversionInput,
+    StockRemovalInput,
 };
 use eo_api::{Api, ApiError};
 use eo_services::clock::RealClock;
@@ -968,4 +969,247 @@ async fn a_strongbox_run_the_keys_do_not_balance_is_a_bad_request() {
         "{refused:?}"
     );
     assert!(api.strongbox_openings().await.unwrap().is_empty());
+}
+
+// ── Converting and removing a holding gathered over several sessions ──
+
+/// Shrapnel and Animal Muscle Oil looted over three hunts, 5 : 4 : 3 of
+/// each, so the holding the Inventory tab shows is the sum of all three
+/// and the latest hunt holds only a quarter of it. The two earlier hunts
+/// are ended and settled into their per-session cells; the latest is still
+/// running or has just ended, and so is read from its raw loot.
+async fn seed_three_hunts(db: &Db, latest_running: bool) {
+    db.with_writer(move |connection| {
+        connection.execute_batch(
+            "INSERT INTO session_definitions (id, name, ad_hoc_segments, is_active) \
+                 VALUES (7, 'Atrox runs', 0, 1), (8, 'Atrox runs, refiled', 0, 1);",
+        )?;
+        let hunts: [(&str, f64, Option<i64>, i64, i64); 3] = [
+            ("hunt-1", 1_780_000_000.0, Some(7), 50_000, 500),
+            ("hunt-2", 1_780_100_000.0, Some(7), 40_000, 400),
+            ("hunt-3", 1_780_200_000.0, None, 30_000, 300),
+        ];
+        for (index, (session, started, definition, shrapnel, oil)) in hunts.into_iter().enumerate()
+        {
+            let latest = index == 2;
+            let (ended, active) = if latest && latest_running {
+                (None, 1)
+            } else {
+                (Some(started + 3600.0), 0)
+            };
+            connection.execute(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, definition_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![session, started, ended, active, definition],
+            )?;
+            connection.execute(
+                "INSERT INTO session_contexts (session_id, created_at) VALUES (?1, ?2)",
+                rusqlite::params![session, started],
+            )?;
+            let context = connection.last_insert_rowid();
+            let kill = format!("{session}-kill");
+            connection.execute(
+                "INSERT INTO kills \
+                     (id, session_id, timestamp, mob_name, mob_species, mob_maturity, \
+                      cost_ped, enhancer_cost, loot_total_ped, context_id) \
+                 VALUES (?1, ?2, ?3, 'Atrox Young', 'Atrox', 'Young', 10.0, 0.0, ?4, ?5)",
+                rusqlite::params![
+                    kill,
+                    session,
+                    started + 60.0,
+                    shrapnel as f64 * 0.0001 + oil as f64 * 0.05,
+                    context
+                ],
+            )?;
+            for (item, quantity, unit_tt) in [
+                ("Shrapnel", shrapnel, 0.0001),
+                ("Animal Muscle Oil", oil, 0.05),
+            ] {
+                connection.execute(
+                    "INSERT INTO kill_loot_items \
+                         (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) \
+                     VALUES (?1, ?2, ?3, ?4, 0)",
+                    rusqlite::params![kill, item, quantity, quantity as f64 * unit_tt],
+                )?;
+            }
+        }
+        eo_services::session_rollup::heal(connection)?;
+        Ok(())
+    })
+    .await
+    .expect("three hunts");
+}
+
+async fn three_hunts_api(dir: &Path, latest_running: bool) -> Api {
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Db::open(&data_dir.join("entropia_orme.db"))
+        .await
+        .expect("migrated database");
+    seed_three_hunts(&db, latest_running).await;
+    analytics_api_with_db(dir, db).await
+}
+
+/// What the Inventory tab lists as held of one item.
+async fn held(api: &Api, item: &str) -> f64 {
+    api.activity_stock(Profession::Inventory)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.item_name == item)
+        .map_or(0.0, |row| row.quantity)
+}
+
+/// The gain the ledger booked for Shrapnel conversions.
+async fn conversion_gain(api: &Api) -> f64 {
+    api.ledger_list(None, None)
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .filter(|entry| entry.tag == "convert")
+        .map(|entry| entry.amount)
+        .sum()
+}
+
+async fn convert_shrapnel(api: &Api, quantity: f64) {
+    api.stock_shrapnel_convert(ShrapnelConversionInput {
+        profession: Profession::Inventory,
+        quantity,
+        converted_at: Some("2026-06-05".to_string()),
+    })
+    .await
+    .unwrap();
+}
+
+async fn remove(api: &Api, item: &str, quantity: f64) {
+    api.stock_remove(StockRemovalInput {
+        profession: Profession::Inventory,
+        item_name: item.to_string(),
+        quantity,
+        removed_at: Some("2026-06-05".to_string()),
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn converting_all_shrapnel_takes_every_hunt_s_share_and_books_the_whole_gain() {
+    for latest_running in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let api = three_hunts_api(dir.path(), latest_running).await;
+        assert!((held(&api, "Shrapnel").await - 120_000.0).abs() < 1e-6);
+
+        convert_shrapnel(&api, 120_000.0).await;
+
+        // 12 PED of Shrapnel at 100:101 gains 0.12 PED, and the inventory
+        // gives up exactly what the ledger was booked for: all of it.
+        let left = held(&api, "Shrapnel").await;
+        assert!(
+            left.abs() < 1e-6,
+            "latest running {latest_running}: {left} left"
+        );
+        let gain = conversion_gain(&api).await;
+        assert!(
+            (gain - 0.12).abs() < 1e-9,
+            "latest running {latest_running}: {gain}"
+        );
+        let history = api.activity_history(Profession::Inventory).await.unwrap();
+        let conversion = history
+            .iter()
+            .find(|entry| entry.kind == "conversion")
+            .expect("the conversion is in the history");
+        assert!((conversion.quantity - 120_000.0).abs() < 1e-6);
+        assert!((conversion.tt_value - 12.0).abs() < 1e-9);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_a_whole_holding_takes_every_hunt_s_share() {
+    for latest_running in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let api = three_hunts_api(dir.path(), latest_running).await;
+        assert!((held(&api, "Animal Muscle Oil").await - 1_200.0).abs() < 1e-9);
+
+        remove(&api, "Animal Muscle Oil", 1_200.0).await;
+
+        let left = held(&api, "Animal Muscle Oil").await;
+        assert!(
+            left.abs() < 1e-9,
+            "latest running {latest_running}: {left} left"
+        );
+        // A removal books nothing, and the Shrapnel beside it is untouched.
+        assert!(api
+            .ledger_list(None, None)
+            .await
+            .unwrap()
+            .entries
+            .is_empty());
+        assert!((held(&api, "Shrapnel").await - 120_000.0).abs() < 1e-6);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn part_of_a_holding_is_taken_across_hunts_and_the_rest_stays() {
+    for latest_running in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let api = three_hunts_api(dir.path(), latest_running).await;
+
+        // More than the latest hunt alone looted of each.
+        convert_shrapnel(&api, 100_000.0).await;
+        remove(&api, "Animal Muscle Oil", 1_000.0).await;
+
+        let shrapnel = held(&api, "Shrapnel").await;
+        assert!(
+            (shrapnel - 20_000.0).abs() < 1e-6,
+            "latest running {latest_running}: {shrapnel}"
+        );
+        let gain = conversion_gain(&api).await;
+        assert!(
+            (gain - 0.10).abs() < 1e-9,
+            "latest running {latest_running}: {gain}"
+        );
+        let oil = held(&api, "Animal Muscle Oil").await;
+        assert!(
+            (oil - 200.0).abs() < 1e-9,
+            "latest running {latest_running}: {oil}"
+        );
+
+        // The rest is still all there to take.
+        convert_shrapnel(&api, 20_000.0).await;
+        remove(&api, "Animal Muscle Oil", 200.0).await;
+        assert!(held(&api, "Shrapnel").await.abs() < 1e-6);
+        assert!(held(&api, "Animal Muscle Oil").await.abs() < 1e-9);
+        assert!((conversion_gain(&api).await - 0.12).abs() < 1e-9);
+    }
+}
+
+/// Part of each holding is taken, and then an earlier hunt is filed under
+/// another definition, carrying its loot away from the share of the outflow
+/// recorded against it. The holding still reads as what is truly left, and
+/// taking all of it leaves nothing behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hunt_refiled_after_part_was_taken_still_gives_up_the_whole_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = three_hunts_api(dir.path(), false).await;
+
+    convert_shrapnel(&api, 100_000.0).await;
+    remove(&api, "Animal Muscle Oil", 1_000.0).await;
+    api.tracking_reassign_session("hunt-1".to_string(), 8)
+        .await
+        .unwrap();
+
+    let shrapnel = held(&api, "Shrapnel").await;
+    assert!((shrapnel - 20_000.0).abs() < 1e-6, "{shrapnel}");
+    let oil = held(&api, "Animal Muscle Oil").await;
+    assert!((oil - 200.0).abs() < 1e-9, "{oil}");
+
+    convert_shrapnel(&api, shrapnel).await;
+    remove(&api, "Animal Muscle Oil", oil).await;
+    let shrapnel = held(&api, "Shrapnel").await;
+    assert!(shrapnel.abs() < 1e-6, "{shrapnel} left");
+    let oil = held(&api, "Animal Muscle Oil").await;
+    assert!(oil.abs() < 1e-9, "{oil} left");
+    let gain = conversion_gain(&api).await;
+    assert!((gain - 0.12).abs() < 1e-9, "{gain}");
 }

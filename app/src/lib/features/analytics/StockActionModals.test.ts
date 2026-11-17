@@ -95,6 +95,39 @@ describe('stock action modals', () => {
 		await waitFor(() => expect(onconfirm).toHaveBeenCalledWith('Shrapnel', 4985));
 	});
 
+	it('converts the whole holding, however many sessions it came from', async () => {
+		const onconfirm = vi.fn().mockResolvedValue(undefined);
+		const holding = { ...stock, heldQty: 120_000, heldTt: 12, unitTt: 0.0001 };
+		render(AdjustStockModal, {
+			props: { item: holding, mode: 'shrapnel', onconfirm, oncancel: vi.fn() },
+		});
+
+		// It opens on all of it; part of it and back to all is all of it again.
+		expect(screen.getByText('12.12 PED ammo after conversion')).not.toBeNull();
+		await fireEvent.input(screen.getByLabelText('PED to convert'), { target: { value: '3' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'All 12.00 PED' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Convert' }));
+		await waitFor(() => expect(onconfirm).toHaveBeenCalledWith('Shrapnel', 120_000));
+	});
+
+	it('removes the whole holding when all of it is entered in PED', async () => {
+		const onconfirm = vi.fn().mockResolvedValue(undefined);
+		const holding = {
+			...stock,
+			itemName: 'Animal Muscle Oil',
+			heldQty: 1_200,
+			heldTt: 60,
+			unitTt: 0.05,
+		};
+		render(AdjustStockModal, {
+			props: { item: holding, mode: 'remove', onconfirm, oncancel: vi.fn() },
+		});
+
+		await fireEvent.input(screen.getByLabelText('PED to remove'), { target: { value: '60' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+		await waitFor(() => expect(onconfirm).toHaveBeenCalledWith('Animal Muscle Oil', 1_200));
+	});
+
 	it('states that Remove leaves historical TT intact', () => {
 		render(AdjustStockModal, {
 			props: { item: stock, mode: 'remove', onconfirm: vi.fn(), oncancel: vi.fn() },

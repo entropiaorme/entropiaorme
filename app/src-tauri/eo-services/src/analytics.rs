@@ -44,7 +44,8 @@ pub use conversion::{
     ConversionLineSide, ConversionOutput, ItemConversion,
 };
 pub use from_account::{
-    AccountRecord, AccountStep, FromAccount, RecentFromAccount, RecordedFromAccount, TakenBack,
+    AccountRecord, AccountStep, FromAccount, ListingFromAccount, RecentFromAccount,
+    RecordedFromAccount, TakenBack,
     UnknownOriginRecorded, UnknownOriginUndo, RECENT_FROM_ACCOUNT_SECONDS,
 };
 pub(crate) use realised::realised_markup_by_quest;
@@ -225,6 +226,10 @@ pub struct AuctionListingRow {
     pub activity_net_markup: Option<f64>,
     /// Gross sale proceeds above the listing's TT, before fees.
     pub gross_markup: Option<f64>,
+    /// When the account readings settled its outcome on their own: the
+    /// step they saw it in. `None` for one the player resolved, and while
+    /// it waits on the auction.
+    pub from_account: Option<RecordedFromAccount>,
 }
 
 /// One thing this activity did to its stock: an auction listing across its
@@ -4499,7 +4504,165 @@ fn listing_from_row(row: &rusqlite::Row) -> AuctionListingRow {
         } else {
             None
         },
+        from_account: None,
     }
+}
+
+/// Confirm a pending listing sold, inside the caller's transaction: the
+/// listing's status, the markup and the point-of-sale fee in the ledger,
+/// and the day's rollup. `None` (nothing written) when the listing does not
+/// stand or is not pending.
+pub(crate) fn confirm_listing_within(
+    tx: &rusqlite::Transaction<'_>,
+    listing_id: &str,
+    final_price: f64,
+    sale_fee: f64,
+    resolved_at: &str,
+) -> Result<Option<AuctionListingRow>, DbError> {
+        let Some(listing) = read_listing(&tx, &listing_id)? else {
+            return Ok(None);
+        };
+        if listing.status != "pending" {
+            return Ok(None);
+        }
+
+        let gross_result = if listing.subject_kind == "equipment" {
+            final_price - listing.cost_basis.unwrap_or(listing.tt_value)
+        } else {
+            stock_allocation::resolve_sale(
+                listing.quantity,
+                listing.attributed_qty,
+                listing.tt_value,
+                listing
+                    .cost_basis
+                    .map_or(0.0, |basis| basis - listing.tt_value),
+                final_price,
+                listing.listing_fee,
+                sale_fee,
+            )
+            .gross_markup
+        };
+
+        tx.execute(
+            "UPDATE auction_listings SET status = 'sold', final_price = ?, \
+                 sale_fee = ?, resolved_at = ? WHERE id = ?",
+            rusqlite::params![final_price, sale_fee, resolved_at, listing_id],
+        )?;
+
+        // Markup only. Selling at TT converts a position rather than
+        // creating income, for untracked stock as much as for tracked:
+        // the player held that value either way, and the app simply
+        // has no record of where the untracked part came from.
+        if gross_result.abs() > STOCK_EPSILON {
+            let entry_id = Uuid::new_v4().to_string();
+            let kind = if gross_result > 0.0 {
+                "markup"
+            } else {
+                "expense"
+            };
+            let tag = if listing.subject_kind == "equipment" {
+                INVENTORY_SALE_TAG
+            } else {
+                "market"
+            };
+            tx.execute(
+                "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+                rusqlite::params![
+                    entry_id,
+                    resolved_at,
+                    kind,
+                    format!("Auction Sale: {}", listing.item_name),
+                    gross_result.abs(),
+                    tag,
+                ],
+            )?;
+            tx.execute(
+                "UPDATE auction_listings SET sale_entry_id = ? WHERE id = ?",
+                rusqlite::params![entry_id, listing_id],
+            )?;
+        }
+
+        if sale_fee > 0.0 {
+            let entry_id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+                 VALUES (?, ?, 'expense', ?, ?, 'market')",
+                rusqlite::params![
+                    entry_id,
+                    resolved_at,
+                    format!("Auction Fee: {}", listing.item_name),
+                    sale_fee,
+                ],
+            )?;
+            tx.execute(
+                "UPDATE auction_listings SET sale_fee_entry_id = ? WHERE id = ?",
+                rusqlite::params![entry_id, listing_id],
+            )?;
+        }
+
+        if listing.subject_kind == "equipment" {
+            if let Some(item_id) = &listing.inventory_item_id {
+                tx.execute(
+                    "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
+                         updated_at = unixepoch('now') WHERE id = ?",
+                    rusqlite::params![resolved_at, item_id],
+                )?;
+            }
+        }
+
+    daily_rollup::refresh_days(tx, [resolved_at])?;
+    Ok(read_listing(tx, listing_id)?)
+}
+
+/// Mark a pending listing expired inside the caller's transaction: its
+/// stock comes back exactly as it left, the fee stays spent. `None`
+/// (nothing written) when the listing does not stand or is not pending.
+pub(crate) fn expire_listing_within(
+    tx: &rusqlite::Transaction<'_>,
+    listing_id: &str,
+    resolved_at: &str,
+    now: f64,
+) -> Result<Option<AuctionListingRow>, DbError> {
+        let Some(listing) = read_listing(&tx, &listing_id)? else {
+            return Ok(None);
+        };
+        if listing.status != "pending" {
+            return Ok(None);
+        }
+
+        if listing.subject_kind == "equipment" {
+            if let Some(item_id) = &listing.inventory_item_id {
+                asset_positions::restore(&tx, item_id, now)?;
+            }
+        } else {
+            // Each original movement goes back in reverse, carrying
+            // whatever its stock was carrying: an expiry returns the
+            // units exactly as they left.
+            for row in conversion::movement_rows(&tx, &listing_id, "listing")? {
+                insert_movement(
+                    &tx,
+                    &listing.item_name,
+                    "listing_return",
+                    Some(&listing_id),
+                    row.provenance(),
+                    row.session_definition_id,
+                    row.activity_context_id,
+                    row.tool_name.as_deref(),
+                    -row.quantity,
+                    -row.tt_value,
+                    &resolved_at,
+                    now,
+                    row.derived().outflow(),
+                )?;
+            }
+        }
+
+        tx.execute(
+            "UPDATE auction_listings SET status = 'expired', resolved_at = ? WHERE id = ?",
+            rusqlite::params![resolved_at, listing_id],
+        )?;
+    Ok(read_listing(tx, listing_id)?)
 }
 
 /// Read one listing by id, or `None` when it does not exist.
@@ -6487,11 +6650,15 @@ impl AnalyticsService {
                      ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, \
                               listed_at DESC, id DESC"
                 ))?;
-                let rows = stmt
+                let mut rows = stmt
                     .query_map(rusqlite::params![profession.as_str()], |row| {
                         Ok(listing_from_row(row))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
+                let sources = from_account::listing_sources(conn)?;
+                for row in &mut rows {
+                    row.from_account = sources.get(&row.id).copied();
+                }
                 Ok(rows)
             })
             .await?)
@@ -6964,101 +7131,10 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let Some(listing) = read_listing(&tx, &listing_id)? else {
-                    return Ok(None);
-                };
-                if listing.status != "pending" {
-                    return Ok(None);
+                let row = confirm_listing_within(&tx, &listing_id, final_price, sale_fee, &resolved_at)?;
+                if row.is_some() {
+                    tx.commit()?;
                 }
-
-                let gross_result = if listing.subject_kind == "equipment" {
-                    final_price - listing.cost_basis.unwrap_or(listing.tt_value)
-                } else {
-                    stock_allocation::resolve_sale(
-                        listing.quantity,
-                        listing.attributed_qty,
-                        listing.tt_value,
-                        listing
-                            .cost_basis
-                            .map_or(0.0, |basis| basis - listing.tt_value),
-                        final_price,
-                        listing.listing_fee,
-                        sale_fee,
-                    )
-                    .gross_markup
-                };
-
-                tx.execute(
-                    "UPDATE auction_listings SET status = 'sold', final_price = ?, \
-                         sale_fee = ?, resolved_at = ? WHERE id = ?",
-                    rusqlite::params![final_price, sale_fee, resolved_at, listing_id],
-                )?;
-
-                // Markup only. Selling at TT converts a position rather than
-                // creating income, for untracked stock as much as for tracked:
-                // the player held that value either way, and the app simply
-                // has no record of where the untracked part came from.
-                if gross_result.abs() > STOCK_EPSILON {
-                    let entry_id = Uuid::new_v4().to_string();
-                    let kind = if gross_result > 0.0 {
-                        "markup"
-                    } else {
-                        "expense"
-                    };
-                    let tag = if listing.subject_kind == "equipment" {
-                        INVENTORY_SALE_TAG
-                    } else {
-                        "market"
-                    };
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![
-                            entry_id,
-                            resolved_at,
-                            kind,
-                            format!("Auction Sale: {}", listing.item_name),
-                            gross_result.abs(),
-                            tag,
-                        ],
-                    )?;
-                    tx.execute(
-                        "UPDATE auction_listings SET sale_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, listing_id],
-                    )?;
-                }
-
-                if sale_fee > 0.0 {
-                    let entry_id = Uuid::new_v4().to_string();
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, 'expense', ?, ?, 'market')",
-                        rusqlite::params![
-                            entry_id,
-                            resolved_at,
-                            format!("Auction Fee: {}", listing.item_name),
-                            sale_fee,
-                        ],
-                    )?;
-                    tx.execute(
-                        "UPDATE auction_listings SET sale_fee_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, listing_id],
-                    )?;
-                }
-
-                if listing.subject_kind == "equipment" {
-                    if let Some(item_id) = &listing.inventory_item_id {
-                        tx.execute(
-                            "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
-                                 updated_at = unixepoch('now') WHERE id = ?",
-                            rusqlite::params![resolved_at, item_id],
-                        )?;
-                    }
-                }
-
-                daily_rollup::refresh_days(&tx, [resolved_at.as_str()])?;
-                let row = read_listing(&tx, &listing_id)?;
-                tx.commit()?;
                 Ok(row)
             })
             .await
@@ -7087,46 +7163,10 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let Some(listing) = read_listing(&tx, &listing_id)? else {
-                    return Ok(None);
-                };
-                if listing.status != "pending" {
-                    return Ok(None);
+                let row = expire_listing_within(&tx, &listing_id, &resolved_at, now)?;
+                if row.is_some() {
+                    tx.commit()?;
                 }
-
-                if listing.subject_kind == "equipment" {
-                    if let Some(item_id) = &listing.inventory_item_id {
-                        asset_positions::restore(&tx, item_id, now)?;
-                    }
-                } else {
-                    // Each original movement goes back in reverse, carrying
-                    // whatever its stock was carrying: an expiry returns the
-                    // units exactly as they left.
-                    for row in conversion::movement_rows(&tx, &listing_id, "listing")? {
-                        insert_movement(
-                            &tx,
-                            &listing.item_name,
-                            "listing_return",
-                            Some(&listing_id),
-                            row.provenance(),
-                            row.session_definition_id,
-                            row.activity_context_id,
-                            row.tool_name.as_deref(),
-                            -row.quantity,
-                            -row.tt_value,
-                            &resolved_at,
-                            now,
-                            row.derived().outflow(),
-                        )?;
-                    }
-                }
-
-                tx.execute(
-                    "UPDATE auction_listings SET status = 'expired', resolved_at = ? WHERE id = ?",
-                    rusqlite::params![resolved_at, listing_id],
-                )?;
-                let row = read_listing(&tx, &listing_id)?;
-                tx.commit()?;
                 Ok(row)
             })
             .await
@@ -7607,6 +7647,69 @@ impl AnalyticsService {
             })
             .await
             .map_err(AnalyticsError::from)
+    }
+
+    /// Take back an expiry, leaving the listing on the auction again: the
+    /// stock that came back goes out once more, exactly as it returned.
+    /// `Ok(None)` when no expired auction listing stands under that id;
+    /// refused when the stock that came back has since left, and for
+    /// equipment, whose return merged it back into the holding it came
+    /// from.
+    pub async fn reopen_expired_listing(
+        &self,
+        listing_id: &str,
+    ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
+        let listing_id = listing_id.to_string();
+        self.db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                let Some(listing) = read_listing(&tx, &listing_id)? else {
+                    return Ok(Ok(None));
+                };
+                if listing.status != "expired" || listing.channel != "auction" {
+                    return Ok(Ok(None));
+                }
+                if listing.subject_kind == "equipment" {
+                    return Ok(Err(
+                        "An equipment listing that came back is held again; list it anew instead"
+                            .to_string(),
+                    ));
+                }
+                let returned: Vec<(String, f64)> = {
+                    let mut stmt = tx.prepare(
+                        "SELECT item_name, SUM(quantity) FROM stock_movements \
+                         WHERE ref_id = ?1 AND movement_kind = 'listing_return' \
+                           AND inventory_item_id IS NULL GROUP BY item_name",
+                    )?;
+                    let rows = stmt
+                        .query_map(rusqlite::params![listing_id], |row| {
+                            Ok((row.get(0)?, row.get(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    rows
+                };
+                for (item_name, came_back) in &returned {
+                    let remaining = raw_position(&tx, item_name)? - came_back;
+                    if remaining < -STOCK_EPSILON {
+                        return Ok(Err(blocked_reason(item_name, -remaining)));
+                    }
+                }
+                tx.execute(
+                    "DELETE FROM stock_movements \
+                     WHERE ref_id = ?1 AND movement_kind = 'listing_return'",
+                    rusqlite::params![listing_id],
+                )?;
+                tx.execute(
+                    "UPDATE auction_listings SET status = 'pending', resolved_at = NULL \
+                     WHERE id = ?1",
+                    rusqlite::params![listing_id],
+                )?;
+                let row = read_listing(&tx, &listing_id)?;
+                tx.commit()?;
+                Ok(Ok(row))
+            })
+            .await?
+            .map_err(AnalyticsError::Rejected)
     }
 
     /// Undo a listing: the stock it took comes back, and every ledger row it

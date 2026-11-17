@@ -26,18 +26,7 @@ use eo_api::account_reconciliation::{
     StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
 };
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
-use eo_api::analytics::{
-    ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
-    AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput,
-    AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput,
-    EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
-    InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
-    InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
-    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
-    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
-    StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
-    StockSaleFromAccount, StockSaleFromAccountInput,
-};
+use eo_api::analytics::{ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting, AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput, AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount, StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput, StockSaleFromAccount, StockSaleFromAccountInput};
 use eo_api::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
     HpOptimizerResult, PathOptimizerResult, ProfessionLevel, SkillLevel,
@@ -1331,6 +1320,14 @@ pub async fn auction_sale_revert(
     input: ActivityUndoInput,
 ) -> Result<AuctionListing, ApiError> {
     facade(&app)?.auction_sale_revert(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn auction_listing_reopen(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<AuctionListing, ApiError> {
+    facade(&app)?.auction_listing_reopen(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

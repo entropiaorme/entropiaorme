@@ -1,8 +1,9 @@
 /**
  * What the account readings propose for listings still on auction: that
- * one sold (with the PED Card's rise in the same step, when it can be read)
- * or came back. A
- * proposal is a guess. It fills the listing's existing confirmation, and
+ * one sold at a price the player says (with the PED Card's rise in the same
+ * step, when it can be read), or an outcome read from a step too long to
+ * record on its own. What the readings settle is recorded without asking.
+ * A proposal is a guess. It fills the listing's existing confirmation, and
  * only once the listing's own command has recorded the outcome is the
  * proposal marked recorded; "Not this listing" dismisses it.
  *
@@ -47,6 +48,19 @@ export function proposalSentence(proposal: ListingProposal, now: Date = new Date
 	return proceeds
 		? `${left} Your PED Card rose by ${formatPed(proceeds.ped)} PED between those two readings: that is the figure filled in, so correct it if the auction took a fee first.`
 		: left;
+}
+
+/** How the account recorded a listing's outcome on its own, with the window
+ * it happened in. */
+export function fromAccountSentence(
+	status: string,
+	seen: { from: string; to: string },
+	now: Date = new Date(),
+): string {
+	const between = `between ${formatSeenAt(seen.from, now)} and ${formatSeenAt(seen.to, now)}`;
+	return status === 'sold'
+		? `Recorded from your account: it sold ${between}.`
+		: `Recorded from your account: it came back ${between}.`;
 }
 
 export function createListingProposals() {

@@ -28,18 +28,7 @@ use crate::account_reconciliation::{
     StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
 };
 use crate::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
-use crate::analytics::{
-    ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
-    AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput,
-    AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput,
-    EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
-    InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
-    InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
-    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
-    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
-    StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
-    StockSaleFromAccount, StockSaleFromAccountInput,
-};
+use crate::analytics::{ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting, AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput, AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount, StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput, StockSaleFromAccount, StockSaleFromAccountInput};
 use crate::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
     HpOptimizerResult, PathOptimizerResult, ProfessionLevel, SkillLevel,
@@ -1193,6 +1182,14 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "auction_sale_revert",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
+            }],
+            returns: Some(schema(schema_for!(AuctionListing))),
+        },
+        CommandSpec {
+            name: "auction_listing_reopen",
             args: vec![ArgSpec {
                 name: "input",
                 schema: schema(schema_for!(ActivityUndoInput)),

@@ -130,6 +130,7 @@ macro_rules! app_command_surface {
             stock_sale_from_account,
             activity_history,
             auction_sale_revert,
+            auction_listing_reopen,
             auction_listing_undo,
             stock_conversion_undo,
             private_sale_undo,

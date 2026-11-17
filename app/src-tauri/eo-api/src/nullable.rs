@@ -20,6 +20,14 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct Nullable<T>(pub Option<T>);
 
+/// `null`: what a field read from a stored shape that predates it takes
+/// under `#[serde(default)]`.
+impl<T> Default for Nullable<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
 impl<T> From<Option<T>> for Nullable<T> {
     fn from(value: Option<T>) -> Self {
         Self(value)

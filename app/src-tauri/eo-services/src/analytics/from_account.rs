@@ -34,7 +34,8 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::{
-    epoch_to_iso, is_universal_ammo, item_positions, naive_to_epoch, write_private_sale,
+    confirm_listing_within, epoch_to_iso, expire_listing_within, is_universal_ammo,
+    item_positions, naive_to_epoch, write_private_sale,
     write_ratio_conversion, ActivityHistoryRow, AnalyticsError, AnalyticsService, PrivateSale,
     Profession, RatioConversion, STOCK_EPSILON,
 };
@@ -112,6 +113,37 @@ impl AccountRecord {
                 "conversion"
             }
             AccountRecord::TerminalSale { .. } => "trade",
+        }
+    }
+}
+
+/// A listing's outcome the readings settled on their own (see
+/// [`AnalyticsService::record_listing_from_account_blocking`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListingFromAccount {
+    /// It sold: at this price (PED), with the fee the game charges for
+    /// selling above the starting bid.
+    Sold {
+        listing_id: String,
+        final_price: f64,
+        sale_fee: f64,
+    },
+    /// It came back from the auction: expired or withdrawn.
+    Returned { listing_id: String },
+}
+
+impl ListingFromAccount {
+    pub fn listing_id(&self) -> &str {
+        match self {
+            ListingFromAccount::Sold { listing_id, .. }
+            | ListingFromAccount::Returned { listing_id } => listing_id,
+        }
+    }
+
+    fn outcome(&self) -> &'static str {
+        match self {
+            ListingFromAccount::Sold { .. } => "sold",
+            ListingFromAccount::Returned { .. } => "returned",
         }
     }
 }
@@ -254,18 +286,22 @@ fn sources(conn: &rusqlite::Connection) -> Result<HashMap<String, RecordedFromAc
     Ok(rows)
 }
 
-/// Mark the history entries a record from the account made.
+/// Mark the history entries a record from the account made, a listing
+/// whose outcome the readings settled among them.
 pub(super) fn attach_sources(
     conn: &rusqlite::Connection,
     rows: &mut [ActivityHistoryRow],
 ) -> Result<(), DbError> {
     let sources = sources(conn)?;
-    if sources.is_empty() {
+    let listings = listing_sources(conn)?;
+    if sources.is_empty() && listings.is_empty() {
         return Ok(());
     }
     for row in rows.iter_mut() {
         if row.kind == "conversion" || row.kind == "trade" {
             row.from_account = sources.get(&row.id).copied();
+        } else if row.kind == "listing" {
+            row.from_account = listings.get(&row.id).copied();
         }
     }
     Ok(())
@@ -387,7 +423,127 @@ fn record_in(
     }))
 }
 
+/// A listing's outcome the readings settled, in one transaction: through
+/// the same writes as the player's own confirmation or expiry, refused once
+/// recorded from the step already, and left when the listing no longer
+/// waits on the auction (the player resolved it, or took it back).
+fn record_listing_in(
+    conn: &mut rusqlite::Connection,
+    step: AccountStep,
+    outcome: &ListingFromAccount,
+    resolved_on: &str,
+    now: f64,
+) -> Result<FromAccount, DbError> {
+    let tx = conn.transaction()?;
+    let listing_id = outcome.listing_id();
+    let recorded: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM listing_outcomes_from_account \
+                        WHERE reading_id = ?1 AND listing_id = ?2)",
+        rusqlite::params![step.reading_id, listing_id],
+        |row| row.get(0),
+    )?;
+    if recorded {
+        return Ok(FromAccount::AlreadyRecorded);
+    }
+    let resolved = match outcome {
+        ListingFromAccount::Sold {
+            final_price,
+            sale_fee,
+            ..
+        } => confirm_listing_within(&tx, listing_id, *final_price, *sale_fee, resolved_on)?,
+        ListingFromAccount::Returned { .. } => {
+            expire_listing_within(&tx, listing_id, resolved_on, now)?
+        }
+    };
+    let Some(listing) = resolved else {
+        return Ok(FromAccount::RecordedByHand);
+    };
+    tx.execute(
+        "INSERT INTO listing_outcomes_from_account \
+             (listing_id, outcome, reading_id, prev_reading_id, seen_from, seen_to, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            listing_id,
+            outcome.outcome(),
+            step.reading_id,
+            step.prev_reading_id,
+            step.seen_from,
+            step.seen_to,
+            now,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(FromAccount::Recorded {
+        record_id: listing.id,
+        taken: Vec::new(),
+    })
+}
+
+/// When the readings settled each listing whose outcome stands, by the
+/// listing's id: the step of the latest outcome recorded from them.
+pub(super) fn listing_sources(
+    conn: &rusqlite::Connection,
+) -> Result<HashMap<String, RecordedFromAccount>, DbError> {
+    let mut stmt = conn.prepare(
+        // id-order: insertion (a later outcome of the same listing replaces an earlier)
+        "SELECT o.listing_id, o.seen_from, o.seen_to \
+         FROM listing_outcomes_from_account o \
+         JOIN auction_listings l ON l.id = o.listing_id \
+         WHERE l.undone_at IS NULL \
+           AND l.status = CASE o.outcome WHEN 'sold' THEN 'sold' ELSE 'expired' END \
+         ORDER BY o.id",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                RecordedFromAccount {
+                    seen_from: row.get(1)?,
+                    seen_to: row.get(2)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+    Ok(rows)
+}
+
 impl AnalyticsService {
+    /// Record a listing's outcome the account readings settled, through the
+    /// same writes as the player's own confirmation or expiry, dated
+    /// `resolved_on` (the local day its step ended), with the step it came
+    /// from, all in one transaction. Recording it again from the same step
+    /// records nothing; a listing the player resolved meanwhile is left.
+    ///
+    /// Blocking, like [`Self::record_from_account_blocking`]: for the
+    /// account connection's pass over the steps it read.
+    pub fn record_listing_from_account_blocking(
+        &self,
+        step: AccountStep,
+        outcome: ListingFromAccount,
+        resolved_on: String,
+    ) -> Result<FromAccount, AnalyticsError> {
+        check_step(&step)?;
+        if outcome.listing_id().trim().is_empty() {
+            return Err(AnalyticsError::InvalidInput("a listing outcome names its listing"));
+        }
+        if let ListingFromAccount::Sold {
+            final_price,
+            sale_fee,
+            ..
+        } = &outcome
+        {
+            if !final_price.is_finite() || !sale_fee.is_finite() || *final_price < 0.0 || *sale_fee < 0.0 {
+                return Err(AnalyticsError::InvalidInput(
+                    "a sale price and fee cannot be negative",
+                ));
+            }
+        }
+        let now = naive_to_epoch(self.clock.now());
+        Ok(self.db.with_writer_blocking(move |conn| {
+            record_listing_in(conn, step, &outcome, &resolved_on, now)
+        })?)
+    }
+
     /// Record one part of a step the account readings recognised, through
     /// the same writes as the player's own entry, against held stock only,
     /// with where it came from, all in one transaction. Recording the same

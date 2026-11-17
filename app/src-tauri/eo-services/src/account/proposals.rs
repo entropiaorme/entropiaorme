@@ -1,6 +1,6 @@
-//! What the readings propose: a strongbox opening, a listing sold, a
-//! listing returned, or a purchase at auction, seen in the step between two
-//! consecutive readings.
+//! What the readings propose: a strongbox opening, a listing sold at a
+//! price the player says, a listing outcome read from a long step, or a
+//! purchase at auction, seen in the step between two consecutive readings.
 //!
 //! A proposal is a guess. The app never records one on its own: it fills
 //! in the existing strongbox review, listing confirmation or asset purchase,
@@ -9,9 +9,11 @@
 //! openings, the auction listings and the asset purchases are read, never
 //! written:
 //! to match a listing, and to tell whether the record a proposal became
-//! still stands. What closes exactly with no markup in it (a Shrapnel
-//! conversion, a recycling, a sale to the Trade Terminal) is no proposal:
-//! it is recorded on its own (see [`super::follow`]).
+//! still stands. What the readings settle leaves nothing to guess and is no
+//! proposal: a Shrapnel conversion, a recycling, a sale to the Trade
+//! Terminal, a listing that came back, and a listing sold at the one price
+//! that fits it ([`settled`]) are recorded on its own (see
+//! [`super::follow`]).
 //!
 //! Each stored reading is examined once, against the reading stored before
 //! it: what the step proposes is worked out on a reader ([`prepare`]) and
@@ -51,8 +53,10 @@
 //!   player paid above TT, so it is never recorded on its own.
 //! - **A listing outcome** is proposed only when exactly one of the
 //!   player's listings on auction from before the step matches it by item
-//!   name and quantity (and TT, where the listing has one), and the
-//!   departure is the only change of that item's quantity in the step.
+//!   name and quantity (and TT, where the listing has one), the departure
+//!   is the only change of that item's quantity in the step, and the step
+//!   is not one whose settled outcomes are recorded on their own
+//!   ([`super::follow::settles_listings`]) or its outcome is not settled.
 //!   Sold: the item left the auction with no return to another place. The
 //!   PED Card's rise is offered only when the Card rose in that same step,
 //!   nothing else in the step could move the Card, and the two readings
@@ -302,6 +306,10 @@ pub struct AuctionDeparture {
     pub returned_to: Option<Container>,
     /// For a sale: the Card's rise, when it can be read as the proceeds.
     pub proceeds: Option<Pec>,
+    /// For a sale: the Card's rise in a step of any length when nothing
+    /// else in it could have moved the Card. Only ever matched against the
+    /// prices the listing could have sold at, never offered as a figure.
+    pub card_rise: Option<Pec>,
 }
 
 /// What one step between two readings shows.
@@ -421,7 +429,7 @@ fn alone_of_its_name(set: &StepSet, index: usize, name: &str) -> bool {
 /// one change of its item's quantity in the step: anything else of that
 /// name gained, lost, consumed or moved alongside (loot of the same item,
 /// say) makes it impossible to tell what happened, so nothing is read.
-fn departures(set: &StepSet, before: &Reading) -> Vec<AuctionDeparture> {
+pub(super) fn departures(set: &StepSet, before: &Reading) -> Vec<AuctionDeparture> {
     let mut found = Vec::new();
     for (index, step) in set.steps.iter().enumerate() {
         let alone = |name: &str| alone_of_its_name(set, index, name);
@@ -440,6 +448,7 @@ fn departures(set: &StepSet, before: &Reading) -> Vec<AuctionDeparture> {
                     rows: (*rows_touched).max(1),
                     returned_to: None,
                     proceeds: proceeds(set, index),
+                    card_rise: card_rise(set, index),
                 })
             }
             Step::Left { key, units, value }
@@ -452,6 +461,7 @@ fn departures(set: &StepSet, before: &Reading) -> Vec<AuctionDeparture> {
                     rows: 1,
                     returned_to: None,
                     proceeds: proceeds(set, index),
+                    card_rise: card_rise(set, index),
                 })
             }
             Step::Moved {
@@ -474,6 +484,7 @@ fn departures(set: &StepSet, before: &Reading) -> Vec<AuctionDeparture> {
                     rows,
                     returned_to: Some(to.clone()),
                     proceeds: None,
+                    card_rise: None,
                 });
             }
             _ => {}
@@ -492,6 +503,13 @@ fn proceeds(set: &StepSet, sold: usize) -> Option<Pec> {
     if !(0.0..=PROCEEDS_WITHIN_SECONDS).contains(&span) {
         return None;
     }
+    card_rise(set, sold)
+}
+
+/// The PED Card's rise in the step, when the Card rose and nothing else in
+/// it but the sale at `sold` could have moved the Card, however long the
+/// step.
+fn card_rise(set: &StepSet, sold: usize) -> Option<Pec> {
     let mut rise = None;
     for (index, step) in set.steps.iter().enumerate() {
         if index == sold {
@@ -530,25 +548,99 @@ fn listed_before(listed_at: &str, listed_instant: Option<f64>, between: &Span) -
     }
 }
 
+/// A listing a departure matched, with the terms it was posted on.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ListedTerms {
+    pub id: String,
+    /// The whole listing's TT, in PED.
+    pub tt_value: f64,
+    pub starting_bid: f64,
+    pub buyout: Option<f64>,
+}
+
+/// What the readings settle about a listing on their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ListingSettled {
+    /// It came back from the auction: expired or withdrawn.
+    Returned,
+    /// It sold at this price, with the fee the game charges for selling
+    /// above the starting bid.
+    Sold { final_price: Pec, sale_fee: Pec },
+}
+
+fn pec_of(ped: f64) -> Pec {
+    Pec((ped * 100.0).round() as i64)
+}
+
+/// The fee the game charges at the point of sale: the listing fee the
+/// final price's markup would have carried, less the one already paid on
+/// the starting bid's ([`crate::auction_fee::listing_fee_ped`]).
+fn point_of_sale_fee(terms: &ListedTerms, final_price: f64) -> Pec {
+    let fee = |price: f64| pec_of(crate::auction_fee::listing_fee_ped(price - terms.tt_value));
+    Pec((fee(final_price).0 - fee(terms.starting_bid).0).max(0))
+}
+
+/// The outcome of a matched listing the readings settle with nothing left
+/// to guess. A return always. A sale only when one price fits: a listing
+/// whose buyout is its starting bid can have sold at nothing else; any
+/// other sells at its starting bid or its buyout only when the Card's rise
+/// in the step is exactly one of them, as paid or less its point-of-sale
+/// fee (it may be taken from the proceeds). A sale between the two, or a
+/// rise that fits both or neither, is the player's to price.
+pub(super) fn settled(terms: &ListedTerms, departure: &AuctionDeparture) -> Option<ListingSettled> {
+    if departure.returned_to.is_some() {
+        return Some(ListingSettled::Returned);
+    }
+    let start = pec_of(terms.starting_bid);
+    let mut prices = vec![(start, Pec::ZERO)];
+    let buyout = terms.buyout.filter(|buyout| buyout.is_finite());
+    if let Some(buyout) = buyout.filter(|buyout| pec_of(*buyout).0 > start.0) {
+        prices.push((pec_of(buyout), point_of_sale_fee(terms, buyout)));
+    }
+    let (final_price, sale_fee) = match departure.card_rise {
+        Some(rise) => {
+            let fits: Vec<(Pec, Pec)> = prices
+                .into_iter()
+                .filter(|(price, fee)| rise.0 == price.0 || rise.0 == price.0 - fee.0)
+                .collect();
+            match fits.as_slice() {
+                [only] => *only,
+                _ => return None,
+            }
+        }
+        None if buyout.is_some_and(|buyout| pec_of(buyout).0 == start.0) => (start, Pec::ZERO),
+        None => return None,
+    };
+    Some(ListingSettled::Sold {
+        final_price,
+        sale_fee,
+    })
+}
+
 /// The one listing still on auction a departure matches, by item name and
 /// quantity, and by TT where the listing has one, among the listings made
 /// before the step; `None` for no match or more than one.
-fn matching_listing(
+pub(super) fn matching_listing(
     conn: &rusqlite::Connection,
     departure: &AuctionDeparture,
     between: &Span,
-) -> Result<Option<String>, AccountError> {
+) -> Result<Option<ListedTerms>, AccountError> {
     let mut stmt = conn.prepare(
-        "SELECT id, item_name, tt_value, listed_at, listed_instant FROM auction_listings \
+        "SELECT id, item_name, tt_value, listed_at, listed_instant, starting_bid, buyout \
+         FROM auction_listings \
          WHERE status = 'pending' AND undone_at IS NULL AND channel = 'auction' \
            AND quantity = ?1",
     )?;
     let candidates = stmt
         .query_map([departure.units], |row| {
             Ok((
-                row.get::<_, String>(0)?,
+                ListedTerms {
+                    id: row.get(0)?,
+                    tt_value: row.get(2)?,
+                    starting_bid: row.get(5)?,
+                    buyout: row.get(6)?,
+                },
                 row.get::<_, String>(1)?,
-                row.get::<_, f64>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<f64>>(4)?,
             ))
@@ -558,19 +650,19 @@ fn matching_listing(
     let tolerance = i64::try_from(departure.rows)
         .unwrap_or(i64::MAX)
         .saturating_mul(MICRO_PER_PEC);
-    let matching: Vec<String> = candidates
+    let matching: Vec<ListedTerms> = candidates
         .into_iter()
-        .filter(|(_, _, _, listed_at, instant)| listed_before(listed_at, *instant, between))
-        .map(|(id, name, tt, _, _)| (id, name, tt))
-        .filter(|(_, name, _)| name.trim().to_lowercase() == wanted)
-        .filter(|(_, _, tt)| {
-            if !tt.is_finite() || *tt <= 0.0 {
+        .filter(|(_, _, listed_at, instant)| listed_before(listed_at, *instant, between))
+        .filter(|(_, name, _, _)| name.trim().to_lowercase() == wanted)
+        .filter(|(terms, _, _, _)| {
+            let tt = terms.tt_value;
+            if !tt.is_finite() || tt <= 0.0 {
                 return true;
             }
             let listed = (tt * MICRO_PER_PED as f64).round() as i64;
             listed.abs_diff(departure.amount.micro_ped()) <= tolerance.unsigned_abs()
         })
-        .map(|(id, _, _)| id)
+        .map(|(terms, _, _, _)| terms)
         .collect();
     Ok(match matching.as_slice() {
         [only] => Some(only.clone()),
@@ -631,6 +723,7 @@ fn found_in_step(
     before: &Reading,
     after: &Reading,
     session: Option<&str>,
+    settles_listings: bool,
     roles: &dyn RoleSource,
 ) -> Result<Vec<Found>, AccountError> {
     let outcomes = step_outcomes(before, after, roles)?;
@@ -674,9 +767,16 @@ fn found_in_step(
         }
     }
     for departure in &outcomes.departures {
-        let Some(listing_id) = matching_listing(conn, departure, &between)? else {
+        let Some(terms) = matching_listing(conn, departure, &between)? else {
             continue;
         };
+        // What the readings settle is recorded on its own by the pass that
+        // follows the stock (see [`super::follow`]); only a sale whose price
+        // is the player's to say is proposed.
+        if settles_listings && settled(&terms, departure).is_some() {
+            continue;
+        }
+        let listing_id = terms.id;
         let kind = if departure.returned_to.is_some() {
             ProposalKind::ListingReturned
         } else {
@@ -939,6 +1039,7 @@ fn prepare_again(
         &before.reading,
         &after.reading,
         session.as_deref(),
+        super::follow::settles_listings(conn, &before, &after)?,
         roles,
     )?;
     let whole = whole_across(conn, &before, &after, roles)?;

@@ -3,6 +3,12 @@
 //! exactly is recorded on its own through the analytics service, as the
 //! player's own entry would be.
 //!
+//! - A listing that came back from the auction is recorded expired, and
+//!   one that sold is recorded sold when only one price fits it (see
+//!   [`super::proposals::settled`]), dated by the local day its step ended
+//!   and kept with the step (see
+//!   [`crate::analytics::AnalyticsService::record_listing_from_account_blocking`]).
+//!   Only from a short step: what a longer one holds is proposed instead.
 //! - A Shrapnel conversion is recorded as a Shrapnel conversion, a recycling
 //!   as one conversion into Nanocubes, and a sale to the Trade Terminal as a
 //!   sale at TT, item by item. Each takes only what the app holds, keeps out
@@ -45,13 +51,18 @@
 use std::sync::Arc;
 
 use super::diff::Span;
-use super::proposals::{is_the_step_s_own, step_between};
+use super::proposals::{
+    departures, is_the_step_s_own, local_day, matching_listing, settled, step_between,
+    ListingSettled,
+};
 use super::recognition::{recognise_step, Recognised};
 use super::recorder::IDLE_READ_EVERY;
 use super::roles::{KnownRoles, RoleSource};
-use super::store::{self, Purpose, ReadingId};
+use super::store::{self, Purpose, ReadingId, StoredReading};
 use super::AccountError;
-use crate::analytics::{AccountRecord, AccountStep, AnalyticsError, AnalyticsService, FromAccount};
+use crate::analytics::{
+    AccountRecord, AccountStep, AnalyticsError, AnalyticsService, FromAccount, ListingFromAccount,
+};
 use crate::db::Db;
 use crate::game_data_store::GameDataStore;
 
@@ -81,6 +92,10 @@ pub struct Following {
     /// The step, when anything in it is to be recorded.
     pub step: Option<AccountStep>,
     pub records: Vec<AccountRecord>,
+    /// The listings whose outcome the step settles.
+    pub listings: Vec<ListingFromAccount>,
+    /// The local day the step ended: what a listing's outcome is dated.
+    pub resolved_on: String,
 }
 
 impl Following {
@@ -90,6 +105,8 @@ impl Following {
             reading,
             step: None,
             records: Vec::new(),
+            listings: Vec::new(),
+            resolved_on: String::new(),
         }
     }
 }
@@ -191,6 +208,59 @@ fn records_of(recognised: &Recognised) -> Vec<AccountRecord> {
     records
 }
 
+/// Whether the pass records the listing outcomes the step from `before` to
+/// `after` settles: a step after the readings stored before the app
+/// recorded from the account, outside a strongbox run's own readings, and
+/// no longer than [`LONGEST_STEP`]. What it settles is then never proposed.
+pub(super) fn settles_listings(
+    conn: &rusqlite::Connection,
+    before: &StoredReading,
+    after: &StoredReading,
+) -> Result<bool, AccountError> {
+    if before.header.id.0 <= history_ends_at(conn)? {
+        return Ok(false);
+    }
+    if after.header.purpose == Purpose::Run && before.header.purpose == Purpose::Run {
+        return Ok(false);
+    }
+    let length = after.reading.taken_at() - before.reading.taken_at();
+    Ok((0.0..=LONGEST_STEP).contains(&length))
+}
+
+/// The listings whose outcome a step settles: each departure from the
+/// auction that matches exactly one listing still on it, when the readings
+/// leave nothing about its outcome to guess.
+fn settled_listings(
+    conn: &rusqlite::Connection,
+    set: &super::diff::StepSet,
+    before: &super::reading::Reading,
+    between: &Span,
+) -> Result<Vec<ListingFromAccount>, AccountError> {
+    let mut out = Vec::new();
+    for departure in departures(set, before) {
+        let Some(terms) = matching_listing(conn, &departure, between)? else {
+            continue;
+        };
+        match settled(&terms, &departure) {
+            Some(ListingSettled::Returned) => {
+                out.push(ListingFromAccount::Returned {
+                    listing_id: terms.id,
+                });
+            }
+            Some(ListingSettled::Sold {
+                final_price,
+                sale_fee,
+            }) => out.push(ListingFromAccount::Sold {
+                listing_id: terms.id,
+                final_price: final_price.0 as f64 / 100.0,
+                sale_fee: sale_fee.0 as f64 / 100.0,
+            }),
+            None => {}
+        }
+    }
+    Ok(out)
+}
+
 /// Read one stored reading's step for what to record: a read, so run it
 /// on a reader.
 pub fn prepare(
@@ -227,14 +297,21 @@ pub fn prepare(
     let set = step_between(&before.reading, &after.reading, roles)?;
     let recognised = recognise_step(&set, &before.reading, &after.reading)?;
     // A long step may hold play no reading saw, unless everything in it
-    // closes exactly.
-    if length > LONGEST_STEP && !recognised.whole {
-        return Ok(Following::nothing(reading));
-    }
-    let records = records_of(&recognised);
+    // closes exactly; a listing's outcome is read only from a short one.
+    let records = if length > LONGEST_STEP && !recognised.whole {
+        Vec::new()
+    } else {
+        records_of(&recognised)
+    };
+    let listings = if settles_listings(conn, &before, &after)? {
+        settled_listings(conn, &set, &before.reading, &between)?
+    } else {
+        Vec::new()
+    };
     Ok(Following {
         reading,
-        step: (!records.is_empty()).then_some(AccountStep {
+        resolved_on: local_day(between.to),
+        step: (!records.is_empty() || !listings.is_empty()).then_some(AccountStep {
             reading_id: reading.0,
             prev_reading_id: prev.0,
             seen_from: between.from,
@@ -243,6 +320,7 @@ pub fn prepare(
             stock_settles_by: between.to + STOCK_SETTLES,
         }),
         records,
+        listings,
     })
 }
 
@@ -303,6 +381,27 @@ pub fn follow(
         };
         let reading = following.reading;
         if let Some(step) = following.step {
+            // A listing's outcome first: it takes nothing from stock, so it
+            // never waits on stock still landing.
+            for listing in following.listings {
+                match analytics.record_listing_from_account_blocking(
+                    step,
+                    listing,
+                    following.resolved_on.clone(),
+                ) {
+                    Ok(FromAccount::Recorded { .. }) => pass.recorded += 1,
+                    Ok(_) => {}
+                    Err(AnalyticsError::Storage(error)) => {
+                        return Err(FollowFailure {
+                            reading: Some(reading),
+                            error: AccountError::Db(error),
+                        })
+                    }
+                    Err(error) => {
+                        tracing::warn!(target: "eo::account", %error, reading = reading.0, "a listing outcome the readings showed was refused; it is left");
+                    }
+                }
+            }
             for record in following.records {
                 match analytics.record_from_account_blocking(step, record) {
                     Ok(FromAccount::Recorded { .. }) => pass.recorded += 1,

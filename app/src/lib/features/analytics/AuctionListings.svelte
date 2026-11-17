@@ -15,11 +15,13 @@
 	 * additional fee charged at the point of sale, because neither is knowable
 	 * at listing time.
 	 *
-	 * With the account connected, the readings may show a listing's outcome:
-	 * it left the auction (sold), or came back. That proposal leads the
-	 * listing's pane in one sentence with the window it happened in, and
-	 * fills the matching action; it is recorded only through the listing's
-	 * own command, and marked recorded after.
+	 * With the account connected, the readings record a listing's outcome on
+	 * their own when they leave nothing to guess: it came back, or it sold
+	 * at the one price that fits. The resolved listing then says so, with
+	 * the window it happened in. A sale whose price is the player's to say
+	 * is proposed instead: the proposal leads the listing's pane in one
+	 * sentence and fills the matching action; it is recorded only through
+	 * the listing's own command, and marked recorded after.
 	 */
 	import { tick, untrack } from 'svelte';
 	import Button from '$lib/components/Button.svelte';
@@ -40,6 +42,7 @@
 	} from '$lib/utils/format';
 	import { hasRunOut } from './listingLifecycle';
 	import {
+		fromAccountSentence,
 		type ListingProposal,
 		type ListingProposals,
 		proposalSentence,
@@ -366,6 +369,11 @@
 									? `, ${selected.status === 'sold' ? 'sold' : 'returned'} ${formatLedgerDate(selected.resolvedAt)}`
 									: ''}
 							</p>
+							{#if selected.recordedFromAccount}
+								<p class="mt-0.5 text-xs text-text-tertiary">
+									{fromAccountSentence(selected.status, selected.recordedFromAccount, nowDate)}
+								</p>
+							{/if}
 						</div>
 						<span
 							class="shrink-0 text-xs font-medium uppercase tracking-wide

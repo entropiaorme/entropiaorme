@@ -683,6 +683,11 @@ pub struct AuctionListing {
     pub activity_net_markup: Nullable<f64>,
     /// Sale proceeds above the listing's TT, before fees.
     pub gross_markup: Nullable<f64>,
+    /// When the account readings settled its outcome on their own, the
+    /// step they saw it in; `null` for one the player resolved, and while
+    /// it waits on the auction.
+    #[serde(default)]
+    pub recorded_from_account: Nullable<RecordedFromAccount>,
 }
 
 /// One thing an activity did to its stock: a listing across its whole
@@ -1628,6 +1633,22 @@ impl Api {
             .ok_or_else(|| ApiError::not_found("no sold listing with that id"))
     }
 
+    /// Take back an expiry, leaving the listing on the auction again: the
+    /// stock that came back goes out once more. A listing that is missing or
+    /// did not expire is a not-found; one whose returned stock has since
+    /// left, or an equipment listing, is refused.
+    pub async fn auction_listing_reopen(
+        &self,
+        input: ActivityUndoInput,
+    ) -> Result<AuctionListing, ApiError> {
+        self.analytics
+            .reopen_expired_listing(&input.id)
+            .await
+            .map_err(analytics_error("auction listing reopen"))?
+            .map(auction_listing_dto)
+            .ok_or_else(|| ApiError::not_found("no expired listing with that id"))
+    }
+
     /// Undo a listing: its stock comes back and every ledger row it wrote goes
     /// with it. The entry stays on file, marked.
     pub async fn auction_listing_undo(&self, input: ActivityUndoInput) -> Result<(), ApiError> {
@@ -2226,6 +2247,13 @@ pub(crate) fn auction_listing_dto(
         expires_at: row.expires_at.into(),
         activity_net_markup: row.activity_net_markup.into(),
         gross_markup: row.gross_markup.into(),
+        recorded_from_account: row
+            .from_account
+            .map(|step| RecordedFromAccount {
+                from: eo_services::time::to_iso_utc(step.seen_from),
+                to: eo_services::time::to_iso_utc(step.seen_to),
+            })
+            .into(),
     }
 }
 

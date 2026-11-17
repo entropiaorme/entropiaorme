@@ -55,8 +55,8 @@ const PROJECTIONS: [Projection; 12] = [
         snapshot_sql: "SELECT day, rollup_version, dirty, has_rows, loot_tt, weapon_cost, \
              enhancer_cost, armour_cost, heal_cost, dangling_cost, skill_tt, codex_pes, \
              quest_pes, harvest_loot_tt, harvest_cost, consumable_cost, overhead_travel, \
-             overhead_field_logistics, overhead_unclassified FROM daily_rollups \
-             ORDER BY day",
+             overhead_field_logistics, overhead_unclassified, overhead_between_sessions \
+             FROM daily_rollups ORDER BY day",
     },
     Projection {
         table: "daily_ledger_rollups",

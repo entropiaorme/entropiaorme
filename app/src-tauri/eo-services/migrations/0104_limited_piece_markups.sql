@@ -13,6 +13,10 @@
 -- what each limited piece lost and what it billed: at its markup, or at the
 -- TT it lost when none was set. Unlimited armour stays in
 -- account_session_cost_armour_parts.
+--
+-- cost_item_placements may place an item as a limited armour piece or a
+-- limited plate: the player's declaration that it is one. SQLite needs a
+-- table rebuild to widen a CHECK; every existing row is copied unchanged.
 
 CREATE TABLE limited_piece_markups (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,3 +39,21 @@ CREATE TABLE account_session_cost_armour_pieces (
     precision          TEXT NOT NULL CHECK (precision IN ('exact', 'wholePec')),
     PRIMARY KEY (session_id, item_name)
 );
+
+CREATE TABLE cost_item_placements_new (
+    item_name TEXT PRIMARY KEY CHECK (length(item_name) > 0 AND item_name = trim(item_name)),
+    category  TEXT NOT NULL CHECK (category IN (
+        'weapon', 'amplifier', 'attachment', 'mindforceImplant', 'harvestingTool',
+        'healingTool', 'healingConsumable', 'unlimitedArmour', 'unlimitedPlate',
+        'limitedArmour', 'limitedPlate', 'consumable', 'travel', 'fieldLogistics',
+        'notACost'
+    )),
+    placed_at REAL NOT NULL
+);
+
+INSERT INTO cost_item_placements_new (item_name, category, placed_at)
+SELECT item_name, category, placed_at FROM cost_item_placements;
+
+DROP TABLE cost_item_placements;
+
+ALTER TABLE cost_item_placements_new RENAME TO cost_item_placements;

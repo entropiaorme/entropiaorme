@@ -39,6 +39,9 @@
 //!   ends at a run's first reading is not the run's (that reading is taken
 //!   before any box is opened) and is read like any other. The connection
 //!   never runs a pass while a run is open.
+//! - A step between sessions that wore or used something up is kept with
+//!   its measure, for what it bills as overhead on its day (see
+//!   [`super::between`]).
 //! - A step whose own content cannot be read is marked and passed. A
 //!   database failure stops the pass with the step unmarked, so the next
 //!   pass, after the next reading, tries it again; the connection passes a
@@ -96,6 +99,9 @@ pub struct Following {
     pub listings: Vec<ListingFromAccount>,
     /// The local day the step ended: what a listing's outcome is dated.
     pub resolved_on: String,
+    /// The step measured, when it lies between sessions and wore or used
+    /// something up (see [`super::between`]).
+    pub between: Option<super::between::BetweenStep>,
 }
 
 impl Following {
@@ -107,6 +113,7 @@ impl Following {
             records: Vec::new(),
             listings: Vec::new(),
             resolved_on: String::new(),
+            between: None,
         }
     }
 }
@@ -308,8 +315,10 @@ pub fn prepare(
     } else {
         Vec::new()
     };
+    let between_sessions = super::between::measure(&before, &after, roles)?;
     Ok(Following {
         reading,
+        between: between_sessions,
         resolved_on: local_day(between.to),
         step: (!records.is_empty() || !listings.is_empty()).then_some(AccountStep {
             reading_id: reading.0,
@@ -351,6 +360,7 @@ pub fn follow(
 ) -> Result<FollowPass, FollowFailure> {
     let mut pass = FollowPass::default();
     for _ in 0..STEPS_PER_PASS {
+        let game_data_for_write = game_data.clone();
         let game_data = game_data.clone();
         let prepared = on_reader(db, move |conn| {
             let Some(reading) = next_unrecognised(conn)? else {
@@ -422,10 +432,22 @@ pub fn follow(
                 }
             }
         }
-        db.with_writer_blocking(move |conn| Ok(mark_recognised(conn, reading, now)))
-            .map_err(AccountError::from)
-            .and_then(|marked| marked)
-            .map_err(FollowFailure::at(Some(reading)))?;
+        // A step between sessions is kept with what it bills, priced by
+        // the roles as they stand, and marked looked at in the same write.
+        let between = following.between;
+        let game_data = game_data_for_write.clone();
+        db.with_writer_blocking(move |conn| {
+            Ok((|| {
+                if let Some(step) = &between {
+                    let roles = KnownRoles::read(conn, game_data.as_deref())?;
+                    super::between::store(conn, step, &roles, now)?;
+                }
+                mark_recognised(conn, reading, now)
+            })())
+        })
+        .map_err(AccountError::from)
+        .and_then(|marked| marked)
+        .map_err(FollowFailure::at(Some(reading)))?;
         pass.recognised += 1;
     }
     pass.more = true;

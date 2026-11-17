@@ -26,12 +26,10 @@
 //!   the decay it settles (wear inside the minute of a repair, which the
 //!   readings net away, is lost, and accepted as lost). A limited armour
 //!   piece or plate is listed with the TT it lost; its cost is that TT at
-//!   its set's markup, once the player has confirmed it as one of the
-//!   set's pieces. The armour bucket is kept in parts ([`ArmourPart`]):
-//!   the unlimited armour at what it lost, each confirmed set at its
-//!   pieces' loss and markup, and what limited pieces no confirmed set
-//!   holds lost, unpriced. One such piece falling leaves the bucket
-//!   unmeasured, while its other parts stay measured.
+//!   the markup set for the piece as it stood when the session started
+//!   (see [`super::armour`]), or the TT itself when none was. The armour
+//!   bucket is kept in parts ([`ArmourPart`]): the unlimited armour at what
+//!   it lost, and each limited piece at its loss and markup.
 //! - **Consumption** is the units of a stack used up, and only for a stack
 //!   whose category is a consumable. It follows the player's own choice
 //!   for the item in the equipment library, the one that decides whether

@@ -63,12 +63,16 @@ pub struct CycledBreakdown {
     pub consumables: f64,
 }
 
-/// The sessions' overhead by category: what they cost beyond performing
-/// their activities, as the account readings measured it.
+/// The overhead by category: what the sessions cost beyond performing
+/// their activities, and what was spent between them, as the account
+/// readings measured it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct OverheadBreakdown {
     pub total: f64,
+    /// Of the total, what the readings billed between sessions: on the day
+    /// it happened, credited to no activity, and left out of every rate.
+    pub between_sessions: f64,
     /// Teleport chips, Mind Essence, vehicles and their fuel.
     pub travel: f64,
     /// Portable repair and Trade Terminal units, and their like.
@@ -102,9 +106,13 @@ pub struct TimelineDay {
     pub quest_pes: f64,
     pub ledger_gains: BTreeMap<String, f64>,
     pub tracking_cost: f64,
-    /// The overhead of the sessions started in it: in its losses, never in
+    /// The overhead of the sessions started in it, and what was billed
+    /// between sessions on its days: in its losses, never in
     /// `trackingCost`.
     pub overhead_cost: f64,
+    /// Of `overheadCost`, what was billed between sessions: credited to no
+    /// activity, and left out of every rate.
+    pub between_sessions_cost: f64,
     pub ledger_losses: BTreeMap<String, f64>,
 }
 
@@ -120,9 +128,13 @@ pub struct MonthlyEntry {
     pub quest_pes: f64,
     pub ledger_gains: BTreeMap<String, f64>,
     pub tracking_cost: f64,
-    /// The overhead of the sessions started in it: in its losses, never in
+    /// The overhead of the sessions started in it, and what was billed
+    /// between sessions on its days: in its losses, never in
     /// `trackingCost`.
     pub overhead_cost: f64,
+    /// Of `overheadCost`, what was billed between sessions: credited to no
+    /// activity, and left out of every rate.
+    pub between_sessions_cost: f64,
     pub ledger_losses: BTreeMap<String, f64>,
 }
 
@@ -2146,6 +2158,7 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
             },
             overhead: OverheadBreakdown {
                 total: data.losses_breakdown.overhead.total,
+                between_sessions: data.losses_breakdown.overhead.between_sessions,
                 travel: data.losses_breakdown.overhead.travel,
                 field_logistics: data.losses_breakdown.overhead.field_logistics,
                 unclassified: data.losses_breakdown.overhead.unclassified,
@@ -2167,6 +2180,7 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
                 ledger_gains: point.ledger_gains,
                 tracking_cost: point.tracking_cost,
                 overhead_cost: point.overhead_cost,
+                between_sessions_cost: point.between_sessions_cost,
                 ledger_losses: point.ledger_losses,
             })
             .collect(),
@@ -2183,6 +2197,7 @@ pub(crate) fn overview_dto(data: eo_services::analytics::OverviewData) -> Analyt
                 ledger_gains: point.ledger_gains,
                 tracking_cost: point.tracking_cost,
                 overhead_cost: point.overhead_cost,
+                between_sessions_cost: point.between_sessions_cost,
                 ledger_losses: point.ledger_losses,
             })
             .collect(),

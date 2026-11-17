@@ -61,6 +61,9 @@ function colorFor(key: string): string {
 export interface OverheadBand {
 	total: number;
 	categories: { key: OverheadKey; label: string; ped: number }[];
+	/** Of the total, what the readings billed between sessions: credited
+	 * to no activity, and in no rate. */
+	betweenSessions: number;
 }
 
 type OverheadKey = 'travel' | 'fieldLogistics' | 'unclassified';
@@ -83,6 +86,7 @@ export function overheadBand(losses: LossesBreakdown): OverheadBand | null {
 			label,
 			ped: losses.overhead[key],
 		})).filter((category) => category.ped > 0),
+		betweenSessions: losses.overhead.betweenSessions,
 	};
 }
 
@@ -92,6 +96,9 @@ export function overheadBand(losses: LossesBreakdown): OverheadBand | null {
 export interface BreakdownTotals {
 	returns: number;
 	costs: number;
+	/** Of the costs, what was billed between sessions: left out of the
+	 * rate. */
+	betweenSessions: number;
 }
 
 export interface PieView {
@@ -164,8 +171,9 @@ export function createOverviewModel() {
 		total += sumRecord(d.ledgerGains, config.gainTags);
 		return total;
 	}
-	// Losses are Cycled, the sessions' overhead, and the enabled ledger
-	// expenses; overhead is never part of Cycled.
+	// Losses are Cycled, the overhead (the sessions' and what was billed
+	// between them), and the enabled ledger expenses; overhead is never
+	// part of Cycled.
 	function dayLosses(d: TimelineDay): number {
 		return d.trackingCost + d.overheadCost + sumRecord(d.ledgerLosses, config.lossTags);
 	}
@@ -189,7 +197,7 @@ export function createOverviewModel() {
 			if (config.gainTags[tag] && amount > 0) returns += amount;
 		}
 		const costs = lb.trackingCost + lb.overhead.total + sumRecord(lb.ledger, config.lossTags);
-		return { returns, costs };
+		return { returns, costs, betweenSessions: lb.overhead.betweenSessions };
 	});
 
 	const pieView = $derived.by((): PieView | null => {
@@ -224,7 +232,10 @@ export function createOverviewModel() {
 			});
 			offset += length;
 		}
-		return { rate: gains / losses, gains, losses, arcs };
+		// The rate leaves out what was billed between sessions: a cost of
+		// no play, in Costs and Net only.
+		const rateLosses = losses - (totals?.betweenSessions ?? 0);
+		return { rate: rateLosses > 0 ? gains / rateLosses : 0, gains, losses, arcs };
 	});
 
 	// ── Timeline (config-aware cumulative P&L) ──
@@ -279,7 +290,10 @@ export function createOverviewModel() {
 			const gains = monthGains(m);
 			const losses = monthLosses(m);
 			const net = gains - losses;
-			const globalRate = losses > 0 ? gains / losses : null;
+			// What was billed between sessions is in the month's costs, never
+			// in its rate.
+			const rateLosses = losses - m.betweenSessionsCost;
+			const globalRate = rateLosses > 0 ? gains / rateLosses : null;
 			const cycled = m.trackingCost;
 			const lootRate = cycled > 0 ? m.lootTt / cycled : null;
 			return {

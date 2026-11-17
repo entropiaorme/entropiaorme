@@ -567,6 +567,11 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "listing outcomes from account",
         sql: include_str!("../../migrations/0106_listing_outcomes_from_account.sql"),
     },
+    Migration {
+        version: 107,
+        description: "overhead between sessions",
+        sql: include_str!("../../migrations/0107_overhead_between_sessions.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second

@@ -469,6 +469,16 @@
 										<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(category.ped)}</td>
 									</tr>
 								{/each}
+								{#if overhead.betweenSessions > 0}
+									<tr
+										class="border-b border-border/20"
+										data-testid="breakdown-overhead-between"
+										title="Travel and the like your account readings measured while no session was tracked, billed on the day it happened. It is in Costs and Net, and in no rate."
+									>
+										<td class="py-1 pl-10 text-text-tertiary text-xs">Of which between sessions</td>
+										<td class="py-1 text-right tabular-nums text-text-tertiary text-xs">{formatPed(overhead.betweenSessions)}</td>
+									</tr>
+								{/if}
 							{/if}
 							{#each Object.entries(lb.ledger) as [tag, amount]}
 								{#if amount > 0 && config.lossTags[tag]}

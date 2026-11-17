@@ -423,6 +423,9 @@ pub struct LossesData {
 #[serde(rename_all = "camelCase")]
 pub struct OverheadData {
     pub total: f64,
+    /// Of the total, what the readings billed between sessions: credited
+    /// to no activity, and left out of every rate.
+    pub between_sessions: f64,
     pub travel: f64,
     pub field_logistics: f64,
     pub unclassified: f64,
@@ -456,9 +459,13 @@ pub struct TimelinePoint {
     pub quest_pes: f64,
     pub ledger_gains: std::collections::BTreeMap<String, f64>,
     pub tracking_cost: f64,
-    /// The overhead of the sessions started in the bucket: in its losses,
-    /// never in `tracking_cost` (Cycled).
+    /// The overhead of the sessions started in the bucket, and what was
+    /// billed between sessions on its days: in its losses, never in
+    /// `tracking_cost` (Cycled).
     pub overhead_cost: f64,
+    /// Of `overhead_cost`, what was billed between sessions: credited to no
+    /// activity, and left out of every rate.
+    pub between_sessions_cost: f64,
     pub ledger_losses: std::collections::BTreeMap<String, f64>,
 }
 
@@ -928,7 +935,7 @@ fn hybrid_window(start: Option<f64>, end: Option<f64>, watermark: &str) -> Hybri
 /// the merged result reproduces the raw engine typing: an all-empty
 /// window leaves the wire as an integer zero, exactly as
 /// `COALESCE(SUM(...), 0)` does.
-type FamilySums = [Option<f64>; 16];
+type FamilySums = [Option<f64>; 17];
 
 fn merge_family_sums(into: &mut FamilySums, from: FamilySums) {
     for (slot, value) in into.iter_mut().zip(from) {
@@ -941,8 +948,9 @@ fn merge_family_sums(into: &mut FamilySums, from: FamilySums) {
 /// The `daily_rollups` family-sum columns, position-matched to
 /// [`FamilySums`] (loot, weapon, enhancer, armour, heal, dangling, skill,
 /// codex, quest, harvest loot, harvest cost, quest items, consumed doses,
-/// and the overhead by category: travel, field logistics, unclassified).
-const ROLLUP_FAMILY_COLS: [&str; 16] = [
+/// the overhead by category: travel, field logistics, unclassified, and the
+/// part of it billed between sessions, credited to none).
+const ROLLUP_FAMILY_COLS: [&str; 17] = [
     "loot_tt",
     "weapon_cost",
     "enhancer_cost",
@@ -959,6 +967,7 @@ const ROLLUP_FAMILY_COLS: [&str; 16] = [
     "overhead_travel",
     "overhead_field_logistics",
     "overhead_unclassified",
+    "overhead_between_sessions",
 ];
 
 /// The rollup-side family sums for several windows in ONE conditional-
@@ -980,7 +989,7 @@ fn rollup_family_sums_multi(
     conn: &rusqlite::Connection,
     windows: &[HybridWindow],
 ) -> Result<Vec<FamilySums>, DbError> {
-    let mut out: Vec<FamilySums> = vec![[None; 16]; windows.len()];
+    let mut out: Vec<FamilySums> = vec![[None; 17]; windows.len()];
 
     // The windows that actually cover full rollup days, paired with their
     // index back into `out`.
@@ -1032,7 +1041,7 @@ fn rollup_family_sums_multi(
         cols.join(", ")
     );
     let per_slot = conn.query_row(&sql, [], |row| {
-        let mut per_slot: Vec<FamilySums> = vec![[None; 16]; active.len()];
+        let mut per_slot: Vec<FamilySums> = vec![[None; 17]; active.len()];
         for (slot, sums) in per_slot.iter_mut().enumerate() {
             let base = slot * ROLLUP_FAMILY_COLS.len();
             for (family, value) in sums.iter_mut().enumerate() {
@@ -1069,7 +1078,7 @@ fn raw_family_sums(
     }
 
     let (start, end) = range;
-    let mut sums: FamilySums = [None; 16];
+    let mut sums: FamilySums = [None; 17];
     // The same scope filters as `daily_rollup::recompute_day`: the raw
     // edges and the rollup rows must agree on which sessions count.
     let economy = |session: &str| session_scope::counts(StatsScope::Economy, session);
@@ -1123,10 +1132,29 @@ fn raw_family_sums(
     sums[4] = sessions[1];
     sums[5] = sessions[2];
     sums[12] = sessions[3];
-    // A session's overhead sits on its start, as the day rollup places it.
-    sums[13] = sessions[7];
-    sums[14] = sessions[8];
-    sums[15] = sessions[9];
+    // A session's overhead sits on its start, as the day rollup places it;
+    // what the readings billed between sessions, on the day each step ended,
+    // joins it by category and is kept apart as well, credited to none.
+    let (w, p) = where_epoch("b.seen_to", start, end);
+    let between = fetch(
+        conn,
+        format!(
+            "SELECT SUM(b.travel_ped), SUM(b.field_logistics_ped), SUM(b.unclassified_ped), \
+                    SUM(b.travel_ped + b.field_logistics_ped + b.unclassified_ped) \
+             FROM account_between_sessions_steps b WHERE {w} AND {}",
+            crate::account::between::stands_sql("b")
+        ),
+        &p,
+        4,
+    )?;
+    let plus = |a: Option<f64>, b: Option<f64>| match (a, b) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+    };
+    sums[13] = plus(sessions[7], between[0]);
+    sums[14] = plus(sessions[8], between[1]);
+    sums[15] = plus(sessions[9], between[2]);
+    sums[16] = between[3];
 
     let (w, p) = where_epoch("timestamp", start, end);
     sums[6] = fetch(
@@ -1226,17 +1254,27 @@ struct Metrics {
     harvest: SqlNumber,
     consumables: SqlNumber,
     tracking_cost: SqlNumber,
-    /// The sessions' overhead by category: travel, field logistics,
-    /// unclassified. In Costs and Net, never in Cycled.
+    /// The overhead by category: travel, field logistics, unclassified,
+    /// the sessions' and what was billed between them. In Costs and Net,
+    /// never in Cycled.
     overhead: [SqlNumber; 3],
+    /// Of the overhead, what was billed between sessions: credited to no
+    /// activity, and never in a rate.
+    between_sessions: SqlNumber,
     ledger_gains: std::collections::BTreeMap<String, f64>,
     ledger_losses: std::collections::BTreeMap<String, f64>,
 }
 
 impl Metrics {
-    /// The sessions' overhead, every category added up.
+    /// The overhead, every category added up: the sessions' and what was
+    /// billed between them.
     fn overhead_total(&self) -> f64 {
         self.overhead.iter().map(|part| part.as_f64()).sum()
+    }
+
+    /// The sessions' own overhead: what a rate may hold.
+    fn session_overhead(&self) -> f64 {
+        self.overhead_total() - self.between_sessions.as_f64()
     }
 }
 
@@ -1383,6 +1421,7 @@ fn assemble_metrics(
         consumables,
         tracking_cost,
         overhead,
+        between_sessions: SqlNumber::from_family(sums[16]),
         ledger_gains,
         ledger_losses,
     })
@@ -1397,7 +1436,10 @@ fn sum_values(map: &std::collections::BTreeMap<String, f64>) -> f64 {
 /// excluded), 0.0 when losses are non-positive.
 fn rate_from_metrics(m: &Metrics) -> f64 {
     let total_gains = m.loot_tt.as_f64() + m.quest_item_tt.as_f64() + sum_values(&m.ledger_gains);
-    let total_losses = m.tracking_cost.as_f64() + m.overhead_total() + sum_values(&m.ledger_losses);
+    // The overhead billed between sessions is a cost of no play: never in
+    // a rate.
+    let total_losses =
+        m.tracking_cost.as_f64() + m.session_overhead() + sum_values(&m.ledger_losses);
     if total_losses > 0.0 {
         total_gains / total_losses
     } else {
@@ -1553,8 +1595,11 @@ fn overview_read(
     let total_gains = m.loot_tt.as_f64() + m.quest_item_tt.as_f64() + total_ledger_gains;
     let overhead_total = m.overhead_total();
     let total_losses = m.tracking_cost.as_f64() + overhead_total + total_ledger_losses;
-    let return_rate = if total_losses > 0.0 {
-        total_gains / total_losses
+    // The rate leaves out what was billed between sessions: a cost of no
+    // play, in Costs and Net only.
+    let rate_losses = total_losses - m.between_sessions.as_f64();
+    let return_rate = if rate_losses > 0.0 {
+        total_gains / rate_losses
     } else {
         0.0
     };
@@ -1601,6 +1646,7 @@ fn overview_read(
             },
             overhead: OverheadData {
                 total: eo_wire::normalizer::round_half_even(overhead_total, 2),
+                between_sessions: m.between_sessions.rounded(2).as_f64(),
                 travel: m.overhead[0].rounded(2).as_f64(),
                 field_logistics: m.overhead[1].rounded(2).as_f64(),
                 unclassified: m.overhead[2].rounded(2).as_f64(),
@@ -1637,8 +1683,11 @@ struct BreakdownMaps {
     quest: std::collections::BTreeMap<String, SqlNumber>,
     /// Harvest swing decay (wood loot merges into `loot`).
     harvest_cost: std::collections::BTreeMap<String, SqlNumber>,
-    /// The sessions' overhead, on their start.
+    /// The sessions' overhead, on their start, and what was billed between
+    /// sessions, on the day each step ended.
     overhead: std::collections::BTreeMap<String, SqlNumber>,
+    /// Of the overhead, what was billed between sessions.
+    between: std::collections::BTreeMap<String, SqlNumber>,
     members: BTreeSet<String>,
 }
 
@@ -1678,7 +1727,8 @@ fn rollup_breakdown(
             "SELECT day AS bucket, has_rows, loot_tt, weapon_cost, enhancer_cost, \
              armour_cost, heal_cost, dangling_cost, skill_tt, codex_pes, quest_pes, \
              harvest_loot_tt, harvest_cost, quest_item_tt, consumable_cost, \
-             overhead_travel, overhead_field_logistics, overhead_unclassified \
+             overhead_travel, overhead_field_logistics, overhead_unclassified, \
+             overhead_between_sessions \
              FROM daily_rollups WHERE day <= ?{extra} ORDER BY bucket"
         ),
         BucketKind::Month => format!(
@@ -1686,7 +1736,8 @@ fn rollup_breakdown(
              SUM(weapon_cost), SUM(enhancer_cost), SUM(armour_cost), SUM(heal_cost), \
              SUM(dangling_cost), SUM(skill_tt), SUM(codex_pes), SUM(quest_pes), \
              SUM(harvest_loot_tt), SUM(harvest_cost), SUM(quest_item_tt), SUM(consumable_cost), \
-             SUM(overhead_travel), SUM(overhead_field_logistics), SUM(overhead_unclassified) \
+             SUM(overhead_travel), SUM(overhead_field_logistics), SUM(overhead_unclassified), \
+             SUM(overhead_between_sessions) \
              FROM daily_rollups WHERE day <= ?{extra} GROUP BY bucket ORDER BY bucket"
         ),
     };
@@ -1745,6 +1796,9 @@ fn rollup_breakdown(
                 .map(SqlNumber::from_family)
                 .fold(SqlNumber::Int(0), SqlNumber::sum);
             BreakdownMaps::merge(&mut maps.overhead, &bucket, total);
+        }
+        if let Some(value) = family(18)? {
+            BreakdownMaps::merge(&mut maps.between, &bucket, SqlNumber::Float(value));
         }
     }
     Ok(())
@@ -1931,6 +1985,25 @@ fn raw_breakdown(
         maps.members.insert(bucket.clone());
         BreakdownMaps::merge(&mut maps.overhead, &bucket, value);
     }
+    // What was billed between sessions lands on the day each step ended,
+    // credited to none.
+    let (between_w, between_p) = where_epoch("b.seen_to", start, end);
+    let between = bucketed_epoch(
+        conn,
+        format!(
+            "SELECT {} as bucket, \
+                    SUM(b.travel_ped + b.field_logistics_ped + b.unclassified_ped) \
+             FROM account_between_sessions_steps b WHERE {between_w} AND {} GROUP BY bucket",
+            ts_bucket("b.seen_to"),
+            crate::account::between::stands_sql("b"),
+        ),
+        &between_p,
+    )?;
+    for (bucket, value) in between {
+        maps.members.insert(bucket.clone());
+        BreakdownMaps::merge(&mut maps.overhead, &bucket, value);
+        BreakdownMaps::merge(&mut maps.between, &bucket, value);
+    }
     Ok(())
 }
 
@@ -2002,6 +2075,7 @@ fn breakdown_points(
             ledger_gains: gains.get(bucket).cloned().unwrap_or_default(),
             tracking_cost: family(&cost, bucket),
             overhead_cost: family(&maps.overhead, bucket),
+            between_sessions_cost: family(&maps.between, bucket),
             ledger_losses: losses.get(bucket).cloned().unwrap_or_default(),
         });
     }

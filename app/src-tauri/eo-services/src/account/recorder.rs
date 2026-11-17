@@ -1014,13 +1014,35 @@ fn heal_costs(
     now: f64,
     being_read: Option<String>,
 ) -> usize {
-    match costs::heal_session_costs(db, game_data, chat_log, now, being_read) {
+    let written = match costs::heal_session_costs(db, game_data.clone(), chat_log, now, being_read)
+    {
         Ok(written) => written,
         Err(error) => {
             tracing::error!(target: "eo::account", %error, "stale session costs could not be rebuilt");
             0
         }
+    };
+    // What the steps between sessions bill, priced again by the roles as
+    // they now stand, a bounded batch a write.
+    loop {
+        let game_data = game_data.clone();
+        let healed = db
+            .with_writer_blocking(move |conn| {
+                Ok(super::roles::KnownRoles::read(conn, game_data.as_deref())
+                    .and_then(|roles| super::between::heal(conn, &roles, now)))
+            })
+            .map_err(AccountError::from)
+            .and_then(|healed| healed);
+        match healed {
+            Ok(healed) if healed >= super::between::STEPS_PER_HEAL => continue,
+            Ok(_) => break,
+            Err(error) => {
+                tracing::error!(target: "eo::account", %error, "the overhead between sessions could not be priced again");
+                break;
+            }
+        }
     }
+    written
 }
 
 /// Run a job on the database's writer, waited for on the blocking pool

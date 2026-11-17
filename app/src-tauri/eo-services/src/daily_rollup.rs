@@ -54,9 +54,10 @@ use crate::session_costs::{self, Bucket};
 // enhancer break became a cost, a break after a session's last kill at the
 // session's grain (`crate::enhancer_breaks`); to 9 when a session's measured
 // overhead (travel, field logistics, unclassified) joined the day of its
-// start, by category, beside Cycled and never in it.
+// start, by category, beside Cycled and never in it; to 10 when the overhead
+// the readings measured between sessions joined the day each step ended.
 // Below-version rows heal on the next read.
-pub const ROLLUP_VERSION: i64 = 9;
+pub const ROLLUP_VERSION: i64 = 10;
 
 /// The UTC day of an epoch second, rendered as SQLite's
 /// `date(epoch, 'unixepoch')` renders it (`YYYY-MM-DD`).
@@ -125,6 +126,8 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
 
     let mut has_rows = false;
     let mut families: [Option<f64>; 16] = [None; 16];
+    // Of the overhead, what was billed between sessions.
+    let mut between_total: Option<f64> = None;
 
     if let Some(date) = canonical_day(day) {
         let (start, end) = day_bounds(date);
@@ -236,6 +239,19 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             1,
         )?;
 
+        // What the readings billed between sessions lands on the day each
+        // step ended, beside the sessions' own overhead and credited to none.
+        let (between_count, between) = crate::account::between::overhead_in(conn, start, end)?;
+        between_total = between
+            .iter()
+            .flatten()
+            .copied()
+            .reduce(|a, b| a + b);
+        let plus = |session: Option<f64>, between: Option<f64>| match (session, between) {
+            (None, None) => None,
+            (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+        };
+
         // A measured bucket no tracked event carries sits on the session's
         // start day with its other own-grain costs.
         let grain = session_costs::with_session_grain;
@@ -253,9 +269,9 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             grain(harvest_sums[1], session_sums[6]), // harvest_cost
             quest_item_sums[0],
             session_sums[3], // consumable_cost
-            session_sums[7], // overhead_travel
-            session_sums[8], // overhead_field_logistics
-            session_sums[9], // overhead_unclassified
+            plus(session_sums[7], between[0]), // overhead_travel
+            plus(session_sums[8], between[1]), // overhead_field_logistics
+            plus(session_sums[9], between[2]), // overhead_unclassified
         ];
         has_rows = kill_count > 0
             || weapon_count > 0
@@ -264,7 +280,8 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             || codex_count > 0
             || quest_count > 0
             || harvest_count > 0
-            || quest_item_count > 0;
+            || quest_item_count > 0
+            || between_count > 0;
     }
 
     conn.execute(
@@ -305,8 +322,9 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
          day, rollup_version, dirty, has_rows, loot_tt, weapon_cost, \
          enhancer_cost, armour_cost, heal_cost, dangling_cost, skill_tt, \
          codex_pes, quest_pes, harvest_loot_tt, harvest_cost, quest_item_tt, consumable_cost, \
-         overhead_travel, overhead_field_logistics, overhead_unclassified, computed_at) \
-         VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
+         overhead_travel, overhead_field_logistics, overhead_unclassified, \
+         overhead_between_sessions, computed_at) \
+         VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             day,
             ROLLUP_VERSION,
@@ -327,6 +345,7 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             families[13],
             families[14],
             families[15],
+            between_total,
         ],
     )?;
     Ok(())

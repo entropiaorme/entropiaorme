@@ -5,13 +5,13 @@ EntropiaOrme ships as a single pure-Rust binary: a Tauri desktop shell hosting t
 - **The cargo workspace** (`app/src-tauri/`): the native backend members and the Tauri shell, run under `cargo nextest`. This is the primary gate on the shipped binary.
 - **The frontend track** (`app/`): the pure-TypeScript logic layer and the high-logic Svelte components under Vitest and Testing-Library, with Biome owning lint and format.
 
-This document is the command-level reference; specific counts, coverage percentages, and mutation scores live in the badges and a live run, not in this prose, because they move with every change.
+This document is the command-level reference; specific counts, coverage percentages, and mutation scores live in the coverage badge and a live run, not in this prose, because they move with every change.
 
 ## What the suite rests on
 
 - **Unit and property tests beside the code** carry most of the weight: each backend module's `#[cfg(test)]` suite, `proptest` properties for the invariants that matter most (cost conservation across re-dose chains, for example), and the `eo-api` facade tests that drive the typed commands through the facade.
 - **The replay corpus is the end-to-end net.** It feeds canned versions of the real input surface (the chat.log tail, plus scripted hotbar presses, clock steps, and restarts) through the production pipeline and pins what comes out: the domain-event stream and the resulting database state. That makes "did behaviour change?" a mechanical question for the application's core loop.
-- **Mutation testing measures whether the net would notice.** It deliberately breaks the code in many small ways and asks whether any test fails. The score is published as a badge; it is a measurement, not a gate.
+- **Mutation testing measures whether the net would notice.** It deliberately breaks the code in many small ways and asks whether any test fails. The score is printed by a local campaign; it is a measurement, not a gate.
 
 A test that runs code but asserts nothing about the result undermines all three: it shows as covered, leaves every behaviour-changing mutant alive, and pins nothing. Coverage proves a line ran; it cannot prove a test would notice if that line were wrong.
 
@@ -99,7 +99,7 @@ This is the durable discipline behind every golden: the system under test must b
 
 Coverage proves a line ran; it cannot prove a test would notice if that line were wrong. Mutation testing closes that gap: [cargo-mutants](https://mutants.rs) makes small changes to the code (a `<` becomes `<=`, a `+` a `-`, a constant shifts) and re-runs the tests against each one. A mutant the tests catch is *killed*; one that slips through *survives* and marks a weak spot. The **mutation score** (the share of mutants killed) is the suite's effectiveness metric for the native logic core.
 
-The campaign targets `eo-wire` and `eo-services`; the Tauri shell stays out (its logic is OS-window plumbing behind `cfg(windows)`, and building it needs the Tauri system toolchain). Because a campaign re-runs the tests once per mutant, it is heavy: it runs when `main` moves and the campaigned members changed, and on demand (`.github/workflows/mutation.yml`), sharded across Linux runners. Run one locally on a POSIX environment with:
+The campaign targets `eo-wire` and `eo-services`; the Tauri shell stays out (its logic is OS-window plumbing behind `cfg(windows)`, and building it needs the Tauri system toolchain). Because a campaign re-runs the tests once per mutant, it is heavy, and it runs on demand only. Run one locally on a POSIX environment with:
 
 ```sh
 cd app/src-tauri
@@ -166,7 +166,7 @@ Shared state is runes-native too: cross-surface state is authored as `.svelte.ts
 
 ## Continuous integration
 
-Every pull request and every push to the two development branches executes the workflow in `.github/workflows/ci.yml`. `next` is the integration branch work lands on directly; `main` is the stable branch releases are cut from, reached by a promotion pull request from `next` (merged as a merge commit, so both lines keep the same commits) or by a squash hotfix pull request. On a documentation-only change (every changed file is Markdown) the compiling jobs are skipped, as described under "Documentation-only changes" below.
+Every pull request and every push to `main` executes the workflow in `.github/workflows/ci.yml`. `main` is the only line: it receives an occasional source snapshot by pull request ([ADR-0040](docs/src/adr/0040-periodic-source-snapshots.md)). On a documentation-only change (every changed file is Markdown) the compiling jobs are skipped, as described under "Documentation-only changes" below.
 
 - **Change scope and CI gate**: a quick detection job classifies whether the change touches code or only documentation, and the compiling jobs run only for a code change. A small always-running `CI gate` sentinel is the single required check in their place: it passes when the change is documentation-only (those jobs were legitimately skipped) or when every gated job succeeded, and fails closed otherwise, so a skip can never let an untested change merge. Branch protection requires only this one context, so the required-check list never drifts as individual jobs are added or renamed.
 - **Authoring lint** (every pull request and push): the `authoring-lint` guard flags em dashes and US spellings on the lines a change adds, and references to absent files, iteration tokens, and tool-attribution lines in the added prose and the commit messages; a `version-stamps` step asserts the three application version stamps stay in lock-step (see "Authoring lint" below).
@@ -181,7 +181,7 @@ On a push these same jobs run against the state that landed, so a promotion to `
 
 ### The two branches
 
-A change lands on `next` by direct push and is run from there before it is promoted. `main` accepts only pull requests, requires the `CI gate` check with the branch up to date, and merges by auto-merge once the check is green; there is no merge queue, because the workflow already runs on every push to both branches. A promotion pull request from `next` merges as a merge commit; the integration branch is never squashed, so the two branches keep the same commits and a promotion that falls behind `main` is refreshed by merging `main` into `next`.
+`main` accepts only pull requests and requires the `CI gate` check with the branch up to date; there is no merge queue, because the workflow runs again on the push.
 
 ### Documentation-only changes
 
@@ -191,7 +191,7 @@ Skipping a required check is the hazard: branch protection treats a never-report
 
 ### Mutation campaign
 
-A separate workflow (`.github/workflows/mutation.yml`) runs the `cargo-mutants` campaign over the backend members when `main` moves and they changed, and on demand: sharded across parallel runners (a single runner cannot finish the full campaign inside the hosted six-hour job ceiling), then a score job that merges the shard outcomes into the per-file report and the mutation-score badge published from `main` (see "Mutation testing" above).
+The `cargo-mutants` campaign is run locally and on demand (see "Mutation testing" above); no workflow runs it.
 
 ## Local checks (pre-commit)
 
@@ -224,13 +224,13 @@ The xtask guards compile the in-tree `xtask` crate once (cached thereafter) and 
 
 ## In-development surfaces
 
-Development lands on `next` continuously, so a control or a panel can reach the tree before the capability behind it. On `next` it may land unmarked; a promotion to `main` marks every such surface (or finishes it) before the merge, so nothing on `main` reads as finished when it is not ([ADR-0038](docs/src/adr/0038-promotion-carries-public-polish.md)). The marking is enforced mechanically rather than remembered.
+Development is continuous, so a control or a panel can exist before the capability behind it. Each source snapshot marks every such surface (or finishes it) before it reaches `main`, so nothing on `main` reads as finished when it is not ([ADR-0038](docs/src/adr/0038-promotion-carries-public-polish.md), [ADR-0040](docs/src/adr/0040-periodic-source-snapshots.md)). The marking is enforced mechanically rather than remembered.
 
 Three parts, in `app/src/lib/inDevelopment/`:
 
 - **The register** (`registry.ts`) declares each in-development surface once, with the user-facing text explaining what is unavailable and what will make it work. One register rather than a flag per component keeps the set auditable; graduating a surface means deleting its entry.
 - **The marker** (`InDevelopmentMark.svelte`) is the single affordance every such surface renders, so the disclosure reaches the person using the app rather than only a reader of the change history.
-- **The channel** (`channel.ts`) decides whether these surfaces render at all. It is stamped at build time via `ENTROPIAORME_STABLE_CHANNEL`, set only by the release workflow: a published artefact hides them, while a locally built installer, a source build, and the dev server show them marked. The stamp is a build-time input rather than a build-mode check because an installer built from the latest source is itself a production build, so build mode cannot tell the two apart.
+- **The channel** (`channel.ts`) decides whether these surfaces render at all. It is stamped at build time via `ENTROPIAORME_STABLE_CHANNEL`, which a release build sets to hide them; nothing in this repository sets it now that no artefacts are published, so a locally built installer, a source build, and the dev server all show them marked. The stamp is a build-time input rather than a build-mode check because an installer built from the latest source is itself a production build, so build mode cannot tell the two apart.
 
 `cargo xtask in-development` (a required CI check and a pre-commit hook) fails on three conditions: a marker referencing an id the register does not declare, a register entry no consumer references (a surface finished without removing its entry), and a release build step that does not stamp the channel. The third is checked because losing that stamp is invisible in CI and visible only to whoever downloads the release.
 

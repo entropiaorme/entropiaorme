@@ -6,7 +6,7 @@ EntropiaOrme's source is public under MIT: anyone who finds it useful is free to
 
 Bug reports are welcome via [GitHub issues](https://github.com/entropiaorme/entropiaorme/issues). Helpful to include:
 
-- The app version (Settings, About panel).
+- The commit you built from.
 - What you expected vs what happened.
 - Any relevant log output.
 
@@ -20,4 +20,4 @@ If you're interested in contributing, please reach out first at MikelWL@protonma
 
 ## Development setup
 
-If you're working on the code (forking or adapting it), the build-from-source steps are in the [README](README.md#build-windows). Development happens on the `next` branch and reaches `main`, the stable line releases are cut from, by promotion once the changes have been run for a while; build from `main` for stability and from `next` for the latest. After installing the development dependencies, run `pre-commit install` once so the local hooks run the same lint, type, test, and hygiene checks as continuous integration before each commit. See [TESTING.md](TESTING.md#local-checks-pre-commit) for what the hooks cover and how to run them on demand.
+If you're working on the code (forking or adapting it), the build-from-source steps are in the [README](README.md#build-windows). Development happens in a private working tree, and `main` here receives an occasional source snapshot of it, so a fork is the right home for changes of your own. After installing the development dependencies, run `pre-commit install` once so the local hooks run the same lint, type, test, and hygiene checks as continuous integration before each commit. See [TESTING.md](TESTING.md#local-checks-pre-commit) for what the hooks cover and how to run them on demand.

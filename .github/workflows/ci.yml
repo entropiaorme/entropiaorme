@@ -2,12 +2,11 @@ name: ci
 
 on:
   pull_request:
-  # Two lines. next is the integration branch: work lands on it directly and is
-  # lived with there. main is the vetted branch releases are cut from, reached
-  # by a promotion pull request from next. Both run the whole workflow on push,
-  # so a landing is verified on the exact state that landed.
+  # main is the only line. It moves by pull request, and the whole workflow
+  # runs again on the push, so a merge is verified on the exact state that
+  # landed.
   push:
-    branches: [main, next]
+    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -128,9 +127,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri
-          # Restrict cache writes to the trusted main and next timelines; pull-request
+          # Restrict cache writes to the trusted main timeline; pull-request
           # runs restore read-only so a branch cannot seed or poison the cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Flag em dashes (U+2014) in any added line, US spellings in added prose
       # lines (docs + comments), and, over the added prose lines and the commit
       # messages in the range, references to files the repository does not have,
@@ -277,9 +276,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri
-          # Restrict cache writes to the trusted main and next timelines; pull-request
+          # Restrict cache writes to the trusted main timeline; pull-request
           # runs restore read-only so a branch cannot seed or poison the cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # --all-targets lints the test and bench code too; -D warnings promotes
       # every lint to a failure so the gate cannot drift into an
       # ignored-warnings state.
@@ -333,9 +332,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri
-          # Restrict cache writes to the trusted main and next timelines; pull-request
+          # Restrict cache writes to the trusted main timeline; pull-request
           # runs restore read-only so a branch cannot seed or poison the cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Prebuilt binary rather than cargo install (same rationale as the
       # policy job's tools).
       - uses: taiki-e/install-action@5ebac0d9522d786674368e47e92963ba13f2c376 # v2.82.11
@@ -369,8 +368,7 @@ jobs:
     name: Linux build + bundle (deb)
     # Pinned to the oldest supported Ubuntu LTS rather than ubuntu-latest: a
     # binary links against the build host's glibc, so the package runs on
-    # 22.04 and everything newer only when it is built on 22.04. Release
-    # (release.yml's linux-deb) builds on the same image.
+    # 22.04 and everything newer only when it is built on 22.04.
     runs-on: ubuntu-22.04
     # Proves the Linux port builds the full Tauri shell and produces an
     # installable package, the platform counterpart of the Windows workspace
@@ -401,7 +399,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: '20'
@@ -435,9 +433,7 @@ jobs:
     runs-on: ubuntu-latest
     # Measures per-member branch coverage over the native-backend members for
     # the README badge. It re-runs the whole member suite under
-    # instrumentation, so it measures the vetted line only: promotion and
-    # hotfix pull requests and pushes to main, never pushes to next (where the
-    # members job above already runs the same tests). Branch-level
+    # instrumentation, on pull requests and pushes to main. Branch-level
     # instrumentation is a nightly-only compiler feature, hence the pinned
     # nightly toolchain on this measurement job. Skipped on documentation-only
     # pull requests like the backend matrix.
@@ -461,9 +457,9 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri
-          # Restrict cache writes to the trusted main and next timelines; pull-request
+          # Restrict cache writes to the trusted main timeline; pull-request
           # runs restore read-only so a branch cannot seed or poison the cache.
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/next' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@5ebac0d9522d786674368e47e92963ba13f2c376 # v2.82.11
         with:
           tool: cargo-llvm-cov,cargo-nextest
@@ -574,8 +570,8 @@ jobs:
             echo "Documentation-only change; the frontend build and Rust workspace jobs were skipped. Gate satisfied."
             exit 0
           fi
-          # Coverage is measured only on pull requests and pushes to main, so
-          # a push to next skips it legitimately.
+          # Coverage is measured on pull requests and pushes to main; a push
+          # to any other branch skips it legitimately.
           COVERAGE_OK=false
           if [ "$RUST_COVERAGE_RESULT" = "success" ]; then
             COVERAGE_OK=true

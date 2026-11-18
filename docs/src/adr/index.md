@@ -47,3 +47,4 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0037](0037-retire-golden-ratification-guard.md) | Retire the golden-ratification guard: goldens still assert, and a deliberate change is reviewed in the commit that moves them |
 | [ADR-0038](0038-promotion-carries-public-polish.md) | Promotion carries the public surface's polish: in-development marking and documentation are settled once per promotion, not per landing on `next` |
 | [ADR-0039](0039-retire-port-equivalence-evidence.md) | Retire the port-equivalence evidence and scale testing to a personal project: the replay corpus stays; the WebDriver suite, mutation floors, and per-push coverage go |
+| [ADR-0040](0040-periodic-source-snapshots.md) | Periodic source snapshots replace two-line development: one line, one commit per snapshot, source-only, no releases |

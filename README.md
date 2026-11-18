@@ -2,22 +2,21 @@
 
 [![CI](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml/badge.svg)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
 [![Branch coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/coverage.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/ci.yml)
-[![Mutation score](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/entropiaorme/entropiaorme/badges/mutation.json)](https://github.com/entropiaorme/entropiaorme/actions/workflows/mutation.yml)
 
-An analytical desktop tool for Entropia Universe. Overview and installer downloads: **[entropiaorme.com](https://entropiaorme.com)**.
+An analytical desktop tool for Entropia Universe: a personal project, built for its maintainer's own play and published here as source for anyone who finds it useful or interesting.
 
-A Tauri 2 shell hosting a Svelte 5 frontend over a pure-Rust in-process backend. It runs on Windows and, experimentally, on Linux (Ubuntu on Wayland/GNOME, via XWayland); the OS-touching seams (input observation, screen capture, window discovery) are implemented per platform behind shared traits, and the Linux build is still being validated against the live game. The rest of this README covers building from source.
+A Tauri 2 shell hosting a Svelte 5 frontend over a pure-Rust in-process backend. It runs on Windows and, experimentally, on Linux (Ubuntu on Wayland/GNOME, via XWayland); the OS-touching seams (input observation, screen capture, window discovery) are implemented per platform behind shared traits, and the Linux build is still being validated against the live game. There are no installer downloads: the application is built from source, as described below.
 
 ## Repository map
 
 - `app/`: the application (SvelteKit frontend + the `src-tauri` Rust workspace)
-- `docs/`: the mdBook architecture handbook and ADRs, published to GitHub Pages
+- `docs/`: the mdBook architecture handbook and ADRs
 - `scripts/`: build and launch scripts driven by the `justfile`
 - `assets/`: repository art
 
-## Branches
+## How this repository is updated
 
-Development happens on `next`; `main` is the stable line releases are cut from, and it moves only when `next` is promoted after its changes have been run in the installed application for a while. Build from `main` for stability, from `next` for the latest changes.
+Day-to-day development happens in a private working tree. This repository receives an occasional source snapshot of it, as a single commit on `main`, once the changes have been in use for a while ([ADR-0040](docs/src/adr/0040-periodic-source-snapshots.md)). The history up to that decision is the project's full development history; from then on, each snapshot is one commit.
 
 ## Build (Windows)
 
@@ -38,9 +37,9 @@ Give each checkout its own `.env.local` with a distinct `ENTROPIAORME_FRONTEND_P
 
 ## Documentation
 
-- [Architecture handbook](docs/) and [ADRs](docs/src/adr/): published to GitHub Pages from `main` alongside the generated `cargo doc` API reference; `mdbook build docs` locally.
+- [Architecture handbook](docs/) and [ADRs](docs/src/adr/): build with `mdbook build docs`; `cargo doc` generates the API reference.
 - [TESTING.md](TESTING.md): the test suite, the replay corpus, and the CI gates.
-- [SECURITY.md](SECURITY.md): the security policy, supply-chain review gates, and the release attestations (SBOM, checksums, build provenance).
+- [SECURITY.md](SECURITY.md): the security policy and the supply-chain review gates.
 
 ## License
 

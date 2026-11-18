@@ -7,14 +7,18 @@
 //!     since been finished (or removed) while still advertising itself as
 //!     unfinished.
 //!
-//!   - Rule (the published channel is stamped): every step in the release
-//!     workflow that builds the app (its frontend, its Rust binary, or both)
+//!   - Rule (the published channel is stamped): where the tree has a
+//!     release workflow, every step in it that builds the app (its frontend,
+//!     its Rust binary, or both)
 //!     sets `ENTROPIAORME_STABLE_CHANNEL` to `1` in its own `env` block. That
 //!     stamp is what hides in-development surfaces from people who did not
 //!     build the app, and what keeps the backend's in-development features
 //!     off in a published build. Losing it, or setting it to anything else,
 //!     is silent in CI and visible only to whoever downloads the release, so
-//!     it gets a mechanical check.
+//!     it gets a mechanical check. A tree with no release workflow publishes
+//!     no build, so there is no channel to stamp and the rule has nothing to
+//!     hold; it binds again the moment such a workflow is added at that
+//!     path.
 //!
 //!   - Rule (the backend reads the same stamp): the settings module, where
 //!     the backend decides whether an in-development feature may run, reads
@@ -306,6 +310,8 @@ landed, delete the entry and its marker"
     let workflow_path = repo_root.join(RELEASE_WORKFLOW);
     match std::fs::read_to_string(&workflow_path) {
         Ok(text) => findings.extend(channel_stamp_findings(&text)),
+        // No release workflow: nothing is published, so no channel to stamp.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
             return Err(format!(
                 "in-development: cannot read {RELEASE_WORKFLOW}: {e}"
@@ -557,9 +563,14 @@ mod tests {
         // Runs the rule over the checked-in workflow, not a fixture. Synthetic
         // cases all passed while a glob in the real file was silently blanking
         // later steps, so the real file is the one that has to be asserted.
+        // A tree that publishes no build has no such workflow, and then
+        // there is nothing to assert.
         let root = git::repo_root().expect("repo root");
-        let text = std::fs::read_to_string(root.join(RELEASE_WORKFLOW))
-            .unwrap_or_else(|e| panic!("cannot read {RELEASE_WORKFLOW}: {e}"));
+        let text = match std::fs::read_to_string(root.join(RELEASE_WORKFLOW)) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(e) => panic!("cannot read {RELEASE_WORKFLOW}: {e}"),
+        };
 
         // Guard against a vacuous pass: if the workflow's build invocations are
         // renamed, the markers match nothing and the rule trivially succeeds.

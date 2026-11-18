@@ -13,11 +13,21 @@ use image::ImageEncoder;
 
 use crate::game_ui::geometry::BgrImage;
 
+/// Whether a region has an area to capture. Checked before any capturer
+/// is touched, so a region with none never starts one (nor, on a Wayland
+/// desktop, asks the player to share their screen).
+fn is_positive(w: i64, h: i64) -> bool {
+    w > 0 && h > 0
+}
+
 /// Capture a screen rectangle as PNG bytes (RGB-encoded). `None` on a
 /// non-positive region, a capture failure, or a host with no capturer.
 /// The app itself reads captures as [`BgrImage`]s; this form serves the
 /// maintainer tools under `examples/` that save what they captured.
 pub fn capture_region_png(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
+    if !is_positive(w, h) {
+        return None;
+    }
     let bgra = platform::capture_bgra(x, y, w, h)?;
     let (pw, ph) = (w as u32, h as u32);
     // BGRA (top-down) -> RGB, the order `mss.tools.to_png(shot.rgb)` encodes.
@@ -38,6 +48,9 @@ pub fn capture_region_png(x: i64, y: i64, w: i64, h: i64) -> Option<Vec<u8>> {
 /// path). `None` on a non-positive region, a capture failure, or a host
 /// with no capturer.
 pub fn capture_region_bgr(x: i64, y: i64, w: i64, h: i64) -> Option<BgrImage> {
+    if !is_positive(w, h) {
+        return None;
+    }
     let bgra = platform::capture_bgra(x, y, w, h)?;
     // BGRA -> BGR (drop the alpha), matching the `[:, :, :3]` slice of the
     // Python capturer's BGR ndarray.
@@ -78,6 +91,9 @@ pub fn capture_running() -> bool {
 /// [`capture_region_bgr`] from a capturer already running; `None` when it
 /// is not (nothing is started).
 pub fn capture_region_bgr_running(x: i64, y: i64, w: i64, h: i64) -> Option<BgrImage> {
+    if !is_positive(w, h) {
+        return None;
+    }
     let bgra = platform::capture_bgra_running(x, y, w, h)?;
     let mut data = Vec::with_capacity((w as usize) * (h as usize) * 3);
     for px in bgra.chunks_exact(4) {
@@ -429,13 +445,16 @@ mod tests {
 
     #[test]
     fn a_non_positive_region_never_captures() {
-        // The dimension guard short-circuits before any GDI call (and the
-        // off-Windows stub returns None regardless), so both capture forms
-        // refuse a zero or negative region on every host.
+        // The dimension guard short-circuits before any capturer is
+        // touched, so every capture form refuses a zero or negative region
+        // on every host without starting a capture: on a Wayland desktop,
+        // never the ScreenCast portal's consent prompt.
         assert!(capture_region_png(10, 10, 0, 5).is_none());
         assert!(capture_region_png(10, 10, 5, 0).is_none());
         assert!(capture_region_png(10, 10, -1, 5).is_none());
         assert!(capture_region_bgr(10, 10, 0, 5).is_none());
         assert!(capture_region_bgr(10, 10, 5, -3).is_none());
+        assert!(capture_region_bgr_running(10, 10, 0, 0).is_none());
+        assert!(!is_positive(0, 5) && !is_positive(5, -1) && is_positive(1, 1));
     }
 }

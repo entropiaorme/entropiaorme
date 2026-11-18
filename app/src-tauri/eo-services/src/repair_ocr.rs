@@ -169,6 +169,13 @@ impl RepairOcrService {
         Self { providers }
     }
 
+    /// Whether a read could happen: a recogniser and the interface profile
+    /// were both composed in. Asks nothing of the screen, so it never
+    /// starts a capture (nor the desktop's screen-sharing prompt).
+    pub fn is_available(&self) -> bool {
+        self.providers.profile.is_some() && self.providers.read_text.is_some()
+    }
+
     /// The Repair Terminal's repair cost.
     pub fn scan_repair_cost(&self) -> Result<TerminalReading, TerminalRefusal> {
         self.read(Terminal::Repair)
@@ -726,6 +733,7 @@ mod tests {
             read_text: None,
         });
         for service in [no_profile, no_recogniser] {
+            assert!(!service.is_available());
             assert_eq!(
                 service.scan_repair_cost(),
                 Err(TerminalRefusal::ReaderUnavailable)

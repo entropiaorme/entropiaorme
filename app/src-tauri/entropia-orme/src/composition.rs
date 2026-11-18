@@ -574,6 +574,12 @@ pub struct Composed {
     /// constructed so the scan operations serve; without the engine or
     /// the profile it rests unavailable and never captures.
     pub skill_scan: Arc<SkillScanService>,
+    /// The terminal reads (the Repair Terminal's cost, the Trade
+    /// Terminal's total), as the facade holds them. Nothing reads this
+    /// copy outside the composition tests, which check what reached the
+    /// reader without capturing the screen.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub repair_ocr: Arc<RepairOcrService>,
     /// The spacebar-capture listener, composed over the shared OS hook for
     /// the development research capture. Held for the exit seam (its
     /// teardown).
@@ -1276,6 +1282,7 @@ async fn compose_with(
         producers,
         ocr_engine,
         skill_scan,
+        repair_ocr,
         spacebar_listener,
         coord_confirm,
         radar_confirm: navigation.1,
@@ -1655,61 +1662,63 @@ fn compose_producers(
         .lock()
         .expect("config service lock at composition")
         .reader();
-    let tracker = block_on_pool(
-        &runtime,
-        HuntTracker::new(
-            bus.clone(),
-            db.clone(),
-            clock.clone(),
-            chatlog_clock.clone(),
-            Providers {
-                detector: mob_detection.clone(),
-                tool_detector: tool_detection.clone(),
-                cpu_pressure: Arc::new(eo_services::look_record::system_cpu_pressure),
-                // A library entry read off the screen resolves as a press
-                // or a declaration of it does; a tool the library does not
-                // hold prices bare from the game data.
-                items: Some(items.clone()),
-                // An enhancer break is priced from the game data's TT for
-                // the enhancer's exact name.
-                enhancer_tt: game_data
-                    .clone()
-                    .map(eo_services::enhancer_breaks::tt_resolver),
-                // And at the markup set for its kind and tier, read when it
-                // breaks (rarely), through the synchronous reader core.
-                enhancer_markup: Some({
-                    let db = db.clone();
-                    Arc::new(move |name: &str, at: f64| {
-                        let name = name.to_string();
-                        db.with_reader_blocking(move |conn| {
-                            Ok(eo_services::enhancer_breaks::TierMarkups::read(conn)?.at(&name, at))
+    let tracker =
+        block_on_pool(
+            &runtime,
+            HuntTracker::new(
+                bus.clone(),
+                db.clone(),
+                clock.clone(),
+                chatlog_clock.clone(),
+                Providers {
+                    detector: mob_detection.clone(),
+                    tool_detector: tool_detection.clone(),
+                    cpu_pressure: Arc::new(eo_services::look_record::system_cpu_pressure),
+                    // A library entry read off the screen resolves as a press
+                    // or a declaration of it does; a tool the library does not
+                    // hold prices bare from the game data.
+                    items: Some(items.clone()),
+                    // An enhancer break is priced from the game data's TT for
+                    // the enhancer's exact name.
+                    enhancer_tt: game_data
+                        .clone()
+                        .map(eo_services::enhancer_breaks::tt_resolver),
+                    // And at the markup set for its kind and tier, read when it
+                    // breaks (rarely), through the synchronous reader core.
+                    enhancer_markup: Some({
+                        let db = db.clone();
+                        Arc::new(move |name: &str, at: f64| {
+                            let name = name.to_string();
+                            db.with_reader_blocking(move |conn| {
+                                Ok(eo_services::enhancer_breaks::TierMarkups::read(conn)?
+                                    .at(&name, at))
+                            })
+                            .ok()
+                            .flatten()
                         })
-                        .ok()
-                        .flatten()
-                    })
-                }),
-                bundled_tools: game_data.clone().map(|data| {
-                    let reader = config_reader.clone();
-                    let doses = doses.clone();
-                    eo_services::bundled_tools::resolver(
-                        data,
-                        Arc::new(move || {
-                            doses.reload_speed_percent(&reader.current().passive_effect_sources)
-                        }),
+                    }),
+                    bundled_tools: game_data.clone().map(|data| {
+                        let reader = config_reader.clone();
+                        let doses = doses.clone();
+                        eo_services::bundled_tools::resolver(
+                            data,
+                            Arc::new(move || {
+                                doses.reload_speed_percent(&reader.current().passive_effect_sources)
+                            }),
+                        )
+                    }),
+                    ..build_providers(
+                        db,
+                        config_reader,
+                        machine_id.clone(),
+                        &config,
+                        runtime.clone(),
+                        game_data,
+                        doses,
                     )
-                }),
-                ..build_providers(
-                    db,
-                    config_reader,
-                    machine_id.clone(),
-                    &config,
-                    runtime.clone(),
-                    game_data,
-                    doses,
-                )
-            },
-        ),
-    )?;
+                },
+            ),
+        )?;
 
     // Wire the quest service's interval sink now that the tracker owning
     // the interval state exists (the quest service is built first, so this
@@ -2784,18 +2793,15 @@ mod tests {
         // `the_domain_bridge_forwards_typed_envelopes_to_a_subscriber`.
 
         // With an engine and the bundled profile, the terminal reader is
-        // available: whatever it answers, it is not that the reader is
-        // unavailable. (A profile at the wrong path would leave it so.)
-        if composed.ocr_engine.is_some() {
-            let read = composed.api.protection_trade_terminal_scan().unwrap();
-            assert_ne!(
-                read,
-                eo_api::protection::TerminalReadResult::Refused {
-                    reason: eo_api::protection::TerminalReadRefusal::ReaderUnavailable,
-                },
-                "the composed terminal reader has no profile"
-            );
-        }
+        // available. (A profile at the wrong path would leave it not.)
+        // Asked without reading a terminal: a read captures the game
+        // window, and on a desktop with the game open that raises the
+        // screen-sharing prompt.
+        assert_eq!(
+            composed.repair_ocr.is_available(),
+            composed.ocr_engine.is_some(),
+            "the composed terminal reader has no profile"
+        );
 
         composed.producers.stop();
     }

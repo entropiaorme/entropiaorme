@@ -105,8 +105,9 @@ pub const RESOLUTION_VERSION: i64 = 5;
 // came to decide where an item's use costs and a limited piece's line came
 // to name the set that priced it. Bumped to 5 with them when the PED Card
 // stopped holding a bucket back and a weapon whose ammo was topped up came
-// to be stored mixed, with its top-up steps.
-pub const MEASURED_COSTS_VERSION: i64 = 5;
+// to be stored mixed, with its top-up steps. Bumped to 6 with them when a
+// limited piece came to be billed at its own markup, or at its TT.
+pub const MEASURED_COSTS_VERSION: i64 = 6;
 
 /// The version of the measure those costs must have been derived from.
 // Bumped to 6 with the measure, when the PED Card stopped deciding what a
@@ -1981,30 +1982,54 @@ pub fn armour_unpriced_sql(session: &str) -> String {
 
 /// The TT, in micro-PED, the `stream` part of the armour of the session
 /// named by `session` lost as the readings measured it, by current measured
-/// costs: an SQL expression, NULL where the stream has no part.
+/// costs: an SQL expression, NULL where the session was not measured whole.
+/// A limited set's part is what its confirmed pieces lost, each billed on
+/// its own (nothing when none of them wore).
 pub fn armour_lost_sql(stream: ArmourStream, session: &str) -> String {
-    let part = match stream {
-        ArmourStream::Unlimited => "p.part = 'unlimited'".to_string(),
-        ArmourStream::Set(set_id) => format!("p.part = 'limitedSet' AND p.set_id = {set_id}"),
-    };
+    match stream {
+        ArmourStream::Unlimited => format!(
+            "(SELECT p.lost_micro_ped FROM account_session_cost_armour_parts p \
+              JOIN account_session_costs c ON c.session_id = p.session_id \
+              WHERE p.session_id = {session} AND c.costs_version = {MEASURED_COSTS_VERSION} \
+                AND c.measure_version = {MEASURED_MEASURE_VERSION} AND p.part = 'unlimited')"
+        ),
+        ArmourStream::Set(set_id) => format!(
+            "(SELECT COALESCE((SELECT SUM(q.lost_micro_ped) \
+                                FROM account_session_cost_armour_pieces q \
+                                WHERE q.session_id = p.session_id AND {}), 0) \
+              FROM account_session_cost_armour_parts p \
+              JOIN account_session_costs c ON c.session_id = p.session_id \
+              WHERE p.session_id = {session} AND c.costs_version = {MEASURED_COSTS_VERSION} \
+                AND c.measure_version = {MEASURED_MEASURE_VERSION} AND p.part = 'unlimited')",
+            set_piece(set_id),
+        ),
+    }
+}
+
+/// Whether the piece `q` is one confirmed for the set `set_id`: an SQL
+/// condition.
+fn set_piece(set_id: i64) -> String {
     format!(
-        "(SELECT p.lost_micro_ped FROM account_session_cost_armour_parts p \
-          JOIN account_session_costs c ON c.session_id = p.session_id \
-          WHERE p.session_id = {session} AND c.costs_version = {MEASURED_COSTS_VERSION} \
-            AND c.measure_version = {MEASURED_MEASURE_VERSION} AND {part})"
+        "q.item_name IN (SELECT s.item_name FROM protection_set_pieces s \
+                         WHERE s.set_id = {set_id})"
     )
 }
 
-/// Whether the readings have billed a limited set: some session's part for
-/// it lost TT. Its markup priced that bill, so it may no longer change.
+/// Whether the readings have billed a limited set: one of its confirmed
+/// pieces lost TT in a session measured by current costs. Its markup
+/// priced that bill, so it may no longer change.
 pub fn set_billed_from_readings(
     conn: &rusqlite::Connection,
     set_id: i64,
 ) -> rusqlite::Result<bool> {
     conn.query_row(
         &format!(
-            "SELECT EXISTS ({} AND p.lost_micro_ped > 0)",
-            sessions_with_part(&format!("p.part = 'limitedSet' AND p.set_id = {set_id}"))
+            "SELECT EXISTS (SELECT 1 FROM account_session_cost_armour_pieces q \
+             JOIN account_session_costs c ON c.session_id = q.session_id \
+             WHERE c.costs_version = {MEASURED_COSTS_VERSION} \
+               AND c.measure_version = {MEASURED_MEASURE_VERSION} \
+               AND q.lost_micro_ped > 0 AND {})",
+            set_piece(set_id)
         ),
         [],
         |row| row.get(0),

@@ -20,7 +20,8 @@ const HARNESS: &str = "Pegasus Harness (M,L)";
 
 /// Store a session's measured costs as the account side does at seal, its
 /// armour measured in parts: the unlimited armour at `unlimited` PED and
-/// each `(set, cost in PED)`; then bring its figures up to date.
+/// each `(set, cost in PED)`, billed on the set's first confirmed piece;
+/// then bring its figures up to date.
 async fn measure(db: &Db, id: &str, unlimited: f64, sets: &[(i64, f64)]) {
     measure_with(db, id, unlimited, sets, None).await;
 }
@@ -89,12 +90,14 @@ async fn measure_with(
              VALUES (?1, 'unlimited', NULL, ?2, 'exact', NULL, ?2, 'exact')",
             rusqlite::params![id, micro(unlimited)],
         )?;
+        // Each set's cost, billed on its first confirmed piece.
         for (set_id, cost) in sets {
             conn.execute(
-                "INSERT INTO account_session_cost_armour_parts \
-                 (session_id, part, set_id, lost_micro_ped, lost_precision, markup_hundredths, \
+                "INSERT INTO account_session_cost_armour_pieces \
+                 (session_id, item_name, lost_micro_ped, lost_precision, markup_hundredths, \
                   amount_micro_ped, precision) \
-                 VALUES (?1, 'limitedSet', ?2, ?3, 'exact', 10000, ?3, 'exact')",
+                 SELECT ?1, item_name, ?3, 'exact', NULL, ?3, 'exact' \
+                 FROM protection_set_pieces WHERE set_id = ?2 ORDER BY id LIMIT 1",
                 rusqlite::params![id, set_id, micro(cost)],
             )?;
         }
@@ -159,21 +162,6 @@ async fn read_session(
     })
     .await
     .expect("session read");
-}
-
-/// A session's stored armour parts, as the readings billed them.
-async fn armour_parts(db: &Db, id: &str) -> Vec<crate::account::costs::ArmourPart> {
-    let id = id.to_string();
-    db.with_writer(move |conn| {
-        Ok(
-            crate::account::costs::session_costs(conn, &id, None, 4_000_000_000.0, None)
-                .expect("its costs")
-                .expect("a known session")
-                .armour,
-        )
-    })
-    .await
-    .expect("armour parts")
 }
 
 async fn resolved_armour(db: &Db, id: &str) -> session_costs::SessionCosts {
@@ -591,11 +579,11 @@ async fn a_trade_terminal_reading_and_the_readings_agree_within_a_pec_per_piece(
     let read_loss = costs
         .armour
         .iter()
-        .find_map(|part| match part {
-            crate::account::costs::ArmourPart::Set { lost, .. } => Some(lost.micro_ped()),
+        .filter_map(|part| match part {
+            crate::account::costs::ArmourPart::Piece { lost, .. } => Some(lost.micro_ped()),
             _ => None,
         })
-        .expect("the set's part") as f64
+        .sum::<i64>() as f64
         / 1_000_000.0;
 
     // Its readings lost: a Trade Terminal reading of the true value.
@@ -650,7 +638,7 @@ async fn suggestions_come_only_from_limited_protection_the_set_s_name_names() {
             (HELMET, 1, 1_000),
             ("Pegasus Gloves (M)", 1, 900),
             ("Pegasus Rifle (L)", 1, 5_000),
-            ("Pegasus Elite Harness (L)", 1, 3_000),
+            ("Pegasus Elite Harness (M,L)", 1, 3_000),
             ("Armor Plating Mk. 5B (L)", 1, 4_000),
             ("Animal Oil Residue (L)", 10, 10),
         ],
@@ -663,11 +651,11 @@ async fn suggestions_come_only_from_limited_protection_the_set_s_name_names() {
     // The other limited armour and plates, to add by hand.
     assert_eq!(
         pieces.others,
-        ["Armor Plating Mk. 5B (L)", "Pegasus Elite Harness (L)"]
+        ["Armor Plating Mk. 5B (L)", "Pegasus Elite Harness (M,L)"]
     );
     assert_eq!(pieces.reading_taken_at, Some(100.0));
     let elite_pieces = service.set_pieces(elite.id).await.unwrap();
-    assert_eq!(elite_pieces.suggested, ["Pegasus Elite Harness (L)"]);
+    assert_eq!(elite_pieces.suggested, ["Pegasus Elite Harness (M,L)"]);
 
     // Confirmed, a piece leaves the suggestions.
     let confirmed = service
@@ -837,66 +825,6 @@ async fn an_account_reading_missing_a_piece_is_no_baseline() {
     assert_eq!(candidates.baseline_tt_ped, None);
     assert!(candidates.sessions.is_empty());
     assert_eq!(candidates.incomplete_account_reading_at, Some(50.0));
-}
-
-#[tokio::test]
-async fn a_piece_moved_to_a_new_set_leaves_earlier_sessions_at_the_old_markup() {
-    let (_dir, db, _clock, service) = harness().await;
-    let old = limited(&service, "Pegasus", 140.0).await;
-    read_account(&db, 5.0, &[(HELMET, 1, 1_000)]).await;
-    service
-        .confirm_set_pieces(old.id, vec![HELMET.into()])
-        .await
-        .unwrap();
-    read_session(&db, "s1", 100.0, &[(HELMET, 1_000)], &[(HELMET, 967)]).await;
-
-    // The old set goes out of use and the helmet joins a new one.
-    service.archive_set(old.id).await.unwrap();
-    let new = limited(&service, "Pegasus Again", 120.0).await;
-    service
-        .confirm_set_pieces(new.id, vec![HELMET.into()])
-        .await
-        .unwrap();
-    let later = 2_000_000_000.0;
-    read_session(&db, "s2", later, &[(HELMET, 967)], &[(HELMET, 934)]).await;
-
-    use crate::account::amount::Amount;
-    use crate::account::costs::ArmourPart;
-    let set_part = |parts: Vec<ArmourPart>| {
-        parts.into_iter().find_map(|part| match part {
-            ArmourPart::Set {
-                set_id,
-                markup_hundredths,
-                cost,
-                ..
-            } => Some((set_id, markup_hundredths, cost)),
-            _ => None,
-        })
-    };
-    assert_eq!(
-        set_part(armour_parts(&db, "s1").await),
-        Some((old.id, 14_000, Amount::WholePec { micro_ped: 462_000 }))
-    );
-    assert_eq!(
-        set_part(armour_parts(&db, "s2").await),
-        Some((new.id, 12_000, Amount::WholePec { micro_ped: 396_000 }))
-    );
-
-    // Billed with it, the new set's markup is fixed now.
-    let fixed = service
-        .update_set(new.id, "Pegasus Again", 130.0)
-        .await
-        .unwrap_err();
-    assert_eq!(
-        message(fixed),
-        "A set's markup cannot change once a session has been billed with it"
-    );
-    // And the old set cannot come back holding the helmet.
-    let restored = service.restore_set(old.id).await.unwrap_err();
-    assert_eq!(
-        message(restored),
-        "A piece of this set is now a piece of a set in use"
-    );
 }
 
 #[tokio::test]

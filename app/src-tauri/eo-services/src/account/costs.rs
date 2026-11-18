@@ -91,7 +91,9 @@ use crate::game_data_store::GameDataStore;
 // categories, and a limited piece's line came to name the confirmed set
 // that priced it. Bumped to 5 when the PED Card stopped holding a
 // consumable's bucket back, and a weapon bucket whose ammo was topped up
-// came to be measured but for the steps it was topped up in.
+// came to be measured but for the steps it was topped up in. Bumped to 6
+// when a limited piece came to be billed at the markup set for it, or at
+// the TT it lost when none was, never waiting on a set.
 pub const COSTS_VERSION: i64 = 6;
 
 /// A group of costs, as the tracked figures group them.
@@ -644,8 +646,8 @@ impl ArmourPart {
 /// A session's costs as its readings measure them: every bucket, in the
 /// order of [`CostBucket::ALL`], and the lines, ordered by bucket, kind,
 /// item and category; the armour in parts, for a session measured whole
-/// (unlimited first, then each confirmed set by id, then what no confirmed
-/// set holds); with the digest of the roles its items were placed by.
+/// (the unlimited part first, then each limited piece by name); with the
+/// digest of the roles its items were placed by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionCosts {
     pub status: Status,
@@ -1595,14 +1597,21 @@ fn read_armour_parts(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<Option<Vec<ArmourPart>>, AccountError> {
-    let unlimited: Vec<(String, i64, String, Option<i64>, Option<i64>)> = {
+    type RawPart = (String, i64, String, Option<i64>, Option<i64>);
+    let unlimited: Vec<RawPart> = {
         let mut stmt = conn.prepare(
             "SELECT part, lost_micro_ped, lost_precision, set_id, amount_micro_ped \
              FROM account_session_cost_armour_parts WHERE session_id = ?1",
         )?;
         let rows = stmt
             .query_map([session_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows

@@ -602,8 +602,10 @@ pub struct Composed {
 /// backend cannot serve); there is no longer an interim "awaiting migration"
 /// state to retry.
 pub enum Composition {
-    /// The native services are built and ready to install.
-    Ready(Composed),
+    /// The native services are built and ready to install. Boxed: the
+    /// services are far larger than a decline, and the outcome is built
+    /// once and moved once.
+    Ready(Box<Composed>),
     /// A terminal decline (a missing/empty snapshot, a producer fault, or a
     /// database that cannot be opened or adopted, including one whose schema
     /// predates the supported baseline, which the retired sidecar used to
@@ -1276,7 +1278,7 @@ async fn compose_with(
         })
         .with_account(account),
     );
-    Composition::Ready(Composed {
+    Composition::Ready(Box::new(Composed {
         db,
         api,
         producers,
@@ -1286,7 +1288,7 @@ async fn compose_with(
         spacebar_listener,
         coord_confirm,
         radar_confirm: navigation.1,
-    })
+    }))
 }
 
 /// What the held-tool watcher reads with, beside the producers it is bound

@@ -738,7 +738,7 @@ fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::Path
             tauri::async_runtime::spawn(async move {
                 match composition::compose_native(resource_dir).await {
                     composition::Composition::Ready(composed) => {
-                        install_native_services(&app, composed);
+                        install_native_services(&app, *composed);
                         // A player who connected before has any session
                         // kept through the session store taken up,
                         // quietly. The app keeps sessions in memory only,

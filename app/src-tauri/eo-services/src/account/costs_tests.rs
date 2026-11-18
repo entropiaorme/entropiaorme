@@ -32,8 +32,8 @@ fn session_row(conn: &rusqlite::Connection, id: &str, started: f64, ended: Optio
     .unwrap();
 }
 
-/// The player's weapon with its amplifier, extender and implant, a first
-/// aid pack, and two armour sets: one unlimited, one limited.
+/// The player's weapon with its amplifier, extender and implant, and a
+/// first aid pack.
 fn the_player_s_gear(conn: &rusqlite::Connection) {
     conn.execute(
         "INSERT INTO equipment_library (name, item_type, properties_json) VALUES \
@@ -42,13 +42,6 @@ fn the_player_s_gear(conn: &rusqlite::Connection) {
            \"absorber_entity\": {\"name\": \"ArMatrix Extender P10 (L)\"}, \
            \"implant_entity\": {\"name\": \"NeoPsion 85-B Mindforce Implant (L)\"}}'), \
          ('Frontier First Aid Pack, Adjusted', 'healing', '{}')",
-        [],
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO protection_sets (kind, name, economy_kind, markup_percent, created_at) \
-         VALUES ('armour', 'Frontier', 'unlimited', NULL, 1), \
-                ('armour', 'Pegasus', 'limited', 120, 1)",
         [],
     )
     .unwrap();
@@ -255,8 +248,8 @@ fn a_hunt_read_whole_costs_what_each_item_lost_in_its_bucket() {
 
     // The unlimited armour and its plate fell 1.13 in all, and three
     // repairs restoring 1.13 take nothing off it. The limited helmet is
-    // listed with the 0.33 it lost, unpriced, so the armour bucket waits
-    // for its set.
+    // listed with the 0.33 it lost; with no markup set for it, it is
+    // billed at that TT.
     let harness = line(&costs, "Frontier Harness, Adjusted (M)");
     let plate = line(&costs, "Armor Plating Mk. 6A");
     assert_eq!(
@@ -281,11 +274,7 @@ fn a_hunt_read_whole_costs_what_each_item_lost_in_its_bucket() {
         )
     );
     assert_eq!(helmet.amount().unwrap().micro_ped(), 33 * PEC);
-    assert_eq!(
-        basis(&costs, CostBucket::Armour),
-        Basis::Unmeasured(Unmeasured::LimitedSetUnconfirmed)
-    );
-    // The unlimited part stays measured; the helmet's loss waits unpriced.
+    assert_eq!(measured(&costs, CostBucket::Armour), 146 * PEC);
     assert_eq!(
         costs.armour,
         [
@@ -294,10 +283,15 @@ fn a_hunt_read_whole_costs_what_each_item_lost_in_its_bucket() {
                     micro_ped: 113 * PEC
                 }
             },
-            ArmourPart::Unconfirmed {
+            ArmourPart::Piece {
+                item: "Pegasus Helmet (M,L)".to_string(),
                 lost: Amount::WholePec {
                     micro_ped: 33 * PEC
-                }
+                },
+                markup_hundredths: None,
+                cost: Amount::WholePec {
+                    micro_ped: 33 * PEC
+                },
             },
         ]
     );
@@ -1266,23 +1260,18 @@ fn placing_an_item_after_the_seal_moves_its_cost_where_it_belongs() {
     let mut conn = migrated_in_memory().unwrap();
     session_row(&conn, "s", 0.0, Some(120.0));
     for (at, value) in [(0.0, 1_000), (60.0, 990), (120.0, 985)] {
-        let reading = reading(at, 1_000, &[("Odd Harness (M)", C, 1, value)]);
+        let reading = reading(at, 1_000, &[("Odd Harness", C, 1, value)]);
         record_reading(&mut conn, &reading, Purpose::Session, Some("s")).unwrap();
     }
     let before = costs_of(&mut conn, "s");
-    let harness = line(&before, "Odd Harness (M)");
+    let harness = line(&before, "Odd Harness");
     assert_eq!(
         (harness.bucket, harness.category),
         (CostBucket::Unclassified, CostCategory::Unclassified)
     );
     assert_eq!(measured(&before, CostBucket::Unclassified), 15 * PEC);
-    // The player names the set the harness belongs to.
-    conn.execute(
-        "INSERT INTO protection_sets (kind, name, economy_kind, markup_percent, created_at) \
-         VALUES ('armour', 'Odd', 'unlimited', NULL, 1)",
-        [],
-    )
-    .unwrap();
+    // The player places the harness, which nothing else names.
+    place(&conn, "Odd Harness", CostCategory::UnlimitedArmour);
     let roles = KnownRoles::read(&conn, None).unwrap();
     assert_eq!(stored_costs(&conn, "s", roles.fingerprint()).unwrap(), None);
     assert_eq!(
@@ -1290,7 +1279,7 @@ fn placing_an_item_after_the_seal_moves_its_cost_where_it_belongs() {
         ["s"]
     );
     let after = costs_of(&mut conn, "s");
-    let harness = line(&after, "Odd Harness (M)");
+    let harness = line(&after, "Odd Harness");
     assert_eq!(
         (harness.bucket, harness.category),
         (CostBucket::Armour, CostCategory::UnlimitedArmour)
@@ -1416,8 +1405,6 @@ fn only_a_named_item_in_a_placeable_category_is_a_placement() {
     for category in [
         CostCategory::Ammo,
         CostCategory::Enhancer,
-        CostCategory::LimitedArmour,
-        CostCategory::LimitedPlate,
         CostCategory::TeleportChip,
         CostCategory::MindEssence,
         CostCategory::Unclassified,
@@ -1426,6 +1413,11 @@ fn only_a_named_item_in_a_placeable_category_is_a_placement() {
     }
     let placed = Placement::new(" Odd Pod ", CostCategory::Travel).unwrap();
     assert_eq!(placed.item(), "Odd Pod");
+    // A limited piece or plate the name does not show is the player's to
+    // place, and is then priced at its own markup.
+    for category in [CostCategory::LimitedArmour, CostCategory::LimitedPlate] {
+        assert!(Placement::new("Odd", category).is_some(), "{category:?}");
+    }
     // The table refuses what the type refuses.
     let conn = migrated_in_memory().unwrap();
     for (item, category) in [("Odd", "ammo"), (" Odd", "travel"), ("", "travel")] {
@@ -1451,26 +1443,6 @@ fn only_a_named_item_in_a_placeable_category_is_a_placement() {
     assert_eq!(
         super::placement::read_all(&conn).unwrap().len(),
         CostCategory::PLACEABLE.len()
-    );
-}
-
-#[test]
-fn a_limited_piece_s_line_names_the_set_that_priced_it() {
-    let mut conn = migrated_in_memory().unwrap();
-    store_the_hunt(&mut conn, "hunt", true);
-    let unconfirmed = costs_of(&mut conn, "hunt");
-    assert_eq!(line(&unconfirmed, "Pegasus Helmet (M,L)").set_id, None);
-    confirm_pieces(&conn, "Pegasus", &["Pegasus Helmet (M,L)"]);
-    let confirmed = costs_of(&mut conn, "hunt");
-    assert_eq!(
-        line(&confirmed, "Pegasus Helmet (M,L)").set_id,
-        Some(set_id(&conn, "Pegasus"))
-    );
-    // Kept and read back with it.
-    let roles = KnownRoles::read(&conn, None).unwrap();
-    assert_eq!(
-        stored_costs(&conn, "hunt", roles.fingerprint()).unwrap(),
-        Some(confirmed)
     );
 }
 
@@ -1755,7 +1727,7 @@ fn the_rules_versions_are_pinned_and_the_resolver_reads_the_same_ones() {
     // A change of the measure's or the costs' rules bumps its version:
     // the bump is what rebuilds everything the earlier rules stored.
     assert_eq!(super::measure::MEASURE_VERSION, 6);
-    assert_eq!(COSTS_VERSION, 5);
+    assert_eq!(COSTS_VERSION, 6);
     // The resolver names its own copies; one left behind would read every
     // stored projection as stale.
     assert_eq!(
@@ -1808,41 +1780,33 @@ async fn the_sweep_rebuilds_every_stale_projection_and_what_derives_from_it() {
 
 /// Name `items` as the pieces of the limited set `set`, as the player
 /// confirms them.
-fn confirm_pieces(conn: &rusqlite::Connection, set: &str, items: &[&str]) {
-    for item in items {
-        conn.execute(
-            "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at) \
-             SELECT id, ?2, 3.0 FROM protection_sets WHERE name = ?1",
-            rusqlite::params![set, item],
-        )
-        .unwrap();
-    }
-}
-
-fn set_id(conn: &rusqlite::Connection, name: &str) -> i64 {
-    conn.query_row(
-        "SELECT id FROM protection_sets WHERE name = ?1",
-        [name],
-        |row| row.get(0),
+/// The player sets `percent` for a limited piece, applying from `from`
+/// (`None` for the first value, which covers the piece's wear from the
+/// start), at `set_at`.
+fn set_markup(
+    conn: &rusqlite::Connection,
+    item: &str,
+    percent: Option<f64>,
+    from: Option<f64>,
+    set_at: f64,
+) {
+    conn.execute(
+        "INSERT INTO limited_piece_markups (item_name, markup_percent, effective_from, set_at) \
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![item, percent, from, set_at],
     )
-    .unwrap()
+    .unwrap();
 }
 
 #[test]
-fn a_confirmed_set_s_pieces_bill_the_tt_they_lost_at_its_markup() {
+fn a_limited_piece_bills_the_tt_it_lost_at_the_markup_set_for_it() {
     let mut conn = migrated_in_memory().unwrap();
     store_the_hunt(&mut conn, "hunt", true);
-    conn.execute(
-        "UPDATE protection_sets SET markup_percent = 140 WHERE name = 'Pegasus'",
-        [],
-    )
-    .unwrap();
-    confirm_pieces(&conn, "Pegasus", &["Pegasus Helmet (M,L)"]);
+    set_markup(&conn, "Pegasus Helmet (M,L)", Some(140.0), None, 3.0);
     let costs = costs_of(&mut conn, "hunt");
 
     // The helmet lost 0.33 TT; at 140% that is 0.462 of armour, beside the
     // unlimited armour's 1.13.
-    let pegasus = set_id(&conn, "Pegasus");
     assert_eq!(
         costs.armour,
         [
@@ -1851,12 +1815,12 @@ fn a_confirmed_set_s_pieces_bill_the_tt_they_lost_at_its_markup() {
                     micro_ped: 113 * PEC
                 }
             },
-            ArmourPart::Set {
-                set_id: pegasus,
+            ArmourPart::Piece {
+                item: "Pegasus Helmet (M,L)".to_string(),
                 lost: Amount::WholePec {
                     micro_ped: 33 * PEC
                 },
-                markup_hundredths: 14_000,
+                markup_hundredths: Some(14_000),
                 cost: Amount::WholePec { micro_ped: 462_000 },
             },
         ]
@@ -1880,47 +1844,37 @@ fn a_confirmed_set_s_pieces_bill_the_tt_they_lost_at_its_markup() {
 }
 
 #[test]
-fn a_falling_limited_piece_in_no_confirmed_set_leaves_only_the_limited_part_unmeasured() {
+fn a_piece_is_billed_at_the_markup_in_force_when_the_session_started() {
     let mut conn = migrated_in_memory().unwrap();
     store_the_hunt(&mut conn, "hunt", true);
-    // A set is confirmed, but the helmet that fell is not one of its pieces.
-    conn.execute(
-        "INSERT INTO protection_sets (kind, name, economy_kind, markup_percent, created_at) \
-         VALUES ('plates', '5B plates', 'limited', 130, 1)",
-        [],
-    )
-    .unwrap();
-    confirm_pieces(&conn, "5B plates", &["Armor Plating Mk. 5B (L)"]);
+    // The first value covers the start; a later one applies only from
+    // after this session started, so it bills nothing here.
+    set_markup(&conn, "Pegasus Helmet (M,L)", Some(120.0), None, 2.0);
+    set_markup(
+        &conn,
+        "Pegasus Helmet (M,L)",
+        Some(200.0),
+        Some(STARTED + 1.0),
+        3.0,
+    );
     let costs = costs_of(&mut conn, "hunt");
-    assert_eq!(
-        basis(&costs, CostBucket::Armour),
-        Basis::Unmeasured(Unmeasured::LimitedSetUnconfirmed)
-    );
-    let plates = set_id(&conn, "5B plates");
-    // The set whose pieces did not fall is measured at nothing in it.
-    assert_eq!(
-        costs.armour,
-        [
-            ArmourPart::Unlimited {
-                lost: Amount::WholePec {
-                    micro_ped: 113 * PEC
-                }
-            },
-            ArmourPart::Set {
-                set_id: plates,
-                lost: Amount::NONE,
-                markup_hundredths: 13_000,
-                cost: Amount::NONE,
-            },
-            ArmourPart::Unconfirmed {
-                lost: Amount::WholePec {
-                    micro_ped: 33 * PEC
-                }
-            },
-        ]
-    );
-}
+    assert_eq!(measured(&costs, CostBucket::Armour), 113 * PEC + 396_000);
 
+    // A value that applies from before the start does bill it, and one
+    // returning the piece to its TT bills the TT it lost.
+    set_markup(
+        &conn,
+        "Pegasus Helmet (M,L)",
+        Some(200.0),
+        Some(STARTED - 1.0),
+        4.0,
+    );
+    let at_200 = costs_of(&mut conn, "hunt");
+    assert_eq!(measured(&at_200, CostBucket::Armour), 113 * PEC + 66 * PEC);
+    set_markup(&conn, "Pegasus Helmet (M,L)", None, Some(STARTED), 5.0);
+    let at_tt = costs_of(&mut conn, "hunt");
+    assert_eq!(measured(&at_tt, CostBucket::Armour), 146 * PEC);
+}
 #[test]
 fn a_session_measured_in_part_keeps_no_armour_parts() {
     let mut conn = migrated_in_memory().unwrap();
@@ -1941,22 +1895,14 @@ fn a_session_measured_in_part_keeps_no_armour_parts() {
 }
 
 #[test]
-fn confirming_pieces_rebuilds_a_sealed_session_s_armour() {
+fn setting_a_piece_s_markup_rebuilds_a_sealed_session_s_armour() {
     let mut conn = migrated_in_memory().unwrap();
     store_the_hunt(&mut conn, "hunt", true);
-    conn.execute(
-        "UPDATE protection_sets SET markup_percent = 140 WHERE name = 'Pegasus'",
-        [],
-    )
-    .unwrap();
     let before = costs_of(&mut conn, "hunt");
-    assert_eq!(
-        basis(&before, CostBucket::Armour),
-        Basis::Unmeasured(Unmeasured::LimitedSetUnconfirmed)
-    );
-    confirm_pieces(&conn, "Pegasus", &["Pegasus Helmet (M,L)"]);
-    // The pieces are part of what places the items: the stored costs are
-    // stale until rebuilt, and the rebuild bills the helmet at the set's
+    assert_eq!(measured(&before, CostBucket::Armour), 146 * PEC);
+    set_markup(&conn, "Pegasus Helmet (M,L)", Some(140.0), None, 3.0);
+    // The markups are part of what places the items: the stored costs are
+    // stale until rebuilt, and the rebuild bills the helmet at its
     // markup.
     let roles = KnownRoles::read(&conn, None).unwrap();
     assert_eq!(

@@ -441,7 +441,7 @@ fn a_topped_up_measure_totals_its_ammo_as_topped_up_and_never_as_settled() {
         started_at: 0.0,
         ended_at: Some(180.0),
     };
-    let roles = KnownRoles::from_parts(&[], &[], None);
+    let roles = KnownRoles::from_parts(&[], None);
     let measure = measure_session(&window, &readings, &roles).unwrap().measure;
     let totals = MeasureTotals::of(&measure).unwrap();
     assert_eq!(

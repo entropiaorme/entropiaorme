@@ -1595,10 +1595,7 @@ impl Api {
                     .into_iter()
                     .map(derived_source_dto)
                     .collect(),
-                recorded_from_account: row
-                    .from_account
-                    .map(recorded_from_account_dto)
-                    .into(),
+                recorded_from_account: row.from_account.map(recorded_from_account_dto).into(),
                 reconciliation_id: row.reconciliation_id.into(),
             })
             .collect())

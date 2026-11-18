@@ -14,6 +14,9 @@ export type AccountRecordRead = Pick<
 	'id' | 'quantity' | 'ttValue' | 'recordedAt'
 >;
 
+/** The two readings a record was seen between. */
+export type SeenBetween = Pick<RecordedFromAccount, 'from' | 'to'>;
+
 function sameDay(a: Date, b: Date): boolean {
 	return (
 		a.getDate() === b.getDate() &&
@@ -25,7 +28,7 @@ function sameDay(a: Date, b: Date): boolean {
 /** When a record from the account happened: between the two readings that
  * saw it ("today, 3:02 PM and 3:03 PM"). The day is said once when both
  * readings fall on it. */
-export function fromAccountWindow(step: RecordedFromAccount, now: Date = new Date()): string {
+export function fromAccountWindow(step: SeenBetween, now: Date = new Date()): string {
 	const from = formatSeenAt(step.from, now);
 	const to = sameDay(new Date(step.from), new Date(step.to))
 		? formatTime(step.to)
@@ -34,7 +37,7 @@ export function fromAccountWindow(step: RecordedFromAccount, now: Date = new Dat
 }
 
 /** The hover text of a history row recorded from the account. */
-export function fromAccountSentence(step: RecordedFromAccount, now: Date = new Date()): string {
+export function fromAccountSentence(step: SeenBetween, now: Date = new Date()): string {
 	return `Recorded from your account readings: it happened ${fromAccountWindow(step, now)}.`;
 }
 

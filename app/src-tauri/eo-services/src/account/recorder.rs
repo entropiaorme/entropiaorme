@@ -79,6 +79,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{JoinError, JoinHandle};
 use tokio::time::Instant;
 
+use super::adoption::SessionStore;
 use super::amount::Pec;
 use super::costs::{self, SessionCosts};
 use super::follow::{FollowFailure, FollowPass};
@@ -86,7 +87,6 @@ use super::minutes::{self, SessionMinutes};
 use super::placement::{self, Placement, Placements};
 use super::proposals::{self, Decided, Examined, Proposal, ProposalId, ProposalKind};
 use super::reading::{Holding, HoldingKey, Reading, SiteResponse};
-use super::adoption::SessionStore;
 use super::sessions::{self, MeasureRead, MeasuredPage, ToSeal};
 use super::site::{SessionSecret, SharedSite, SiteFailure, SiteOutcome};
 use super::store::{self, Purpose, ReadingHeader, ReadingId};
@@ -1675,10 +1675,7 @@ impl Actor {
                 .then_some(self.confirming),
             signing_in: self.signing_in,
             has_readings: self.latest.is_some(),
-            failing_since: self
-                .is_connected()
-                .then_some(self.failing_since)
-                .flatten(),
+            failing_since: self.is_connected().then_some(self.failing_since).flatten(),
             failures_in_a_row: if self.is_connected() {
                 self.failures_in_a_row
             } else {

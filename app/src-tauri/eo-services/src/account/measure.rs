@@ -1661,9 +1661,6 @@ mod tests {
                 _ => None,
             }
         }
-        fn protection_category(&self, _: &str) -> Option<CostCategory> {
-            None
-        }
     }
 
     const WHOLE: SessionWindow = SessionWindow {

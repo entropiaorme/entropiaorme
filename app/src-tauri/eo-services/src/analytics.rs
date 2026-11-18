@@ -45,8 +45,8 @@ pub use conversion::{
 };
 pub use from_account::{
     AccountRecord, AccountStep, FromAccount, ListingFromAccount, RecentFromAccount,
-    RecordedFromAccount, TakenBack,
-    UnknownOriginRecorded, UnknownOriginUndo, RECENT_FROM_ACCOUNT_SECONDS,
+    RecordedFromAccount, TakenBack, UnknownOriginRecorded, UnknownOriginUndo,
+    RECENT_FROM_ACCOUNT_SECONDS,
 };
 pub(crate) use realised::realised_markup_by_quest;
 pub use reconciliation::{
@@ -4593,97 +4593,97 @@ pub(crate) fn confirm_listing_within(
     sale_fee: f64,
     resolved_at: &str,
 ) -> Result<Option<AuctionListingRow>, DbError> {
-        let Some(listing) = read_listing(&tx, &listing_id)? else {
-            return Ok(None);
-        };
-        if listing.status != "pending" {
-            return Ok(None);
-        }
+    let Some(listing) = read_listing(tx, listing_id)? else {
+        return Ok(None);
+    };
+    if listing.status != "pending" {
+        return Ok(None);
+    }
 
-        let gross_result = if listing.subject_kind == "equipment" {
-            final_price - listing.cost_basis.unwrap_or(listing.tt_value)
-        } else {
-            stock_allocation::resolve_sale(
-                listing.quantity,
-                listing.attributed_qty,
-                listing.tt_value,
-                listing
-                    .cost_basis
-                    .map_or(0.0, |basis| basis - listing.tt_value),
-                final_price,
-                listing.listing_fee,
-                sale_fee,
-            )
-            .gross_markup
-        };
+    let gross_result = if listing.subject_kind == "equipment" {
+        final_price - listing.cost_basis.unwrap_or(listing.tt_value)
+    } else {
+        stock_allocation::resolve_sale(
+            listing.quantity,
+            listing.attributed_qty,
+            listing.tt_value,
+            listing
+                .cost_basis
+                .map_or(0.0, |basis| basis - listing.tt_value),
+            final_price,
+            listing.listing_fee,
+            sale_fee,
+        )
+        .gross_markup
+    };
 
-        tx.execute(
-            "UPDATE auction_listings SET status = 'sold', final_price = ?, \
+    tx.execute(
+        "UPDATE auction_listings SET status = 'sold', final_price = ?, \
                  sale_fee = ?, resolved_at = ? WHERE id = ?",
-            rusqlite::params![final_price, sale_fee, resolved_at, listing_id],
-        )?;
+        rusqlite::params![final_price, sale_fee, resolved_at, listing_id],
+    )?;
 
-        // Markup only. Selling at TT converts a position rather than
-        // creating income, for untracked stock as much as for tracked:
-        // the player held that value either way, and the app simply
-        // has no record of where the untracked part came from.
-        if gross_result.abs() > STOCK_EPSILON {
-            let entry_id = Uuid::new_v4().to_string();
-            let kind = if gross_result > 0.0 {
-                "markup"
-            } else {
-                "expense"
-            };
-            let tag = if listing.subject_kind == "equipment" {
-                INVENTORY_SALE_TAG
-            } else {
-                "market"
-            };
-            tx.execute(
-                "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+    // Markup only. Selling at TT converts a position rather than
+    // creating income, for untracked stock as much as for tracked:
+    // the player held that value either way, and the app simply
+    // has no record of where the untracked part came from.
+    if gross_result.abs() > STOCK_EPSILON {
+        let entry_id = Uuid::new_v4().to_string();
+        let kind = if gross_result > 0.0 {
+            "markup"
+        } else {
+            "expense"
+        };
+        let tag = if listing.subject_kind == "equipment" {
+            INVENTORY_SALE_TAG
+        } else {
+            "market"
+        };
+        tx.execute(
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
                  VALUES (?, ?, ?, ?, ?, ?)",
-                rusqlite::params![
-                    entry_id,
-                    resolved_at,
-                    kind,
-                    format!("Auction Sale: {}", listing.item_name),
-                    gross_result.abs(),
-                    tag,
-                ],
-            )?;
-            tx.execute(
-                "UPDATE auction_listings SET sale_entry_id = ? WHERE id = ?",
-                rusqlite::params![entry_id, listing_id],
-            )?;
-        }
+            rusqlite::params![
+                entry_id,
+                resolved_at,
+                kind,
+                format!("Auction Sale: {}", listing.item_name),
+                gross_result.abs(),
+                tag,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE auction_listings SET sale_entry_id = ? WHERE id = ?",
+            rusqlite::params![entry_id, listing_id],
+        )?;
+    }
 
-        if sale_fee > 0.0 {
-            let entry_id = Uuid::new_v4().to_string();
-            tx.execute(
-                "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+    if sale_fee > 0.0 {
+        let entry_id = Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
                  VALUES (?, ?, 'expense', ?, ?, 'market')",
-                rusqlite::params![
-                    entry_id,
-                    resolved_at,
-                    format!("Auction Fee: {}", listing.item_name),
-                    sale_fee,
-                ],
-            )?;
-            tx.execute(
-                "UPDATE auction_listings SET sale_fee_entry_id = ? WHERE id = ?",
-                rusqlite::params![entry_id, listing_id],
-            )?;
-        }
+            rusqlite::params![
+                entry_id,
+                resolved_at,
+                format!("Auction Fee: {}", listing.item_name),
+                sale_fee,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE auction_listings SET sale_fee_entry_id = ? WHERE id = ?",
+            rusqlite::params![entry_id, listing_id],
+        )?;
+    }
 
-        if listing.subject_kind == "equipment" {
-            if let Some(item_id) = &listing.inventory_item_id {
-                tx.execute(
-                    "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
+    if listing.subject_kind == "equipment" {
+        if let Some(item_id) = &listing.inventory_item_id {
+            tx.execute(
+                "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
                          updated_at = unixepoch('now') WHERE id = ?",
-                    rusqlite::params![resolved_at, item_id],
-                )?;
-            }
+                rusqlite::params![resolved_at, item_id],
+            )?;
         }
+    }
 
     daily_rollup::refresh_days(tx, [resolved_at])?;
     Ok(read_listing(tx, listing_id)?)
@@ -4698,44 +4698,44 @@ pub(crate) fn expire_listing_within(
     resolved_at: &str,
     now: f64,
 ) -> Result<Option<AuctionListingRow>, DbError> {
-        let Some(listing) = read_listing(&tx, &listing_id)? else {
-            return Ok(None);
-        };
-        if listing.status != "pending" {
-            return Ok(None);
-        }
+    let Some(listing) = read_listing(tx, listing_id)? else {
+        return Ok(None);
+    };
+    if listing.status != "pending" {
+        return Ok(None);
+    }
 
-        if listing.subject_kind == "equipment" {
-            if let Some(item_id) = &listing.inventory_item_id {
-                asset_positions::restore(&tx, item_id, now)?;
-            }
-        } else {
-            // Each original movement goes back in reverse, carrying
-            // whatever its stock was carrying: an expiry returns the
-            // units exactly as they left.
-            for row in conversion::movement_rows(&tx, &listing_id, "listing")? {
-                insert_movement(
-                    &tx,
-                    &listing.item_name,
-                    "listing_return",
-                    Some(&listing_id),
-                    row.provenance(),
-                    row.session_definition_id,
-                    row.activity_context_id,
-                    row.tool_name.as_deref(),
-                    -row.quantity,
-                    -row.tt_value,
-                    &resolved_at,
-                    now,
-                    row.derived().outflow(),
-                )?;
-            }
+    if listing.subject_kind == "equipment" {
+        if let Some(item_id) = &listing.inventory_item_id {
+            asset_positions::restore(tx, item_id, now)?;
         }
+    } else {
+        // Each original movement goes back in reverse, carrying
+        // whatever its stock was carrying: an expiry returns the
+        // units exactly as they left.
+        for row in conversion::movement_rows(tx, listing_id, "listing")? {
+            insert_movement(
+                tx,
+                &listing.item_name,
+                "listing_return",
+                Some(listing_id),
+                row.provenance(),
+                row.session_definition_id,
+                row.activity_context_id,
+                row.tool_name.as_deref(),
+                -row.quantity,
+                -row.tt_value,
+                resolved_at,
+                now,
+                row.derived().outflow(),
+            )?;
+        }
+    }
 
-        tx.execute(
-            "UPDATE auction_listings SET status = 'expired', resolved_at = ? WHERE id = ?",
-            rusqlite::params![resolved_at, listing_id],
-        )?;
+    tx.execute(
+        "UPDATE auction_listings SET status = 'expired', resolved_at = ? WHERE id = ?",
+        rusqlite::params![resolved_at, listing_id],
+    )?;
     Ok(read_listing(tx, listing_id)?)
 }
 
@@ -7205,7 +7205,8 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let row = confirm_listing_within(&tx, &listing_id, final_price, sale_fee, &resolved_at)?;
+                let row =
+                    confirm_listing_within(&tx, &listing_id, final_price, sale_fee, &resolved_at)?;
                 if row.is_some() {
                     tx.commit()?;
                 }
@@ -8448,7 +8449,8 @@ mod tests {
              \"questItemTt\":0.0,\"pes\":0.0,\"codexPes\":0.0,\"questPes\":0.0,\"ledger\":{}},\"lossesBreakdown\":\
              {\"trackingCost\":0.0,\"cycledBreakdown\":{\"weapon\":0,\"healing\":0,\"enhancer\":0,\
              \"armour\":0,\"dangling\":0,\"harvest\":0,\"consumables\":0},\"overhead\":\
-             {\"total\":0.0,\"travel\":0.0,\"fieldLogistics\":0.0,\"unclassified\":0.0},\
+             {\"total\":0.0,\"betweenSessions\":0.0,\"travel\":0.0,\"fieldLogistics\":0.0,\
+             \"unclassified\":0.0},\
              \"ledger\":{}},\"totalGains\":0.0,\"totalLosses\":0.0,\
              \"timeline\":[],\"monthlyBreakdown\":[]}"
         );
@@ -10290,6 +10292,122 @@ mod tests {
         assert!((resold.gross_markup.unwrap() - 1.5).abs() < 1e-9);
     }
 
+    /// A listing's outcome the readings settled is recorded once from its
+    /// step, through the same writes as the player's own; a listing the
+    /// player resolved meanwhile is left as they resolved it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_listing_outcome_from_the_account_is_recorded_once_and_never_over_the_player_s() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let list = |quantity| {
+            service.create_auction_listing(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                quantity,
+                4.0,
+                None,
+                0.5,
+                None,
+                None,
+            )
+        };
+        let sold_one = list(50.0).await.unwrap();
+        let expired_by_hand = list(50.0).await.unwrap();
+        let step = AccountStep {
+            reading_id: 9,
+            prev_reading_id: 8,
+            seen_from: 1_780_000_000.0,
+            seen_to: 1_780_000_060.0,
+            hand_entries_since: 1_779_999_700.0,
+            stock_settles_by: 1_780_000_600.0,
+        };
+        let record = |outcome: ListingFromAccount| {
+            tokio::task::block_in_place(|| {
+                service
+                    .record_listing_from_account_blocking(step, outcome, "2026-06-01".to_string())
+                    .unwrap()
+            })
+        };
+        let sold = ListingFromAccount::Sold {
+            listing_id: sold_one.id.clone(),
+            final_price: 4.0,
+            sale_fee: 0.0,
+        };
+        assert!(matches!(
+            record(sold.clone()),
+            FromAccount::Recorded { record_id, .. } if record_id == sold_one.id
+        ));
+        let ledger = ledger_descriptions(&service).await;
+        assert!(ledger.iter().any(|d| d == "Auction Sale: Moonleaf Board"));
+        // The same step again records nothing.
+        assert_eq!(record(sold), FromAccount::AlreadyRecorded);
+
+        // The player marked the other expired before the readings did.
+        service
+            .expire_auction_listing(&expired_by_hand.id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record(ListingFromAccount::Returned {
+                listing_id: expired_by_hand.id.clone(),
+            }),
+            FromAccount::RecordedByHand
+        );
+    }
+
+    /// A listing that came back can be put back on the auction, the stock
+    /// that returned going out once more; only an expired listing can.
+    #[tokio::test]
+    async fn a_listing_that_came_back_is_put_back_on_the_auction() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let listing = service
+            .create_auction_listing(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                100.0,
+                4.0,
+                None,
+                0.5,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(service
+            .reopen_expired_listing(&listing.id)
+            .await
+            .unwrap()
+            .is_none());
+        service
+            .expire_auction_listing(&listing.id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let back = service
+            .stock_positions(Profession::Harvesting)
+            .await
+            .unwrap();
+        let board = position(&back, "Moonleaf Board").unwrap();
+        assert!((board.quantity - 100.0).abs() < 1e-9);
+
+        let reopened = service
+            .reopen_expired_listing(&listing.id)
+            .await
+            .unwrap()
+            .expect("an expired listing");
+        assert_eq!(reopened.status, "pending");
+        assert_eq!(reopened.resolved_at, None);
+        let out = service
+            .stock_positions(Profession::Harvesting)
+            .await
+            .unwrap();
+        let board = position(&out, "Moonleaf Board").unwrap();
+        assert!(board.quantity.abs() < 1e-9);
+        assert!((board.listed_quantity - 100.0).abs() < 1e-9);
+    }
+
     /// A sale can only be taken back while it is a sale.
     #[tokio::test]
     async fn reverting_reports_not_found_unless_the_listing_is_sold() {
@@ -11461,12 +11579,14 @@ mod tests {
             None,
             None,
             None,
+            None,
         ];
         merge_family_sums(
             &mut into,
             [
                 Some(3.0),
                 Some(4.0),
+                None,
                 None,
                 None,
                 None,
@@ -11516,6 +11636,7 @@ mod tests {
             consumables: SqlNumber::Int(0),
             tracking_cost: SqlNumber::Float(cost),
             overhead: [SqlNumber::Int(0); 3],
+            between_sessions: SqlNumber::Int(0),
             ledger_gains: map(gains),
             ledger_losses: map(losses),
         }
@@ -11526,6 +11647,12 @@ mod tests {
         // (loot 10 + markup 5) / (cost 4 + expense 1) = 3.0.
         let m = make_metrics(10.0, &[("markup", 5.0)], 4.0, &[("expense", 1.0)]);
         assert_eq!(rate_from_metrics(&m), 3.0);
+        // Overhead billed between sessions is a cost of the day, never of
+        // the rate: 2 PED of it leaves the rate where it was.
+        let mut between = make_metrics(10.0, &[("markup", 5.0)], 4.0, &[("expense", 1.0)]);
+        between.overhead = [SqlNumber::Float(2.0), SqlNumber::Int(0), SqlNumber::Int(0)];
+        between.between_sessions = SqlNumber::Float(2.0);
+        assert_eq!(rate_from_metrics(&between), 3.0);
         // Non-positive losses short-circuit to 0.0 (no division).
         let zero = make_metrics(10.0, &[("markup", 5.0)], 0.0, &[]);
         assert_eq!(rate_from_metrics(&zero), 0.0);

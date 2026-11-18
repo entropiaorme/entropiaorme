@@ -11,19 +11,37 @@
 
 use std::sync::Arc;
 
-use eo_api::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
+use eo_api::account::{
+    AccountActivityMarks, AccountActivitySeenInput, AccountMeasuredSummary, AccountSessionMeasure,
+    AccountSignal, AccountStatus, CostPlacementInput, CostPlacementResult, CostPlacements,
+    MeasuredSessionPage,
+};
 use eo_api::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
-use eo_api::account::{AccountActivityMarks, AccountActivitySeenInput, AccountMeasuredSummary, AccountSessionMeasure, AccountSignal, AccountStatus, CostPlacementInput, CostPlacementResult, CostPlacements, MeasuredSessionPage};
 use eo_api::account_minutes::{
     AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
 };
-use eo_api::account_proposals::{AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput, AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading, AccountRunWhole, AccountRunWholeInput};
+use eo_api::account_proposals::{
+    AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
+    AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading, AccountRunWhole,
+    AccountRunWholeInput,
+};
 use eo_api::account_reconciliation::{
     StockReconciliationApplied, StockReconciliationApplyInput, StockReconciliationDraft,
     StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
 };
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
-use eo_api::analytics::{ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting, AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput, AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession, RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount, StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput, StockSaleFromAccount, StockSaleFromAccountInput};
+use eo_api::analytics::{
+    ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
+    AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput,
+    AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput,
+    EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
+    InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
+    InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
+    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
+    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
+    StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
+    StockSaleFromAccount, StockSaleFromAccountInput,
+};
 use eo_api::character::{
     ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
     HpOptimizerResult, PathOptimizerResult, ProfessionLevel, SkillLevel,
@@ -38,6 +56,7 @@ use eo_api::dev::{
     AuctionFeeOverlayStatus, AuctionFeeResearchStatus, CompactResult, CrashReportingStatus,
     MetricsSnapshot, RebuildReport,
 };
+use eo_api::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
 use eo_api::equipment::{
     EquipmentDetail, EquipmentLibrary, EquipmentRequest, EquipmentSearchHit, EquipmentSummary,
     SearchKind,
@@ -153,9 +172,7 @@ pub async fn equipment_delete(app: tauri::AppHandle, item_id: i64) -> Result<(),
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn enhancer_markups(
-    app: tauri::AppHandle,
-) -> Result<EnhancerMarkups, ApiError> {
+pub async fn enhancer_markups(app: tauri::AppHandle) -> Result<EnhancerMarkups, ApiError> {
     facade(&app)?.enhancer_markups().await
 }
 
@@ -1124,9 +1141,7 @@ pub async fn account_cost_placement_clear(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn account_armour_pieces(
-    app: tauri::AppHandle,
-) -> Result<ArmourPiecesView, ApiError> {
+pub async fn account_armour_pieces(app: tauri::AppHandle) -> Result<ArmourPiecesView, ApiError> {
     facade(&app)?.account_armour_pieces().await
 }
 

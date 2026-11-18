@@ -24,6 +24,7 @@ const account = vi.hoisted(() => ({
 	beginAccountRun: vi.fn(),
 	finishAccountRun: vi.fn(),
 	cancelAccountRun: vi.fn(),
+	readRunWhole: vi.fn(),
 }));
 vi.mock('$lib/api', () => ({ getTrackingSnapshot: api.getTrackingSnapshot }));
 vi.mock('$lib/api/account', () => account);
@@ -88,6 +89,7 @@ function mount() {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	account.readRunWhole.mockResolvedValue({ readWhole: false, boxesLeft: 0 });
 	api.getTrackingSnapshot.mockResolvedValue({ status: 'idle' });
 	api.getLootInventory.mockResolvedValue([
 		{
@@ -182,8 +184,10 @@ describe('the strongbox opening view', () => {
 				row.recycle,
 			]),
 		).toEqual([
+			// Every content is kept: recycling is the game's, and the
+			// readings record it when it happens.
 			['Skeleton Shirt White (F)', false],
-			['Red Heart Fireworks', true],
+			['Red Heart Fireworks', false],
 			['Skeleton Shirt White (M)', false],
 		]);
 	});
@@ -468,8 +472,10 @@ describe('openings read from the account', () => {
 		await openTheBoxes();
 		await fireEvent.click(await screen.findByRole('button', { name: 'Done' }));
 		expect(
-			await screen.findByText(/Your account shows no Halloween Strongbox opened/),
+			await screen.findByText(/Your account does not show any Halloween Strongbox opened yet/),
 		).not.toBeNull();
+		// The site may be a minute behind: the next reading is the player's to ask for.
+		expect(screen.getByRole('button', { name: 'Check the next reading' })).not.toBeNull();
 		await fireEvent.click(screen.getByRole('button', { name: 'Paste the export' }));
 		expect(await screen.findByLabelText('Inventory Changes export')).not.toBeNull();
 	});

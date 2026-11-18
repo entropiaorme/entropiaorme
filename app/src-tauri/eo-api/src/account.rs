@@ -1201,7 +1201,8 @@ impl Api {
     ) -> Result<(), ApiError> {
         let through = chrono::DateTime::parse_from_rfc3339(input.through.trim())
             .map_err(|_| ApiError::bad_request("a seen instant is an ISO 8601 date and time"))?;
-        let seconds = through.timestamp() as f64 + f64::from(through.timestamp_subsec_micros()) / 1e6;
+        let seconds =
+            through.timestamp() as f64 + f64::from(through.timestamp_subsec_micros()) / 1e6;
         self.account()?
             .mark_activity_seen(seconds)
             .await

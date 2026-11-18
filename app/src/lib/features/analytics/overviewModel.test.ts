@@ -21,6 +21,7 @@ function day(overrides: Partial<TimelineDay> = {}): TimelineDay {
 		ledgerGains: {},
 		trackingCost: 0,
 		overheadCost: 0,
+		betweenSessionsCost: 0,
 		ledgerLosses: {},
 		...overrides,
 	};
@@ -37,6 +38,7 @@ function month(overrides: Partial<MonthlyEntry> = {}): MonthlyEntry {
 		ledgerGains: {},
 		trackingCost: 0,
 		overheadCost: 0,
+		betweenSessionsCost: 0,
 		ledgerLosses: {},
 		...overrides,
 	};
@@ -65,7 +67,7 @@ function overview(overrides: Partial<OverviewStats> = {}): OverviewStats {
 				harvest: 0,
 				consumables: 0,
 			},
-			overhead: { total: 0, travel: 0, fieldLogistics: 0, unclassified: 0 },
+			overhead: { total: 0, travel: 0, fieldLogistics: 0, unclassified: 0, betweenSessions: 0 },
 			ledger: { equipment: 40, repair: 20 },
 		},
 		totalGains: 1000,
@@ -168,13 +170,38 @@ describe('pieView', () => {
 			overview({
 				lossesBreakdown: {
 					...base.lossesBreakdown,
-					overhead: { total: 6, travel: 4, fieldLogistics: 2, unclassified: 0 },
+					overhead: { total: 6, travel: 4, fieldLogistics: 2, unclassified: 0, betweenSessions: 0 },
 				},
 			}),
 		);
 		const model = createOverviewModel();
 		await model.loadData('all');
 		expect(model.pieView?.losses).toBe(1066); // 1000 cycled + 6 overhead + 40 + 20
+	});
+
+	it('keeps what was billed between sessions in the costs and out of the rate', async () => {
+		const base = overview();
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				lossesBreakdown: {
+					...base.lossesBreakdown,
+					overhead: {
+						total: 66,
+						travel: 66,
+						fieldLogistics: 0,
+						unclassified: 0,
+						betweenSessions: 60,
+					},
+				},
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		expect(model.totals?.costs).toBe(1126); // 1000 cycled + 66 overhead + 40 + 20
+		expect(model.totals?.betweenSessions).toBe(60);
+		expect(model.pieView?.losses).toBe(1126);
+		// The rate's losses leave the 60 out: 1000 cycled + 6 + 40 + 20.
+		expect(model.pieView?.rate).toBeCloseTo((model.pieView?.gains ?? 0) / 1066, 10);
 	});
 
 	it('returns null when either side is empty', async () => {
@@ -317,6 +344,28 @@ describe('monthlyRows', () => {
 		expect(june.lootRate).toBe(0.9);
 		expect(june.globalRate).toBeCloseTo(90 / 105, 10);
 	});
+
+	it("counts what was billed between a month's sessions in its cost, never in its rate", async () => {
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				monthlyBreakdown: [
+					month({
+						month: '2026-06',
+						lootTt: 90,
+						trackingCost: 100,
+						overheadCost: 15,
+						betweenSessionsCost: 10,
+					}),
+				],
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		const [june] = model.monthlyRows;
+		expect(june.cost).toBe(115);
+		expect(june.net).toBe(-25);
+		expect(june.globalRate).toBeCloseTo(90 / 105, 10);
+	});
 });
 
 describe('labelFor', () => {
@@ -331,7 +380,7 @@ describe("the sessions' overhead band", () => {
 		const losses = overview({
 			lossesBreakdown: {
 				...overview().lossesBreakdown,
-				overhead: { total: 6, travel: 4, fieldLogistics: 0, unclassified: 2 },
+				overhead: { total: 6, travel: 4, fieldLogistics: 0, unclassified: 2, betweenSessions: 0 },
 			},
 		}).lossesBreakdown;
 		expect(overheadBand(losses)).toEqual({
@@ -340,6 +389,7 @@ describe("the sessions' overhead band", () => {
 				{ key: 'travel', label: 'Travel', ped: 4 },
 				{ key: 'unclassified', label: 'Unclassified', ped: 2 },
 			],
+			betweenSessions: 0,
 		});
 		// Cycled is untouched by it.
 		expect(losses.trackingCost).toBe(1000);
@@ -358,7 +408,7 @@ describe('the cumulative breakdown', () => {
 				returnsBreakdown: { ...base.returnsBreakdown, questItemTt: 25 },
 				lossesBreakdown: {
 					...base.lossesBreakdown,
-					overhead: { total: 6, travel: 4, fieldLogistics: 2, unclassified: 0 },
+					overhead: { total: 6, travel: 4, fieldLogistics: 2, unclassified: 0, betweenSessions: 0 },
 				},
 			}),
 		);

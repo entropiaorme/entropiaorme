@@ -26,9 +26,6 @@ impl RoleSource for Nothing {
     fn catalogue_category(&self, _: &str) -> Option<CostCategory> {
         None
     }
-    fn protection_category(&self, _: &str) -> Option<CostCategory> {
-        None
-    }
 }
 
 fn count(conn: &rusqlite::Connection, sql: &str) -> i64 {

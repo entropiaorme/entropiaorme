@@ -58,6 +58,27 @@ fn converting() -> (Reading, Reading) {
 }
 
 #[test]
+fn a_step_with_change_no_pattern_explains_is_not_read_whole() {
+    let (before, mut after) = converting();
+    // Something arrives that no conversion, recycling or sale explains.
+    after = reading(
+        after.taken_at(),
+        5_000,
+        &[
+            ("Universal Ammo", C, 50_000, 500),
+            ("Universal Ammo", C, 101_000, 1_010),
+            ("Animal Hide", C, 40, 400),
+        ],
+    );
+    let read = recognised(&before, &after);
+    assert!(
+        read.shrapnel.is_some(),
+        "the conversion is still recognised"
+    );
+    assert!(!read.whole);
+}
+
+#[test]
 fn a_shrapnel_conversion_alone_is_read_as_one() {
     let (before, after) = converting();
     assert_eq!(
@@ -69,6 +90,7 @@ fn a_shrapnel_conversion_alone_is_read_as_one() {
             }),
             recycled: vec![],
             sold: vec![],
+            whole: true,
         }
     );
 }

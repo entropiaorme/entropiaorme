@@ -33,6 +33,7 @@ function line(
 		unitTt: { kind: 'exact', ped: 0.05 },
 		disposition: difference < 0 ? { kind: 'removed' } : { kind: 'unknownOrigin' },
 		takenBack: false,
+		acceptedAt: null,
 		...overrides,
 	};
 }
@@ -46,6 +47,7 @@ function draft(lines: StockReconciliationLine[]) {
 		excluded: [],
 		groups: [],
 		caution: null,
+		previouslyAccepted: [],
 	};
 }
 
@@ -74,15 +76,21 @@ describe('what a line can be set to', () => {
 		]);
 	});
 
-	it('offers a surplus of inexact TT only to be left as it is', () => {
+	it("offers a surplus of inexact TT as of unknown origin at the account's TT", () => {
 		const truncated = line('Iron Ingot', 1, 5, {
 			unitTt: { kind: 'truncated', ped: 0.13 },
 			disposition: { kind: 'leftAsIs' },
 		});
-		expect(choicesFor(truncated).map((c) => c.id)).toEqual(['leftAsIs']);
-		expect(standaloneChoice(truncated)).toBe('leftAsIs');
+		const choices = choicesFor(truncated);
+		expect(choices.map((c) => c.id)).toEqual(['unknownOrigin', 'leftAsIs']);
+		expect(choices[0].title).toMatch(/your account's TT/);
+		expect(standaloneChoice(truncated)).toBe('unknownOrigin');
+	});
+
+	it('offers a surplus of no known TT only to be left as it is', () => {
 		const unknown = line('Iron Ingot', 1, 5, { unitTt: { kind: 'unknown' } });
 		expect(choicesFor(unknown).map((c) => c.id)).toEqual(['leftAsIs']);
+		expect(standaloneChoice(unknown)).toBe('leftAsIs');
 	});
 
 	it('says what a bulk choice was set on and why the rest did not fit', () => {

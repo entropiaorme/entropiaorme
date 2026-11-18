@@ -34,10 +34,9 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::{
-    confirm_listing_within, epoch_to_iso, expire_listing_within, is_universal_ammo,
-    item_positions, naive_to_epoch, write_private_sale,
-    write_ratio_conversion, ActivityHistoryRow, AnalyticsError, AnalyticsService, PrivateSale,
-    Profession, RatioConversion, STOCK_EPSILON,
+    confirm_listing_within, epoch_to_iso, expire_listing_within, is_universal_ammo, item_positions,
+    naive_to_epoch, write_private_sale, write_ratio_conversion, ActivityHistoryRow, AnalyticsError,
+    AnalyticsService, PrivateSale, Profession, RatioConversion, STOCK_EPSILON,
 };
 use crate::db::DbError;
 
@@ -538,7 +537,9 @@ impl AnalyticsService {
     ) -> Result<FromAccount, AnalyticsError> {
         check_step(&step)?;
         if outcome.listing_id().trim().is_empty() {
-            return Err(AnalyticsError::InvalidInput("a listing outcome names its listing"));
+            return Err(AnalyticsError::InvalidInput(
+                "a listing outcome names its listing",
+            ));
         }
         if let ListingFromAccount::Sold {
             final_price,
@@ -546,7 +547,11 @@ impl AnalyticsService {
             ..
         } = &outcome
         {
-            if !final_price.is_finite() || !sale_fee.is_finite() || *final_price < 0.0 || *sale_fee < 0.0 {
+            if !final_price.is_finite()
+                || !sale_fee.is_finite()
+                || *final_price < 0.0
+                || *sale_fee < 0.0
+            {
                 return Err(AnalyticsError::InvalidInput(
                     "a sale price and fee cannot be negative",
                 ));

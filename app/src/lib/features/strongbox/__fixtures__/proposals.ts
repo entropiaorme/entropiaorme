@@ -22,6 +22,7 @@ export function seven(overrides: Partial<OpeningProposal['outcome']> = {}): Open
 		readingId: 11,
 		previousReadingId: 10,
 		between: { from: '2026-11-14T18:02:00Z', to: '2026-11-14T18:03:00Z' },
+		detectedAt: '2026-11-14T18:03:05Z',
 		sessionId: 'hunt',
 		possiblyRecorded: false,
 		outcome: {
@@ -81,6 +82,7 @@ export function sold(listingId: string, proceeds: number | null, id = 21): Accou
 		readingId: 31,
 		previousReadingId: 30,
 		between: { from: '2026-11-14T18:02:00Z', to: '2026-11-15T09:11:00Z' },
+		detectedAt: '2026-11-15T09:11:05Z',
 		sessionId: null,
 		possiblyRecorded: false,
 		outcome: {
@@ -100,6 +102,7 @@ export function returned(listingId: string, id = 22): AccountProposal {
 		readingId: 32,
 		previousReadingId: 31,
 		between: { from: '2026-11-14T18:02:00Z', to: '2026-11-15T09:11:00Z' },
+		detectedAt: '2026-11-15T09:11:05Z',
 		sessionId: null,
 		possiblyRecorded: false,
 		outcome: {

@@ -474,10 +474,7 @@ export function createInventoryModel() {
 	/** Take a strongbox opening back whole: the boxes and keys return and
 	 * everything they became is unmade. */
 	async function undoOpening(openingId: string) {
-		await withRefresh(
-			() => undoStrongboxOpening({ id: openingId }),
-			'Failed to undo the opening',
-		);
+		await withRefresh(() => undoStrongboxOpening({ id: openingId }), 'Failed to undo the opening');
 	}
 
 	/** Put a listing that came back from the auction on it again. */

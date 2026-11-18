@@ -421,17 +421,11 @@ describe('overlay popup readiness handshake', () => {
 
 describe('how the sub-windows open and close', () => {
 	async function mountIdle() {
-		const popups = existingPopups('overlay-menu', 'overlay-armour-cost');
+		const popups = existingPopups('overlay-menu');
 		seams.getTrackingSnapshot.mockResolvedValue(idleSnapshot);
 		render(OverlayPage);
 		const picker = await screen.findByTitle(PICKER_TITLE);
-		const armour = screen.getByTitle("Record an armour repair or a limited set's reading");
-		return {
-			menu: popups['overlay-menu'],
-			armourPopup: popups['overlay-armour-cost'],
-			picker,
-			armour,
-		};
+		return { menu: popups['overlay-menu'], picker };
 	}
 	const expanded = (el: HTMLElement) => el.getAttribute('aria-expanded');
 
@@ -462,24 +456,6 @@ describe('how the sub-windows open and close', () => {
 		// The next click is a new one: it opens.
 		await act(() => picker.click());
 		await waitFor(() => expect(expanded(picker)).toBe('true'));
-	});
-
-	it('keeps one open at a time, an armour recording staying through the rest', async () => {
-		const { menu, armourPopup, picker, armour } = await mountIdle();
-		await act(() => armour.click());
-		await waitFor(() => expect(expanded(armour)).toBe('true'));
-		// A menu opened meanwhile leaves the recording where it is.
-		await act(() => picker.click());
-		await waitFor(() => expect(expanded(picker)).toBe('true'));
-		expect(expanded(armour)).toBe('true');
-		expect(armourPopup.emit).not.toHaveBeenCalledWith('overlay-armour-cost:hide');
-		// Closed and opened again, the recording takes the menu's place.
-		await act(() => armour.click());
-		await waitFor(() => expect(expanded(armour)).toBe('false'));
-		await act(() => armour.click());
-		await waitFor(() => expect(expanded(armour)).toBe('true'));
-		await waitFor(() => expect(expanded(picker)).toBe('false'));
-		expect(menu.emit).toHaveBeenCalledWith('overlay-menu:hide');
 	});
 
 	it('closes every sub-window when the overlay is dragged', async () => {
@@ -658,53 +634,5 @@ describe('the tool in hand read off the screen', () => {
 		} finally {
 			visibility.mockRestore();
 		}
-	});
-});
-
-describe('armour-cost popup', () => {
-	it('hands the popup its state and leaves sizing, placement and reveal to the popup', async () => {
-		render(OverlayPage);
-		const trigger = await screen.findByTitle("Record an armour repair or a limited set's reading");
-		trigger.click();
-
-		await waitFor(() => {
-			expect(seams.FakeWebviewWindow.instances).toHaveLength(1);
-		});
-		const popup = seams.FakeWebviewWindow.instances[0];
-		expect(popup.label).toBe('overlay-armour-cost');
-		expect(popup.options.visible).toBe(false);
-
-		await act(async () => {
-			popup.onceHandlers.get('tauri://created')?.({});
-		});
-		await act(async () => {
-			fireReady('overlay-armour-cost:ready', 'overlay-armour-cost');
-		});
-
-		await waitFor(() => {
-			expect(popup.emit).toHaveBeenCalledWith(
-				'overlay-armour-cost:show',
-				expect.objectContaining({ id: 'armourCost' }),
-			);
-		});
-		// Centred under its control, and staying while the player goes to
-		// the game to repair.
-		expect(shown(popup, 'overlay-armour-cost:show')).toMatchObject({
-			id: 'armourCost',
-			state: { repairOcrEnabled: false },
-			align: 'centre',
-			stays: true,
-			focus: true,
-		});
-		await waitFor(() => {
-			expect(trigger.getAttribute('aria-expanded')).toBe('true');
-		});
-		// The popup measures its panel and sizes, positions, reveals and
-		// focuses itself from the payload; a host-side reveal would flash the
-		// window at a stale location before it has measured anything.
-		expect(popup.show).not.toHaveBeenCalled();
-		expect(popup.setSize).not.toHaveBeenCalled();
-		expect(popup.setPosition).not.toHaveBeenCalled();
-		expect(popup.setFocus).not.toHaveBeenCalled();
 	});
 });

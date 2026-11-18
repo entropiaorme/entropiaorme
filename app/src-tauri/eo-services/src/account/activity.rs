@@ -136,7 +136,10 @@ mod tests {
         record(&conn, 6, "recycling", "r4", 111.0);
         let marks = marks(&conn).unwrap();
         assert_eq!(marks.seen_through, 100.0);
-        assert_eq!(marks.unseen, 2, "the step's two sales are one event, its recycling another");
+        assert_eq!(
+            marks.unseen, 2,
+            "the step's two sales are one event, its recycling another"
+        );
     }
 
     #[test]
@@ -171,8 +174,11 @@ mod tests {
         .unwrap();
         assert_eq!(marks(&conn).unwrap().unseen, 1);
         // Taken back since: the history no longer shows it as the account's.
-        conn.execute("UPDATE auction_listings SET status = 'pending' WHERE id = 'l1'", [])
-            .unwrap();
+        conn.execute(
+            "UPDATE auction_listings SET status = 'pending' WHERE id = 'l1'",
+            [],
+        )
+        .unwrap();
         assert_eq!(marks(&conn).unwrap().unseen, 0);
     }
 }

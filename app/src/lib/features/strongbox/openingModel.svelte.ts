@@ -27,8 +27,8 @@ import {
 	dismissProposal,
 	finishAccountRun,
 	getProposals,
-	readRunWhole,
 	linkProposals,
+	readRunWhole,
 	releaseProposals,
 } from '$lib/api/account';
 import type {

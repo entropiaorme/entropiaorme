@@ -246,6 +246,18 @@ describe("the session's armour in parts", () => {
 		expect(unconfirmed.label).toBe('Limited pieces in no confirmed set');
 		expect(unconfirmed.cost).toEqual({ text: UNPRICED.limitedSetUnconfirmed, title: null });
 	});
+
+	it('names each limited piece, at its markup or at TT when none is set', () => {
+		const priced = armourPartLine(
+			part({ part: 'limitedPiece', item: 'Pegasus Helmet (M,L)', markupPercent: 140, cost: 0.7 }),
+		);
+		expect(priced.label).toBe('Pegasus Helmet (M,L)');
+		expect(priced.detail).toBe('0.5000 TT lost, at 140.0% markup');
+		expect(priced.cost.text).toBe('0.7000');
+		const atTt = armourPartLine(part({ part: 'limitedPiece', item: 'Odd Gloves (L)' }));
+		expect(atTt.detail).toBe('0.5000 TT lost, no markup set: billed at TT');
+		expect(atTt.cost.text).toBe('0.5000');
+	});
 });
 
 describe('placing an item', () => {
@@ -255,6 +267,7 @@ describe('placing an item', () => {
 			'Harvesting',
 			'Healing',
 			'Armour',
+			'Limited armour',
 			'Consumable',
 			'Travel',
 			'Field logistics',
@@ -271,7 +284,7 @@ describe('placing an item', () => {
 
 	it('names every stored placement', () => {
 		const categories = Object.keys(PLACEMENT_LABELS) as CostPlacementCategory[];
-		expect(categories).toHaveLength(13);
+		expect(categories).toHaveLength(15);
 		for (const category of categories) {
 			expect(PLACEMENT_LABELS[category].length).toBeGreaterThan(0);
 		}

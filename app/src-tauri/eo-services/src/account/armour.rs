@@ -277,3 +277,165 @@ pub fn set_markup(
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account::store::{record_reading, Purpose};
+    use crate::account::test_support::reading;
+    use crate::db::migrated_in_memory;
+
+    const C: Container = Container::Carried;
+
+    fn read(conn: &mut rusqlite::Connection, at: f64, rows: &[(&str, Container, i64, i64)]) {
+        record_reading(conn, &reading(at, 1_000, rows), Purpose::Ambient, None).unwrap();
+    }
+
+    fn on(parent: &str) -> Container {
+        Container::Attached {
+            parent: parent.to_string(),
+        }
+    }
+
+    fn pieces_of(conn: &rusqlite::Connection) -> ArmourPieces {
+        let roles = KnownRoles::read(conn, None).unwrap();
+        pieces(conn, &roles).unwrap()
+    }
+
+    fn piece<'a>(listed: &'a ArmourPieces, item: &str) -> &'a ArmourPiece {
+        listed
+            .pieces
+            .iter()
+            .find(|piece| piece.item == item)
+            .unwrap_or_else(|| panic!("{item} is listed: {listed:?}"))
+    }
+
+    #[test]
+    fn the_limited_armour_and_plates_held_are_listed_and_the_rest_offered() {
+        let mut conn = migrated_in_memory().unwrap();
+        read(
+            &mut conn,
+            100.0,
+            &[
+                ("Pegasus Helmet (M,L)", C, 1, 1_000),
+                ("Frontier Harness (M)", C, 1, 4_000),
+                (
+                    "Armor Plating Mk. 5B (L)",
+                    on("Frontier Harness (M)"),
+                    1,
+                    2_500,
+                ),
+                ("Odd Plate", on("Frontier Harness (M)"), 1, 300),
+                ("Pegasus Helmet (M,L) Blueprint (L)", C, 1, 1),
+                ("Animal Hide", C, 10, 50),
+            ],
+        );
+        let listed = pieces_of(&conn);
+        let names: Vec<(&str, PieceList, bool)> = listed
+            .pieces
+            .iter()
+            .map(|piece| (piece.item.as_str(), piece.list, piece.held))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Pegasus Helmet (M,L)", PieceList::Armour, true),
+                ("Armor Plating Mk. 5B (L)", PieceList::Plates, true),
+            ]
+        );
+        let helmet = piece(&listed, "Pegasus Helmet (M,L)");
+        assert_eq!(helmet.tt, Some(Pec(1_000)));
+        assert_eq!(helmet.markup_percent, None, "billed at TT until set");
+        assert!(!helmet.declared);
+        assert_eq!(listed.read_at, Some(100.0));
+
+        // What may be declared a piece, the likeliest first; a blueprint
+        // never.
+        let offered: Vec<(&str, CandidateHint)> = listed
+            .candidates
+            .iter()
+            .map(|candidate| (candidate.item.as_str(), candidate.hint))
+            .collect();
+        assert_eq!(
+            offered,
+            [
+                ("Odd Plate", CandidateHint::Attached),
+                ("Frontier Harness (M)", CandidateHint::Tagged),
+                ("Animal Hide", CandidateHint::Other),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_markup_set_is_shown_with_when_and_a_declared_piece_is_listed() {
+        let mut conn = migrated_in_memory().unwrap();
+        read(
+            &mut conn,
+            100.0,
+            &[
+                ("Pegasus Helmet (M,L)", C, 1, 1_000),
+                ("Odd Plate", on("Pegasus Helmet (M,L)"), 1, 300),
+            ],
+        );
+        set_markup(&conn, "Pegasus Helmet (M,L)", Some(140.0), 200.0).unwrap();
+        set_markup(&conn, "Pegasus Helmet (M,L)", Some(150.0), 300.0).unwrap();
+        conn.execute(
+            "INSERT INTO cost_item_placements (item_name, category, placed_at) \
+             VALUES ('Odd Plate', 'limitedPlate', 1.0)",
+            [],
+        )
+        .unwrap();
+        let listed = pieces_of(&conn);
+        let helmet = piece(&listed, "Pegasus Helmet (M,L)");
+        assert_eq!(helmet.markup_percent, Some(150.0));
+        assert_eq!(helmet.markup_set_at, Some(300.0));
+        let plate = piece(&listed, "Odd Plate");
+        assert_eq!(plate.list, PieceList::Plates);
+        assert!(plate.declared);
+        assert!(listed.candidates.is_empty());
+
+        // The first value covers the piece from the start; later ones from
+        // when they were set.
+        let stamped: Vec<(Option<f64>, Option<f64>)> = conn
+            .prepare(
+                // id-order: insertion (a test reading what it just wrote)
+                "SELECT markup_percent, effective_from FROM limited_piece_markups ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(stamped, [(Some(140.0), None), (Some(150.0), Some(300.0))]);
+    }
+
+    #[test]
+    fn a_piece_whose_tt_rose_after_its_markup_was_set_was_replaced() {
+        let mut conn = migrated_in_memory().unwrap();
+        read(&mut conn, 100.0, &[("Pegasus Helmet (M,L)", C, 1, 1_000)]);
+        set_markup(&conn, "Pegasus Helmet (M,L)", Some(140.0), 150.0).unwrap();
+        read(&mut conn, 200.0, &[("Pegasus Helmet (M,L)", C, 1, 900)]);
+        assert_eq!(
+            piece(&pieces_of(&conn), "Pegasus Helmet (M,L)").replaced_at,
+            None,
+            "wear is no replacement"
+        );
+        read(&mut conn, 300.0, &[("Pegasus Helmet (M,L)", C, 1, 1_000)]);
+        assert_eq!(
+            piece(&pieces_of(&conn), "Pegasus Helmet (M,L)").replaced_at,
+            Some(300.0)
+        );
+    }
+
+    #[test]
+    fn a_piece_no_longer_held_stays_listed_while_it_has_a_markup() {
+        let mut conn = migrated_in_memory().unwrap();
+        read(&mut conn, 100.0, &[("Pegasus Helmet (M,L)", C, 1, 1_000)]);
+        set_markup(&conn, "Pegasus Helmet (M,L)", Some(140.0), 150.0).unwrap();
+        read(&mut conn, 200.0, &[("Animal Hide", C, 10, 50)]);
+        let helmet = piece(&pieces_of(&conn), "Pegasus Helmet (M,L)").clone();
+        assert!(!helmet.held);
+        assert_eq!(helmet.tt, None);
+        assert_eq!(helmet.markup_percent, Some(140.0));
+    }
+}

@@ -656,11 +656,12 @@ fn an_opening_recorded_another_way_accounts_for_one_group_of_proposals_only() {
     assert_eq!(left.len(), 1);
     assert!(left[0].between.from < 100.0, "the older one stays");
 
-    // A pasted opening of seven accounts for a three and a four seen in
-    // consecutive steps.
+    // A three and a four seen in consecutive steps outside a session are
+    // read as one opening of seven, which a pasted opening of seven
+    // accounts for.
     let mut conn = migrated_in_memory().unwrap();
     openings_from(&mut conn, 0.0, &[3, 4]);
-    assert_eq!(open_counts(&conn), vec![4, 3]);
+    assert_eq!(open_counts(&conn), vec![7]);
     recorded_opening(&conn, "pasted", 7.0, 500.0);
     assert!(open_counts(&conn).is_empty());
 
@@ -675,8 +676,10 @@ fn an_opening_recorded_another_way_accounts_for_one_group_of_proposals_only() {
 
 #[test]
 fn a_claim_marks_proposals_possibly_recorded_until_released_or_linked() {
+    // Two openings apart: a three, and later a four.
     let mut conn = migrated_in_memory().unwrap();
-    openings_from(&mut conn, 0.0, &[3, 4]);
+    openings_from(&mut conn, 0.0, &[3]);
+    openings_from(&mut conn, 1_000.0, &[4]);
     let found: Vec<ProposalId> = pending(&conn, None)
         .unwrap()
         .iter()
@@ -694,7 +697,7 @@ fn a_claim_marks_proposals_possibly_recorded_until_released_or_linked() {
     assert_eq!(claim(&mut conn, &found, &[], 4.0).unwrap(), Decided::Done);
 
     // Linked as one: both leave, and their claim with them.
-    recorded_opening(&conn, "seven", 7.0, 500.0);
+    recorded_opening(&conn, "seven", 7.0, 2_000.0);
     assert_eq!(
         link(&mut conn, &found, "seven", 5.0).unwrap(),
         Decided::Done
@@ -884,6 +887,57 @@ fn stored_as(conn: &mut rusqlite::Connection, readings: &[Reading], purpose: Pur
 const FAST: [(i64, i64); 3] = [(5, 17), (4, 18), (3, 17)];
 
 #[test]
+fn a_box_run_read_whole_on_the_player_s_word_is_one_opening_and_says_what_is_left() {
+    use super::proposals::read_run_whole;
+    let readings = fast_run(0.0, &FAST);
+    let mut conn = migrated_in_memory().unwrap();
+    stored_as(&mut conn, &readings, Purpose::Run);
+    // One step is no run to read whole.
+    let one = read_run_whole(
+        &mut conn,
+        ReadingId(1),
+        ReadingId(2),
+        "Halloween Strongbox",
+        &roles(),
+        500.0,
+    )
+    .unwrap();
+    assert!(!one.read_whole);
+    assert_eq!(one.boxes_left, 80 - 22);
+
+    let whole = read_run_whole(
+        &mut conn,
+        ReadingId(1),
+        ReadingId(4),
+        "Halloween Strongbox",
+        &roles(),
+        500.0,
+    )
+    .unwrap();
+    assert!(whole.read_whole);
+    assert_eq!(whole.boxes_left, 80 - 64);
+    assert_eq!(open_counts(&conn), vec![64]);
+    let proposal = &pending(&conn, Some(ProposalKind::Opening)).unwrap()[0];
+    assert_eq!(
+        (proposal.prev_reading, proposal.reading),
+        (ReadingId(1), ReadingId(4))
+    );
+
+    // Reading it again adds nothing.
+    let again = read_run_whole(
+        &mut conn,
+        ReadingId(1),
+        ReadingId(4),
+        "Halloween Strongbox",
+        &roles(),
+        600.0,
+    )
+    .unwrap();
+    assert!(again.read_whole);
+    assert_eq!(open_counts(&conn), vec![64]);
+}
+
+#[test]
 fn a_fast_run_seen_while_idle_is_one_settled_opening_with_every_item_certain() {
     let readings = fast_run(0.0, &FAST);
     // Step by step, each is too much to weigh: unsettled, nothing certain.
@@ -944,12 +998,13 @@ fn a_fast_run_seen_while_idle_is_one_settled_opening_with_every_item_certain() {
 }
 
 #[test]
-fn a_run_seen_by_a_strongbox_run_s_own_readings_keeps_its_steps() {
-    // The strongbox run's own readings keep today's step by step reading.
+fn a_run_seen_by_a_strongbox_run_s_own_readings_is_read_as_one() {
+    // The strongbox run's own readings are read whole, as the idle ones
+    // are: one opening of every box the run took.
     let mut conn = migrated_in_memory().unwrap();
     stored_as(&mut conn, &fast_run(0.0, &FAST), Purpose::Run);
     examine_all(&mut conn).unwrap();
-    assert_eq!(open_counts(&conn), vec![20, 22, 22]);
+    assert_eq!(open_counts(&conn), vec![64]);
 }
 
 #[test]
@@ -1211,4 +1266,95 @@ fn a_purchase_is_settled_by_the_asset_purchase_it_became_and_opens_again_if_that
     conn.execute("DELETE FROM asset_purchases WHERE id = ?1", [purchase])
         .unwrap();
     assert_eq!(purchases(&conn).len(), 1);
+}
+
+/// What the readings settle about a matched listing on their own: a return
+/// always, a sale only at the one price the Card's rise fits.
+mod settling_a_listing {
+    use super::super::amount::{Amount, Pec};
+    use super::super::proposals::{settled, AuctionDeparture, ListedTerms, ListingSettled};
+    use super::super::reading::Container;
+
+    /// Ten hides of 5.00 TT, listed at 7.00 with a buyout of `buyout`.
+    fn terms(buyout: Option<f64>) -> ListedTerms {
+        ListedTerms {
+            id: "l1".to_string(),
+            tt_value: 5.0,
+            starting_bid: 7.0,
+            buyout,
+        }
+    }
+
+    fn departure(card_rise: Option<i64>, returned_to: Option<Container>) -> AuctionDeparture {
+        AuctionDeparture {
+            name: "Animal Hide".to_string(),
+            units: 10,
+            amount: Amount::whole_pec(Pec(500)).unwrap(),
+            rows: 1,
+            returned_to,
+            proceeds: None,
+            card_rise: card_rise.map(Pec),
+        }
+    }
+
+    /// The fee the game takes at the point of sale at the buyout.
+    fn buyout_fee() -> i64 {
+        let fee = |gross: f64| (crate::auction_fee::listing_fee_ped(gross) * 100.0).round() as i64;
+        (fee(3.0) - fee(2.0)).max(0)
+    }
+
+    fn sold(final_price: i64, sale_fee: i64) -> Option<ListingSettled> {
+        Some(ListingSettled::Sold {
+            final_price: Pec(final_price),
+            sale_fee: Pec(sale_fee),
+        })
+    }
+
+    #[test]
+    fn a_listing_that_came_back_is_settled_whatever_the_card_did() {
+        assert_eq!(
+            settled(
+                &terms(Some(8.0)),
+                &departure(None, Some(Container::Carried))
+            ),
+            Some(ListingSettled::Returned)
+        );
+    }
+
+    #[test]
+    fn a_sale_is_settled_at_the_one_price_the_card_s_rise_fits() {
+        let listed = terms(Some(8.0));
+        // At the starting bid: no fee at the point of sale.
+        assert_eq!(settled(&listed, &departure(Some(700), None)), sold(700, 0));
+        // At the buyout, paid whole or less the fee taken from it.
+        let fee = buyout_fee();
+        assert!(fee > 0);
+        assert_eq!(
+            settled(&listed, &departure(Some(800), None)),
+            sold(800, fee)
+        );
+        assert_eq!(
+            settled(&listed, &departure(Some(800 - fee), None)),
+            sold(800, fee)
+        );
+    }
+
+    #[test]
+    fn a_sale_the_card_does_not_price_is_the_player_s_to_say() {
+        let listed = terms(Some(8.0));
+        // Between the two prices, or no rise to read.
+        assert_eq!(settled(&listed, &departure(Some(750), None)), None);
+        assert_eq!(settled(&listed, &departure(None, None)), None);
+        // A buyout equal to the starting bid can only have sold at it.
+        assert_eq!(
+            settled(&terms(Some(7.0)), &departure(None, None)),
+            sold(700, 0)
+        );
+        // With no buyout, only the starting bid is a price.
+        assert_eq!(
+            settled(&terms(None), &departure(Some(700), None)),
+            sold(700, 0)
+        );
+        assert_eq!(settled(&terms(None), &departure(Some(800), None)), None);
+    }
 }

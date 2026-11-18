@@ -36,12 +36,7 @@ fn roles() -> KnownRoles {
             "{}".to_string(),
         ),
     ];
-    let sets = vec![(
-        "armour".to_string(),
-        "Pegasus".to_string(),
-        "limited".to_string(),
-    )];
-    KnownRoles::from_parts(&library, &sets, Some(&game_data))
+    KnownRoles::from_parts(&library, Some(&game_data))
 }
 
 /// The session ran from just after the reading at 1794754637 to just

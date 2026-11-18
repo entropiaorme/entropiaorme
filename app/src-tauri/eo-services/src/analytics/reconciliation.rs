@@ -1281,7 +1281,10 @@ fn write_surplus(
     made: &mut Vec<Made>,
 ) -> Result<Result<(), String>, DbError> {
     if line.unit_tt == UnitTt::Unknown {
-        return Ok(Err(format!("{}'s TT per unit is not known", line.item_name)));
+        return Ok(Err(format!(
+            "{}'s TT per unit is not known",
+            line.item_name
+        )));
     }
     let unit = line.unit_tt.ped();
     let id = Uuid::new_v4().to_string();
@@ -1817,6 +1820,7 @@ mod tests {
             unit_tt: UnitTt::Exact { ped: 0.01 },
             disposition: Disposition::LeftAsIs,
             taken_back: Vec::new(),
+            accepted_at: None,
         };
         line.disposition = line.default_disposition();
         line
@@ -1838,6 +1842,7 @@ mod tests {
             excluded: Vec::new(),
             groups: Vec::new(),
             caution: None,
+            previously_accepted: Vec::new(),
         }
     }
 
@@ -1869,12 +1874,17 @@ mod tests {
         let mut taken = line("Iron Stone", 10.0, 6.0);
         taken.taken_back = vec!["r1".to_string()];
         assert_eq!(taken.default_disposition(), Disposition::LeftAsIs);
-        // Extra units whose TT per unit is only the account's truncated
-        // figure are not valued as stock by default, and cannot be.
+        // Extra units whose TT per unit is the account's own figure are
+        // valued at it; with no TT known at all they are left as they are,
+        // and cannot be valued as stock.
         let mut truncated = line("Garcen Grease", 0.0, 10.0);
         truncated.unit_tt = UnitTt::Truncated { ped: 0.2 };
-        assert_eq!(truncated.default_disposition(), Disposition::LeftAsIs);
-        assert!(truncated.fits(&Disposition::UnknownOrigin).is_err());
+        assert_eq!(truncated.default_disposition(), Disposition::UnknownOrigin);
+        assert!(truncated.fits(&Disposition::UnknownOrigin).is_ok());
+        let mut unknown = line("Garcen Grease", 0.0, 10.0);
+        unknown.unit_tt = UnitTt::Unknown;
+        assert_eq!(unknown.default_disposition(), Disposition::LeftAsIs);
+        assert!(unknown.fits(&Disposition::UnknownOrigin).is_err());
     }
 
     #[test]
@@ -2102,7 +2112,7 @@ mod tests {
             catalogue_unit_tt: None,
         };
         // The loot lines, each rounded to the PEC, average a little low.
-        let averaged = 104_438.6114 / 1_045_010_067.0;
+        let averaged = 104_438.611_4 / 1_045_010_067.0;
         assert!(!tt_fits(&shrapnel, averaged, 0.0));
         assert_eq!(constant_unit_tt("Shrapnel", Some(&shrapnel)), Some(0.0001));
         assert!(tt_fits(&shrapnel, 0.0001, 0.0));

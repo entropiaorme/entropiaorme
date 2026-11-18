@@ -650,25 +650,52 @@ mod tests {
     }
 
     #[test]
-    fn a_weapon_s_enhancer_markup_is_read_only_when_it_is_a_markup() {
+    fn an_enhancer_s_kind_and_tier_are_read_from_either_spelling() {
         assert_eq!(
-            markup_percent(&json!({"enhancer_markup": 150})),
-            Some(150.0)
+            kind_and_tier("T3 Weapon Damage Enhancer"),
+            Some((EnhancerKind::WeaponDamage, 3))
         );
         assert_eq!(
-            markup_percent(&json!({"enhancer_markup": 100})),
-            Some(100.0)
+            kind_and_tier("Weapon Damage Enhancer 10"),
+            Some((EnhancerKind::WeaponDamage, 10))
         );
-        assert_eq!(markup_percent(&json!({"enhancer_markup": 90})), None);
-        assert_eq!(markup_percent(&json!({"enhancer_markup": null})), None);
-        assert_eq!(markup_percent(&json!({"weapon_markup": 150})), None);
+        // A kind not set per tier, a tier out of range, or no enhancer.
+        assert_eq!(kind_and_tier("T3 Armor Defense Enhancer"), None);
+        assert_eq!(kind_and_tier("T11 Weapon Damage Enhancer"), None);
+        assert_eq!(kind_and_tier("T0 Weapon Damage Enhancer"), None);
+        assert_eq!(kind_and_tier("Odd Enhancer"), None);
+    }
+
+    #[test]
+    fn a_tier_s_markup_is_the_one_in_force_when_it_broke() {
+        let conn = crate::db::migrated_in_memory().unwrap();
+        let wde = EnhancerKind::WeaponDamage;
+        set_tier_markup(&conn, wde, 1, Some(150.0), 100.0).unwrap();
+        set_tier_markup(&conn, wde, 1, Some(180.0), 200.0).unwrap();
+        set_tier_markup(&conn, wde, 1, None, 300.0).unwrap();
+        set_tier_markup(&conn, wde, 2, Some(300.0), 100.0).unwrap();
+        let markups = TierMarkups::read(&conn).unwrap();
+        let t1 = "T1 Weapon Damage Enhancer";
+        assert_eq!(markups.at(t1, 50.0), None, "before any value was set");
+        assert_eq!(markups.at(t1, 100.0), Some(150.0));
+        assert_eq!(markups.at("Weapon Damage Enhancer 1", 199.0), Some(150.0));
+        assert_eq!(markups.at(t1, 250.0), Some(180.0));
+        assert_eq!(markups.at(t1, 400.0), None, "returned to TT");
+        assert_eq!(markups.at("T2 Weapon Damage Enhancer", 400.0), Some(300.0));
+        assert_eq!(markups.at("T3 Weapon Damage Enhancer", 400.0), None);
+        // What is in force now, tier by tier, with when it was set.
+        let current = markups.current(wde);
+        assert_eq!(current.len(), 10);
+        assert_eq!(current[0], (1, None, Some(300.0)));
+        assert_eq!(current[1], (2, Some(300.0), Some(100.0)));
+        assert_eq!(current[2], (3, None, None));
     }
 
     // ── Pricing kept breaks again ───────────────────────────────────
 
     /// An ended session with one kill carrying `tagged` PED of Shrapnel
-    /// tagged as returns, and a library weapon "Rifle" whose enhancer
-    /// markup is `markup`.
+    /// tagged as returns, and a tier 1 Weapon Damage markup of `markup`
+    /// set before it started.
     fn hunt(conn: &rusqlite::Connection, tagged: f64, markup: Option<i64>) {
         conn.execute_batch(
             "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, session_name) \
@@ -690,19 +717,19 @@ mod tests {
             )
             .unwrap();
         }
-        set_markup(conn, markup);
+        if let Some(markup) = markup {
+            set_markup(conn, Some(markup), 0.0);
+        }
     }
 
-    fn set_markup(conn: &rusqlite::Connection, markup: Option<i64>) {
-        conn.execute("DELETE FROM equipment_library", []).unwrap();
-        let mut props = json!({"weapon_entity": {"name": "Rifle"}, "damage_enhancers": 2});
-        if let Some(markup) = markup {
-            props[MARKUP_KEY] = json!(markup);
-        }
-        conn.execute(
-            "INSERT INTO equipment_library (name, item_type, properties_json) \
-             VALUES ('Rifle', 'weapon', ?1)",
-            [props.to_string()],
+    /// The player sets tier 1's markup at `at`.
+    fn set_markup(conn: &rusqlite::Connection, markup: Option<i64>, at: f64) {
+        set_tier_markup(
+            conn,
+            EnhancerKind::WeaponDamage,
+            1,
+            markup.map(|markup| markup as f64),
+            at,
         )
         .unwrap();
     }
@@ -731,7 +758,7 @@ mod tests {
     }
 
     #[test]
-    fn a_kept_break_is_priced_again_when_its_tt_or_its_weapon_s_markup_arrives() {
+    fn a_kept_break_is_priced_again_when_its_tt_arrives_at_the_markup_of_its_time() {
         let conn = crate::db::migrated_in_memory().unwrap();
         hunt(&conn, 0.8, None);
         kept(&conn, "b1", 1400.0);
@@ -756,8 +783,16 @@ mod tests {
             0.2,
         );
 
-        // The weapon's markup is set later: 1.00 + 0.50 - 0.80.
-        set_markup(&conn, Some(150));
+        // A markup set after it broke leaves it as it was priced.
+        set_markup(&conn, Some(150), 1_500.0);
+        heal_prices(&conn, &tt).unwrap();
+        approx(
+            Some(Ped(scalar(&conn, "SELECT cost_ped FROM enhancer_breaks"))),
+            0.2,
+        );
+
+        // One in force when it broke prices it: 1.00 + 0.50 - 0.80.
+        set_markup(&conn, Some(150), 1_300.0);
         heal_prices(&conn, &tt).unwrap();
         approx(
             Some(Ped(scalar(&conn, "SELECT cost_ped FROM enhancer_breaks"))),
@@ -775,7 +810,7 @@ mod tests {
             0.7,
         );
         // Nothing moved since: priced again, nothing is written.
-        assert!(!reprice_session(&conn, "s1", &tt, &weapon_markups(&conn).unwrap()).unwrap());
+        assert!(!reprice_session(&conn, "s1", &tt, &TierMarkups::read(&conn).unwrap()).unwrap());
     }
 
     #[test]
@@ -788,7 +823,7 @@ mod tests {
         kept(&conn, "b2", 1450.0);
         let (_dir, store) = store();
         let tt = |name: &str| tt_from_game_data(&store, name);
-        reprice_session(&conn, "s1", &tt, &weapon_markups(&conn).unwrap()).unwrap();
+        reprice_session(&conn, "s1", &tt, &TierMarkups::read(&conn).unwrap()).unwrap();
         // The first claims the tagged 0.80; the second deducts nothing.
         approx(
             Some(Ped(scalar(
@@ -808,27 +843,5 @@ mod tests {
             Some(Ped(scalar(&conn, "SELECT enhancer_cost FROM kills"))),
             0.7 + 1.5,
         );
-    }
-
-    #[test]
-    fn a_name_held_twice_with_different_markups_has_none() {
-        let conn = crate::db::migrated_in_memory().unwrap();
-        for markup in [150, 160] {
-            conn.execute(
-                "INSERT INTO equipment_library (name, item_type, properties_json) \
-                 VALUES ('Rifle', 'weapon', ?1)",
-                [json!({"enhancer_markup": markup}).to_string()],
-            )
-            .unwrap();
-        }
-        conn.execute(
-            "INSERT INTO equipment_library (name, item_type, properties_json) \
-             VALUES ('Pistol', 'weapon', ?1), ('Pistol', 'weapon', ?1)",
-            [json!({"enhancer_markup": 120}).to_string()],
-        )
-        .unwrap();
-        let markups = weapon_markups(&conn).unwrap();
-        assert_eq!(markups["Rifle"], None);
-        assert_eq!(markups["Pistol"], Some(120.0));
     }
 }

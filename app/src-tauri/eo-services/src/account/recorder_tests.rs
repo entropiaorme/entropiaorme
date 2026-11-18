@@ -2209,7 +2209,7 @@ async fn installed_a_session_started_inside_an_idle_reading_s_floor_takes_its_ow
 }
 
 #[tokio::test(start_paused = true)]
-async fn installed_a_failed_idle_reading_puts_the_next_back_five_minutes() {
+async fn installed_a_failed_idle_reading_is_tried_again_a_minute_on() {
     let rig = always_rig(script(3), &[]).await;
     rig.connect(COOKIE).await;
     // Calls 0 and 1 connect, 2 and 3 read at 60; the reading at 120
@@ -2217,13 +2217,13 @@ async fn installed_a_failed_idle_reading_puts_the_next_back_five_minutes() {
     rig.site.fail_at(4, ScriptedFault::Network);
     rig.at(121.0).await;
     assert_eq!(calls(&rig), 5);
-    rig.at(419.0).await;
-    assert_eq!(calls(&rig), 5, "not a minute on, though the last changed");
+    rig.at(179.0).await;
+    assert_eq!(calls(&rig), 5, "not before a minute on");
     rig.at(1_000.0).await;
     let times: Vec<f64> = rig.stored().await.iter().map(|(at, _, _)| *at).collect();
-    // A change, a minute; a failure, five; a change, a minute; agreement,
-    // five.
-    assert_eq!(times, vec![0.0, 60.0, 420.0, 480.0, 780.0]);
+    // A change, a minute; a failure, a minute, never the idle interval;
+    // a change, a minute; agreement, five.
+    assert_eq!(times, vec![0.0, 60.0, 180.0, 240.0, 540.0, 840.0]);
     assert_eq!(rig.recorder.status().state, ConnectionState::Connected);
 }
 

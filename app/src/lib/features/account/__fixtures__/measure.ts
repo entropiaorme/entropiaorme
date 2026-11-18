@@ -125,6 +125,7 @@ export function status(overrides: Partial<AccountStatus> = {}): AccountStatus {
 		confirming: null,
 		signingIn: false,
 		hasReadings: false,
+		failingSince: null,
 		...overrides,
 	};
 }

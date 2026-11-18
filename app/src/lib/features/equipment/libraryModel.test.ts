@@ -90,7 +90,6 @@ function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
 		effectProfile: null,
 		consumable: null,
 		attackRate: null,
-		enhancerMarkupPercent: null,
 		...overrides,
 	};
 }
@@ -434,7 +433,6 @@ describe('openEditModal', () => {
 					damageEnhancers: 0,
 					efficiencyPct: 50,
 				},
-				enhancerMarkupPercent: 160,
 			}),
 		);
 		const model = createLibraryModel();
@@ -453,7 +451,6 @@ describe('openEditModal', () => {
 		expect(model.scopeMarkupPercent).toBe(120);
 		expect(model.absorberMarkupPercent).toBe(100);
 		expect(model.damageEnhancers).toBe(2);
-		expect(model.enhancerMarkupPercent).toBe(160);
 	});
 
 	it('keeps the attachments section folded when neither scope nor absorber is stored', async () => {
@@ -576,7 +573,6 @@ describe('saveEquipment', () => {
 			scope_markup: 130,
 			absorber_markup: 100,
 			damage_enhancers: 4,
-			enhancer_markup: null,
 			implant_catalog_id: null,
 			implant_markup: 100,
 			weapon_effect: null,
@@ -586,27 +582,17 @@ describe('saveEquipment', () => {
 		expect(model.sortedEquipment.map((e) => e.id)).toEqual(['9']);
 	});
 
-	it("sends the enhancers' markup only for a weapon fitted with enhancers", async () => {
+	it('sends no enhancer markup with a weapon: it is set per tier, not per weapon', async () => {
 		mocked.addToLibrary.mockResolvedValue(summary({ id: '9', name: 'Korss H400' }));
 		mocked.getEquipmentDetail.mockResolvedValue(detail({ id: '9' }));
 		const model = createLibraryModel();
 		model.openAddModal();
 		model.weaponPicker.select(weaponHit);
 		model.damageEnhancers = 2;
-		model.enhancerMarkupPercent = 150;
 		await model.saveEquipment();
-		expect(mocked.addToLibrary).toHaveBeenLastCalledWith(
-			expect.objectContaining({ damage_enhancers: 2, enhancer_markup: 150 }),
-		);
-
-		model.openAddModal();
-		expect(model.enhancerMarkupPercent).toBeNull();
-		model.weaponPicker.select(weaponHit);
-		model.enhancerMarkupPercent = 150;
-		await model.saveEquipment();
-		expect(mocked.addToLibrary).toHaveBeenLastCalledWith(
-			expect.objectContaining({ damage_enhancers: 0, enhancer_markup: null }),
-		);
+		const sent = mocked.addToLibrary.mock.lastCall?.[0] as unknown as Record<string, unknown>;
+		expect(sent.damage_enhancers).toBe(2);
+		expect(sent).not.toHaveProperty('enhancer_markup');
 	});
 
 	it('sends a declared damage-over-time effect, and gates the save until it is whole', async () => {

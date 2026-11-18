@@ -295,9 +295,11 @@ async fn the_status_follows_connecting_expiring_and_disconnecting() {
             "hasConnected",
             "confirming",
             "signingIn",
-            "hasReadings"
+            "hasReadings",
+            "failingSince"
         ]
     );
+    assert_eq!(wire["failingSince"], serde_json::Value::Null);
     assert_eq!(wire["state"], "connected");
     assert_eq!(wire["signal"], "signedIn");
     assert_signal(&harness, AccountSignal::SignedIn).await;
@@ -1022,18 +1024,11 @@ async fn the_measured_summary_sums_what_both_sides_know() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn confirming_a_limited_set_s_pieces_bills_the_measured_hunt_by_them() {
+async fn a_limited_piece_s_markup_bills_the_measured_hunt_by_it() {
     let harness = harness_with(
         the_hunt_from_its_opening_reading(),
         &[HUNT],
-        Box::new(|conn, _| {
-            conn.execute(
-                "UPDATE protection_sets SET economy_kind = 'limited', markup_percent = 140 \
-                 WHERE name = 'Pegasus'",
-                [],
-            )
-            .unwrap();
-        }),
+        Box::new(|_, _| {}),
     )
     .await;
     record_the_hunt(&harness).await;
@@ -1077,46 +1072,48 @@ async fn confirming_a_limited_set_s_pieces_bills_the_measured_hunt_by_them() {
         .unwrap();
     assert!(limited > 0, "the Pegasus pieces wore");
 
-    // Until its pieces are named, the set's part waits: the armour is the
-    // unlimited armour measured, and nothing recorded for the set.
+    // With no markup set, each limited piece is billed at the TT it lost:
+    // the armour is measured whole.
     let before = armour(&detail(&harness).await);
-    assert_eq!(before.1, "mixed");
-    assert!((before.0 - (unlimited as f64 / 1e6 * 100.0).round() / 100.0).abs() < 1e-9);
+    assert_eq!(before.1, "measured");
+    let at_tt = (unlimited + limited) as f64 / 1e6;
+    assert!((before.0 - (at_tt * 100.0).round() / 100.0).abs() < 1e-9);
 
-    let set_id: i64 = harness
+    // The held pieces are listed by their names' tag, to price.
+    let worn: Vec<String> = harness
         .db
         .with_reader(|conn| {
-            Ok(conn.query_row(
-                "SELECT id FROM protection_sets WHERE name = 'Pegasus'",
-                [],
-                |row| row.get(0),
-            )?)
+            let mut stmt = conn.prepare(
+                "SELECT item_name FROM account_session_cost_lines \
+                 WHERE session_id = 'hunt' AND kind = 'limitedDecay' ORDER BY item_name",
+            )?;
+            let rows = stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<String>>>()?;
+            Ok(rows)
         })
         .await
         .unwrap();
-    let pieces = harness.api.protection_set_pieces(set_id).await.unwrap();
-    assert!(pieces.confirmed.is_empty());
-    assert_eq!(
-        pieces.suggested,
-        [
-            "Pegasus Arm Guards (M,L)",
-            "Pegasus Foot Guards (M,L)",
-            "Pegasus Gloves (M,L)",
-            "Pegasus Helmet (M,L)",
-            "Pegasus Shin Guards (M,L)",
-            "Pegasus Thigh Guards (M,L)",
-        ]
-    );
-    let confirmed = harness
-        .api
-        .protection_set_pieces_confirm(set_id, pieces.suggested.clone())
-        .await
-        .unwrap();
-    assert_eq!(confirmed.confirmed.len(), 6);
-    assert!(confirmed.suggested.is_empty());
+    let listed = harness.api.account_armour_pieces().await.unwrap();
+    for item in &worn {
+        assert!(
+            listed.pieces.iter().any(|piece| &piece.item == item),
+            "{item} is listed"
+        );
+    }
 
-    // Confirmed once, the measured hunt is billed by them: the pieces' loss
-    // at the set's markup, beside the unlimited armour.
+    // A markup set for each, the first value covering the hunt: the
+    // pieces' loss at 140%, beside the unlimited armour.
+    for item in &worn {
+        harness
+            .api
+            .account_armour_piece_markup(eo_api::account_armour::ArmourPieceMarkupInput {
+                item: item.clone(),
+                markup_percent: Some(140.0),
+            })
+            .await
+            .unwrap();
+    }
     let after = armour(&detail(&harness).await);
     assert_eq!(after.1, "measured");
     let expected = (unlimited as f64 + limited as f64 * 1.4) / 1e6;

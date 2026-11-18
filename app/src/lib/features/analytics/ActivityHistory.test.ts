@@ -35,7 +35,13 @@ const manual: ActivityHistoryEntry = {
 const fromAccount: ActivityHistoryEntry = {
 	...manual,
 	id: 'conversion-2',
-	recordedFromAccount: { from: '2026-03-04T14:02:00Z', to: '2026-03-04T14:03:00Z' },
+	recordedFromAccount: {
+		readingId: 7,
+		from: '2026-03-04T14:02:00Z',
+		to: '2026-03-04T14:03:00Z',
+		recordedAt: '2026-03-04T14:03:05Z',
+		cardChange: null,
+	},
 };
 
 function show(entries: ActivityHistoryEntry[], onundo = vi.fn().mockResolvedValue(undefined)) {

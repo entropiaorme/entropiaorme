@@ -31,8 +31,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use eo_api::ApiError;
-use eo_services::account::site::{SESSION_COOKIE, SITE_ORIGIN};
 use eo_services::account::keyring_store::KeyringStore;
+use eo_services::account::site::{SESSION_COOKIE, SITE_ORIGIN};
 use eo_services::account::{
     AccountRecorder, ConnectEpoch, ConnectOutcome, SessionSecret, SessionStore,
 };
@@ -686,7 +686,6 @@ mod tests {
             })
         );
     }
-
 
     /// Every capability Tauri would load for this app: the files under
     /// `capabilities/` (any depth; one capability, an array of them, or an

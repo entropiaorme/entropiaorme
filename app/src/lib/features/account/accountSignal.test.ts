@@ -2,12 +2,37 @@ import { describe, expect, it } from 'vitest';
 import type { AccountSignal } from '$lib/api/commands.gen';
 import { overlaySignal, signInView } from './accountSignal';
 
-const SIGNALS: AccountSignal[] = ['off', 'notSignedIn', 'checking', 'signedIn', 'signedOut'];
+const SIGNALS: AccountSignal[] = [
+	'off',
+	'notSignedIn',
+	'checking',
+	'signedIn',
+	'signedOut',
+	'failing',
+];
 
 describe('the dashboard sign-in control', () => {
-	it('offers to sign in until signed in, and says nothing more', () => {
+	it('offers to connect before the player ever has, and says nothing more', () => {
 		expect(signInView('off', false)).toMatchObject({ status: null, action: 'Connect account' });
-		expect(signInView('notSignedIn', false)).toMatchObject({ status: null, action: 'Sign in' });
+	});
+
+	it('alerts while the readings wait on a sign-in, and offers one', () => {
+		expect(signInView('notSignedIn', false)).toMatchObject({
+			status: { text: 'Readings paused', mark: 'alert' },
+			action: 'Sign in',
+		});
+		expect(
+			signInView('notSignedIn', false, { lastReadingAt: '2026-11-17T09:30:00Z' }).hint,
+		).toMatch(/The last reading was at /);
+	});
+
+	it('alerts while signed in and the readings keep failing, saying since when', () => {
+		const now = new Date('2026-11-17T12:00:00Z');
+		const failing = signInView('failing', false, { failingSince: '2026-11-17T11:00:00Z' }, now);
+		expect(failing.status?.mark).toBe('alert');
+		expect(failing.status?.text).toMatch(/^Readings failing since /);
+		expect(failing.action).toBeNull();
+		expect(signInView('failing', false).status?.text).toBe('Readings failing');
 	});
 
 	it('is quiet green text once signed in, with no offer', () => {
@@ -51,7 +76,8 @@ describe('the overlay dot', () => {
 		expect(overlaySignal('off')).toBeNull();
 		expect(overlaySignal('signedIn')?.mark).toBe('live');
 		expect(overlaySignal('signedOut')?.mark).toBe('alert');
-		expect(overlaySignal('notSignedIn')?.mark).toBe('absent');
+		expect(overlaySignal('notSignedIn')?.mark).toBe('alert');
+		expect(overlaySignal('failing')?.mark).toBe('alert');
 		expect(overlaySignal('checking')?.mark).toBe('checking');
 	});
 

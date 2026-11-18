@@ -242,11 +242,7 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
         // What the readings billed between sessions lands on the day each
         // step ended, beside the sessions' own overhead and credited to none.
         let (between_count, between) = crate::account::between::overhead_in(conn, start, end)?;
-        between_total = between
-            .iter()
-            .flatten()
-            .copied()
-            .reduce(|a, b| a + b);
+        between_total = between.iter().flatten().copied().reduce(|a, b| a + b);
         let plus = |session: Option<f64>, between: Option<f64>| match (session, between) {
             (None, None) => None,
             (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
@@ -268,7 +264,7 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
             harvest_sums[0],                         // harvest_loot_tt
             grain(harvest_sums[1], session_sums[6]), // harvest_cost
             quest_item_sums[0],
-            session_sums[3], // consumable_cost
+            session_sums[3],                   // consumable_cost
             plus(session_sums[7], between[0]), // overhead_travel
             plus(session_sums[8], between[1]), // overhead_field_logistics
             plus(session_sums[9], between[2]), // overhead_unclassified

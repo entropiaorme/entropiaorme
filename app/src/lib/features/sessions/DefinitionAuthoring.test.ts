@@ -86,11 +86,11 @@ describe('DefinitionAuthoring lifecycle', () => {
 		expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
 	});
 
-	it('offers one armour-cost switch and no per-segment attribution', () => {
+	it('offers no armour-cost switch: armour is billed from the account readings', () => {
 		const { model } = modelFor(definition({ trackProtectionCosts: false }));
 		render(DefinitionAuthoring, { props: { model } });
 
-		expect(screen.getByRole('switch', { name: 'Track armour costs' })).toBeTruthy();
+		expect(screen.queryByRole('switch', { name: 'Track armour costs' })).toBeNull();
 		expect(screen.queryByText('Armour costs by segment')).toBeNull();
 	});
 });

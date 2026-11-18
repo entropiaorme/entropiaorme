@@ -266,17 +266,17 @@ describe('the mob attribution', () => {
 	});
 });
 
-// Armour is recorded when the player repairs, possibly sessions later, so a
-// session with hits and no recording yet must not read as zero armour cost.
+// Armour is billed from the account readings, so a session with hits and
+// no readings to bill them from must not read as zero armour cost.
 describe('the armour standing', () => {
-	it('reads as not recorded while hits await a recording', async () => {
+	it('reads as not measured while hits have no readings to bill them', async () => {
 		const api = await import('$lib/api');
 		vi.mocked(api.getProtectionSessionStatus).mockResolvedValueOnce({ unrecordedHits: 42 });
 		render(SessionDetail, { props: { detail: detail() } });
-		expect(await screen.findByText('not recorded yet')).toBeTruthy();
+		expect(await screen.findByText('not measured')).toBeTruthy();
 	});
 
-	it('re-reads the cost and standing when a recording lands elsewhere', async () => {
+	it('re-reads the cost and standing when a protection write lands elsewhere', async () => {
 		const api = await import('$lib/api');
 		vi.mocked(api.getProtectionSessionStatus)
 			.mockResolvedValueOnce({ unrecordedHits: 42 })
@@ -285,21 +285,21 @@ describe('the armour standing', () => {
 		recorded.summary.costBreakdown.armourCost = 2.25;
 		vi.mocked(api.getSessionDetail).mockResolvedValue(recorded);
 		render(SessionDetail, { props: { detail: detail() } });
-		expect(await screen.findByText('not recorded yet')).toBeTruthy();
+		expect(await screen.findByText('not measured')).toBeTruthy();
 
 		await vi.waitFor(() => expect(protectionListeners).toHaveLength(1));
 		protectionListeners[0]();
 		expect(await screen.findByText('2.25')).toBeTruthy();
 		expect(api.getSessionDetail).toHaveBeenCalledWith('s1');
-		expect(screen.queryByText('not recorded yet')).toBeNull();
+		expect(screen.queryByText('not measured')).toBeNull();
 	});
 
-	it('shows the recorded cost once a recording covers the session', async () => {
+	it('shows the cost once the session has one', async () => {
 		const recorded = detail();
 		recorded.summary.costBreakdown.armourCost = 1.5;
 		render(SessionDetail, { props: { detail: recorded } });
 		expect(await screen.findByText('1.50')).toBeTruthy();
-		expect(screen.queryByText('not recorded yet')).toBeNull();
+		expect(screen.queryByText('not measured')).toBeNull();
 	});
 });
 

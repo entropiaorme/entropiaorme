@@ -89,12 +89,13 @@ fn valid_markup(markup: Option<f64>) -> Result<Option<f64>, ApiError> {
     match markup {
         None => Ok(None),
         Some(percent)
-            if percent.is_finite()
-                && (100.0..=MAX_ENHANCER_MARKUP_PERCENT).contains(&percent) =>
+            if percent.is_finite() && (100.0..=MAX_ENHANCER_MARKUP_PERCENT).contains(&percent) =>
         {
             Ok(Some((percent * 100.0).round() / 100.0))
         }
-        Some(_) => Err(ApiError::bad_request("An enhancer's markup is from 100% up")),
+        Some(_) => Err(ApiError::bad_request(
+            "An enhancer's markup is from 100% up",
+        )),
     }
 }
 

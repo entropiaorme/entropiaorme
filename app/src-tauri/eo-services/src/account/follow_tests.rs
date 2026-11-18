@@ -311,12 +311,32 @@ async fn a_session_s_steps_are_read_like_any_other() {
 }
 
 #[tokio::test]
-async fn a_step_spanning_hours_records_nothing() {
+async fn a_step_spanning_hours_records_only_when_its_change_is_read_whole() {
+    // Hours apart, but nothing changed but the conversion: no play hides
+    // in it, so it is recorded.
     let env = env().await;
     hunted(&env.db, "k1", "Shrapnel", 100_000, 10.0).await;
     store(&env.db, converted_at(hour_ago(), 3.0 * 3_600.0)).await;
     let done = pass(&env).await;
-    assert_eq!(done.recognised, 2);
+    assert_eq!(done.recorded, 1);
+    assert!(shrapnel_held(&env.analytics).await.abs() < 1e-6);
+
+    // Hours apart, with something arriving that no pattern explains:
+    // untracked play may hide in it, so nothing is recorded.
+    let env = self::env().await;
+    hunted(&env.db, "k1", "Shrapnel", 100_000, 10.0).await;
+    let mut readings = converted_at(hour_ago(), 3.0 * 3_600.0);
+    readings[1].0 = reading(
+        hour_ago(),
+        5_000,
+        &[
+            ("Universal Ammo", C, 50_000, 500),
+            ("Universal Ammo", C, 101_000, 1_010),
+            ("Animal Hide", C, 40, 400),
+        ],
+    );
+    store(&env.db, readings).await;
+    let done = pass(&env).await;
     assert_eq!(done.recorded, 0);
     assert!((shrapnel_held(&env.analytics).await - 100_000.0).abs() < 1e-6);
 }

@@ -23,7 +23,9 @@ const CYCLED = {
 	consumables: 0,
 };
 
-function overview(overhead = { total: 0, travel: 0, fieldLogistics: 0, unclassified: 0 }) {
+function overview(
+	overhead = { total: 0, travel: 0, fieldLogistics: 0, unclassified: 0, betweenSessions: 0 },
+) {
 	return {
 		totalReturnRate: 0.85,
 		trend: 'stable',
@@ -72,7 +74,7 @@ beforeEach(() => {
 describe("the Overview's losses", () => {
 	it('sets an Overhead band beside Cycled, by category, leaving Cycled as it was', async () => {
 		mocked.getAnalyticsOverview.mockResolvedValue(
-			overview({ total: 6, travel: 4, fieldLogistics: 0, unclassified: 2 }),
+			overview({ total: 6, travel: 4, fieldLogistics: 0, unclassified: 2, betweenSessions: 0 }),
 		);
 		render(OverviewTab);
 		const band = await screen.findByTestId('overhead-band');
@@ -96,7 +98,7 @@ describe("the Overview's losses", () => {
 
 	it('totals the cumulative breakdown as the donut does, with Overhead beside Cycled', async () => {
 		mocked.getAnalyticsOverview.mockResolvedValue(
-			overview({ total: 6, travel: 4, fieldLogistics: 2, unclassified: 0 }),
+			overview({ total: 6, travel: 4, fieldLogistics: 2, unclassified: 0, betweenSessions: 0 }),
 		);
 		render(OverviewTab);
 		await fireEvent.click(await screen.findByRole('button', { name: /Cumulative Breakdown/ }));
@@ -113,5 +115,16 @@ describe("the Overview's losses", () => {
 		// Net is what the totals leave: 995 returns less 1026 costs.
 		const net = screen.getByText('Net', { selector: 'td' }).closest('tr');
 		expect(within(net as HTMLElement).getByText(/-31\.00/)).toBeTruthy();
+		expect(screen.queryByText('Of which between sessions', { selector: 'td' })).toBeNull();
+	});
+
+	it('says how much of the overhead was billed between sessions', async () => {
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({ total: 6, travel: 6, fieldLogistics: 0, unclassified: 0, betweenSessions: 4 }),
+		);
+		render(OverviewTab);
+		await fireEvent.click(await screen.findByRole('button', { name: /Cumulative Breakdown/ }));
+		expect(breakdownFigure('Overhead')).toBe('6.00');
+		expect(breakdownFigure('Of which between sessions')).toBe('4.00');
 	});
 });

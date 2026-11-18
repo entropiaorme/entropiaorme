@@ -23,11 +23,32 @@ describe('the connection row', () => {
 		});
 	});
 
-	it('asks for a sign-in without a warning when the player has connected before', () => {
-		const view = connectionView(status({ hasConnected: true }));
-		expect(view.tone).toBe('none');
+	it('warns that the readings are paused when the player has connected before', () => {
+		const view = connectionView(
+			status({ hasConnected: true, lastReadingAt: '2026-11-16T14:32:00Z' }),
+		);
+		expect(view.tone).toBe('warning');
+		expect(view.title).toBe('Readings paused: not signed in');
+		expect(view.lines).toEqual([lastReading('2026-11-16T14:32:00Z')]);
 		expect(view.signIn).toBe('Sign in');
 		expect(view.describesReading).toBe(true);
+	});
+
+	it('warns while connected and the readings keep failing, and keeps trying', () => {
+		const view = connectionView(
+			status({
+				state: 'connected',
+				hasConnected: true,
+				failingSince: '2026-11-16T14:00:00Z',
+				lastReadingAt: '2026-11-16T13:59:00Z',
+			}),
+		);
+		expect(view.tone).toBe('warning');
+		expect(view.title).toBe('Connected');
+		expect(view.lines[0]).toBe(
+			`Readings failing since ${formatTime('2026-11-16T14:00:00Z')}; still trying`,
+		);
+		expect(view.disconnect).toBe(true);
 	});
 
 	it('says to finish signing in, and brings the window forward, only while the status says it is open', () => {
@@ -79,7 +100,7 @@ describe('the connection row', () => {
 	it('stays true when the site signs the player out while a sign-in window is open', () => {
 		const view = connectionView(status({ state: 'expired', hasConnected: true, signingIn: true }));
 		expect(view.title).toBe('Signed out by the site');
-		expect(view.lines).toEqual([FINISH_SIGNING_IN]);
+		expect(view.lines).toEqual([FINISH_SIGNING_IN, lastReading(null)]);
 		expect(view.signIn).toBe('Show sign-in window');
 	});
 

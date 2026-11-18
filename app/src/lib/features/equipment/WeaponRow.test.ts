@@ -100,7 +100,6 @@ const jesterDetail: EquipmentDetail = {
 		effectivePerMinute: 46,
 		factor: 1,
 	},
-	enhancerMarkupPercent: null,
 };
 
 /** The row reads only the expansion and the detail cache from its model. */

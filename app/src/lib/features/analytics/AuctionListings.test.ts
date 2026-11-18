@@ -42,6 +42,7 @@ const boxes: AuctionListing = {
 	expiresAt: null,
 	activityNetMarkup: 28.75,
 	grossMarkup: 36,
+	recordedFromAccount: null,
 };
 
 describe('a listing of an item with no TT', () => {

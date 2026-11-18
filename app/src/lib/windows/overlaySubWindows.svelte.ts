@@ -1,19 +1,14 @@
 /**
- * The tracking overlay's sub-windows, assembled: the two windows they open
- * in and the one host that opens, places and closes them (the rules are in
+ * The tracking overlay's sub-windows, assembled: the window they open in
+ * and the one host that opens, places and closes them (the rules are in
  * `subWindow.ts`).
  *
- * Menus and panels share a window, showing one at a time. An armour
- * recording, which stays while the player goes to the game, has a window of
- * its own, so a menu opened meanwhile does not take its place.
+ * Menus and panels share the window, showing one at a time.
  */
 
 import { listen } from '@tauri-apps/api/event';
 import { anchorForSubWindow, currentScreenBounds } from './anchor';
-import {
-	OVERLAY_MENU_CHANNEL,
-	OVERLAY_MENU_MIN_WIDTH,
-} from './overlayMenu';
+import { OVERLAY_MENU_CHANNEL, OVERLAY_MENU_MIN_WIDTH } from './overlayMenu';
 import { createSatelliteWindow } from './satellite';
 import type { SubWindowChannel, SubWindowReport } from './subWindow';
 import { createSubWindowHost, type SubWindowRequest } from './subWindowHost.svelte';

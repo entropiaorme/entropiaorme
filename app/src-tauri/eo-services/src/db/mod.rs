@@ -1996,10 +1996,16 @@ mod tests {
         // + the stock reconciliation's draft, its applied reconciliations
         //   with their lines, records and acknowledged records taken back,
         //   and the records' index
+        // + the limited pieces' markups with their index, and a session's
+        //   armour billed piece by piece
+        // + the enhancer tiers' markups and their index
+        // + the listing outcomes the readings recorded, and their index
+        // + the steps billed between sessions, and their index
+        // + how far the player has seen what the account did
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 300);
+        assert_eq!(master.len(), 310);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

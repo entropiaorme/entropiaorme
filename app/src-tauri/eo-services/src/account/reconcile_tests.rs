@@ -190,6 +190,20 @@ async fn set(
         .draft
 }
 
+/// Bring previously accepted lines back into review.
+async fn reconsider(env: &Env, draft: &ReconciliationDraft, items: &[&str]) -> ReconciliationDraft {
+    env.analytics
+        .revise_reconciliation(
+            &draft.id,
+            Revision::Reconsider {
+                items: items.iter().map(|item| item.to_string()).collect(),
+            },
+        )
+        .await
+        .unwrap()
+        .draft
+}
+
 async fn group(env: &Env, draft: &ReconciliationDraft, items: &[&str]) -> ReconciliationDraft {
     env.analytics
         .revise_reconciliation(
@@ -358,43 +372,73 @@ async fn stock_of_unknown_origin_shows_in_the_inventory_s_history_with_its_undo(
 }
 
 #[tokio::test]
-async fn a_check_that_records_nothing_keeps_no_record() {
+async fn a_check_that_only_leaves_differences_records_nothing_but_keeps_them_accepted() {
     let env = env().await;
     hunted(&env.db, 5, "Iron Stone", 10, 1.3).await;
     let draft = plan(&env, &[("Iron Stone", C, 6, 78)]).await;
     let draft = set(&env, &draft, &["Iron Stone"], LineChoice::LeftAsIs).await;
-    assert_eq!(
-        apply(&env, &draft).await,
-        ApplyOutcome::Applied {
-            reconciliation_id: None,
-            settled: vec!["Iron Stone".to_string()],
-            refused: Vec::new(),
-        }
-    );
+    let outcome = apply(&env, &draft).await;
+    applied_id(&outcome);
+    assert!(matches!(
+        &outcome,
+        ApplyOutcome::Applied { settled, refused, .. }
+            if settled == &["Iron Stone".to_string()] && refused.is_empty()
+    ));
+    // Nothing moved: the check is kept only to remember the player's word.
     assert!((held(&env, "Iron Stone").await - 10.0).abs() < 1e-9);
     let kept = query_f64(&env.db, "SELECT COUNT(*) * 1.0 FROM stock_reconciliations").await;
-    assert_eq!(kept, 0.0);
+    assert_eq!(kept, 1.0);
 }
 
 #[tokio::test]
-async fn extra_units_valued_only_by_the_account_s_truncated_figures_are_left_as_they_are() {
+async fn a_difference_left_as_it_is_is_filed_apart_until_it_moves_or_is_reconsidered() {
+    let env = env().await;
+    hunted(&env.db, 5, "Iron Stone", 10, 1.3).await;
+    let first = plan_at(&env, noon(), &[("Iron Stone", C, 6, 78)]).await;
+    let first = set(&env, &first, &["Iron Stone"], LineChoice::LeftAsIs).await;
+    let id = applied_id(&apply(&env, &first).await);
+
+    // The same difference again: filed apart as accepted, with when.
+    let same = plan_at(&env, noon() + 60.0, &[("Iron Stone", C, 6, 78)]).await;
+    assert!(same.lines.iter().all(|line| line.item_name != "Iron Stone"));
+    let accepted = same
+        .previously_accepted
+        .iter()
+        .find(|line| line.item_name == "Iron Stone")
+        .expect("filed apart");
+    assert!(accepted.accepted_at.is_some());
+    // Brought back into review, it starts as any other line.
+    let brought = reconsider(&env, &same, &["Iron Stone"]).await;
+    assert_eq!(disposition(&brought, "Iron Stone"), Disposition::Removed);
+    assert!(brought.previously_accepted.is_empty());
+
+    // A difference that moved since is a live line.
+    let moved = plan_at(&env, noon() + 120.0, &[("Iron Stone", C, 5, 65)]).await;
+    assert_eq!(disposition(&moved, "Iron Stone"), Disposition::Removed);
+    assert!(moved.previously_accepted.is_empty());
+
+    // Undoing the check forgets what it accepted.
+    assert_eq!(
+        env.analytics.undo_reconciliation(&id).await.unwrap(),
+        ReconciliationUndo::Undone
+    );
+    let after = plan_at(&env, noon() + 180.0, &[("Iron Stone", C, 6, 78)]).await;
+    assert_eq!(disposition(&after, "Iron Stone"), Disposition::Removed);
+    assert!(after.previously_accepted.is_empty());
+}
+
+#[tokio::test]
+async fn extra_units_valued_only_by_the_account_s_figures_are_held_at_them() {
     let env = env().await;
     let draft = plan(&env, &[("Garcen Grease", C, 10, 200)]).await;
-    assert_eq!(disposition(&draft, "Garcen Grease"), Disposition::LeftAsIs);
-    let refused = env
-        .analytics
-        .revise_reconciliation(
-            &draft.id,
-            Revision::Set {
-                items: vec!["Garcen Grease".to_string()],
-                choice: LineChoice::UnknownOrigin,
-            },
-        )
-        .await;
-    assert!(
-        matches!(refused, Err(AnalyticsError::Rejected(_))),
-        "{refused:?}"
+    // The account's own figure is the game's: the extra units are held at
+    // it, of unknown origin.
+    assert_eq!(
+        disposition(&draft, "Garcen Grease"),
+        Disposition::UnknownOrigin
     );
+    applied_id(&apply(&env, &draft).await);
+    assert!((held(&env, "Garcen Grease").await - 10.0).abs() < 1e-9);
 }
 
 #[tokio::test]
@@ -718,9 +762,15 @@ async fn an_item_taken_back_stays_left_as_it_is_until_a_reconciliation_settles_i
     applied_id(&apply(&env, &twelve).await);
     assert!((held(&env, "Shrapnel").await - 10_000_000.0).abs() < 1e-6);
 
-    // 13:00, still left as it is, whatever came between; this time the
-    // player settles it.
+    // 13:00, the same difference: the player's word at 12:00 stands, filed
+    // apart. Brought back into review it is still left as it is, whatever
+    // came between; this time the player settles it.
     let thirteen = plan_at(&env, noon() + 120.0, &[("Shrapnel", C, 9_000_000, 90_000)]).await;
+    assert!(thirteen
+        .previously_accepted
+        .iter()
+        .any(|line| line.item_name == "Shrapnel"));
+    let thirteen = reconsider(&env, &thirteen, &["Shrapnel"]).await;
     assert_eq!(disposition(&thirteen, "Shrapnel"), Disposition::LeftAsIs);
     let thirteen = set(&env, &thirteen, &["Shrapnel"], LineChoice::Removed).await;
     applied_id(&apply(&env, &thirteen).await);

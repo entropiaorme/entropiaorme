@@ -525,28 +525,12 @@ describe('the harvest guardrail cue', () => {
 	});
 });
 
-// Armour is recorded when the player repairs, and spread back over the
-// sessions it covers, so nothing about it is declared during play and the
-// control never waits on a running session.
-describe('armour cost control', () => {
-	it('is available with no session running and toggles through the callback', () => {
-		const onArmourCostToggle = vi.fn();
-		render(OverlayReadout, { props: { data: liveData(), onArmourCostToggle } });
-		const button = screen.getByLabelText('Armour cost') as HTMLButtonElement;
-		expect(button.disabled).toBe(false);
-		button.click();
-		expect(onArmourCostToggle).toHaveBeenCalledTimes(1);
-	});
-
-	it('stays offered under a session type that records no hits', () => {
-		render(OverlayReadout, {
-			props: { data: liveData({ status: 'active', trackProtectionCosts: false }) },
-		});
-		expect(screen.getByLabelText('Armour cost')).toBeTruthy();
-	});
-
-	it('offers no armour selector and asks nothing when a session stops', () => {
+// Armour is read from the account and priced per piece in the library, so
+// the overlay offers nothing about it during play.
+describe('armour', () => {
+	it('offers no armour control and asks nothing when a session stops', () => {
 		render(OverlayReadout, { props: { data: liveData({ status: 'active' }) } });
+		expect(screen.queryByLabelText('Armour cost')).toBeNull();
 		expect(screen.queryByTestId('protection-facet')).toBeNull();
 		expect(screen.getByTitle('Stop tracking')).toBeTruthy();
 	});
@@ -1066,7 +1050,9 @@ describe('the account dot', () => {
 		for (const [signal, mark] of [
 			['signedIn', 'live'],
 			['signedOut', 'alert'],
-			['notSignedIn', 'absent'],
+			// A lapse in the readings asks for attention, whatever its cause.
+			['notSignedIn', 'alert'],
+			['failing', 'alert'],
 			['checking', 'checking'],
 		] as const) {
 			const { unmount } = render(OverlayReadout, {

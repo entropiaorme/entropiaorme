@@ -18,12 +18,15 @@ vi.mock('$lib/api/inventory', () => ({
 	getInventoryHistory: vi.fn(),
 	getInventoryListings: vi.fn(),
 	getLootInventory: vi.fn(),
+	getStrongboxOpenings: vi.fn(async () => []),
 	removeLoot: vi.fn(),
+	reopenInventoryListing: vi.fn(),
 	revertInventorySale: vi.fn(),
 	undoInventoryConversion: vi.fn(),
 	undoInventoryListing: vi.fn(),
 	undoInventoryRemoval: vi.fn(),
 	undoInventoryTrade: vi.fn(),
+	undoStrongboxOpening: vi.fn(),
 }));
 
 const frames = vi.hoisted(() => ({ handlers: new Map<string, () => void>() }));
@@ -189,6 +192,23 @@ describe('inventory market valuation', () => {
 		expect(mocked.getLootInventory).toHaveBeenCalledTimes(1);
 		stop();
 		expect(frames.handlers.has('account:updated')).toBe(false);
+	});
+
+	it('reads the openings with the history, and takes one back or puts a listing back', async () => {
+		mocked.getStrongboxOpenings.mockResolvedValue([
+			{ id: 'opening-1', openedAt: '2026-11-15T09:00:00Z' },
+		] as unknown as Awaited<ReturnType<typeof inventoryApi.getStrongboxOpenings>>);
+		mocked.undoStrongboxOpening.mockResolvedValue(undefined as never);
+		mocked.reopenInventoryListing.mockResolvedValue(undefined as never);
+		const model = createInventoryModel();
+		await model.load();
+		await model.loadHistory();
+		expect(model.openings.map((opening) => opening.id)).toEqual(['opening-1']);
+
+		await model.undoOpening('opening-1');
+		expect(mocked.undoStrongboxOpening).toHaveBeenCalledWith({ id: 'opening-1' });
+		await model.reopenListing('listing-1');
+		expect(mocked.reopenInventoryListing).toHaveBeenCalledWith({ id: 'listing-1' });
 	});
 
 	it('leaves the history unread on an account frame until it is shown', async () => {

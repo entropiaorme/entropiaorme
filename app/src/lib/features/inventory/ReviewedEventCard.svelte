@@ -9,7 +9,7 @@
 	import FlowList from './FlowList.svelte';
 	import { openingFlow, type FlowLine, type ReviewedEvent } from './accountActivity';
 	import type { ActivityHistoryEntry } from '$lib/api/commands.gen';
-	import { formatLedgerDate, formatPed, formatQuantity } from '$lib/utils/format';
+	import { formatLedgerDate, formatPed } from '$lib/utils/format';
 
 	let {
 		event,

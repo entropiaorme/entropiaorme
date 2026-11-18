@@ -49,6 +49,7 @@ function line(
 		unitTt: { kind: 'exact', ped },
 		disposition,
 		takenBack: false,
+		acceptedAt: null,
 	};
 }
 
@@ -72,6 +73,7 @@ function proposed(): StockReconciliationDraft {
 		],
 		groups: [],
 		caution: null,
+		previouslyAccepted: [],
 	};
 }
 
@@ -271,23 +273,21 @@ describe('the review', () => {
 		expect(within(other).queryByText(/held as an asset/)).toBeNull();
 	});
 
-	it('offers an extra of inexact TT neither as unknown origin nor for a conversion', async () => {
+	it("offers an extra of inexact TT as of unknown origin at the account's TT, never for a conversion", async () => {
 		const draft = proposed();
 		draft.lines[2] = {
 			...draft.lines[2],
 			unitTt: { kind: 'truncated', ped: 0.13 },
-			disposition: { kind: 'leftAsIs' },
+			disposition: { kind: 'unknownOrigin' },
 		};
 		account.getStockReconciliationDraft.mockResolvedValue(draft);
 		await mount();
 
 		const iron = within(decision('Iron Ingot'));
-		expect(iron.queryByRole('button', { name: 'Unknown origin' })).toBeNull();
-		expect(pressed('Iron Ingot')).toBe('Left as is');
+		expect(iron.getByRole('button', { name: 'Unknown origin' })).toBeTruthy();
+		expect(pressed('Iron Ingot')).toBe('Unknown origin');
 		const row = screen.getByRole('listitem', { name: 'Iron Ingot' });
-		expect(
-			within(row).getByRole('button', { name: 'Why it can only be left as it is' }),
-		).toBeTruthy();
+		expect(within(row).getByRole('button', { name: 'How its TT is valued' })).toBeTruthy();
 
 		await fireEvent.click(screen.getByRole('checkbox', { name: 'Select Iron Ingot' }));
 		await fireEvent.click(screen.getByRole('checkbox', { name: 'Select Animal Oil Residue' }));

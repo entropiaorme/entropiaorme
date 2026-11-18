@@ -1447,28 +1447,33 @@ fn the_detail_lists_the_measured_lines_and_marks_a_peg_naming_an_overhead_item()
 }
 
 #[test]
-fn the_detail_prices_a_limited_piece_at_its_confirmed_set_s_markup() {
+fn the_detail_prices_each_limited_piece_at_its_own_markup_or_at_its_tt() {
     let conn = conn();
     hunted(&conn, "s1");
-    let set = limited_set(&conn, "Pegasus", 120.0);
-    store(&conn, "s1", CURRENT, &[("armour", Stored::Measured(1.53))]);
+    store(&conn, "s1", CURRENT, &[("armour", Stored::Measured(1.546))]);
     conn.execute(
         "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, kind, \
          item_name, units, amount_micro_ped, precision, markup_hundredths, reason, set_id) \
          VALUES ('s1', 0, 'armour', 'limitedArmour', 'limitedDecay', 'Pegasus Helmet (M,L)', \
-                 NULL, 330000, 'wholePec', NULL, NULL, ?1), \
+                 NULL, 330000, 'wholePec', NULL, NULL, NULL), \
                 ('s1', 1, 'armour', 'limitedArmour', 'limitedDecay', 'Odd Gloves (L)', \
                  NULL, 20000, 'wholePec', NULL, NULL, NULL)",
-        [set],
+        [],
     )
     .unwrap();
     conn.execute(
         "INSERT INTO account_session_cost_armour_parts (session_id, part, set_id, \
          lost_micro_ped, lost_precision, markup_hundredths, amount_micro_ped, precision) \
-         VALUES ('s1', 'unlimited', NULL, 1130000, 'wholePec', NULL, 1130000, 'wholePec'), \
-                ('s1', 'limitedSet', ?1, 330000, 'wholePec', 12000, 396000, 'wholePec'), \
-                ('s1', 'unconfirmed', NULL, 20000, 'wholePec', NULL, NULL, NULL)",
-        [set],
+         VALUES ('s1', 'unlimited', NULL, 1130000, 'wholePec', NULL, 1130000, 'wholePec')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO account_session_cost_armour_pieces (session_id, item_name, \
+         lost_micro_ped, lost_precision, markup_hundredths, amount_micro_ped, precision) \
+         VALUES ('s1', 'Pegasus Helmet (M,L)', 330000, 'wholePec', 12000, 396000, 'wholePec'), \
+                ('s1', 'Odd Gloves (L)', 20000, 'wholePec', NULL, 20000, 'wholePec')",
+        [],
     )
     .unwrap();
     session_costs::refresh(&conn, "s1").unwrap();
@@ -1478,27 +1483,30 @@ fn the_detail_prices_a_limited_piece_at_its_confirmed_set_s_markup() {
     let measured = &detail["summary"]["costBreakdown"]["measured"];
     let lines = measured["buckets"][0]["lines"].as_array().unwrap();
     assert_eq!(measured["buckets"][0]["bucket"], "armour");
-    // The confirmed piece: the TT it lost, at its set's markup.
+    // A piece with a markup set: the TT it lost, at that markup.
     assert_eq!(lines[0]["item"], "Pegasus Helmet (M,L)");
     assert_eq!(lines[0]["markupPercent"], 120.0);
     assert!(lines[0]["unpriced"].is_null());
     assert_near(lines[0]["amount"].as_f64().unwrap(), 0.33);
-    // A piece no confirmed set holds waits for its set.
-    assert_eq!(lines[1]["unpriced"], "limitedSetUnconfirmed");
+    // One with none set: at the TT it lost, never waiting.
+    assert_eq!(lines[1]["item"], "Odd Gloves (L)");
     assert!(lines[1]["markupPercent"].is_null());
+    assert!(lines[1]["unpriced"].is_null());
     let parts = measured["armourParts"].as_array().unwrap();
     let kinds: Vec<&str> = parts
         .iter()
         .map(|part| part["part"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["unlimited", "limitedSet", "unconfirmed"]);
-    let pegasus = &parts[1];
-    assert_eq!(pegasus["setId"], set);
-    assert_eq!(pegasus["setName"], "Pegasus");
+    assert_eq!(kinds, ["unlimited", "limitedPiece", "limitedPiece"]);
+    // The pieces by name.
+    assert_eq!(parts[1]["item"], "Odd Gloves (L)");
+    assert!(parts[1]["markupPercent"].is_null());
+    assert_near(parts[1]["cost"].as_f64().unwrap(), 0.02);
+    let pegasus = &parts[2];
+    assert_eq!(pegasus["item"], "Pegasus Helmet (M,L)");
     assert_eq!(pegasus["markupPercent"], 120.0);
     assert_near(pegasus["lost"].as_f64().unwrap(), 0.33);
     assert_near(pegasus["cost"].as_f64().unwrap(), 0.396);
-    assert!(parts[2]["cost"].is_null());
 }
 
 #[tokio::test]

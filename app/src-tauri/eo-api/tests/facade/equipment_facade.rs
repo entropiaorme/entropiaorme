@@ -152,7 +152,6 @@ fn consumable(name: &str) -> EquipmentRequest {
         damage_enhancers: 0,
         implant_catalog_id: None,
         implant_markup: 100,
-        enhancer_markup: None,
         healing_mode: Default::default(),
         heal_min: None,
         heal_max: None,
@@ -350,30 +349,49 @@ async fn a_weapon_setup_stores_and_lists_with_its_catalogue_economy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_weapon_keeps_its_enhancers_markup_only_when_one_is_set() {
+async fn an_enhancer_s_markup_is_set_per_tier_and_returns_to_tt_on_none() {
+    use eo_api::enhancer_markups::{EnhancerMarkupKind, EnhancerTierMarkupInput};
+
     let dir = tempfile::tempdir().unwrap();
     let (api, _db) = api_over(dir.path()).await;
-    let mut req = consumable("");
-    req.kind = EquipmentKind::Weapon;
-    req.name = None;
-    req.catalog_id = Some("w1".to_string());
-    req.damage_enhancers = 2;
+    let unset = api.enhancer_markups().await.unwrap();
+    assert_eq!(unset.tiers.len(), 10);
+    assert!(unset
+        .tiers
+        .iter()
+        .all(|tier| tier.markup_percent.is_none() && tier.set_at.is_none()));
 
-    let unset = api.equipment_add(&req).await.unwrap();
-    let detail = api
-        .equipment_detail(unset.id.parse().unwrap())
+    let input = |tier: u8, markup_percent: Option<f64>| EnhancerTierMarkupInput {
+        kind: EnhancerMarkupKind::WeaponDamage,
+        tier,
+        markup_percent,
+    };
+    let set = api
+        .enhancer_markup_set(input(3, Some(150.0)))
         .await
         .unwrap();
-    assert!(detail.enhancer_markup_percent.is_none());
+    let third = &set.tiers[2];
+    assert_eq!(
+        (third.tier, third.markup_percent.as_ref()),
+        (3, Some(&150.0))
+    );
+    assert!(third.set_at.is_some());
+    assert!(
+        set.tiers[1].markup_percent.is_none(),
+        "the other tiers stay"
+    );
 
-    req.enhancer_markup = Some(150);
-    let set = api.equipment_add(&req).await.unwrap();
-    let detail = api.equipment_detail(set.id.parse().unwrap()).await.unwrap();
-    assert_eq!(detail.enhancer_markup_percent.as_ref(), Some(&150.0));
+    // Back to TT: set, with no markup.
+    let back = api.enhancer_markup_set(input(3, None)).await.unwrap();
+    assert!(back.tiers[2].markup_percent.is_none());
+    assert!(back.tiers[2].set_at.is_some());
 
-    // A figure below TT is no markup anyone paid.
-    req.enhancer_markup = Some(90);
-    assert!(api.equipment_add(&req).await.is_err());
+    // A tier out of range, or a figure below TT, is refused.
+    assert!(api
+        .enhancer_markup_set(input(11, Some(150.0)))
+        .await
+        .is_err());
+    assert!(api.enhancer_markup_set(input(1, Some(90.0))).await.is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -3057,14 +3057,13 @@ fn enhanced_rifle(markup: Option<i64>, tt: Option<f64>) -> (Rig, Arc<HuntTracker
         equipment: Arc::new(ScriptedEquipment {
             profile: Some(Arc::new(move |name| {
                 (name == "Rifle").then(|| {
-                    let mut profile = json!({
+                    json!({
                         "damage_enhancers": 2,
                         "weapon_entity": {"name": "Rifle Prime"},
-                    });
-                    if let Some(markup) = markup {
-                        profile["enhancer_markup"] = json!(markup);
-                    }
-                    profile.as_object().unwrap().clone()
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone()
                 })
             })),
             ..Default::default()
@@ -3072,21 +3071,35 @@ fn enhanced_rifle(markup: Option<i64>, tt: Option<f64>) -> (Rig, Arc<HuntTracker
         enhancer_tt: Some(Arc::new(move |name: &str| {
             tt.filter(|_| name == "Weapon Damage Enhancer 1").map(Ped)
         })),
+        // The markup set for tier 1, as it stood when the break came.
+        enhancer_markup: Some(Arc::new(move |name: &str, _at: f64| {
+            markup
+                .filter(|_| crate::enhancer_breaks::kind_and_tier(name).is_some())
+                .map(|markup| markup as f64)
+        })),
         ..Providers::default()
     });
-    // The library entry the profile above stands for, which prices the
-    // session's breaks again when it ends.
-    let mut props = json!({"weapon_entity": {"name": "Rifle Prime"}, "damage_enhancers": 2});
-    if let Some(markup) = markup {
-        props["enhancer_markup"] = json!(markup);
-    }
-    let props = props.to_string();
+    // The library entry the profile above stands for, and the tier's
+    // markup as stored, which prices the session's breaks again when it
+    // ends.
     rig.wait(rig.db.with_writer(move |conn| {
         conn.execute(
             "INSERT INTO equipment_library (name, item_type, properties_json) \
              VALUES ('Rifle Prime', 'weapon', ?1)",
-            [props],
+            [
+                json!({"weapon_entity": {"name": "Rifle Prime"}, "damage_enhancers": 2})
+                    .to_string(),
+            ],
         )?;
+        if let Some(markup) = markup {
+            crate::enhancer_breaks::set_tier_markup(
+                conn,
+                crate::enhancer_breaks::EnhancerKind::WeaponDamage,
+                1,
+                Some(markup as f64),
+                0.0,
+            )?;
+        }
         Ok(())
     }))
     .unwrap();

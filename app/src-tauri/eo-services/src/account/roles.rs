@@ -188,9 +188,9 @@ impl CostCategory {
     ];
 
     /// The categories the player may place an item in: every Cycled one the
-    /// costs know but ammo (read from its own split), an enhancer (costed
-    /// from the chat log) and limited armour (priced through its set's
-    /// confirmed pieces); travel; field logistics; and no cost.
+    /// costs know but ammo (read from its own split) and an enhancer
+    /// (costed from the chat log); travel; field logistics; and no cost. A
+    /// limited piece or plate placed so is priced at its own markup.
     pub const PLACEABLE: [CostCategory; 15] = [
         CostCategory::Weapon,
         CostCategory::Amplifier,
@@ -463,10 +463,7 @@ impl KnownRoles {
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        Ok(
-            KnownRoles::with_placements(&library, &markups, &placements, game_data)
-                .with_held(held),
-        )
+        Ok(KnownRoles::with_placements(&library, &markups, &placements, game_data).with_held(held))
     }
 
     /// These roles, knowing `held` as the names the app has recorded as
@@ -710,7 +707,6 @@ impl RoleSource for KnownRoles {
     fn catalogue_category(&self, name: &str) -> Option<CostCategory> {
         self.catalogue.get(name.trim()).copied()
     }
-
 }
 
 /// What the readings show about one name.
@@ -972,7 +968,6 @@ mod tests {
     struct Stand {
         library: Vec<(&'static str, CostCategory)>,
         catalogue: Vec<(&'static str, CostCategory)>,
-        protection: Vec<(&'static str, CostCategory)>,
     }
 
     impl RoleSource for Stand {
@@ -986,12 +981,6 @@ mod tests {
             self.catalogue
                 .iter()
                 .find(|(n, _)| *n == name)
-                .map(|(_, c)| *c)
-        }
-        fn protection_category(&self, name: &str) -> Option<CostCategory> {
-            self.protection
-                .iter()
-                .find(|(n, _)| name.starts_with(n))
                 .map(|(_, c)| *c)
         }
     }
@@ -1035,7 +1024,6 @@ mod tests {
                 ("Universal Ammo", CostCategory::Weapon),
                 ("Opalo", CostCategory::Weapon),
             ],
-            ..Stand::default()
         };
         let book = RoleBook::resolve(
             &stand,
@@ -1099,10 +1087,49 @@ mod tests {
     }
 
     #[test]
-    fn exact_names_answer_before_a_protection_family() {
+    fn a_name_s_gender_tag_or_plate_mark_says_armour_or_plate() {
+        for tagged in [
+            "Pegasus Helmet (M,L)",
+            "Pegasus Helmet (F, L)",
+            "Frontier Harness (M)",
+            "Ghost Gloves (F)",
+        ] {
+            assert!(has_gender_tag(tagged), "{tagged}");
+        }
+        for untagged in [
+            "Opalo (L)",
+            "Helmet (M,L,X)",
+            "Mayhem Token",
+            "Armor Plating Mk. 5B (L)",
+            "Helmet (M,L) Blueprint (L)",
+        ] {
+            assert!(!has_gender_tag(untagged), "{untagged}");
+        }
+        assert!(names_a_plate("Armor Plating Mk. 5B (L)"));
+        assert!(names_a_plate("Cyrene Acid Armor Plate (L)"));
+        assert!(!names_a_plate("Frontier Harness (M)"));
+        assert_eq!(
+            name_category("Pegasus Helmet (M,L)"),
+            Some(CostCategory::LimitedArmour)
+        );
+        assert_eq!(
+            name_category("Frontier Harness (M)"),
+            Some(CostCategory::UnlimitedArmour)
+        );
+        assert_eq!(
+            name_category("Armor Plating Mk. 5B (L)"),
+            Some(CostCategory::LimitedPlate)
+        );
+        assert_eq!(
+            name_category("Armor Plating Mk. 6A"),
+            Some(CostCategory::UnlimitedPlate)
+        );
+    }
+
+    #[test]
+    fn a_gender_tag_names_armour_and_an_exact_name_still_answers_first() {
         let stand = Stand {
             catalogue: vec![("Frontier Combat Knife", CostCategory::Weapon)],
-            protection: vec![("Frontier", CostCategory::UnlimitedArmour)],
             ..Stand::default()
         };
         let book = RoleBook::resolve(
@@ -1121,33 +1148,41 @@ mod tests {
 
     #[test]
     fn a_blueprint_is_never_armour_or_a_plate_whatever_its_name_carries() {
-        let stand = Stand {
-            protection: vec![
-                ("Hyperion", CostCategory::LimitedArmour),
-                ("Cyrene Acid Armor Plate", CostCategory::LimitedPlate),
-            ],
-            ..Stand::default()
-        };
         let book = RoleBook::resolve(
-            &stand,
+            &Stand::default(),
             &[reading(
                 0.0,
                 &[
-                    ("Hyperion Aurora GR-10 (L) Blueprint (L)", Container::Carried, 1, 1),
-                    ("Cyrene Acid Armor Plate (L) Blueprint", Container::Carried, 1, 1),
-                    ("Armor Plating Mk. 5B Blueprint (L)", Container::Carried, 1, 1),
-                    ("Hyperion Aurora GR-10 (L)", Container::Carried, 1, 400),
+                    (
+                        "Pegasus Helmet (M,L) Blueprint (L)",
+                        Container::Carried,
+                        1,
+                        1,
+                    ),
+                    (
+                        "Cyrene Acid Armor Plate (L) Blueprint",
+                        Container::Carried,
+                        1,
+                        1,
+                    ),
+                    (
+                        "Armor Plating Mk. 5B Blueprint (L)",
+                        Container::Carried,
+                        1,
+                        1,
+                    ),
+                    ("Pegasus Helmet (M,L)", Container::Carried, 1, 400),
                 ],
             )],
         );
         for name in [
-            "Hyperion Aurora GR-10 (L) Blueprint (L)",
+            "Pegasus Helmet (M,L) Blueprint (L)",
             "Cyrene Acid Armor Plate (L) Blueprint",
             "Armor Plating Mk. 5B Blueprint (L)",
         ] {
             assert_eq!(book.role(name), Role::Material, "{name}");
         }
-        assert_eq!(book.role("Hyperion Aurora GR-10 (L)"), Role::Armour);
+        assert_eq!(book.role("Pegasus Helmet (M,L)"), Role::Armour);
     }
 
     #[test]
@@ -1175,7 +1210,9 @@ mod tests {
         let book = RoleBook::resolve(&Stand::default(), &readings);
         assert_eq!(book.role("Teleportation Chip 1"), Role::OtherEquipment);
         assert_eq!(book.stacking("Teleportation Chip 1"), Stacking::Single);
-        assert_eq!(book.role("Christmas Coat 2025 (M)"), Role::Material);
+        // Clothes carry the gender tag as armour does, and read as armour;
+        // they never wear, so they never cost anything.
+        assert_eq!(book.role("Christmas Coat 2025 (M)"), Role::Armour);
         assert_eq!(
             book.stacking("Mayhem Token"),
             Stacking::Single,
@@ -1228,7 +1265,6 @@ mod tests {
         let stand = Stand {
             library: vec![("Loot Collection Pill", CostCategory::Consumable)],
             catalogue: vec![("Vivo T1", CostCategory::Consumable)],
-            ..Stand::default()
         };
         let book = RoleBook::resolve(
             &stand,
@@ -1247,7 +1283,7 @@ mod tests {
     }
 
     #[test]
-    fn known_roles_read_the_library_its_weapon_parts_the_sets_and_the_game_data() {
+    fn known_roles_read_the_library_its_weapon_parts_and_the_game_data() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("weapons.json"),
@@ -1280,24 +1316,7 @@ mod tests {
                 "{}".to_string(),
             ),
         ];
-        let sets = vec![
-            (
-                "armour".to_string(),
-                "Pegasus".to_string(),
-                "limited".to_string(),
-            ),
-            (
-                "plates".to_string(),
-                "6B".to_string(),
-                "unlimited".to_string(),
-            ),
-            (
-                "armour".to_string(),
-                "Pegasus Elite".to_string(),
-                "unlimited".to_string(),
-            ),
-        ];
-        let known = KnownRoles::from_parts(&library, &sets, Some(&store));
+        let known = KnownRoles::from_parts(&library, Some(&store));
         assert_eq!(known.library_role("Chip 15"), Some(Role::Weapon));
         assert_eq!(known.library_role("Delta Amp"), Some(Role::Amplifier));
         assert_eq!(
@@ -1313,14 +1332,6 @@ mod tests {
             "the weapon collection settles a name two collections hold"
         );
         assert_eq!(known.catalogue_role("Vivo T1"), Some(Role::Healing));
-        assert_eq!(
-            known.protection_role("Pegasus Helmet (M,L)"),
-            Some(Role::Armour)
-        );
-        assert_eq!(known.protection_role("pegasus"), Some(Role::Armour));
-        assert_eq!(known.protection_role("Pegasusx Helmet"), None);
-        assert_eq!(known.protection_role("6B Plate"), Some(Role::Plating));
-        assert_eq!(known.protection_role("Hyperion Helmet"), None);
         // The finer categories the roles are read from.
         assert_eq!(
             known.library_category("NeoPsion 85-B"),
@@ -1337,19 +1348,6 @@ mod tests {
         assert_eq!(
             known.library_category("Pill"),
             Some(CostCategory::Consumable)
-        );
-        assert_eq!(
-            known.protection_category("Pegasus Helmet (M,L)"),
-            Some(CostCategory::LimitedArmour),
-            "a limited set's pieces are limited"
-        );
-        assert_eq!(
-            known.protection_category("Pegasus Elite Helmet"),
-            Some(CostCategory::UnlimitedArmour)
-        );
-        assert_eq!(
-            known.protection_category("6B Plate"),
-            Some(CostCategory::UnlimitedPlate)
         );
     }
 
@@ -1371,7 +1369,7 @@ mod tests {
             .unwrap();
         }
         let store = GameDataStore::new(dir.path()).unwrap();
-        let known = KnownRoles::from_parts(&[], &[], Some(&store));
+        let known = KnownRoles::from_parts(&[], Some(&store));
         for (name, category) in [
             ("Odd Scope", CostCategory::Attachment),
             ("Odd Extender P10 (L)", CostCategory::Attachment),
@@ -1417,16 +1415,12 @@ mod tests {
         let stand = Stand {
             library: vec![("Opalo", CostCategory::Weapon)],
             catalogue: vec![("Vivo T1", CostCategory::HealingTool)],
-            protection: vec![
-                ("Pegasus", CostCategory::LimitedArmour),
-                ("Frontier", CostCategory::UnlimitedArmour),
-            ],
         };
         let carried = |name: &str| key(name, Container::Carried);
         let cost = |key: &HoldingKey, role: Role, used: Use, parent: Option<Role>| {
             cost_category(&stand, key, role, used, parent)
         };
-        // Named by the library, the game data, the name or a set.
+        // Named by the library, the game data or the name.
         assert_eq!(
             cost(&carried("Opalo"), Role::Weapon, Use::Wear, None),
             CostCategory::Weapon
@@ -1477,7 +1471,7 @@ mod tests {
                 None
             ),
             CostCategory::LimitedArmour,
-            "a piece whose name says limited is, whatever its set"
+            "a piece whose name says limited is"
         );
         let plate = key(
             "Armor Plating Mk. 5B (L)",
@@ -1567,24 +1561,6 @@ mod tests {
         assert_eq!(book.role("Mind Essence"), Role::Material);
     }
 
-    #[test]
-    fn two_equally_long_families_that_disagree_give_no_role() {
-        let sets = vec![
-            (
-                "armour".to_string(),
-                "Ghost".to_string(),
-                "unlimited".to_string(),
-            ),
-            (
-                "plates".to_string(),
-                "ghost".to_string(),
-                "unlimited".to_string(),
-            ),
-        ];
-        let known = KnownRoles::from_parts(&[], &sets, None);
-        assert_eq!(known.protection_role("Ghost Harness"), None);
-    }
-
     #[tokio::test]
     async fn known_roles_read_the_player_s_tables_without_writing_them() {
         let dir = tempfile::tempdir().unwrap();
@@ -1602,8 +1578,8 @@ mod tests {
         let known = db
             .with_writer(|conn| {
                 conn.execute(
-                    "INSERT INTO protection_sets (kind, name, economy_kind, markup_percent, \
-                     created_at) VALUES ('armour', 'Pegasus', 'limited', 120, 1)",
+                    "INSERT INTO limited_piece_markups (item_name, markup_percent, \
+                     effective_from, set_at) VALUES ('Pegasus Gloves (M,L)', 120, NULL, 1)",
                     [],
                 )?;
                 let changes_before = conn.total_changes();
@@ -1622,8 +1598,9 @@ mod tests {
             .unwrap();
         assert_eq!(known.library_role("Delta Amp"), Some(Role::Amplifier));
         assert_eq!(
-            known.protection_role("Pegasus Gloves (M,L)"),
-            Some(Role::Armour)
+            known.piece_markup("Pegasus Gloves (M,L)", 5.0),
+            Some(12_000),
+            "the markup set for a limited piece is read, in hundredths"
         );
     }
 }

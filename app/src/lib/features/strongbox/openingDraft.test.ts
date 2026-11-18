@@ -143,8 +143,8 @@ describe('valuing what came out', () => {
 		expect(shirt.sellsAsCubes).toBe(false);
 	});
 
-	it('cubes by default only what its own reading puts at or below cubes', () => {
-		expect(contentLine('Red Heart Fireworks', 1, 2, context).recycle).toBe(true);
+	it('keeps every content: recycling is done in game, and the readings record it', () => {
+		expect(contentLine('Red Heart Fireworks', 1, 2, context).recycle).toBe(false);
 		expect(contentLine('Skeleton Shirt White (F)', 1, 10, context).recycle).toBe(false);
 		expect(contentLine('Skeleton Shirt White (M)', 1, 10, context).recycle).toBe(false);
 	});
@@ -173,13 +173,15 @@ describe('a result from the export', () => {
 		expect(result.notes).toEqual([]);
 		const summary = summarise(result);
 		expect(summary.keysTt).toBe(80);
-		expect(summary.cubedTt).toBe(2);
-		expect(summary.nanocubes).toBe(200);
-		expect(summary.keptTt).toBe(20);
+		// Every content is kept, the fireworks too.
+		expect(summary.cubedTt).toBe(0);
+		expect(summary.nanocubes).toBe(0);
+		expect(summary.keptTt).toBe(22);
 		expect(summary.gap).toBeCloseTo(0);
 		expect(summary.hits).toBe(1);
 		expect(summary.unvalued).toBe(1);
-		expect(summary.estimatedMarkup).toBeCloseTo(15 + 0.04);
+		const fireworks = estimateItem('Red Heart Fireworks', 1, 2, context).markupPed ?? 0;
+		expect(summary.estimatedMarkup).toBeCloseTo(15 + fireworks);
 		expect(balanceRefusal(result)).toBeNull();
 	});
 
@@ -300,9 +302,7 @@ describe('where the boxes came from', () => {
 		expect(input.keyUnitTt).toBe(10);
 		expect(input.ammoPed).toBe(58);
 		expect(input.intake).toBe('export');
-		expect(input.contents.find((row) => row.itemName === 'Red Heart Fireworks')?.recycle).toBe(
-			true,
-		);
+		expect(input.contents.every((row) => !row.recycle)).toBe(true);
 	});
 });
 

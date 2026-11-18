@@ -106,9 +106,7 @@ export function connectionView(status: AccountStatus): ConnectionView {
 			return {
 				tone: status.hasConnected ? 'warning' : 'none',
 				title: status.hasConnected ? 'Readings paused: not signed in' : 'Account readings',
-				lines: status.hasConnected
-					? [...waiting, lastReading(status.lastReadingAt)]
-					: waiting,
+				lines: status.hasConnected ? [...waiting, lastReading(status.lastReadingAt)] : waiting,
 				signIn: status.signingIn ? reopen : status.hasConnected ? 'Sign in' : 'Connect',
 				disconnect: false,
 				explainsSignIn: true,

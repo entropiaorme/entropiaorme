@@ -1156,8 +1156,10 @@ pub fn read_run_whole(
     roles: &dyn RoleSource,
     now: f64,
 ) -> Result<RunWhole, AccountError> {
-    let (Some(before), Some(after)) = (store::load_reading(conn, from)?, store::load_reading(conn, to)?)
-    else {
+    let (Some(before), Some(after)) = (
+        store::load_reading(conn, from)?,
+        store::load_reading(conn, to)?,
+    ) else {
         return Ok(RunWhole {
             read_whole: false,
             boxes_left: 0,

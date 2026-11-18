@@ -1,12 +1,13 @@
 # cargo-audit configuration
 #
-# Every advisory ignored here is on a transitive crate, not a direct
+# Every advisory ignored here but one is on a transitive crate, not a direct
 # dependency: most sit inside the Tauri toolchain, and the zbus family sits
 # under the Linux screen-capture portal client. None are exploitable in the
 # shipped artefacts; none are fixable here without an upstream release that
-# bumps the relevant subtree. Resolution path for each category is "wait for
+# bumps the relevant subtree. Resolution path for each of those is "wait for
 # upstream"; the per-advisory comments below spell out why each is
-# non-actionable.
+# non-actionable. The exception is chrono, a direct dependency, whose entry
+# says what replaces it and when.
 #
 # Categorisation note: every entry below is an `unmaintained` / `unsound`
 # *warning*, not a vulnerability. Any future *vulnerability* suppression must
@@ -60,4 +61,18 @@ ignore = [
     "RUSTSEC-2026-0370", # zvariant
     "RUSTSEC-2026-0371", # zbus_names
     "RUSTSEC-2026-0372", # zvariant_derive
+
+    # chrono: declared unmaintained (issued 2026-11-17), all versions, with no
+    # patched release; the advisory reports no defect and names jiff and time
+    # as successors. A direct dependency, unlike everything above: the
+    # backend's calendar arithmetic and timestamp formatting go through it,
+    # so replacing it is a migration of every date the accounting reads and
+    # writes, not a version bump, and is done as its own change with the
+    # goldens as the proof, not folded into an advisory response. Built with
+    # default features off (`std` and `clock` only), so the one historical
+    # chrono vulnerability class (RUSTSEC-2020-0159, the `localtime_r` path
+    # of the old `time` 0.1 dependency) is not in the graph. Drop this entry
+    # when the migration to a maintained crate lands; revisit at once if a
+    # vulnerability-class advisory is ever issued against chrono.
+    "RUSTSEC-2026-0543", # chrono
 ]

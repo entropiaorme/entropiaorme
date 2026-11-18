@@ -28,9 +28,10 @@ all-features = true
 version = 2
 yanked = "deny"
 # The shipped-graph subset of .cargo/audit.toml (single source of full
-# rationale). All are `unmaintained` / `unsound` warnings on transitive
+# rationale). All are `unmaintained` / `unsound` warnings, on transitive
 # crates (the Tauri toolchain, and the zbus family under the Linux capture
-# portal client). Review both files together on every Tauri bump.
+# portal client) but for chrono, a direct dependency awaiting its
+# replacement. Review both files together on every Tauri bump.
 ignore = [
     "RUSTSEC-2024-0370", # proc-macro-error (build-time macro crate)
     "RUSTSEC-2025-0075", # unic-char-range (build-time Unicode data)
@@ -42,6 +43,7 @@ ignore = [
     "RUSTSEC-2026-0370", # zvariant (Linux portal D-Bus, via ashpd)
     "RUSTSEC-2026-0371", # zbus_names
     "RUSTSEC-2026-0372", # zvariant_derive
+    "RUSTSEC-2026-0543", # chrono (unmaintained; direct; replacement pending)
 ]
 
 [licenses]

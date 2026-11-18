@@ -1354,6 +1354,36 @@ pub fn heal(conn: &rusqlite::Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+// ── What the readings billed between sessions ───────────────────────
+
+/// The steps between sessions whose overhead is billed, as plain rows
+/// aliased by the reader: when each was seen (`seen_from`, `seen_to`, unix
+/// seconds) and what it bills by category in PED (`travel_ped`,
+/// `field_logistics_ped`, `unclassified_ped`). A step a session came to
+/// cover is not among them; the rows decide that themselves, so a reader
+/// only sums.
+pub const BETWEEN_SESSIONS_STEPS: &str = "overhead_billed_between_sessions";
+
+/// The overhead billed between sessions over `[start, end)` (unix seconds,
+/// by when each step ended): how many steps, and the amount by category in
+/// PED (travel, field logistics, unclassified), `None` for a category no
+/// step billed in the window. For the day rollup.
+pub fn between_sessions_overhead_in(
+    conn: &rusqlite::Connection,
+    start: f64,
+    end: f64,
+) -> Result<(i64, [Option<f64>; 3]), DbError> {
+    let sql = format!(
+        "SELECT COUNT(*), SUM(b.travel_ped), SUM(b.field_logistics_ped), \
+                SUM(b.unclassified_ped) \
+         FROM {BETWEEN_SESSIONS_STEPS} b \
+         WHERE b.seen_to >= ?1 AND b.seen_to < ?2"
+    );
+    Ok(conn.query_row(&sql, rusqlite::params![start, end], |row| {
+        Ok((row.get(0)?, [row.get(1)?, row.get(2)?, row.get(3)?]))
+    })?)
+}
+
 // ── SQL for readers that aggregate many sessions ────────────────────
 
 /// The scale a bucket's tracked events weigh by, for the session named by

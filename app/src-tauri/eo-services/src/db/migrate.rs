@@ -578,6 +578,16 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "account activity seen",
         sql: include_str!("../../migrations/0108_account_activity_seen.sql"),
     },
+    Migration {
+        version: 109,
+        description: "overhead billed between sessions",
+        sql: include_str!("../../migrations/0109_overhead_billed_between_sessions.sql"),
+    },
+    Migration {
+        version: 110,
+        description: "card change on account records",
+        sql: include_str!("../../migrations/0110_card_change_on_account_records.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -693,6 +703,8 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "95757F83D489460E964691D1EBDE2E5C8AB544F1162D477F7102793492603830591C3326A66DADEA6719B4787CDC766C",
     "A8EC9B9C482F9114A1AD18CFF8AEB78C3F8A7DE26F4791EC06312DC37005F93C208FD99863D17F621975DADBEDEF5A17",
     "06814279F2CED7039B2F963D0FF231CD3716BEE9EF882F8372B6C038BE449EA7108783747FB4AD15AD50311BD449B432",
+    "E76D1AC6323711B53ED1FC1D744AB21D6C4504C128EA35F66936F283FBB98C74F370DE376A9116569FEC84795D31328B",
+    "83D201EEAC96E64A829B4A7D055937E5BD3FCA35E289FF8AB04B8D3499BE90BFA2C1373FBBD7A7D0E407A77EE98BFDA7",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as

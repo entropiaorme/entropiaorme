@@ -1141,8 +1141,8 @@ fn raw_family_sums(
         format!(
             "SELECT SUM(b.travel_ped), SUM(b.field_logistics_ped), SUM(b.unclassified_ped), \
                     SUM(b.travel_ped + b.field_logistics_ped + b.unclassified_ped) \
-             FROM account_between_sessions_steps b WHERE {w} AND {}",
-            crate::account::between::stands_sql("b")
+             FROM {} b WHERE {w}",
+            session_costs::BETWEEN_SESSIONS_STEPS
         ),
         &p,
         4,
@@ -1993,9 +1993,9 @@ fn raw_breakdown(
         format!(
             "SELECT {} as bucket, \
                     SUM(b.travel_ped + b.field_logistics_ped + b.unclassified_ped) \
-             FROM account_between_sessions_steps b WHERE {between_w} AND {} GROUP BY bucket",
+             FROM {} b WHERE {between_w} GROUP BY bucket",
             ts_bucket("b.seen_to"),
-            crate::account::between::stands_sql("b"),
+            session_costs::BETWEEN_SESSIONS_STEPS,
         ),
         &between_p,
     )?;
@@ -10320,6 +10320,7 @@ mod tests {
             seen_to: 1_780_000_060.0,
             hand_entries_since: 1_779_999_700.0,
             stock_settles_by: 1_780_000_600.0,
+            card_change_pec: None,
         };
         let record = |outcome: ListingFromAccount| {
             tokio::task::block_in_place(|| {

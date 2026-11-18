@@ -64,6 +64,9 @@ pub struct AccountStep {
     /// Until this instant (unix seconds), stock the open positions cannot
     /// cover in full may still be landing: the part waits.
     pub stock_settles_by: f64,
+    /// How far the PED Card moved across the step, in PEC; `None` when the
+    /// caller does not know it.
+    pub card_change_pec: Option<i64>,
 }
 
 /// What a step showed, to record.
@@ -180,17 +183,15 @@ pub struct RecordedFromAccount {
     /// When the record was made (unix seconds), which may be after the step
     /// ended: stock still landing is waited for.
     pub recorded_at: f64,
-    /// How far the PED Card moved across the step, in PED; `None` once
-    /// either reading is gone.
+    /// How far the PED Card moved across the step, in PED; `None` when it
+    /// was not known as the record was made.
     pub card_change: Option<f64>,
 }
 
 /// The columns a [`RecordedFromAccount`] is read from, off a provenance
 /// row aliased `s`: the step, when it was recorded, and the Card's move
-/// across the step from the two readings' balances.
-const STEP_COLUMNS: &str = "s.reading_id, s.seen_from, s.seen_to, s.created_at, \
-     (SELECT a.balance_pec FROM account_readings a WHERE a.id = s.reading_id) \
-       - (SELECT b.balance_pec FROM account_readings b WHERE b.id = s.prev_reading_id)";
+/// across the step as the row keeps it.
+const STEP_COLUMNS: &str = "s.reading_id, s.seen_from, s.seen_to, s.created_at, s.card_change_pec";
 
 /// A [`RecordedFromAccount`] from [`STEP_COLUMNS`], starting at `first`.
 fn step_from(row: &rusqlite::Row, first: usize) -> rusqlite::Result<RecordedFromAccount> {
@@ -423,8 +424,8 @@ fn record_in(
     tx.execute(
         "INSERT INTO stock_records_from_account \
              (record_kind, record_id, reading_id, prev_reading_id, seen_from, \
-              seen_to, part, item_name, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              seen_to, part, item_name, created_at, card_change_pec) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             record.record_kind(),
             id,
@@ -435,6 +436,7 @@ fn record_in(
             part,
             taken[0].0,
             now,
+            step.card_change_pec,
         ],
     )?;
     tx.commit()?;
@@ -481,8 +483,9 @@ fn record_listing_in(
     };
     tx.execute(
         "INSERT INTO listing_outcomes_from_account \
-             (listing_id, outcome, reading_id, prev_reading_id, seen_from, seen_to, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (listing_id, outcome, reading_id, prev_reading_id, seen_from, seen_to, \
+              created_at, card_change_pec) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             listing_id,
             outcome.outcome(),
@@ -491,6 +494,7 @@ fn record_listing_in(
             step.seen_from,
             step.seen_to,
             now,
+            step.card_change_pec,
         ],
     )?;
     tx.commit()?;
@@ -991,6 +995,7 @@ mod tests {
             seen_to,
             hand_entries_since: seen_to - 60.0 - 300.0,
             stock_settles_by: seen_to + 600.0,
+            card_change_pec: None,
         }
     }
 
@@ -1091,7 +1096,34 @@ mod tests {
             (2, step(2).seen_from, step(2).seen_to)
         );
         assert_eq!(source.recorded_at, noon(), "recorded when the clock says");
-        assert_eq!(source.card_change, None, "no readings are stored here");
+        assert_eq!(source.card_change, None, "the step named no Card move");
+    }
+
+    #[tokio::test]
+    async fn a_record_keeps_how_far_the_card_moved_across_its_step() {
+        let (_dir, service) = write_service().await;
+        seed_hunted(&service, 5, SHRAPNEL, 100_000, 10.0).await;
+        let moved = AccountStep {
+            card_change_pec: Some(-250),
+            ..step(2)
+        };
+        let outcome = service
+            .record_from_account(
+                moved,
+                AccountRecord::ShrapnelConversion { quantity: 40_000.0 },
+            )
+            .await
+            .unwrap();
+        let id = recorded_id(&outcome);
+        let source = history(&service)
+            .await
+            .into_iter()
+            .find(|row| row.id == id)
+            .expect("on the history")
+            .from_account
+            .expect("from the account");
+        // Kept on the record itself, in PEC, and shown in PED.
+        assert_eq!(source.card_change, Some(-2.5));
     }
 
     #[tokio::test]

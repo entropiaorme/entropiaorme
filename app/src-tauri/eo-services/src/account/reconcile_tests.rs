@@ -726,6 +726,7 @@ async fn an_item_taken_back_stays_left_as_it_is_until_a_reconciliation_settles_i
         seen_to: noon() - 7_200.0,
         hand_entries_since: noon() - 7_560.0,
         stock_settles_by: noon() - 6_600.0,
+        card_change_pec: None,
     };
     let crate::analytics::FromAccount::Recorded { record_id, .. } = env
         .analytics

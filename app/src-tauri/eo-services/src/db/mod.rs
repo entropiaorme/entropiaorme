@@ -2002,10 +2002,11 @@ mod tests {
         // + the listing outcomes the readings recorded, and their index
         // + the steps billed between sessions, and their index
         // + how far the player has seen what the account did
+        // + the view of the steps billed between sessions that stand
         // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 310);
+        assert_eq!(master.len(), 311);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");

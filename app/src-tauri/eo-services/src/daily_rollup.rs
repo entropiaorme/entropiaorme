@@ -241,7 +241,8 @@ pub fn recompute_day(conn: &rusqlite::Connection, day: &str) -> Result<(), DbErr
 
         // What the readings billed between sessions lands on the day each
         // step ended, beside the sessions' own overhead and credited to none.
-        let (between_count, between) = crate::account::between::overhead_in(conn, start, end)?;
+        let (between_count, between) =
+            session_costs::between_sessions_overhead_in(conn, start, end)?;
         between_total = between.iter().flatten().copied().reduce(|a, b| a + b);
         let plus = |session: Option<f64>, between: Option<f64>| match (session, between) {
             (None, None) => None,

@@ -327,6 +327,7 @@ pub fn prepare(
             seen_to: between.to,
             hand_entries_since: between.from - HAND_ENTRY_LOOK_BACK,
             stock_settles_by: between.to + STOCK_SETTLES,
+            card_change_pec: Some(after.header.balance.0 - before.header.balance.0),
         }),
         records,
         listings,

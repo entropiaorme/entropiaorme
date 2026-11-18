@@ -3,12 +3,13 @@
 //! that a step a session later covers is never billed twice, and that a
 //! step is priced again when the roles move.
 
-use super::between::{self, is_between, overhead_in};
+use super::between::{self, is_between};
 use super::reading::Container;
 use super::roles::{CostCategory, KnownRoles};
 use super::store::{load_reading, record_reading, Purpose, StoredReading};
 use super::test_support::reading;
 use crate::db::migrated_in_memory;
+use crate::session_costs::between_sessions_overhead_in as overhead_in;
 
 const C: Container = Container::Carried;
 

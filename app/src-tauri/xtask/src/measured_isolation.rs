@@ -18,7 +18,11 @@
 //!     session, blends them) and knows nothing of readings; what it resolves
 //!     them to (`session_cost_resolutions` and its buckets and mixed
 //!     armour and weapon) is its own, read
-//!     elsewhere only through the SQL it hands out. Any other accounting
+//!     elsewhere only through the SQL it hands out. What the readings
+//!     billed between sessions reaches the surface the same way: as the
+//!     plain rows of the steps that stand
+//!     (`overhead_billed_between_sessions`), named by the resolver alone
+//!     and handed out by it. Any other accounting
 //!     file naming either set of rows fails, as does any account import
 //!     anywhere on the surface, the resolver included. The boundary is one-directional:
 //!     the account module MAY read what it needs (the equipment library and
@@ -75,6 +79,7 @@ const COST_TABLES: &[&str] = &[
     "account_session_cost_lines",
     "account_session_cost_top_ups",
     "account_session_costs",
+    "overhead_billed_between_sessions",
     "session_cost_resolution_armour",
     "session_cost_resolution_buckets",
     "session_cost_resolution_weapon",

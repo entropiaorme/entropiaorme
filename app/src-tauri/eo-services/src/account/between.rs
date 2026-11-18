@@ -18,8 +18,10 @@
 //! ([`heal`]). A step is one between sessions when its later reading was
 //! taken for no session, or as a session started (its first reading), and
 //! no strongbox run read both its ends. Whether it counts is decided when
-//! it is read ([`stands_sql`]): a step a session's measure, or its costs
-//! read across a gap, came to cover is that session's, never billed twice.
+//! it is read (the `overhead_billed_between_sessions` view, which the cost
+//! resolver hands to the day rollup and the Overview): a step a session's
+//! measure, or its costs read across a gap, came to cover is that
+//! session's, never billed twice.
 
 use rusqlite::OptionalExtension as _;
 
@@ -29,7 +31,6 @@ use super::measure::{measure_used, Edge, SessionMeasure, MEASURE_VERSION};
 use super::roles::{KnownRoles, RoleSource};
 use super::store::{self, Purpose, ReadingId, StoredReading};
 use super::AccountError;
-use crate::db::DbError;
 
 /// The most steps one pass of [`heal`] prices again; the rest wait for the
 /// next pass.
@@ -174,20 +175,6 @@ pub fn store(
     Ok(())
 }
 
-/// The condition, over a step row aliased `alias`, that it is billed
-/// between sessions: no session's measure, nor its costs read across a gap,
-/// covers it.
-pub fn stands_sql(alias: &str) -> String {
-    format!(
-        "NOT EXISTS (SELECT 1 FROM account_session_measures m \
-                     WHERE m.first_reading_id < {alias}.reading_id \
-                       AND {alias}.reading_id <= m.last_reading_id) \
-         AND NOT EXISTS (SELECT 1 FROM account_session_costs c \
-                         WHERE c.first_reading_id < {alias}.reading_id \
-                           AND {alias}.reading_id <= c.last_reading_id)"
-    )
-}
-
 /// One step whose price is not the code's or the roles'.
 struct Stale {
     reading: i64,
@@ -321,24 +308,4 @@ pub fn any_stale(conn: &rusqlite::Connection, roles: &KnownRoles) -> Result<bool
         )
         .optional()?
         .is_some())
-}
-
-/// The overhead billed between sessions over `[start, end)` (unix seconds,
-/// by when each step ended), by category in PED; `None` for a category no
-/// step billed in the window. For the day rollup and the Overview.
-pub fn overhead_in(
-    conn: &rusqlite::Connection,
-    start: f64,
-    end: f64,
-) -> Result<(i64, [Option<f64>; 3]), DbError> {
-    let sql = format!(
-        "SELECT COUNT(*), SUM(b.travel_ped), SUM(b.field_logistics_ped), \
-                SUM(b.unclassified_ped) \
-         FROM account_between_sessions_steps b \
-         WHERE b.seen_to >= ?1 AND b.seen_to < ?2 AND {}",
-        stands_sql("b")
-    );
-    Ok(conn.query_row(&sql, rusqlite::params![start, end], |row| {
-        Ok((row.get(0)?, [row.get(1)?, row.get(2)?, row.get(3)?]))
-    })?)
 }

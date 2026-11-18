@@ -49,26 +49,9 @@ Thumbs.db
 # the directory remains walked and per-path re-inclusions work below.
 data/*
 
-# Bundled curated demo DB: committed so the Tauri bundle (bundle.resources in
-# tauri.conf.json) can ship it for guide-mode playback (the /demo/* router reads
-# it read-only and clones into memory before any tracker priming). Everything
-# else under data/demo/ stays ignored (transient SQLite -wal/-shm, settings).
-!data/demo/
-data/demo/*
-!data/demo/entropia_orme.db
-!data/demo/seed_manifest.json
-
 # Diagnostic/temp artifacts
 tmp/
 /calibration/
-
-# Session-recording bundles. The synthetic placeholder is the tracked public
-# stand-in; real recorded bundles are local-by-default (kept in a local,
-# un-pushed store and copied in when the environment is set up), never pushed
-# to the public remote. The in-flight staging dir is never committed.
-app/src-tauri/fixtures/corpus/recording_in_progress/
-app/src-tauri/fixtures/corpus/recorded/*
-!app/src-tauri/fixtures/corpus/recorded/placeholder_recorded_hunt/
 
 # Local dev scratch dirs
 /.scratch/

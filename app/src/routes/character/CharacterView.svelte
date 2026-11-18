@@ -7,20 +7,9 @@
 	import Tabs from '$lib/components/Tabs.svelte';
 	import AttributesTable from '$lib/features/character/AttributesTable.svelte';
 	import { createCharacterModel } from '$lib/features/character/characterModel.svelte';
-	import OptimizerView from '$lib/features/character/OptimizerView.svelte';
 	import ProfessionsTable from '$lib/features/character/ProfessionsTable.svelte';
-	import ProspectView from '$lib/features/character/ProspectView.svelte';
-	import RecommenderView from '$lib/features/character/RecommenderView.svelte';
+	import SkillingHub from '$lib/features/character/SkillingHub.svelte';
 	import SkillsTable from '$lib/features/character/SkillsTable.svelte';
-	import {
-		characterDemoOptimizerProfession,
-		characterDemoOptimizerTargetLevel,
-		characterDemoPathOptimizer,
-		characterDemoProspectProfession,
-		characterDemoProspectResult,
-		characterDemoProspectTargetLevel,
-	} from '$lib/guide/fixtures/character';
-	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
 	import {
 		hydrate as hydrateScan,
 		scanStatus as scanStatusStore,
@@ -31,69 +20,18 @@
 	import ScanInFlightView from './ScanInFlightView.svelte';
 
 	const model = createCharacterModel();
-	const optimizer = model.optimizer;
-	const prospect = model.prospect;
 
 	// ── Tab state ───────────────────────────────────────────────────────────
 
-	let mainTab = $state<'stats' | 'prospect' | 'optimizer' | 'recommender' | 'codex'>('stats');
+	let mainTab = $state<'stats' | 'skilling' | 'codex'>('stats');
 	let statsSubTab = $state<'attributes' | 'skills' | 'professions'>('attributes');
 
-	// Guide-mode fake skill scanner (only consulted when guideState.isActive)
-	let demoFakeScannerVisible = $state(false);
-	// Guide-mode codex seed flag, passed as a prop to CodexTab.
-	let demoCodexSeedActive = $state(false);
+	// ── Skill scan status (drives in-flight view) ───────────────────────────────
 
-	onMount(() => {
-		registerDemoApi('character', {
-			setMainTab: (tab: string) => {
-				mainTab = tab as 'stats' | 'prospect' | 'optimizer' | 'recommender' | 'codex';
-			},
-			setStatsSubTab: (tab: string) => {
-				statsSubTab = tab as 'attributes' | 'skills' | 'professions';
-			},
-			setFakeScannerVisible: (visible: boolean) => {
-				demoFakeScannerVisible = visible;
-			},
-			setProspectSeed: (seed: boolean) => {
-				if (seed) {
-					optimizer.selectedProfession = characterDemoProspectProfession;
-					prospect.targetInput = characterDemoProspectTargetLevel;
-					prospect.sliceType = 'global';
-					prospect.result = characterDemoProspectResult;
-				} else {
-					optimizer.selectedProfession = '';
-					prospect.targetInput = '';
-					prospect.result = null;
-				}
-			},
-			setOptimizerSeed: (seed: boolean) => {
-				if (seed) {
-					optimizer.mode = 'profession';
-					optimizer.selectedProfession = characterDemoOptimizerProfession;
-					optimizer.pathTargetInput = characterDemoOptimizerTargetLevel;
-					optimizer.pathResult = characterDemoPathOptimizer;
-				} else {
-					optimizer.mode = 'profession';
-					optimizer.selectedProfession = '';
-					optimizer.pathTargetInput = '';
-					optimizer.pathResult = null;
-				}
-			},
-			setCodexSeed: (seed: boolean) => {
-				demoCodexSeedActive = seed;
-			}
-		});
-		return () => unregisterDemoApi('character');
-	});
-
-	// ── Manual scan status (drives in-flight view) ──────────────────────────────
-
-	// Scan status from the shared event-driven store, suppressed while the guide
-	// is active (the guide owns this view then). The effect below hydrates once
-	// and subscribes when the guide is inactive; the store re-reads on each
-	// backend scan frame the relay re-emits, replacing the retired 500ms poll.
-	let scanStatus = $derived(guideState.isActive ? null : scanStatusStore.current);
+	// Scan status from the shared event-driven store. The effect below hydrates
+	// once and subscribes; the store re-reads on each backend scan frame the
+	// shell bridges.
+	let scanStatus = $derived(scanStatusStore.current);
 	let scanInFlight = $derived(scanStatus !== null && scanStatus.phase !== 'idle');
 
 	$effect(() => {
@@ -101,7 +39,6 @@
 	});
 
 	$effect(() => {
-		if (guideState.isActive) return;
 		let unlisten: UnlistenFn | undefined;
 		let disposed = false;
 		// Attach the listener BEFORE the first hydrate: a status change between
@@ -123,58 +60,30 @@
 	});
 
 	function onScanReviewComplete() {
-		void model.loadCharacterData(guideState.isActive);
+		void model.loadCharacterData();
 	}
-
-	// Keep the prospect slice selection valid as its options or type change.
-	$effect(() => {
-		if (prospect.sliceType === 'global') {
-			prospect.sliceValue = '';
-			return;
-		}
-		if (!prospect.currentOptions.some((option) => option.value === prospect.sliceValue)) {
-			prospect.sliceValue = prospect.currentOptions[0]?.value ?? '';
-		}
-	});
 
 	// ── Load on mount ───────────────────────────────────────────────────────────
 
-	$effect(() => {
-		void model.loadCharacterData(guideState.isActive);
-	});
-
-	// Refresh after the user returns from the scan overlay window.
-	$effect(() => {
-		if (guideState.isActive) return;
-		const onFocus = () => { void model.loadCharacterData(false); };
+	onMount(() => {
+		void model.loadCharacterData();
+		// Refresh after the user returns from the scan overlay window.
+		const onFocus = () => { void model.loadCharacterData(); };
 		window.addEventListener('focus', onFocus);
 		return () => window.removeEventListener('focus', onFocus);
 	});
 </script>
 
 <div class="space-y-5">
-	{#if guideState.isActive && demoFakeScannerVisible}
-		<div class="fixed top-20 left-12 right-0 z-10 flex justify-center pointer-events-none">
-			<img
-				data-guide-anchor="character-scanner-spawn"
-				src="/guide-assets/skill-scanner.png"
-				alt=""
-				class="block"
-			/>
-		</div>
-	{/if}
-
 	<!-- Main tab toggle -->
 	<Tabs
 		tabs={[
 			{ id: 'stats', label: 'Stats' },
-			{ id: 'prospect', label: 'Prospect' },
-			{ id: 'optimizer', label: 'Optimiser' },
-			{ id: 'recommender', label: 'Activity Recommender' },
+			{ id: 'skilling', label: 'Skilling' },
 			{ id: 'codex', label: 'Codex' }
 		]}
 		active={mainTab}
-		onchange={(id) => (mainTab = id as 'stats' | 'prospect' | 'optimizer' | 'recommender' | 'codex')}
+		onchange={(id) => (mainTab = id as 'stats' | 'skilling' | 'codex')}
 	/>
 
 	<ErrorNotice message={model.error} />
@@ -204,7 +113,7 @@
 				</div>
 				{#if scanInFlight}
 					<span class="rounded-md bg-surface px-3 py-1.5 text-xs font-medium uppercase tracking-wide text-text-secondary whitespace-nowrap">
-						{scanStatus?.phase === 'capturing' ? 'Capturing' : scanStatus?.phase === 'processing' ? 'Processing' : 'Awaiting review'}
+						{scanStatus?.phase === 'collecting' ? 'Collecting' : scanStatus?.phase === 'saving' ? 'Saving' : 'Awaiting review'}
 					</span>
 				{:else}
 					<Button size="sm" variant="secondary" onclick={model.openScanOverlay}>
@@ -240,19 +149,11 @@
 
 	{/if}
 
-	{#if mainTab === 'prospect'}
-		<ProspectView {model} />
-	{/if}
-
-	{#if mainTab === 'optimizer'}
-		<OptimizerView {model} />
-	{/if}
-
-	{#if mainTab === 'recommender'}
-		<RecommenderView {model} />
+	{#if mainTab === 'skilling'}
+		<SkillingHub {model} />
 	{/if}
 
 	{#if mainTab === 'codex'}
-		<CodexTab seedActive={demoCodexSeedActive} />
+		<CodexTab />
 	{/if}
 </div>

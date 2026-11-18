@@ -100,3 +100,23 @@ describe('focus restore', () => {
 		}
 	});
 });
+
+describe('document layer', () => {
+	it('lives on the document body, outside an owner that would re-anchor fixed positioning', async () => {
+		const { container, unmount } = render(Modal, {
+			props: { open: true, title: 'Confirm', children: twoButtons },
+		});
+
+		const dialog = screen.getByRole('dialog');
+		expect(container.contains(dialog)).toBe(false);
+		expect(document.body.contains(dialog)).toBe(true);
+
+		// The backdrop still dismisses: handlers survive the move to body.
+		const backdrop = dialog.parentElement as HTMLElement;
+		await fireEvent.click(backdrop);
+		await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+		unmount();
+		expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+	});
+});

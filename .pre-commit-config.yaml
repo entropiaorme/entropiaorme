@@ -55,6 +55,14 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # One search implementation: every frontend search box, picker, and
+      # filter matches through the shared search module.
+      - id: single-search
+        name: single search implementation (frontend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- single-search'
+        language: system
+        pass_filenames: false
+        always_run: true
       # Runes-native state ruling: new shared state may not import
       # svelte/store; the legacy surface is frozen and only shrinks.
       - id: no-new-writable
@@ -79,6 +87,45 @@ repos:
       - id: in-development
         name: in-development register matches its consumers (frontend)
         entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- in-development'
+        language: system
+        pass_filenames: false
+        always_run: true
+      # Figures measured from the account site's readings stand beside the
+      # tracked ones: the accounting surface may not reference the account
+      # readings module or its tables. A whole-tree cargo xtask guard over
+      # the backend crates.
+      - id: measured-isolation
+        name: accounting never reads measured figures (backend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- measured-isolation'
+        language: system
+        pass_filenames: false
+        always_run: true
+      # A database read that means "the latest in time" orders by its
+      # timestamp column, id as the tiebreak only; a read that genuinely
+      # orders by id names its allowed case at the site. A whole-tree cargo
+      # xtask guard over the backend crates.
+      - id: id-order
+        name: id-ordered reads name their case (backend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- id-order'
+        language: system
+        pass_filenames: false
+        always_run: true
+      # A quest reward claimed at a hand-in arrives as a kill row but is no
+      # kill: kill figures read the counted_kills view, and a read of the
+      # kills table names its case at the site. A whole-tree cargo xtask
+      # guard over the backend crates.
+      - id: counted-kills
+        name: kill figures leave claimed quest rewards out (backend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- counted-kills'
+        language: system
+        pass_filenames: false
+        always_run: true
+      # The game-interface readers reach the screen and the recogniser only
+      # through their pipeline's seams and keep their layout numbers in the
+      # interface profile. A whole-tree cargo xtask guard over the backend.
+      - id: ui-profile
+        name: readers keep to the pipeline and the profile (backend)
+        entry: bash -c 'cd app/src-tauri && cargo run -q -p xtask -- ui-profile'
         language: system
         pass_filenames: false
         always_run: true

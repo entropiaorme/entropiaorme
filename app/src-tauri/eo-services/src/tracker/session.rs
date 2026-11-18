@@ -1,4 +1,4 @@
-//! The session lifecycle (start, stop, demo priming, config reload),
+//! The session lifecycle (start, stop, config reload),
 //! the `ActiveSession` typestate payload, the aggregated tracking
 //! readout, and the coalesced tick flush.
 
@@ -10,28 +10,29 @@ use super::intervals::{
     ActiveActivity, ActivityKey, ActivityRef, CloseScope, IntervalKind, IntervalSpec,
     IntervalState, ACTIVITY_KINDS,
 };
-use crate::bus_events::{BusEvent, SessionLifecyclePayload};
+use crate::bus_events::{BusEvent, HotbarItemKind, SessionLifecyclePayload};
 use crate::db::DbError;
 use crate::expected_hunting::{
     evaluate as evaluate_expected_hunting, HuntingLooterLevels, LooterSource,
-    OffensiveComponentEvidence, OffensiveComponentKind, OffensiveLoadoutEvidence,
+    OffensiveLoadoutEvidence,
 };
+use crate::loaded_expectation::FlattenedPhases;
 use crate::mob_lookup_service::python_whitespace;
 use crate::ped::Ped;
-use crate::protection::{active_selection, ProtectionSelection};
 use crate::tracking_models::{
     ActiveSessionView, HarvestGuardrailMismatchView, HealingRuntimeView, TrackingReadout,
-    TrackingSession,
+    TrackingSession, WeaponGuardrailMismatchView,
 };
 
 use super::actor::TrackerActor;
+use super::attribution::{HitMargin, WeaponMismatch};
 use super::combat::Accumulator;
 use super::harvest::GuardrailMismatch;
 use super::healing::HealingRuntime;
-use super::mob::DeclaredMob;
+use super::mob::{DeclaredMob, MobSource, MobSourceView};
 use super::time::{instant_to_epoch, local_isoformat, resolve_local};
 use super::weapons::WeaponRuntime;
-use super::{HealTool, HuntTracker, SessionState, TrackerCommandError};
+use super::{HuntTracker, SessionState, TrackerCommandError};
 
 /// A loot group's dedup identity: (total, item count, first item name).
 pub(super) type LootFingerprint = (f64, usize, String);
@@ -54,11 +55,36 @@ pub struct SessionFacets {
     /// validated against an ACTIVE definition at start and immutable
     /// for the session's life (it rides the name facet's selection).
     pub definition_id: Option<i64>,
+    /// Whether defensive hits are recorded for later armour costing.
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
     /// The skill-boost configuration the session runs under, as the
     /// pill's labelled percentage.
     pub skill_boost_percent: Option<i64>,
+    /// How the session reads the player's equipment intent, fixed at start.
+    pub input_mode: InputMode,
+}
+
+/// How a session reads which equipment the player is using.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum InputMode {
+    /// Hotbar presses, when observed, declare equipment; healing is billed
+    /// only from paid activations a press (or an overlay declaration) opens.
+    #[default]
+    Keys,
+    /// The machine cannot read keys: the overlay declares equipment, and a
+    /// heal fitting the declared healer's band and reload is inferred as a
+    /// paid use.
+    Keyless,
+}
+
+impl InputMode {
+    /// The stored vocabulary (`tracking_sessions.input_mode`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InputMode::Keys => "keys",
+            InputMode::Keyless => "keyless",
+        }
+    }
 }
 
 /// Everything that exists exactly while a session runs. Constructed at
@@ -74,13 +100,52 @@ pub(super) struct ActiveSession {
     /// Heal cost accrued this session (the equipped tool's per-use
     /// cost per counted activation).
     pub(super) heal_cost: Ped,
-    pub(super) heal_warning_emitted: bool,
+    /// Consumed-dose cost booked to this session: every dose of a
+    /// cost-tracked item taken while it ran, less any removed since. The
+    /// session row holds the same figure, moved in the dose's own write.
+    pub(super) consumable_cost: Ped,
+    /// `heal_cost` per healing tool, with the TT each tool consumed.
+    pub(super) heal_spend: std::collections::BTreeMap<String, super::cycled::HealSpend>,
+    /// `consumable_cost` per consumable item.
+    pub(super) consumable_spend: std::collections::BTreeMap<String, Ped>,
+    /// Each paid heal's time and cost, in the order they were paid: what
+    /// of `heal_cost` came after a given instant.
+    pub(super) heal_times: Vec<(f64, Ped)>,
+    /// Each dose's start and what it costs the session now (corrections
+    /// included), by dose: what of `consumable_cost` came after a given
+    /// instant.
+    pub(super) dose_times: std::collections::BTreeMap<String, (f64, Ped)>,
+    /// When each kill's shots were recorded, by kill: what of its spend
+    /// came after a given instant. In memory only; a kill recorded without
+    /// them is timed whole by when it ended.
+    pub(super) kill_shot_times: std::collections::HashMap<String, Vec<f64>>,
+    /// The armour and plate cost recorded against this session so far,
+    /// re-read whenever a protection recording or undo reaches it.
+    pub(super) armour: super::cycled::SessionArmour,
+    /// What the account readings measured of this session up to their
+    /// latest reading, when the account side has published it; re-read
+    /// whenever the account announces a change.
+    pub(super) measured_so_far: Option<crate::session_costs::MeasuredSoFar>,
+    /// The reload speed in effect that shots and heals are priced under
+    /// now: equipped sources and running doses, under the game's limits.
+    /// Every stored shot and paid heal keeps the value it was charged at.
+    pub(super) reload_speed_percent: f64,
     pub(super) harvest_warning_emitted: bool,
     pub(super) protection_evidence_warning_emitted: bool,
     pub(super) warnings: Vec<String>,
-    /// The declared mob that kills take their stamp from (None: no
-    /// declaration; kills stamp "Unknown" with no stamp source).
-    pub(super) declared_mob: Option<DeclaredMob>,
+    /// The unpriced shots' upper bound: each at the dearest carried weapon
+    /// that fitted it. The session's cost leaves them out.
+    pub(super) unpriced_cost_bound: Ped,
+    /// Unpriced shots no carried weapon fitted: they add nothing to the
+    /// bound.
+    pub(super) unpriced_no_fit: i64,
+    /// Unpriced shots that landed with no weapon declared, and whether
+    /// their count has raised the warning yet.
+    pub(super) undeclared_unpriced: i64,
+    pub(super) undeclared_warning_emitted: bool,
+    /// The session's one source for its kills' creature: the typed
+    /// creature and the pin (see `mob`).
+    pub(super) mob: MobSource,
     /// The session-scoped facets snapshotted at session start.
     pub(super) facets: SessionFacets,
     /// The live interval state: which intervals are open and the context
@@ -91,7 +156,6 @@ pub(super) struct ActiveSession {
     /// The last recorded loot group's dedup identity and instant,
     /// always stamped together.
     pub(super) last_loot: Option<(LootFingerprint, DateTime<Utc>)>,
-    pub(super) trifecta_unmatched_warning_emitted: bool,
     /// The standing harvest-guardrail disagreement, when loot evidence
     /// last contradicted the hotbar-equipped tool (see `harvest.rs`).
     pub(super) guardrail_mismatch: Option<GuardrailMismatch>,
@@ -104,6 +168,25 @@ pub(super) struct ActiveSession {
     /// Believed-current Animal, Mutant, and Robot Looter levels captured at
     /// session start so later calibration cannot rewrite this evidence.
     pub(super) hunting_looters: HuntingLooterLevels,
+    /// The history of the locked plate and the kills waiting on it, while
+    /// creature detection runs for this session.
+    pub(super) detection: Option<super::detection::SessionDetection>,
+    /// Whether the screen was read when the readouts were last told: a
+    /// change is told once, however it came about.
+    pub(super) reading_told: bool,
+    /// The tool in hand as read off the screen, while the screen is the
+    /// source of it for this session.
+    pub(super) held_tool: Option<super::held_tool::SessionHeldTool>,
+    /// Why the keys are the source though the reading is on: the watch
+    /// ended by itself, or never started.
+    pub(super) screen_off: Option<super::held_tool::ScreenOff>,
+    /// A tool unseen when the reading ended whose settlement could not be
+    /// saved then: the stop settles it.
+    pub(super) unsettled: Vec<super::held_tool::Unsettled>,
+    /// Steps taken over the accumulator's rows and the kills when shots are
+    /// moved, for tests that bound the cost.
+    #[cfg(test)]
+    pub(super) steps: u64,
 }
 
 impl ActiveSession {
@@ -113,16 +196,27 @@ impl ActiveSession {
             accumulator: Accumulator::default(),
             dirty: false,
             heal_cost: Ped::ZERO,
-            heal_warning_emitted: false,
+            consumable_cost: Ped::ZERO,
+            heal_spend: Default::default(),
+            consumable_spend: Default::default(),
+            heal_times: Vec::new(),
+            dose_times: Default::default(),
+            kill_shot_times: Default::default(),
+            armour: Default::default(),
+            measured_so_far: None,
+            reload_speed_percent: 0.0,
             harvest_warning_emitted: false,
             protection_evidence_warning_emitted: false,
             warnings: Vec::new(),
-            declared_mob: None,
+            unpriced_cost_bound: Ped::ZERO,
+            unpriced_no_fit: 0,
+            undeclared_unpriced: 0,
+            undeclared_warning_emitted: false,
+            mob: MobSource::default(),
             facets,
             intervals: IntervalState::default(),
             healing: HealingRuntime::default(),
             last_loot: None,
-            trifecta_unmatched_warning_emitted: false,
             guardrail_mismatch: None,
             guardrail_warning_emitted: false,
             harvest_press_floor: 0,
@@ -132,17 +226,50 @@ impl ActiveSession {
                 mutant: 0.0,
                 robot: 0.0,
             },
+            detection: None,
+            reading_told: false,
+            held_tool: None,
+            screen_off: None,
+            unsettled: Vec::new(),
+            #[cfg(test)]
+            steps: 0,
         }
     }
 
-    /// The mob name a kill stamps or the readout shows: the declared
-    /// mob's display name when it is set AND non-empty (an empty
-    /// declared name behaves as unset, the original's falsy check).
+    /// The name a kill settling now is recorded with (the pin, else the
+    /// typed creature), for tests that follow the source.
+    #[cfg(test)]
     pub(super) fn stamped_mob_name(&self) -> Option<&str> {
-        self.declared_mob
+        self.mob
+            .pin
             .as_ref()
-            .map(|declared| declared.name.as_str())
+            .map(|pin| &pin.mob)
+            .or(self.mob.typed.as_ref())
+            .map(|mob| mob.name.as_str())
             .filter(|name| !name.is_empty())
+    }
+
+    /// The session's mob source as the readouts show it: the pin and the
+    /// typed creature, and, while the screen is read (`reading_screen`, see
+    /// `TrackerActor::reading_screen`), the creature being read and the one
+    /// the latest kills were.
+    pub(super) fn mob_source_view(&self, reading_screen: bool) -> MobSourceView {
+        let screen = self
+            .detection
+            .as_ref()
+            .filter(|_| reading_screen)
+            .map(|d| d.view());
+        MobSourceView {
+            reading_screen,
+            pin: self.mob.pin.clone(),
+            typed: self
+                .mob
+                .typed
+                .clone()
+                .filter(|typed| !typed.name.is_empty()),
+            reading: screen.as_ref().and_then(|view| view.reading.clone()),
+            continuity: screen.and_then(|view| view.continuity),
+        }
     }
 }
 
@@ -181,6 +308,13 @@ pub(super) struct SessionAggregate {
     pub(super) max_damage: f64,
     pub(super) live_weapon_damage: f64,
     pub(super) weapon_cost: Ped,
+    pub(super) armour_cost: Ped,
+    pub(super) cycled_breakdown: Vec<crate::tracking_models::CycledLine>,
+    /// The overhead the account readings measured so far, and when the
+    /// measured part of the costs runs to, while any of them rests on the
+    /// readings.
+    pub(super) measured: Option<(Ped, f64)>,
+    pub(super) expected_cycle: Option<crate::tracking_models::LiveExpectation>,
     pub(super) expected_tt_rate: Option<f64>,
     pub(super) expected_return_coverage: Option<f64>,
     pub(super) expected_return_model: Option<String>,
@@ -190,13 +324,14 @@ pub(super) struct SessionAggregate {
     pub(super) multiplier_last: Option<f64>,
     pub(super) multiplier_avg: Option<f64>,
     pub(super) multiplier_max: Option<f64>,
+    pub(super) multiplier_sum: f64,
+    pub(super) multiplier_count: i64,
     pub(super) multiplier_history: Vec<f64>,
     pub(super) cumulative_net: Vec<f64>,
-    pub(super) mob_name: Option<String>,
+    pub(super) mob_source: MobSourceView,
     pub(super) session_name: Option<String>,
     pub(super) definition_id: Option<i64>,
     pub(super) track_protection_costs: bool,
-    pub(super) track_protection_by_segment: bool,
     pub(super) skill_boost_percent: Option<i64>,
     pub(super) active_activities: Vec<ActiveActivity>,
     pub(super) harvest_swings: i64,
@@ -204,6 +339,13 @@ pub(super) struct SessionAggregate {
     pub(super) harvest_loot: Ped,
     pub(super) harvest_cost: Ped,
     pub(super) guardrail_mismatch: Option<GuardrailMismatch>,
+    pub(super) weapon_mismatch: Option<WeaponMismatch>,
+    pub(super) unpriced_shots: i64,
+    pub(super) unpriced_cost_bound: Ped,
+    pub(super) unpriced_no_fit: i64,
+    pub(super) weapon_declared: bool,
+    pub(super) weapon_hit_cue: Option<HitMargin>,
+    pub(super) keyless: bool,
     pub(super) warnings: Vec<String>,
     pub(super) healing: HealingRuntimeView,
 }
@@ -225,11 +367,13 @@ impl TrackerActor {
                 None,
             );
         };
+        // With no hotbar press yet (or the listener off), the weapon being
+        // recorded is the best answer to "what is in hand".
         let current_tool = self
             .held_item
             .as_ref()
             .map(|item| item.0.clone())
-            .or_else(|| active.weapons.hotbar_tool.clone());
+            .or_else(|| active.weapons.attribution.recording().map(str::to_string));
         let current_tool_kind = self.held_item.as_ref().map(|item| item.1).or_else(|| {
             current_tool
                 .as_ref()
@@ -237,6 +381,12 @@ impl TrackerActor {
         });
 
         let kills = &active.session.kills;
+        // The kills a kill figure counts: a reward clump a hand-in claimed
+        // stays in `kills` (its shots are real spend, its loot is zeroed)
+        // but is no kill, so counts, per-kill extremes, the latest kill and
+        // the multipliers read this instead.
+        let counted: Vec<&crate::tracking_models::Kill> =
+            kills.iter().filter(|kill| !kill.reward_claimed).collect();
         let mut weapon_cost: Ped = kills
             .iter()
             .flat_map(|kill| kill.tool_stats.iter())
@@ -244,44 +394,34 @@ impl TrackerActor {
             .sum();
         let mut enhancer_cost: Ped = kills.iter().map(|kill| kill.enhancer_cost).sum();
         weapon_cost += active.accumulator.weapon_cost();
-        enhancer_cost += active.accumulator.enhancer_cost;
+        enhancer_cost += active.accumulator.enhancer_cost();
         let heal_cost = active.heal_cost;
+        let consumable_cost = active.consumable_cost;
+        let armour_cost = active.armour.total;
 
         // Flatten every immutable tool phase at the TT it actually cycled.
         // Equipment changes create distinct phases, while the three hunting
         // looters remain the session-start snapshot.
-        let mut expected_evidence = OffensiveLoadoutEvidence {
-            components: Vec::new(),
-            looters: active.hunting_looters,
-            looter_source: LooterSource::ThreeLooterMean,
-        };
+        let mut phases = FlattenedPhases::default();
         for stats in kills
             .iter()
             .flat_map(|kill| kill.tool_stats.iter().map(|(_, stats)| stats))
             .chain(active.accumulator.tool_stats.iter().map(|(_, stats)| stats))
         {
-            let Some(evidence) = stats.expected_economics.as_ref() else {
-                if stats.shots_fired > 0 && stats.cost_per_shot.is_positive() {
-                    expected_evidence
-                        .components
-                        .push(OffensiveComponentEvidence {
-                            kind: OffensiveComponentKind::Weapon,
-                            catalog_id: None,
-                            name: stats.tool_name.clone(),
-                            efficiency_pct: None,
-                            raw_tt_per_use: stats.cost_per_shot.value() * stats.shots_fired as f64,
-                            consumed_premium_per_use: 0.0,
-                        });
-                }
-                continue;
-            };
-            for component in &evidence.components {
-                let mut component = component.clone();
-                component.raw_tt_per_use *= stats.shots_fired.max(0) as f64;
-                component.consumed_premium_per_use *= stats.shots_fired.max(0) as f64;
-                expected_evidence.components.push(component);
-            }
+            phases.add(
+                stats.expected_economics.as_ref(),
+                &stats.tool_name,
+                stats.cost_per_shot.value(),
+                stats.shots_fired,
+            );
         }
+        let transferred_tt = phases.transferred_tt;
+        let expected_evidence = OffensiveLoadoutEvidence {
+            components: phases.components,
+            looters: active.hunting_looters,
+            looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
+        };
         let expected_result = (!expected_evidence.components.is_empty())
             .then(|| evaluate_expected_hunting(&expected_evidence).ok())
             .flatten();
@@ -292,7 +432,46 @@ impl TrackerActor {
         let harvest_cost: Ped = harvests.iter().map(|harvest| harvest.cost_ped).sum();
         let harvest_loot: Ped = harvests.iter().map(|harvest| harvest.loot_total_ped).sum();
 
-        let cost = weapon_cost + heal_cost + enhancer_cost + harvest_cost;
+        let tracked_cost =
+            weapon_cost + heal_cost + consumable_cost + enhancer_cost + harvest_cost + armour_cost;
+        // Where the account readings measured the session so far, its
+        // buckets are that and the tracked events since; the rest, and
+        // every figure while nothing is measured, stay tracked exactly.
+        let tracked = crate::session_costs::BucketCosts {
+            weapon: weapon_cost.value(),
+            enhancer: enhancer_cost.value(),
+            armour: armour_cost.value(),
+            heal: heal_cost.value(),
+            consumable: consumable_cost.value(),
+            dangling: 0.0,
+            harvest: harvest_cost.value(),
+        };
+        let so_far = active.measured_so_far.as_ref();
+        let after = so_far
+            .map(|so_far| super::cycled::tracked_after(active, so_far.through))
+            .unwrap_or_default();
+        let live = crate::session_costs::live(so_far, &tracked, &after);
+        let measured = live
+            .measured_through
+            .map(|through| (Ped(live.overhead.total()), through));
+        let tracked_armour = armour_cost;
+        let (cost, armour_cost) = match measured {
+            Some(_) => (Ped(live.cycled.cycled()), Ped(live.cycled.armour)),
+            None => (tracked_cost, tracked_armour),
+        };
+        let cycled_breakdown = super::cycled::cycled_breakdown(
+            active,
+            super::cycled::weapon_lines(active),
+            enhancer_cost,
+            &live,
+        );
+        // Expected figures keep their tracked inputs.
+        let expected_cycle = super::cycled::live_expectation(
+            active,
+            &expected_evidence,
+            transferred_tt,
+            tracked_cost,
+        );
         let returns: Ped = kills.iter().map(|kill| kill.loot_total_ped).sum::<Ped>() + harvest_loot;
 
         let damage_total: f64 = kills.iter().map(|kill| kill.damage_dealt).sum();
@@ -300,23 +479,22 @@ impl TrackerActor {
 
         // Multipliers use kill.cost_ped (weapon cost only) per EU
         // convention; a ratio of two PED amounts is dimensionless.
-        let mult_per_kill: Vec<f64> = kills
+        let mult_per_kill: Vec<f64> = counted
             .iter()
             .filter(|kill| kill.cost_ped.is_positive())
             .map(|kill| kill.loot_total_ped / kill.cost_ped)
             .collect();
-        let multiplier_avg = if mult_per_kill.is_empty() {
-            None
-        } else {
-            Some(mult_per_kill.iter().sum::<f64>() / mult_per_kill.len() as f64)
-        };
+        let multiplier_sum = mult_per_kill.iter().sum::<f64>();
+        let multiplier_count = mult_per_kill.len() as i64;
+        let multiplier_avg =
+            (multiplier_count > 0).then(|| multiplier_sum / multiplier_count as f64);
         let multiplier_max = mult_per_kill
             .iter()
             .copied()
             .fold(None, |acc: Option<f64>, value| {
                 Some(acc.map_or(value, |best| best.max(value)))
             });
-        let multiplier_last = kills
+        let multiplier_last = counted
             .last()
             .filter(|kill| kill.cost_ped.is_positive())
             .map(|kill| kill.loot_total_ped / kill.cost_ped);
@@ -330,11 +508,18 @@ impl TrackerActor {
 
         // Cumulative-net history (per kill and per harvesting swing,
         // merged in timestamp order), distributing the session-level
-        // heal cost pro-rata across kills by their weapon-cost share
-        // so the curve's final point reconciles with the displayed
+        // heal, dose, and armour costs pro-rata across kills by their weapon-cost
+        // share so the curve's final point reconciles with the displayed
         // Net stat (returns - cost). Harvest swings carry their own
         // exact per-event net (wood TT minus swing decay), so they
-        // take no heal share.
+        // take no share.
+        // What the measured costs move beyond the tracked ones (overhead
+        // included) is shared the same way, so the curve still ends at Net.
+        let measured_shift = match measured {
+            Some((overhead, _)) => cost + overhead - tracked_cost,
+            None => Ped::ZERO,
+        };
+        let shared_cost = heal_cost + consumable_cost + tracked_armour + measured_shift;
         let per_kill_weapon: Vec<Ped> = kills
             .iter()
             .map(|kill| {
@@ -348,7 +533,7 @@ impl TrackerActor {
         let mut net_events: Vec<(f64, Ped)> = Vec::with_capacity(kills.len() + harvests.len());
         for (kill, weapon) in kills.iter().zip(per_kill_weapon.iter()) {
             let heal_share = if total_weapon.is_positive() {
-                heal_cost * (*weapon / total_weapon)
+                shared_cost * (*weapon / total_weapon)
             } else {
                 Ped::ZERO
             };
@@ -411,36 +596,41 @@ impl TrackerActor {
             session_id: active.session.id.clone(),
             started_at: local_isoformat(active.session.start_time),
             elapsed: (now - start_ts) as i64,
-            kill_count: kills.len() as i64,
+            kill_count: counted.len() as i64,
             cost,
             returns,
             damage_total,
             shots_total: kills.iter().map(|kill| kill.shots_fired).sum(),
             crits_total: kills.iter().map(|kill| kill.critical_hits).sum(),
-            max_damage: kills
+            max_damage: counted
                 .iter()
                 .map(|kill| kill.damage_dealt)
                 .fold(0.0, f64::max),
             live_weapon_damage,
             weapon_cost,
+            armour_cost,
+            cycled_breakdown,
+            measured,
+            expected_cycle,
             expected_tt_rate: expected_result
                 .as_ref()
                 .and_then(|result| result.expected_tt_rate),
             expected_return_coverage: expected_result.as_ref().map(|result| result.coverage),
             expected_return_model: expected_result.map(|result| result.model_version),
-            globals_count: kills.iter().filter(|kill| kill.is_global).count() as i64,
-            hofs_count: kills.iter().filter(|kill| kill.is_hof).count() as i64,
-            latest_kill_loot: kills.last().map(|kill| kill.loot_total_ped),
+            globals_count: counted.iter().filter(|kill| kill.is_global).count() as i64,
+            hofs_count: counted.iter().filter(|kill| kill.is_hof).count() as i64,
+            latest_kill_loot: counted.last().map(|kill| kill.loot_total_ped),
             multiplier_last,
             multiplier_avg,
             multiplier_max,
+            multiplier_sum,
+            multiplier_count,
             multiplier_history,
             cumulative_net,
-            mob_name: active.stamped_mob_name().map(str::to_string),
+            mob_source: active.mob_source_view(self.reading_screen()),
             session_name: active.facets.name.clone(),
             definition_id: active.facets.definition_id,
             track_protection_costs: active.facets.track_protection_costs,
-            track_protection_by_segment: active.facets.track_protection_by_segment,
             // Read from the interval state, not the row mirror: the row's
             // scalar cannot hold a declared zero (0019's `> 0 OR NULL`),
             // and the readout is what the overlay renders the facet from.
@@ -457,6 +647,13 @@ impl TrackerActor {
             harvest_loot,
             harvest_cost,
             guardrail_mismatch: active.guardrail_mismatch.clone(),
+            weapon_mismatch: active.weapons.attribution.mismatch().cloned(),
+            unpriced_shots: active.weapons.attribution.counts().unresolved,
+            unpriced_cost_bound: active.unpriced_cost_bound,
+            unpriced_no_fit: active.unpriced_no_fit,
+            weapon_declared: active.weapons.attribution.declared().is_some(),
+            weapon_hit_cue: active.weapons.attribution.hit_cue(),
+            keyless: active.facets.input_mode == InputMode::Keyless,
             warnings: active.warnings.clone(),
             healing: HealingRuntimeView {
                 tool_name,
@@ -473,19 +670,18 @@ impl TrackerActor {
         (current_tool, current_tool_kind, Some(aggregate))
     }
 
-    /// Prime the tracker with a fully-formed demo session, bypassing
-    /// the normal `start_session` lifecycle (no handlers subscribe,
-    /// nothing persists). It exists solely for guide-mode demo playback
-    /// over a throwaway database and must never run on the live
-    /// tracker.
-    pub(super) fn prime_demo(
+    /// Test-only: stand up an active session directly, bypassing the
+    /// normal `start_session` lifecycle (no handlers subscribe, nothing
+    /// persists), so a handler can be exercised on the actor alone.
+    #[cfg(test)]
+    pub(super) fn prime_session(
         &mut self,
         session: TrackingSession,
         declared_mob: Option<DeclaredMob>,
         facets: SessionFacets,
     ) {
         let mut active = ActiveSession::new(session, facets);
-        active.declared_mob = declared_mob;
+        active.mob.typed = declared_mob;
         self.session = SessionState::Active(Box::new(active));
         self.publish_status();
     }
@@ -695,43 +891,29 @@ impl TrackerActor {
         Ok(active_activities(active))
     }
 
-    /// Refresh trifecta-attribution state after config changes. The
-    /// providers may read the database; the actor simply runs them
-    /// inline (nothing else can touch its state meanwhile).
+    /// Refresh the config-derived tracker state after a settings change:
+    /// the carried weapons (a regime in progress carries on over the new
+    /// set), the harvest guardrail, and the loot filter. The providers may
+    /// read the database; the actor simply runs them inline (nothing else
+    /// can touch its state meanwhile).
     pub(super) fn reload_config(&mut self) {
-        let trifecta_mode = self.providers.config.weapon_attribution_trifecta();
-        let trifecta = if trifecta_mode {
-            self.providers.equipment.resolve_trifecta()
-        } else {
-            None
-        };
         self.harvest_guardrail = self.providers.equipment.resolve_harvest_guardrail();
         self.refresh_loot_filter();
         let Self {
-            session,
-            heal_tool,
-            providers,
-            ..
+            session, providers, ..
         } = self;
         let Some(active) = session.active_mut() else {
             return;
         };
-        if trifecta_mode {
-            Self::load_trifecta_weapon_profiles(active, heal_tool, trifecta.as_ref());
-        } else {
-            active.weapons.attributor.clear();
-            *heal_tool = HealTool::default();
-            active.heal_warning_emitted = false;
-            active.weapons.reset_runtime();
-        }
+        active.weapons.load_carried(Self::carried_set(providers));
 
-        // Sync the declared mob with the live config (the declare and
+        // Sync the typed creature with the live config (the declare and
         // release commands write the config first, so this also covers
-        // a settings-page edit landing mid-session).
-        active.declared_mob = providers
-            .config
-            .manual_mob()
-            .map(|(species, maturity)| DeclaredMob::from_parts(species, maturity));
+        // a settings-page edit landing mid-session). A pin is the
+        // session's own and stands.
+        active.mob.typed = providers.config.manual_mob().map(|(species, maturity)| {
+            DeclaredMob::labelled(species, maturity, &providers.mob_names)
+        });
     }
 
     /// Start a new tracking session; any prior session stops first, so
@@ -740,6 +922,9 @@ impl TrackerActor {
         if self.session.active().is_some() {
             self.stop_session().await?;
         }
+        // No dose carries into the session: whatever effect the player
+        // still has from before, they declare on the overlay.
+        self.settle_stray_doses().await;
 
         // Snapshot the session facets from the live config: the name
         // (trimmed; empty is "not declared") and the skill boost (zero
@@ -779,32 +964,22 @@ impl TrackerActor {
             crate::session_definitions::resolve_selection(&self.db, configured_selection).await?;
         let track_protection_costs = resolved
             .as_ref()
-            .is_none_or(|(_, _, track_costs, _)| *track_costs);
-        let track_protection_by_segment = track_protection_costs
-            && resolved
-                .as_ref()
-                .is_some_and(|(_, _, _, track_by_segment)| *track_by_segment);
-        let protection = if track_protection_by_segment {
-            active_selection(&self.db).await?
-        } else {
-            None
-        };
+            .is_none_or(|(_, _, track_costs)| *track_costs);
         let facets = SessionFacets {
             name: Some(configured_name)
                 .filter(|name| !name.is_empty())
-                .or_else(|| resolved.as_ref().map(|(_, name, _, _)| name.clone())),
-            definition_id: resolved.as_ref().map(|(id, _, _, _)| *id),
+                .or_else(|| resolved.as_ref().map(|(_, name, _)| name.clone())),
+            definition_id: resolved.as_ref().map(|(id, _, _)| *id),
             track_protection_costs,
-            track_protection_by_segment,
             skill_boost_percent: declared_boost.filter(|percent| *percent > 0),
+            input_mode: if self.providers.config.keyless_input() {
+                InputMode::Keyless
+            } else {
+                InputMode::Keys
+            },
         };
         let session_id = uuid::Uuid::new_v4().to_string();
-        let trifecta_mode = self.providers.config.weapon_attribution_trifecta();
-        let trifecta = if trifecta_mode {
-            self.providers.equipment.resolve_trifecta()
-        } else {
-            None
-        };
+        let carried = Self::carried_set(&self.providers);
         self.harvest_guardrail = self.providers.equipment.resolve_harvest_guardrail();
 
         self.refresh_loot_filter();
@@ -833,15 +1008,19 @@ impl TrackerActor {
         let insert_definition = facets.definition_id;
         let insert_boost = facets.skill_boost_percent;
         let insert_track_protection_costs = facets.track_protection_costs;
-        let insert_track_protection = facets.track_protection_by_segment;
+        let insert_input_mode = facets.input_mode.as_str();
         let opening_boost = declared_boost;
         self.db
             .with_writer(move |conn| {
                 conn.execute(
                     "INSERT INTO tracking_sessions \
                      (id, started_at, is_active, session_name, definition_id, \
-                      skill_boost_percent, track_protection_costs, track_protection_by_segment) \
-                     VALUES (?, ?, 1, ?, ?, ?, ?, ?)",
+                      skill_boost_percent, track_protection_costs, track_protection_by_segment, \
+                      input_mode) \
+                     VALUES (?, ?, 1, ?, ?, ?, ?, 0, ?)",
+                    // The per-segment armour flag is retired: protection
+                    // costs are spread by hits at recording time, so every
+                    // new session records 0 for it.
                     rusqlite::params![
                         insert_id,
                         start_ts,
@@ -849,7 +1028,7 @@ impl TrackerActor {
                         insert_definition,
                         insert_boost,
                         insert_track_protection_costs as i64,
-                        insert_track_protection as i64,
+                        insert_input_mode,
                     ],
                 )?;
                 Ok(())
@@ -858,28 +1037,63 @@ impl TrackerActor {
 
         // The fresh ActiveSession IS the session reset: every
         // session-scoped field starts at its documented initial
-        // state by construction. (The equipped heal tool
-        // deliberately persists; it lives outside the typestate.)
+        // state by construction.
+        let keyless = facets.input_mode == InputMode::Keyless;
+        // Reading the tool off the screen, the first look declares it: the
+        // tool held before the start is not carried in, nor is the healer
+        // declared before it.
+        let reads_tool = self.session_reads_tool();
         let mut active = ActiveSession::new(session.clone(), facets);
+        if keyless {
+            active.healing.keyless = true;
+            if !reads_tool {
+                active.healing.declared_healer = self.declared_healer.clone();
+            }
+        }
         active.hunting_looters = self.providers.equipment.hunting_looter_levels();
-
-        if trifecta_mode {
-            Self::load_trifecta_weapon_profiles(
-                &mut active,
-                &mut self.heal_tool,
-                trifecta.as_ref(),
-            );
+        active.weapons.load_carried(carried);
+        // The carried weapons were prepared under the reload speed in
+        // effect; shots and heals are stamped with it.
+        active.reload_speed_percent = self.reload_speed_at(start_ts);
+        // The hand outlives the session: a weapon pressed before this start
+        // is still the one in hand unless the player switched while the
+        // hotbar was unobserved, and the overlay keeps showing it. Declare
+        // it from the start, as its press would have, so a hit several
+        // carried bands explain prices to it rather than to nothing, and
+        // damage that contradicts it raises the weapon cue.
+        if reads_tool {
+            self.held_item = None;
+        }
+        if let Some((weapon, HotbarItemKind::Weapon)) = &self.held_item {
+            active.weapons.attribution.declare(weapon, start_ts);
+            Self::current_cost_for_tool(&self.providers, &mut active.weapons, weapon, Ped::ZERO);
+            tracing::info!(target: "eo::tracker", "weapon declared at session start from the held weapon");
         }
 
-        // Seed the declared mob from the configured declaration, when
+        // Seed the typed creature from the configured declaration, when
         // one is set (the same seeding the declare command performs).
         if let Some((species, maturity)) = self.providers.config.manual_mob() {
-            active.declared_mob = Some(DeclaredMob::from_parts(species, maturity));
+            active.mob.typed = Some(DeclaredMob::labelled(
+                species,
+                maturity,
+                &self.providers.mob_names,
+            ));
         }
 
         self.session = SessionState::Active(Box::new(active));
+        // A heal-over-time effect paid for before this session (in the
+        // previous session, or before a restart) keeps running in the game:
+        // its window carries over by its absolute expiry.
+        self.restore_persisted_healing(start_ts).await;
+        // Likewise a damage-over-time effect: its ticks stay outcomes of the
+        // paid hit that started it.
+        self.restore_persisted_weapon_effects(start_ts).await;
         self.subscribe_handlers();
         self.publish_status();
+        self.start_detection();
+        self.start_tool_reading().await;
+        // The session's start tells the readouts; this only notes it.
+        self.reading_changed();
 
         self.bus
             .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
@@ -914,20 +1128,6 @@ impl TrackerActor {
                             )
                             .await;
                     }
-                    if let Some(selection) = protection {
-                        let _ = active
-                            .intervals
-                            .open_interval(
-                                &db,
-                                &session_id,
-                                start_ts,
-                                IntervalSpec::new(IntervalKind::Protection)
-                                    .label(Some(selection.loadout_name.clone()))
-                                    .ref_id(Some(selection.loadout_id))
-                                    .protection(selection, false),
-                            )
-                            .await;
-                    }
                 }
             }
         }
@@ -940,148 +1140,53 @@ impl TrackerActor {
         Ok(session)
     }
 
-    /// Adopt one protection loadout from this point onward. This is an
-    /// intent boundary: the interval transition mints the context future
-    /// defensive evidence stamps, and never reaches back into prior play.
-    pub(super) async fn set_protection(
-        &mut self,
-        selection: ProtectionSelection,
-    ) -> Result<(), TrackerCommandError> {
-        let Some(active) = self.session.active_mut() else {
-            return Err(TrackerCommandError::NoActiveSession);
-        };
-        if !active.facets.track_protection_by_segment {
-            return Err(TrackerCommandError::ProtectionBySegmentDisabled);
-        }
-        let now = instant_to_epoch(resolve_local(self.clock.now()));
-        let session_id = active.session.id.clone();
-        active
-            .intervals
-            .open_interval(
-                &self.db,
-                &session_id,
-                now,
-                IntervalSpec::new(IntervalKind::Protection)
-                    .label(Some(selection.loadout_name.clone()))
-                    .ref_id(Some(selection.loadout_id))
-                    .protection(selection, true),
-            )
-            .await
-            .map_err(|error| {
-                tracing::error!(target: "eo::tracker", %error, "protection selection failed");
-                TrackerCommandError::Persistence
-            })?;
-        active.dirty = true;
-        self.emit_session_event(
-            TrackingReason::Updated,
-            TrackingStatus::Active,
-            now,
-            Some(&session_id),
-        );
-        Ok(())
-    }
-
-    /// Declare the one setup worn for the whole of the running session.
-    ///
-    /// A session that opted out of per-segment attribution still needs
-    /// to say what it was wearing, and waiting for the session to end
-    /// to ask made recording armour cost a post-session ceremony rather
-    /// than something done as part of the session. The declaration
-    /// carries identity only: allocation for such a session collapses
-    /// every context to session grain regardless of how many protection
-    /// intervals stand, so opening one here cannot smuggle in the
-    /// per-segment attribution the user opted out of.
-    ///
-    /// Whether the declaration reaches backwards is decided by what has
-    /// already been paid for. With nothing settled, the user is naming
-    /// what they have been wearing all along and the session's recorded
-    /// hits are adopted, which is also how a mistaken declaration is
-    /// corrected. Once a cost has settled, the hits it paid for belong
-    /// to the setup that was declared then, so a new declaration takes
-    /// effect from now and the next recording covers only what follows.
-    pub(super) async fn declare_whole_session_protection(
-        &mut self,
-        for_session: &str,
-        selection: ProtectionSelection,
-    ) -> Result<(), TrackerCommandError> {
-        let Some(active) = self.session.active_mut() else {
-            return Err(TrackerCommandError::NoActiveSession);
-        };
-        if active.session.id != for_session {
-            return Err(TrackerCommandError::SessionNoLongerActive);
-        }
-        if !active.facets.track_protection_costs {
-            return Err(TrackerCommandError::ProtectionCostsDisabled);
-        }
-        if active.facets.track_protection_by_segment {
-            return Err(TrackerCommandError::ProtectionBySegmentEnabled);
-        }
-        let session_id = active.session.id.clone();
-        let standing = active
-            .intervals
-            .open_of_kind(super::IntervalKind::Protection)
-            .and_then(|interval| interval.ref_id);
-        if standing == Some(selection.loadout_id) {
-            return Ok(());
-        }
-
-        let settled_session = session_id.clone();
-        let settled = self
-            .db
-            .with_reader(move |conn| {
-                Ok(conn.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM protection_cost_evidence ce \
-                     JOIN protection_defence_events d ON d.id = ce.defence_event_id \
-                     WHERE d.session_id = ?1)",
-                    rusqlite::params![settled_session],
-                    |row| row.get::<_, i64>(0),
-                )? != 0)
-            })
-            .await
-            .map_err(|error| {
-                tracing::error!(target: "eo::tracker", %error, "settled armour evidence read failed");
-                TrackerCommandError::Persistence
-            })?;
-
-        let now = instant_to_epoch(resolve_local(self.clock.now()));
-        let Some(active) = self.session.active_mut() else {
-            return Err(TrackerCommandError::NoActiveSession);
-        };
-        let mut spec = IntervalSpec::new(super::IntervalKind::Protection)
-            .label(Some(selection.loadout_name.clone()))
-            .ref_id(Some(selection.loadout_id))
-            .protection(selection, true);
-        if !settled {
-            spec = spec.adopting_unsettled_defence();
-        }
-        active
-            .intervals
-            .open_interval(&self.db, &session_id, now, spec)
-            .await
-            .map_err(|error| {
-                tracing::error!(target: "eo::tracker", %error, "whole-session armour declaration failed");
-                TrackerCommandError::Persistence
-            })?;
-        active.dirty = true;
-        self.emit_session_event(
-            TrackingReason::Updated,
-            TrackingStatus::Active,
-            now,
-            Some(&session_id),
-        );
-        Ok(())
-    }
-
     /// Stop the active session: dangling cost, the handler
     /// unsubscribes and the end stamp; then persistence, ledger gains,
     /// summary, and the stop events; then the in-memory clear
     /// (dropping the whole `ActiveSession`).
     pub(super) async fn stop_session(&mut self) -> Result<Option<TrackingSession>, DbError> {
-        let (session, session_id, end_time, heal_cost, dangling_cost, session_name, session_boost) = {
+        // The kills still waiting on detection are answered before anything
+        // below sums the session's kills; the watcher itself stops only once
+        // the stop has committed, so a stop that fails leaves the session
+        // fully live, still watching.
+        // A tool still unseen is settled in memory first, so the sums below
+        // see it; its write goes in the stop's transaction, and a stop that
+        // fails puts it back.
+        let mut settlement = None;
+        if self.session.active().is_some() {
+            self.answer_waiting_kills().await;
+            settlement = self.prepare_stop_settlement().await;
+        }
+        let (
+            session,
+            session_id,
+            end_time,
+            heal_cost,
+            dangling_cost,
+            session_name,
+            session_boost,
+            dangling_evidence,
+            dangling_breaks,
+            attribution_counts,
+        ) = {
             let Some(active) = self.session.active_mut() else {
                 return Ok(None);
             };
-            let dangling_cost = active.accumulator.total_cost();
+            // The shots after the last kill are the session's dangling
+            // cost; the enhancer breaks after it stay enhancer cost, carried
+            // by the session itself.
+            let dangling_cost = active.accumulator.weapon_cost();
+            // Evidence of the shots after the last kill settles with the
+            // session's dangling cost.
+            let dangling_evidence = active.accumulator.evidence.clone();
+            // The breaks after the last kill, the Shrapnel returned for
+            // breaks that no kill has kept yet, and the kill to keep it.
+            let dangling_breaks = (
+                active.accumulator.breaks.clone(),
+                active.accumulator.returns.clone(),
+                active.session.kills.last().map(|kill| kill.id.clone()),
+            );
+            let attribution_counts = active.weapons.attribution.counts();
             active.session.end_time = Some(resolve_local(self.clock.now()));
             active.session.dangling_cost = dangling_cost;
             let snapshot = active.session.clone();
@@ -1098,6 +1203,9 @@ impl TrackerActor {
                 dangling_cost,
                 session_name,
                 session_boost,
+                dangling_evidence,
+                dangling_breaks,
+                attribution_counts,
             )
         };
         // Close every still-open interval before the session record is
@@ -1122,27 +1230,75 @@ impl TrackerActor {
         let end_epoch = instant_to_epoch(end_time);
         let heal_value = heal_cost.value();
         let dangling_value = dangling_cost.value();
-        self.db
+        let (settled, restore) = match settlement {
+            Some(settlement) => (
+                Some(settlement.moved),
+                Some((settlement.backup, settlement.hold, settlement.unsettled)),
+            ),
+            None => (None, None),
+        };
+        let enhancer_tt = self.providers.enhancer_tt.clone();
+        let stopped = self
+            .db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
+                if let Some(moved) = &settled {
+                    super::weapon_evidence::write_moved(&tx, moved, None)?;
+                }
                 // Both facets re-land from memory at stop, so a contained
                 // failure of a mid-session write cannot strand the summary
                 // on a stale row.
                 tx.execute(
                     "UPDATE tracking_sessions SET ended_at = ?, is_active = 0, \
                      heal_cost = ?, dangling_cost = ?, session_name = ?, \
-                     skill_boost_percent = ? WHERE id = ?",
+                     skill_boost_percent = ?, weapon_shots_agreed = ?, \
+                     weapon_shots_evidenced = ? WHERE id = ?",
                     rusqlite::params![
                         end_epoch,
                         heal_value,
                         dangling_value,
                         session_name,
                         session_boost,
+                        attribution_counts.agreed,
+                        attribution_counts.evidenced,
                         sid
                     ],
                 )?;
-                // Enhancer-break Shrapnel is an immediate cost rebate. Ordinary
-                // Shrapnel remains stock until the player explicitly converts it.
+                for row in &dangling_evidence {
+                    row.insert(&tx, None)?;
+                }
+                let (dangling_breaks, waiting_returns, last_kill) = &dangling_breaks;
+                for enhancer_break in dangling_breaks {
+                    enhancer_break.insert(&tx, None)?;
+                }
+                // Shrapnel returned after the last kill is kept among that
+                // kill's lines, tagged, so never its loot.
+                if let Some(kill_id) = last_kill {
+                    for item in waiting_returns {
+                        tx.execute(
+                            "INSERT INTO kill_loot_items \
+                             (kill_id, item_name, quantity, value_ped, is_enhancer_shrapnel) \
+                             VALUES (?, ?, ?, ?, 1)",
+                            rusqlite::params![
+                                kill_id,
+                                item.item_name,
+                                item.quantity,
+                                item.value_ped
+                            ],
+                        )?;
+                    }
+                }
+                // A dose's effect ends with the session it was taken in.
+                crate::consumables::end_session_doses(&tx, &sid, end_epoch)?;
+                // Every kept break is priced from its inputs, its return
+                // settled against the Shrapnel tagged as returns, before the
+                // rebate takes what no kept break claims.
+                let markups = crate::enhancer_breaks::TierMarkups::read(&tx)?;
+                let tt = |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
+                crate::enhancer_breaks::reprice_session(&tx, &sid, &tt, &markups)?;
+                // Enhancer-break Shrapnel no kept break claims is an immediate
+                // cost rebate. Ordinary Shrapnel remains stock until the player
+                // explicitly converts it.
                 Self::create_enhancer_rebate_ledger_entry(&tx, &sid, end_time)?;
                 crate::session_summary::write_session_summary(&tx, &sid)?;
                 crate::daily_rollup::refresh_session_days(&tx, &sid)?;
@@ -1150,8 +1306,26 @@ impl TrackerActor {
                 tx.commit()?;
                 Ok(())
             })
-            .await?;
+            .await;
+        match (stopped, restore) {
+            (Err(error), Some((backup, hold, unsettled))) => {
+                self.restore_stop_settlement(backup, hold, unsettled);
+                return Err(error);
+            }
+            (Err(error), None) => return Err(error),
+            // Saved: the settlement stands.
+            (Ok(()), Some((backup, _, _))) => {
+                if let Some(active) = self.session.active_mut() {
+                    backup.commit(active);
+                }
+            }
+            (Ok(()), None) => {}
+        }
         self.unsubscribe_handlers();
+        self.drop_detection();
+        self.drop_tool_reading();
+        // The watchers have stopped: their last minutes are finished.
+        self.keep_look_minutes().await;
 
         // Session end is a quiescent boundary: checkpoint and truncate the WAL
         // so its growth over a tracked session is bounded. Best-effort: the
@@ -1188,6 +1362,8 @@ impl TrackerActor {
         // equipped heal tool deliberately does.)
         self.session = SessionState::Idle;
         self.publish_status();
+        self.doses_ended_with_session(&session_id, instant_to_epoch(end_time))
+            .await;
         Ok(Some(session))
     }
 
@@ -1240,7 +1416,30 @@ impl HuntTracker {
     /// the actor; the two session-scoped reads (skill-gain total,
     /// notable-event feed) run here, keyed on the captured session id.
     pub async fn snapshot(&self) -> Result<TrackingReadout, DbError> {
-        let (current_tool, current_tool_kind, aggregate) = self.aggregate().await;
+        let aggregate = self.aggregate().await;
+        self.readout(aggregate).await
+    }
+
+    /// [`Self::snapshot`] with where the tool in hand comes from, both read
+    /// in one turn of the tracker so they describe the same moment.
+    pub async fn snapshot_with_tool(
+        &self,
+    ) -> Result<(TrackingReadout, super::held_tool::ToolDisplay), DbError> {
+        let (aggregate, display) = self
+            .call(|reply| super::actor::TrackerMsg::AggregateWithTool(Box::new(reply)))
+            .await;
+        Ok((self.readout(aggregate).await?, display))
+    }
+
+    /// The readout over the actor's in-memory half.
+    async fn readout(
+        &self,
+        (current_tool, current_tool_kind, aggregate): (
+            Option<String>,
+            Option<crate::bus_events::HotbarItemKind>,
+            Option<SessionAggregate>,
+        ),
+    ) -> Result<TrackingReadout, DbError> {
         let Some(aggregated) = aggregate else {
             return Ok(TrackingReadout {
                 current_tool,
@@ -1295,9 +1494,14 @@ impl HuntTracker {
             cost: aggregated.cost.round_half_even(2).value(),
             returns: aggregated.returns.round_half_even(2).value(),
             pes: round_half_even(skill_tt, 2),
-            net: (aggregated.returns - aggregated.cost)
-                .round_half_even(2)
-                .value(),
+            // The overhead the readings measured is in Net, never in Cycled.
+            net: (aggregated.returns
+                - aggregated.cost
+                - aggregated
+                    .measured
+                    .map_or(Ped::ZERO, |(overhead, _)| overhead))
+            .round_half_even(2)
+            .value(),
             return_rate: if aggregated.cost.is_positive() {
                 round_half_even(aggregated.returns / aggregated.cost, 4)
             } else {
@@ -1306,6 +1510,13 @@ impl HuntTracker {
             damage_dealt_total: round_half_even(aggregated.damage_total, 1),
             weapon_damage_dealt: round_half_even(aggregated.live_weapon_damage, 1),
             weapon_cost: aggregated.weapon_cost.round_half_even(6).value(),
+            armour_cost: aggregated.armour_cost.round_half_even(4).value() + 0.0,
+            cycled_breakdown: aggregated.cycled_breakdown,
+            overhead_cost: aggregated
+                .measured
+                .map(|(overhead, _)| overhead.round_half_even(4).value() + 0.0),
+            costs_measured_through: aggregated.measured.map(|(_, through)| through),
+            expected_cycle: aggregated.expected_cycle,
             expected_tt_rate: aggregated.expected_tt_rate,
             expected_return_coverage: aggregated.expected_return_coverage,
             expected_return_model: aggregated.expected_return_model,
@@ -1320,13 +1531,14 @@ impl HuntTracker {
             multiplier_last: round_opt(aggregated.multiplier_last, 4),
             multiplier_avg: round_opt(aggregated.multiplier_avg, 4),
             multiplier_max: round_opt(aggregated.multiplier_max, 4),
+            multiplier_sum: aggregated.multiplier_sum,
+            multiplier_count: aggregated.multiplier_count,
             multiplier_history: aggregated.multiplier_history,
             cumulative_net_history: aggregated.cumulative_net,
-            current_mob: aggregated.mob_name.clone(),
+            mob_source: aggregated.mob_source.clone(),
             session_name: aggregated.session_name.clone(),
             definition_id: aggregated.definition_id,
             track_protection_costs: aggregated.track_protection_costs,
-            track_protection_by_segment: aggregated.track_protection_by_segment,
             skill_boost_percent: aggregated.skill_boost_percent,
             active_activities: aggregated.active_activities.clone(),
             harvest_swings: aggregated.harvest_swings,
@@ -1344,6 +1556,20 @@ impl HuntTracker {
                     at_epoch: mismatch.at_epoch,
                 }
             }),
+            weapon_guardrail_mismatch: aggregated.weapon_mismatch.map(|mismatch| {
+                WeaponGuardrailMismatchView {
+                    hotbar_tool: mismatch.declared,
+                    recording_tool: mismatch.evidence,
+                    since: mismatch.since,
+                    shots: mismatch.shots,
+                }
+            }),
+            unpriced_shots: aggregated.unpriced_shots,
+            unpriced_cost_bound: aggregated.unpriced_cost_bound.value(),
+            unpriced_no_fit: aggregated.unpriced_no_fit,
+            weapon_declared: aggregated.weapon_declared,
+            weapon_hit_cue: aggregated.weapon_hit_cue,
+            keyless: aggregated.keyless,
             notable_event_rows: notable_rows,
             warnings: aggregated.warnings,
             healing: aggregated.healing,

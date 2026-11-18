@@ -10,7 +10,7 @@ function definition(overrides: Partial<SessionDefinition> = {}): SessionDefiniti
 		name: 'ARIS Dailies',
 		adHocSegments: false,
 		trackProtectionCosts: true,
-		trackProtectionBySegment: true,
+		questPlanet: null,
 		isProtected: false,
 		isActive: true,
 		instanceCount: 0,
@@ -32,6 +32,8 @@ function family(id: string, name: string): QuestFamily {
 		memberCount: 0,
 		lastStartedAt: null,
 		lastCompletedAt: null,
+		curated: false,
+		catalogueKey: null,
 	};
 }
 
@@ -65,6 +67,10 @@ function quest(overrides: Partial<Quest> = {}): Quest {
 		familyCooldownAnchor: null,
 		familyCooldownExpiresAt: null,
 		rewardUndoAvailable: false,
+		curated: false,
+		catalogueKey: null,
+		lastAbandonedAt: null,
+		lastCompletedAt: null,
 		...overrides,
 	};
 }
@@ -165,7 +171,7 @@ describe('createDefinitionsModel', () => {
 			name: 'General Hunting',
 			ad_hoc_segments: false,
 			track_protection_costs: true,
-			track_protection_by_segment: false,
+			quest_planet: null,
 			roster: [{ kind: 'quest', ref_id: 9, label: null }],
 		});
 		expect(deps.selectDefinition).toHaveBeenCalledWith(7);
@@ -211,45 +217,56 @@ describe('createDefinitionsModel', () => {
 			name: 'ARIS Dailies',
 			ad_hoc_segments: false,
 			track_protection_costs: true,
-			track_protection_by_segment: true,
+			quest_planet: null,
 			roster: [{ kind: 'segment', ref_id: null, label: 'Grind' }],
 		});
 	});
 
-	it('defaults new definitions to armour costs without segment attribution', () => {
+	it('keeps the planet a session follows, and lists only its segments', async () => {
+		const deps = makeDeps();
+		const model = createDefinitionsModel(deps);
+		model.openEdit(
+			definition({
+				id: '2',
+				questPlanet: 'ARIS',
+				roster: [
+					{ id: '1', kind: 'quest', refId: '7', label: null, displayName: 'Old pick' },
+					{ id: '2', kind: 'segment', refId: null, label: 'Grind', displayName: 'Grind' },
+				],
+			}),
+		);
+		expect(model.questPlanet).toBe('ARIS');
+		expect(model.visibleRoster.map((entry) => entry.displayName)).toEqual(['Grind']);
+		expect(await model.save()).toBe(true);
+		expect(deps.updateDefinition).toHaveBeenCalledWith(
+			'2',
+			expect.objectContaining({
+				quest_planet: 'ARIS',
+				roster: [
+					{ kind: 'quest', ref_id: 7, label: null },
+					{ kind: 'segment', ref_id: null, label: 'Grind' },
+				],
+			}),
+		);
+	});
+
+	it('defaults new definitions to recording armour hits', () => {
 		const model = createDefinitionsModel(makeDeps());
 		model.openCreate();
 
 		expect(model.trackProtectionCosts).toBe(true);
-		expect(model.trackProtectionBySegment).toBe(false);
 	});
 
-	it('persists the whole-session armour policy on a definition', async () => {
+	it('persists an armour-cost opt-out on a definition', async () => {
 		const deps = makeDeps();
 		const model = createDefinitionsModel(deps);
-		model.openEdit(definition({ id: '2', trackProtectionBySegment: false }));
-		expect(model.trackProtectionBySegment).toBe(false);
-
-		expect(await model.save()).toBe(true);
-		expect(deps.updateDefinition).toHaveBeenCalledWith(
-			'2',
-			expect.objectContaining({ track_protection_by_segment: false }),
-		);
-	});
-
-	it('normalises segment attribution off when armour costs are disabled', async () => {
-		const deps = makeDeps();
-		const model = createDefinitionsModel(deps);
-		model.openEdit(definition({ id: '2', trackProtectionBySegment: true }));
+		model.openEdit(definition({ id: '2' }));
 		model.trackProtectionCosts = false;
 
 		expect(await model.save()).toBe(true);
 		expect(deps.updateDefinition).toHaveBeenCalledWith(
 			'2',
-			expect.objectContaining({
-				track_protection_costs: false,
-				track_protection_by_segment: false,
-			}),
+			expect.objectContaining({ track_protection_costs: false }),
 		);
 	});
 

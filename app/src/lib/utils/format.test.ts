@@ -1,14 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+	formatCount,
 	formatDate,
 	formatDateFull,
 	formatDuration,
 	formatElapsed,
 	formatLedgerDate,
 	formatMultiplier,
+	formatOrdinal,
+	formatPec,
 	formatPed,
 	formatPedHalfEven,
 	formatPercent,
+	formatQuantity,
+	formatSeenAt,
+	formatTime,
+	formatTt,
+	formatTtOrCount,
+	isZeroTt,
+	listNames,
+	localDateOf,
 	todayDate,
 } from '$lib/utils/format';
 
@@ -102,6 +113,20 @@ describe('formatPercent', () => {
 	});
 });
 
+describe('formatOrdinal', () => {
+	it('suffixes a place by English ordinal rules', () => {
+		expect([1, 2, 3, 4, 10].map(formatOrdinal)).toEqual(['1st', '2nd', '3rd', '4th', '10th']);
+		expect([11, 12, 13].map(formatOrdinal)).toEqual(['11th', '12th', '13th']);
+		expect([21, 22, 23, 101, 111].map(formatOrdinal)).toEqual([
+			'21st',
+			'22nd',
+			'23rd',
+			'101st',
+			'111th',
+		]);
+	});
+});
+
 describe('formatMultiplier', () => {
 	it('uses 2 decimals below 10', () => {
 		expect(formatMultiplier(1.5)).toBe('1.50x');
@@ -190,6 +215,13 @@ describe('formatDate / formatDateFull', () => {
 	});
 });
 
+describe('formatTime', () => {
+	it('renders a timestamp as its time of day (UTC)', () => {
+		expect(formatTime('2026-06-03T08:30:00Z')).toBe('8:30 AM');
+		expect(formatTime('2026-06-03T14:05:00Z')).toBe('2:05 PM');
+	});
+});
+
 describe('formatLedgerDate', () => {
 	afterEach(() => {
 		vi.useRealTimers();
@@ -222,5 +254,74 @@ describe('formatLedgerDate', () => {
 		vi.setSystemTime(new Date('2026-06-03T12:00:00Z'));
 		// Same month/day as "today" but a year earlier: must be a date, not a time.
 		expect(formatLedgerDate('2025-06-03T08:30:00Z')).toBe('Jun 3');
+	});
+});
+
+describe('listNames', () => {
+	it('joins names in a sentence', () => {
+		expect(listNames([])).toBe('');
+		expect(listNames(['A'])).toBe('A');
+		expect(listNames(['A', 'B'])).toBe('A and B');
+		expect(listNames(['A', 'B', 'C'])).toBe('A, B and C');
+	});
+});
+
+describe('formatPec', () => {
+	it('renders two decimal places at ordinary magnitudes', () => {
+		expect(formatPec(0.426)).toBe('0.43');
+		expect(formatPec(4)).toBe('4.00');
+	});
+
+	it('keeps four decimals for slow-decay amounts below 0.1', () => {
+		expect(formatPec(0.011)).toBe('0.0110');
+		expect(formatPec(0.0002)).toBe('0.0002');
+		expect(formatPec(0)).toBe('0.00');
+	});
+});
+
+describe('items with no TT', () => {
+	it('writes a quantity without needless decimals', () => {
+		expect(formatQuantity(200)).toBe('200');
+		expect(formatQuantity(2.5)).toBe('2.50');
+	});
+
+	it('treats only a TT of nothing as none, never a merely small one', () => {
+		expect(isZeroTt(0)).toBe(true);
+		// Floating-point residue left by summing and carving TT is still nothing.
+		expect(isZeroTt(0.1 + 0.2 - 0.3)).toBe(true);
+		// One Shrapnel, and a handful of them: small, but TT all the same.
+		expect(isZeroTt(0.0001)).toBe(false);
+		expect(isZeroTt(0.004)).toBe(false);
+		expect(isZeroTt(0.01)).toBe(false);
+	});
+
+	it('keeps a sub-PEC TT legible rather than letting it read as 0.00', () => {
+		expect(formatTt(0)).toBe('0.00');
+		expect(formatTt(0.003)).toBe('0.0030');
+		expect(formatTt(0.0001)).toBe('0.0001');
+		expect(formatTt(0.01)).toBe('0.01');
+		expect(formatTt(12.3456)).toBe('12.35');
+	});
+
+	it('shows how many stand where no TT would', () => {
+		expect(formatCount(12)).toBe('\u00d712');
+		expect(formatTtOrCount(0, 12)).toBe('\u00d712');
+		expect(formatTtOrCount(1.5, 12)).toBe('1.50');
+		// Thirty Shrapnel hold TT, so they read in PED, not by count.
+		expect(formatTtOrCount(0.003, 30)).toBe('0.0030');
+	});
+});
+
+describe('the day and time something was seen', () => {
+	it('gives the local day of an instant for a date field', () => {
+		const at = new Date(2026, 10, 14, 23, 30);
+		expect(localDateOf(at.toISOString())).toBe('2026-11-14');
+		expect(localDateOf('not a time')).toBe(todayDate());
+	});
+
+	it('says today for today, and the date otherwise', () => {
+		const at = new Date(2026, 10, 14, 15, 4);
+		expect(formatSeenAt(at.toISOString(), new Date(2026, 10, 14, 20, 0))).toMatch(/^today, /);
+		expect(formatSeenAt(at.toISOString(), new Date(2026, 10, 16, 9, 0))).toMatch(/^Nov 14, /);
 	});
 });

@@ -1,32 +1,72 @@
 <script lang="ts">
 	import type { Equipment } from '$lib/types';
-	import type { Hotbar } from '$lib/types/settings';
-	import { hotbarFromSettings, updateSettings } from '$lib/api';
-	import { Select } from '$lib/components';
+	import type { Hotbar, HotbarPreset } from '$lib/types/settings';
+	import { Divider, Select } from '$lib/components';
+	import { NO_DATA } from '$lib/utils/format';
+	import CarriedWeapons from '$lib/features/equipment/CarriedWeapons.svelte';
+	import DamageRanges from '$lib/features/equipment/DamageRanges.svelte';
+	import {
+		addableWeapons,
+		carriedWeapons,
+		parkedHotbars,
+		weaponBands
+	} from '$lib/features/equipment/carriedWeapons';
+	import {
+		enabledCarried,
+		hotbarReadingNote,
+		slotIdleWhileReading
+	} from '$lib/features/equipment/toolReading';
 
 	let {
 		equipment,
-		hotbar: initialHotbar,
-		enabled = true,
-		onchange
+		hotbar,
+		hotbarPresets,
+		activeHotbarPreset,
+		carriedWeaponIds,
+		hotbarHooksEnabled,
+		keyless = false,
+		toolReading = false,
+		lookalikeLabels = {},
+		onassign,
+		oncarriedchange
 	}: {
 		equipment: Equipment[];
+		/** The live preset's slots. */
 		hotbar: Hotbar;
-		enabled?: boolean;
-		onchange?: (value: Hotbar) => void;
+		hotbarPresets: Hotbar[];
+		activeHotbarPreset: HotbarPreset;
+		carriedWeaponIds: number[];
+		/** The hotbar key listener setting: presses declare the weapon in hand. */
+		hotbarHooksEnabled: boolean;
+		/** This machine runs keyless: the overlay declares the weapon. */
+		keyless?: boolean;
+		/** The tool in hand is read off the screen: the keys start consumables
+		 * only, and the weapons on are the ones carried. */
+		toolReading?: boolean;
+		/** How entries the held-tool bar cannot tell apart are told apart. */
+		lookalikeLabels?: Record<string, string>;
+		onassign: (slot: string, equipmentId: number | null) => void;
+		oncarriedchange?: (ids: number[]) => void;
 	} = $props();
-
-	let hotbar: Hotbar = $state({});
-	let error: string | null = $state(null);
 
 	let weapons = $derived(equipment.filter((e) => e.type === 'weapon'));
 	let healingTools = $derived(equipment.filter((e) => e.type === 'healing'));
 	let consumablesList = $derived(equipment.filter((e) => e.type === 'consumable'));
 	let harvestingToolsList = $derived(equipment.filter((e) => e.type === 'tool'));
 
-	$effect(() => {
-		hotbar = { ...initialHotbar };
-	});
+	// The weapons attribution chooses among: every preset's and the ones
+	// carried without a hotkey, with the damage band each is checked against.
+	let parked = $derived(parkedHotbars(hotbarPresets, activeHotbarPreset));
+	let carried = $derived(
+		toolReading
+			? enabledCarried(equipment)
+			: carriedWeapons(equipment, hotbar, carriedWeaponIds, parked)
+	);
+	let unslotted = $derived(
+		carried.filter((entry) => entry.slot === null && entry.parked === null).map((entry) => entry.weapon)
+	);
+	let addable = $derived(addableWeapons(equipment, hotbar, carriedWeaponIds, parked));
+	let bands = $derived(weaponBands(carried));
 
 	function slotItem(slot: string): Equipment | null {
 		const id = hotbar[slot];
@@ -46,66 +86,45 @@
 		return slotItem(slot)?.type ?? null;
 	}
 
-	async function assignSlot(slot: string, equipId: string | null) {
-		if (!enabled) return;
-		error = null;
-		const previous = { ...hotbar };
-		const nextHotbar = {
-			...hotbar,
-			[slot]: equipId ? parseInt(equipId, 10) : null
-		};
-		hotbar = nextHotbar;
-
-		try {
-			const updated = await updateSettings({ hotbar: nextHotbar });
-			hotbar = hotbarFromSettings(updated);
-			onchange?.(hotbar);
-		} catch (e) {
-			hotbar = previous;
-			error = e instanceof Error ? e.message : 'Failed to save hotbar';
-		}
+	function assignSlot(slot: string, value: string) {
+		const id = Number.parseInt(value, 10);
+		onassign(slot, Number.isNaN(id) ? null : id);
 	}
 </script>
 
 <div class="space-y-4">
-	{#if error}
-		<div class="rounded-md border border-error/20 bg-error/10 px-3 py-2">
-			<p class="text-sm text-error">{error}</p>
-		</div>
+	{#if toolReading}
+		<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
+			{hotbarReadingNote({ keyless, hotbarHooksEnabled })}
+		</p>
+	{:else}
+		<p class="text-xs text-text-tertiary max-w-2xl" data-testid="hotbar-listener-state">
+			{#if keyless}
+				Keyless tracking is on for this machine: pick the weapon in hand from the overlay's
+				equipment glyph, and each weapon's damage range checks it.
+			{:else if hotbarHooksEnabled}
+				The hotbar key listener is on: a press tells the app which weapon is in hand, and each
+				weapon's damage range checks it.
+			{:else}
+				The hotbar key listener is off, so shots are attributed by damage range alone.
+				<a href="/settings#cost-attribution" class="linklet">Turn it on in Settings</a> for exact
+				switching.
+			{/if}
+		</p>
 	{/if}
 
-	<div class="relative min-h-64">
-		{#if !enabled}
-			<div class="absolute inset-0 z-10 flex items-center justify-center px-4 py-10">
-				<div
-					data-guide-anchor="hotbar-disabled-notice"
-					class="max-w-md rounded-md border border-border bg-surface-raised/95 px-5 py-4 text-center shadow-lg backdrop-blur-sm"
-				>
-					<p class="text-sm font-medium text-text">Trifecta is currently in use.</p>
-					<p class="mt-1.5 text-sm leading-6 text-text-secondary">
-						To use the Hotbar, enable the hotbar key listener in the
-						<a
-							href="/settings#cost-attribution"
-							class="whitespace-nowrap font-medium text-accent underline underline-offset-4 hover:text-accent-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
-						>
-							Settings tab
-						</a>.
-					</p>
-				</div>
-			</div>
-		{/if}
-
-		<div class="{enabled ? '' : 'opacity-40 grayscale blur-[2px] pointer-events-none select-none'}">
+	<div>
 		{#if weapons.length === 0 && healingTools.length === 0 && consumablesList.length === 0 && harvestingToolsList.length === 0}
 			<p class="text-sm text-text-tertiary py-4">
 				Add equipment in the Library tab first, then assign them to hotbar slots here.
 			</p>
 		{:else}
-			<div class="space-y-1" data-guide-anchor="hotbar-slot-list">
+			<div class="space-y-1">
 				{#each ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'] as slot}
 					{@const name = slotName(slot)}
 					{@const cost = slotCost(slot)}
 					{@const type = slotType(slot)}
+					{@const idle = toolReading && slotIdleWhileReading(type)}
 					<div
 						class="flex items-center gap-3 px-3 py-2.5 rounded-md
 							{name ? 'bg-surface-hover/30' : 'hover:bg-surface-hover/20'}
@@ -114,7 +133,9 @@
 						<!-- Slot key badge -->
 						<div
 							class="shrink-0 h-7 w-7 rounded-md flex items-center justify-center text-xs font-bold
-								{name
+								{idle
+								? 'bg-surface text-text-tertiary border border-border'
+								: name
 								? type === 'healing'
 									? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
 									: type === 'consumable'
@@ -129,11 +150,16 @@
 						<div class="flex-1 min-w-0">
 							<Select
 								value={hotbar[slot] != null ? String(hotbar[slot]) : ''}
-								onchange={(e) => assignSlot(slot, e.currentTarget.value || null)}
-								disabled={!enabled}
+								onchange={(e) => assignSlot(slot, e.currentTarget.value)}
 							>
 								<option value="">— Empty slot —</option>
-								{#if weapons.length > 0}
+								{#if toolReading}
+									<!-- The keys start consumables only; a weapon or tool
+										 already here stays for when the reading is off. -->
+									{#if idle}
+										<option value={String(hotbar[slot])}>{lookalikeLabels[String(hotbar[slot])] ?? name}</option>
+									{/if}
+								{:else if weapons.length > 0}
 									<optgroup label="Weapons">
 										{#each weapons as w}
 											<option value={w.id}>
@@ -150,7 +176,7 @@
 										{/each}
 									</optgroup>
 								{/if}
-								{#if harvestingToolsList.length > 0}
+								{#if !toolReading && harvestingToolsList.length > 0}
 									<optgroup label="Harvesting Tools">
 										{#each harvestingToolsList as t}
 											<option value={t.id}>{t.name}</option>
@@ -165,12 +191,25 @@
 									</optgroup>
 								{/if}
 							</Select>
+							{#if idle}
+								<p class="mt-1 text-xs text-text-tertiary" data-testid="slot-idle">
+									not used while the screen is read
+								</p>
+							{/if}
 						</div>
 
 						<!-- Cost display -->
 						<div class="shrink-0 w-20 text-right">
-							{#if type === 'consumable'}
-								<span class="text-xs text-text-tertiary">consumable</span>
+							{#if idle}
+								<span class="text-xs text-text-tertiary">{NO_DATA}</span>
+							{:else if type === 'consumable'}
+								<!-- The key is the dose: what one press books. -->
+								{#if cost !== null && cost > 0}
+									<span class="text-sm font-medium tabular-nums text-text">{(cost / 100).toFixed(2)}</span>
+									<span class="text-xs text-text-tertiary ml-0.5">PED</span>
+								{:else}
+									<span class="text-xs text-text-tertiary" title="This item's doses book no cost">not booked</span>
+								{/if}
 							{:else if cost !== null}
 								<span class="text-sm font-medium tabular-nums text-text">
 									{cost.toFixed(2)}
@@ -184,6 +223,20 @@
 				{/each}
 			</div>
 		{/if}
-		</div>
 	</div>
+
+	{#if weapons.length > 0}
+		<Divider />
+		{#if !toolReading}
+			<!-- While the screen is read the weapons on are the carried ones. -->
+			<CarriedWeapons
+				carried={unslotted}
+				{addable}
+				carriedIds={carriedWeaponIds}
+				onchange={oncarriedchange}
+			/>
+			<Divider />
+		{/if}
+		<DamageRanges banded={bands.banded} bandless={bands.bandless} />
+	{/if}
 </div>

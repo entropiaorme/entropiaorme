@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "sale-capture-overlay",
-  "description": "Least-privilege window access for the sale-window capture button.",
+  "description": "Least-privilege window access for the sell-queue capture button.",
   "windows": ["overlay-sale-capture"],
   "permissions": [
     "sale-capture-commands",

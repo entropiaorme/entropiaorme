@@ -1,29 +1,30 @@
 /**
- * The manual scan flow (public, user-driven page-by-page capture).
- * Thin wrappers over the generated typed commands. A logical refusal
- * rides the returned status' `error` field (the scanner never throws
- * for one), so every caller reads `.error` first and the status fields
- * defensively.
+ * The skill scan: it collects the Skills window's pages by itself while the
+ * player pages through them in the game, then holds what it read for review.
+ * Thin wrappers over the generated typed commands.
  */
 
-import type { ScanStatus } from './commands.gen';
 import * as commands from './commands.gen';
 
-export type { ScanPhase, SkillScanPending } from './commands.gen';
+export type {
+	SkillScanHint,
+	SkillScanRefusal,
+	SkillScanReply,
+	SkillScanReview,
+	SkillScanStatus,
+	SkillScanStop,
+	SkillScanTotal,
+} from './commands.gen';
 
-/** The manual-scan status shape, as the scan commands answer it. */
-export type ScanManualStatus = ScanStatus;
+export const getSkillScanStatus = commands.scanStatus;
+export const startSkillScan = commands.scanStart;
+export const cancelSkillScan = commands.scanCancel;
+export const getSkillScanReview = commands.scanPending;
 
-export const getManualSkillScanStatus = commands.scanStatus;
-export const cancelManualSkillScan = commands.scanCancel;
-export const undoManualSkillCapture = commands.scanUndo;
-export const processManualSkillScan = commands.scanProcess;
-export const acceptManualSkillScan = commands.scanAccept;
-export const rejectManualSkillScan = commands.scanReject;
-export const getManualSkillScanPending = commands.scanPending;
-export const captureManualSkillPage = commands.scanCapture;
-export const setSpacebarCapture = commands.scanSpacebarCapture;
+/** Save the review of scan `scan`; one whose figures do not add up is saved
+ * only with `saveAnyway`. */
+export const acceptSkillScan = (scan: number, saveAnyway = false) =>
+	commands.scanAccept(scan, saveAnyway);
 
-export async function startManualSkillScan(pageCount?: number): Promise<ScanStatus> {
-	return commands.scanStart(pageCount ?? null);
-}
+/** Discard the review of scan `scan`. */
+export const rejectSkillScan = (scan: number) => commands.scanReject(scan);

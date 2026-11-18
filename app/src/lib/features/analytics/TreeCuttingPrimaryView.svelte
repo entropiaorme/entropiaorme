@@ -64,6 +64,8 @@
 				muRate={line.muRate}
 				realisedReturns={line.realisedReturns}
 				realisedRate={line.realisedRate}
+				overhead={line.overhead}
+				unassignedOverhead={'unassignedOverhead' in line ? line.unassignedOverhead : 0}
 			/>
 		</div>
 

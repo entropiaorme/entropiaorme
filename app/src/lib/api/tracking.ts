@@ -1,27 +1,27 @@
 /**
  * The tracking family: session lifecycle, the consolidated snapshot,
  * session reads and post-hoc edits, and mob locking
- * flow. Thin wrappers over the generated typed commands; the session
- * and snapshot reads swap onto the parallel `demo_*` commands while the
- * guide is active (see `./guide`).
+ * flow. Thin wrappers over the generated typed commands.
  */
 
+import { createCatalogueSearch } from '$lib/view/catalogueSearch';
 import type {
 	ActivitySummary,
 	HarvestGuardrailAlert,
 	HealingStatus,
+	MobSourceView,
 	NotableEventCategory,
 	NotableEventType,
 	RecentEvent,
 	ToolActivity,
+	ToolSourceView,
 	TrackingSnapshot,
 	TrackingState,
-	TrifectaAttribution,
 	Warning,
-	WeaponAttribution,
+	WeaponGuardrailAlert,
+	WeaponHitMargin,
 } from './commands.gen';
 import * as commands from './commands.gen';
-import { guideSwapped } from './guide';
 
 /** The snapshot shape the status-flavoured consumers (the stat
  * registry, the overlay pills) render from. */
@@ -41,18 +41,27 @@ export interface TrackingLive {
 	pes?: number | null;
 	net?: number | null;
 	returnRate?: number | null;
-	weaponAttribution?: WeaponAttribution | null;
+	/** The hotbar key listener is enabled: presses declare the weapon in hand. */
+	hotbarKeysEnabled?: boolean | null;
+	/** The hotbar keystroke source is attached and delivering: a press now
+	 * would be seen. */
+	hotbarListenerActive?: boolean | null;
 	repairOcrEnabled?: boolean | null;
-	endOfSessionArmourReminderEnabled?: boolean | null;
 	sessionName?: string | null;
 	/** The selected session definition (stringified id): the active
 	 * session's stamped reference when tracking, the configured
 	 * selection when idle. */
 	sessionDefinitionId?: string | null;
 	trackProtectionCosts?: boolean | null;
-	trackProtectionBySegment?: boolean | null;
 	skillBoostPercent?: number | null;
-	currentMob?: string | null;
+	/** The session's one source for its kills' creature: the typed
+	 * mob (idle: the one the next session starts with), the pin, and
+	 * what the screen reads. */
+	mobSource?: MobSourceView | null;
+	/** Where the tool in hand comes from (the hotbar keys, or the game
+	 * screen) and, while it is the screen, what the screen shows of it:
+	 * then the tool held is this one, never `currentTool`. */
+	toolSource?: ToolSourceView | null;
 	currentTool?: string | null;
 	currentToolKind?: 'weapon' | 'healing' | 'consumable' | 'harvesting' | null;
 	/** What the held tool implies the next action records as. */
@@ -62,8 +71,22 @@ export interface TrackingLive {
 	 * every frame, idle included, over the session a start would run as;
 	 * the standing set is necessarily empty until one does. */
 	activities?: ActivitySummary | null;
-	trifectaAttribution?: TrifectaAttribution | null;
 	harvestGuardrail?: HarvestGuardrailAlert | null;
+	/** The standing weapon mismatch: present only while the damage evidence
+	 * says another carried weapon is being fired than the hotbar declared. */
+	weaponGuardrail?: WeaponGuardrailAlert | null;
+	/** Shots recorded without a price this session: the cost leaves them out. */
+	unpricedShots?: number | null;
+	/** The active session has a weapon declared. Without one, `currentTool`
+	 * is only what the damage last pointed to, and hits several carried
+	 * weapons explain go unpriced. */
+	weaponDeclared?: boolean | null;
+	/** What the held weapon's latest hits say about its damage: above or
+	 * below its listed range. Absent while they land inside it. */
+	weaponHitCue?: WeaponHitMargin | null;
+	/** The session runs keyless (this machine's setting while idle): the
+	 * overlay declares equipment and healing uses are inferred. */
+	keylessInput?: boolean | null;
 	healing?: HealingStatus | null;
 	warnings?: Warning[] | null;
 	recentEvents?: {
@@ -79,8 +102,24 @@ export type { HarvestGuardrailAlert, RecentEvent, TrackingSnapshot };
 
 export const startTracking = commands.trackingStart;
 export const stopTracking = commands.trackingStop;
+/** Clear the typed mob (the declared mob; the backstop while the
+ * screen is read). A pin stands. */
 export const releaseMob = commands.trackingReleaseMob;
+/** Pin a mob for the running session: the one shown as read (refused
+ * if the screen no longer shows it) or one typed. Every kill takes it, and
+ * the screen is not read, until it is released. */
+export const pinMob = commands.trackingMobPin;
+/** Release the running session's pin; answers whether one stood. */
+export const unpinMob = commands.trackingMobUnpin;
+/** Declare an equipment item in hand, as its hotbar press would. */
+export const declareEquipment = commands.trackingDeclareEquipment;
 export const deleteSession = commands.trackingSessionDelete;
+/** Keep an ended session on record while leaving its PED side, its skill
+ * gains, or both out of the app-wide statistics. Full-state apply: both
+ * scopes and the note are sent every time, so a repeat is harmless; a
+ * scope switched back on clears its stamp, and the note is kept only while
+ * something is excluded. A running session answers 409. */
+export const setSessionExclusion = commands.trackingSessionExclusion;
 export const deactivateLootItem = commands.trackingLootItemDeactivate;
 export const activateLootItem = commands.trackingLootItemActivate;
 /** Re-file an ended session under a different (active) definition: the
@@ -92,6 +131,39 @@ export async function reassignSession(sessionId: string, definitionId: string) {
 }
 export const renameSessionMob = commands.trackingRenameMob;
 export const restoreSessionMob = commands.trackingRestoreMob;
+/** An ended session's kills by the mob the screen gave them: a line for
+ * each mob, and one for the kills it could not name. */
+export const getMobDetections = commands.trackingMobDetections;
+/** Settle every kill of one line: name the mob, or put back the
+ * declared mob each kill had. Answers with the refreshed review. */
+export const settleMobDetection = commands.trackingMobDetectionSettle;
+/** The mobs kept for the name reader beside the bundled list. */
+export const getCreatureEntries = commands.creatureEntries;
+/** What keeping a mob typed as its plate prints it would come to:
+ * ready (and as what), already known, or refused with the reason. */
+export const checkCreatureEntry = commands.creatureEntryCheck;
+/** Keep a mob typed as its plate prints it, in place of the one being
+ * edited; answers with the list as it now stands. */
+export const saveCreatureEntry = commands.creatureEntrySave;
+/** Stop keeping a mob; answers with the list as it now stands. */
+export const removeCreatureEntry = commands.creatureEntryRemove;
+/** The labels mobs are shown by in place of their printed names. */
+export const getMobLabels = commands.mobLabels;
+/** Show a mob (typed as the game prints it) under a label, from now on
+ * and everywhere it is recorded; answers with the labels as they stand. */
+export const setMobLabel = commands.mobLabelSet;
+/** Show a mob as the game prints it again. */
+export const clearMobLabel = commands.mobLabelClear;
+/** What the screen read as the tool in hand during a session that is not
+ * in the library: tools of the game's data held without an entry, and
+ * names that matched no tool. The ones still to be settled come first. */
+export const getToolSightings = commands.trackingToolSightings;
+/** Settle one sighting: add the tool to the library, dismiss the name as
+ * not a tracked tool, or leave it. Answers with the refreshed review, or a
+ * typed refusal that changed nothing. */
+export const settleToolSighting = commands.trackingToolSightingSettle;
+/** Undo a sighting's settlement, so it is asked about again. */
+export const undoToolSighting = commands.trackingToolSightingUndo;
 /** Set the session facets (full-state apply: null clears a facet). The
  * name is fixed while a session runs (the backend answers 409 on an
  * attempted change): it is a stamp of the definition's name, so a
@@ -105,6 +177,7 @@ export const setSessionConfig = commands.trackingSessionConfig;
  * backend reads back as the protected default rather than as no session;
  * the app never sends one. */
 export const selectDefinition = commands.trackingDefinitionSelect;
+/** Read the Repair Terminal's repair cost off the game window, or why it could not be. */
 export const scanRepairCost = commands.trackingRepairScan;
 export const saveArmourCost = commands.trackingArmourCost;
 /** What the Activities control offers right now: the session
@@ -121,32 +194,31 @@ export const activateActivity = commands.trackingActivityActivate;
 /** End one standing activity, leaving the others running. Idempotent. */
 export const deactivateActivity = commands.trackingActivityDeactivate;
 
-const readSessionsPage = guideSwapped(commands.trackingSessions, commands.demoTrackingSessions);
-
 /** One keyset page of sessions plus the cursor for the next page (null on
  * the last page). `definitionId` narrows the page to one definition's
  * instances, which is how the review surface reads one; omitted, the
  * page is the whole history. */
 export async function getTrackingSessions(cursor?: string, limit?: number, definitionId?: string) {
-	return readSessionsPage(
+	return commands.trackingSessions(
 		cursor ?? null,
 		limit ?? null,
 		definitionId === undefined ? null : Number(definitionId),
 	);
 }
-export const getSessionDetail = guideSwapped(
-	commands.trackingSessionDetail,
-	commands.demoTrackingSessionDetail,
-);
-export const getTrackingSnapshot = guideSwapped(
-	commands.trackingSnapshot,
-	commands.demoTrackingSnapshot,
-);
+export const getSessionDetail = commands.trackingSessionDetail;
+export const getDefinitionLoot = commands.trackingDefinitionLoot;
+export const getDefinitionRewards = commands.trackingDefinitionRewards;
+export const getTrackingSnapshot = commands.trackingSnapshot;
 
-export async function getManualMobSuggestions(query: string) {
-	if (!query.trim()) return [];
-	return commands.trackingManualMobSuggestions(query.trim(), null);
-}
+/** Most mob names the declared-mob picker offers at once. */
+const MOB_SUGGESTION_LIMIT = 10;
+
+/** Catalogue mob names matching `query`, best first; empty for a blank query. */
+export const getManualMobSuggestions = createCatalogueSearch(
+	commands.trackingMobCatalogue,
+	(mob) => mob.display,
+	MOB_SUGGESTION_LIMIT,
+);
 
 export async function lockManualMob(species: string, maturity = '') {
 	return commands.trackingManualMobLock(species, maturity);

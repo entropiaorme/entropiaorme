@@ -24,6 +24,13 @@
 //! Per-event granularity would fan a sale of a few hundred units into hundreds
 //! of rows nothing reads, and the movement schema carries a nullable
 //! `source_event_id` for it if that ever changes.
+//!
+//! Stock a conversion produced carries more than a quantity: the markup paid
+//! for bought inputs, any markup declared on the player's own inputs, and the
+//! root item it descends from. Those facts are per unit, so an outflow consumes
+//! them in the same proportion as the stock itself. [`split_realised`] then
+//! says who a realised figure belongs to when some inputs were declared to be
+//! worth a fixed amount and others were left to share whatever is left.
 
 use crate::harvest_yield::HarvestYieldTier;
 
@@ -51,6 +58,47 @@ pub enum StockProvenance<'a> {
     },
 }
 
+/// What a parcel of converted stock carries beyond its quantity and TT.
+///
+/// On a [`SourcePosition`] the figures are per unit; on a [`SourceAllocation`]
+/// they are the total for that share. Stock that no conversion touched has the
+/// default, all absent.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DerivedFacts<'a> {
+    /// The conversion input this stock descends from, which keeps one
+    /// conversion's terms from blending into another's.
+    pub source_line_id: Option<i64>,
+    /// The item this stock traces back to before any conversion.
+    pub origin_item: Option<&'a str>,
+    /// Markup paid for bought inputs that the eventual sale must recover
+    /// before anything counts as gained.
+    pub paid_markup: f64,
+    /// The share of a declared worth this stock is carrying. Absent means the
+    /// source takes part in whatever is left after declared worths are met.
+    pub declared_markup: Option<f64>,
+    /// How many of `origin_item` this stock accounts for.
+    pub origin_quantity: Option<f64>,
+    /// Set when these facts describe a whole asset rather than fungible stock.
+    pub inventory_item_id: Option<&'a str>,
+}
+
+impl DerivedFacts<'_> {
+    fn scaled(self, units: f64) -> Self {
+        Self {
+            paid_markup: self.paid_markup * units,
+            declared_markup: self.declared_markup.map(|value| value * units),
+            origin_quantity: self.origin_quantity.map(|value| value * units),
+            ..self
+        }
+    }
+
+    /// The same facts signed for the outflow that consumes them.
+    #[must_use]
+    pub fn outflow(self) -> Self {
+        self.scaled(-1.0)
+    }
+}
+
 /// One source's still-open position for a canonical item.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SourcePosition<'a> {
@@ -68,6 +116,8 @@ pub struct SourcePosition<'a> {
     /// kill's loot is not a single tool's produce).
     pub tool_name: Option<&'a str>,
     pub quantity: f64,
+    /// Per unit, so any share of the position takes its proportion.
+    pub derived: DerivedFacts<'a>,
 }
 
 /// One source's share of an outflow.
@@ -79,6 +129,7 @@ pub struct SourceAllocation<'a> {
     pub tool_name: Option<&'a str>,
     pub quantity: f64,
     pub tt_value: f64,
+    pub derived: DerivedFacts<'a>,
 }
 
 /// How a requested outflow divides across open positions.
@@ -102,6 +153,8 @@ pub struct AllocationPlan<'a> {
     /// caller records the acquisition it implies before recording the outflow.
     pub excess_qty: f64,
     pub excess_tt: f64,
+    /// Paid markup the outflow consumes, which any sale of it must recover.
+    pub paid_markup: f64,
 }
 
 /// Split `quantity` of an item across its open source positions, weighted by
@@ -151,6 +204,7 @@ pub fn allocate<'a>(
             tool_name: position.tool_name,
             quantity: share,
             tt_value: share * unit_tt,
+            derived: position.derived.scaled(share),
         });
     }
 
@@ -176,10 +230,15 @@ pub fn allocate<'a>(
             tool_name: None,
             quantity: excess,
             tt_value: excess * unit_tt,
+            derived: DerivedFacts::default(),
         });
     }
 
     let unattributed_qty = unknown_qty + excess;
+    let paid_markup = allocations
+        .iter()
+        .map(|allocation| allocation.derived.paid_markup)
+        .sum();
     AllocationPlan {
         allocations,
         attributed_qty,
@@ -188,6 +247,7 @@ pub fn allocate<'a>(
         unattributed_tt: unattributed_qty * unit_tt,
         excess_qty: excess,
         excess_tt: excess * unit_tt,
+        paid_markup,
     }
 }
 
@@ -195,8 +255,8 @@ pub fn allocate<'a>(
 /// what the activity may claim.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SaleOutcome {
-    /// Sale proceeds above the whole listing's TT, and exactly what the
-    /// ledger records as the gain.
+    /// Sale proceeds above the whole listing's TT and any markup paid to
+    /// produce it, and exactly what the ledger records as the gain.
     ///
     /// The TT itself is never income at sale time. For tracked stock it was
     /// already booked as loot when it dropped; for untracked stock the player
@@ -218,8 +278,9 @@ pub struct SaleOutcome {
 /// Resolve a confirmed sale.
 ///
 /// `tt_value` is the whole listing's TT and `attributed_quantity` the part of
-/// its quantity covered by tracked stock. This remains defined for zero-TT
-/// vouchers. Fees are what the game actually charged: the
+/// its quantity covered by tracked stock. `paid_markup` is what bought inputs
+/// cost above TT when the stock was produced by a conversion, and is zero for
+/// everything else. This remains defined for zero-TT vouchers. Fees are what the game actually charged: the
 /// starting-bid fee taken at listing, and the additional fee taken at the
 /// point of sale when an item sells above its starting bid.
 ///
@@ -232,11 +293,12 @@ pub fn resolve_sale(
     quantity: f64,
     attributed_quantity: f64,
     tt_value: f64,
+    paid_markup: f64,
     final_price: f64,
     listing_fee: f64,
     sale_fee: f64,
 ) -> SaleOutcome {
-    let gross_markup = final_price - tt_value;
+    let gross_markup = final_price - tt_value - paid_markup;
     let total_fees = listing_fee + sale_fee;
     let net_markup = gross_markup - total_fees;
     let attributed_share = if quantity.abs() > EPSILON {
@@ -253,9 +315,107 @@ pub fn resolve_sale(
     }
 }
 
+/// One source's standing in a realised figure.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CreditLine {
+    /// Its share among the sources that were left to take what remains.
+    pub weight: f64,
+    /// The amount it was declared to be worth, or `None` to take a share of
+    /// whatever is left once declared worths are met.
+    pub worth: Option<f64>,
+}
+
+/// Divide a realised figure across its sources.
+///
+/// Declared worths are met first, because the player has said what those
+/// sources are worth and the rest is what the remaining sources earned. A
+/// figure that falls short pays the declared sources pro rata and leaves the
+/// others nothing, and a loss lands on the undeclared sources, which are the
+/// ones the outcome was riding on. With no undeclared source, whatever is left
+/// over goes to the declared ones in proportion to their worth.
+///
+/// The parts always sum to `net` exactly.
+#[must_use]
+pub fn split_realised(net: f64, lines: &[CreditLine]) -> Vec<f64> {
+    let mut parts = vec![0.0; lines.len()];
+    if lines.is_empty() {
+        return parts;
+    }
+    let declared_total: f64 = lines
+        .iter()
+        .filter_map(|line| line.worth)
+        .map(|worth| worth.max(0.0))
+        .sum();
+    let to_declared = if net > 0.0 {
+        net.min(declared_total)
+    } else {
+        0.0
+    };
+    if declared_total > EPSILON {
+        for (part, line) in parts.iter_mut().zip(lines) {
+            if let Some(worth) = line.worth {
+                *part = to_declared * (worth.max(0.0) / declared_total);
+            }
+        }
+    }
+
+    let remainder = net - to_declared;
+    let blank_weight: f64 = lines
+        .iter()
+        .filter(|line| line.worth.is_none())
+        .map(|line| line.weight)
+        .sum();
+    // Who takes the remainder, weighted: the undeclared sources, or failing
+    // those the declared ones by worth, or failing that all of them by weight.
+    let takes: Vec<f64> = if blank_weight > EPSILON {
+        lines
+            .iter()
+            .map(|line| {
+                if line.worth.is_none() {
+                    line.weight
+                } else {
+                    0.0
+                }
+            })
+            .collect()
+    } else if declared_total > EPSILON {
+        lines
+            .iter()
+            .map(|line| line.worth.unwrap_or(0.0).max(0.0))
+            .collect()
+    } else {
+        lines.iter().map(|line| line.weight).collect()
+    };
+    let total_take: f64 = takes.iter().sum();
+    if total_take > EPSILON {
+        for (part, take) in parts.iter_mut().zip(&takes) {
+            *part += remainder * (take / total_take);
+        }
+    } else if let Some(first) = parts.first_mut() {
+        // Every weight is zero: nothing distinguishes the sources, but the
+        // figure still has to land somewhere for the total to hold.
+        *first += remainder;
+    }
+
+    // Float division can leave an ulp behind; the largest part absorbs it so
+    // the sources reconcile with the ledger exactly.
+    let residual = net - parts.iter().sum::<f64>();
+    if residual != 0.0 {
+        if let Some(largest) = parts.iter_mut().max_by(|a, b| {
+            a.abs()
+                .partial_cmp(&b.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
+            *largest += residual;
+        }
+    }
+    parts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn tier(tier: HarvestYieldTier, quantity: f64) -> SourcePosition<'static> {
         SourcePosition {
@@ -264,6 +424,7 @@ mod tests {
             activity_context_id: None,
             tool_name: None,
             quantity,
+            derived: DerivedFacts::default(),
         }
     }
 
@@ -274,6 +435,7 @@ mod tests {
             activity_context_id: None,
             tool_name: None,
             quantity,
+            derived: DerivedFacts::default(),
         }
     }
 
@@ -284,6 +446,7 @@ mod tests {
             activity_context_id: None,
             tool_name: None,
             quantity,
+            derived: DerivedFacts::default(),
         }
     }
 
@@ -294,6 +457,7 @@ mod tests {
             activity_context_id: None,
             tool_name: Some(tool),
             quantity,
+            derived: DerivedFacts::default(),
         }
     }
 
@@ -394,6 +558,7 @@ mod tests {
                 activity_context_id: Some(31),
                 tool_name: None,
                 quantity: 75.0,
+                derived: DerivedFacts::default(),
             },
             SourcePosition {
                 provenance: Some(StockProvenance::Hunt(Some("Atrox"))),
@@ -401,6 +566,7 @@ mod tests {
                 activity_context_id: Some(32),
                 tool_name: None,
                 quantity: 25.0,
+                derived: DerivedFacts::default(),
             },
         ];
         let plan = allocate(&positions, 40.0, 0.01);
@@ -509,6 +675,7 @@ mod tests {
                 activity_context_id: None,
                 tool_name: None,
                 quantity: 5.0,
+                derived: DerivedFacts::default(),
             },
         ];
         let plan = allocate(&positions, 20.0, 0.03);
@@ -548,6 +715,7 @@ mod tests {
                 activity_context_id: None,
                 tool_name: None,
                 quantity: 50.0,
+                derived: DerivedFacts::default(),
             },
         ];
         let plan = allocate(&positions, 100.0, 0.01);
@@ -612,7 +780,7 @@ mod tests {
     /// ledger only the money that was not already booked as loot TT.
     #[test]
     fn fully_tracked_sale_attributes_all_net_markup() {
-        let outcome = resolve_sale(300.0, 300.0, 3.00, 5.00, 0.50, 0.20);
+        let outcome = resolve_sale(300.0, 300.0, 3.00, 0.0, 5.00, 0.50, 0.20);
 
         assert!((outcome.gross_markup - 2.00).abs() < 1e-9);
         assert!((outcome.net_markup - 1.30).abs() < 1e-9);
@@ -626,7 +794,7 @@ mod tests {
     /// remainder reconciles exactly against the global figure.
     #[test]
     fn partly_tracked_sale_reconciles_against_the_ledger() {
-        let outcome = resolve_sale(450.0, 300.0, 4.50, 7.50, 0.50, 0.20);
+        let outcome = resolve_sale(450.0, 300.0, 4.50, 0.0, 7.50, 0.50, 0.20);
 
         assert!((outcome.attributed_share - 2.0 / 3.0).abs() < 1e-9);
         assert!((outcome.net_markup - 2.30).abs() < 1e-9);
@@ -645,7 +813,7 @@ mod tests {
     /// Selling below TT is a real loss and must stay negative, not clamp.
     #[test]
     fn a_sale_under_tt_realises_a_negative_markup() {
-        let outcome = resolve_sale(300.0, 300.0, 3.00, 2.50, 0.50, 0.0);
+        let outcome = resolve_sale(300.0, 300.0, 3.00, 0.0, 2.50, 0.50, 0.0);
         assert!((outcome.gross_markup + 0.50).abs() < 1e-9);
         assert!((outcome.net_markup + 1.00).abs() < 1e-9);
         assert!(outcome.activity_net_markup < 0.0);
@@ -655,7 +823,7 @@ mod tests {
     /// sale, while the ledger still records the full proceeds.
     #[test]
     fn untracked_sale_claims_nothing_for_the_activity() {
-        let outcome = resolve_sale(400.0, 0.0, 4.00, 9.00, 0.50, 0.30);
+        let outcome = resolve_sale(400.0, 0.0, 4.00, 0.0, 9.00, 0.50, 0.30);
         assert!((outcome.attributed_share).abs() < 1e-9);
         assert!((outcome.activity_net_markup).abs() < 1e-9);
         // Markup only, even with nothing tracked: the 4.00 of TT sold was
@@ -667,9 +835,140 @@ mod tests {
     /// return to the activity that earned it.
     #[test]
     fn zero_tt_listing_attributes_by_quantity() {
-        let outcome = resolve_sale(10.0, 10.0, 0.0, 1.00, 0.50, 0.0);
+        let outcome = resolve_sale(10.0, 10.0, 0.0, 0.0, 1.00, 0.50, 0.0);
         assert!(outcome.attributed_share.is_finite());
         assert!((outcome.attributed_share - 1.0).abs() < 1e-9);
         assert!((outcome.activity_net_markup - 0.50).abs() < 1e-9);
+    }
+
+    /// Stock a conversion produced gives up its paid markup and declared worth
+    /// in proportion, however it is sliced.
+    #[test]
+    fn an_outflow_carries_its_share_of_a_lot() {
+        let positions = [SourcePosition {
+            provenance: Some(StockProvenance::Hunt(None)),
+            session_definition_id: Some(5),
+            activity_context_id: None,
+            tool_name: None,
+            quantity: 4.0,
+            derived: DerivedFacts {
+                source_line_id: Some(9),
+                origin_item: Some("Voucher"),
+                paid_markup: 2.5,
+                declared_markup: Some(1.25),
+                origin_quantity: Some(20.0),
+                inventory_item_id: None,
+            },
+        }];
+        let plan = allocate(&positions, 2.0, 50.0);
+        assert!((plan.paid_markup - 5.0).abs() < 1e-9);
+        let derived = plan.allocations[0].derived;
+        assert!((derived.paid_markup - 5.0).abs() < 1e-9);
+        assert!((derived.declared_markup.unwrap() - 2.5).abs() < 1e-9);
+        assert!((derived.origin_quantity.unwrap() - 40.0).abs() < 1e-9);
+        assert_eq!(derived.origin_item, Some("Voucher"));
+        assert!((derived.outflow().paid_markup + 5.0).abs() < 1e-9);
+    }
+
+    /// Markup paid to produce the stock is recovered before anything counts
+    /// as gained: a 50 TT harness carrying 10 of paid markup, sold at 220.
+    #[test]
+    fn paid_markup_comes_off_the_gain_before_fees() {
+        let outcome = resolve_sale(1.0, 1.0, 50.0, 10.0, 220.0, 0.0, 8.0);
+        assert!((outcome.gross_markup - 160.0).abs() < 1e-9);
+        assert!((outcome.net_markup - 152.0).abs() < 1e-9);
+        assert!((outcome.activity_net_markup - 152.0).abs() < 1e-9);
+    }
+
+    fn blank(weight: f64) -> CreditLine {
+        CreditLine {
+            weight,
+            worth: None,
+        }
+    }
+
+    fn worth(amount: f64) -> CreditLine {
+        CreditLine {
+            weight: 1.0,
+            worth: Some(amount),
+        }
+    }
+
+    /// Declared inputs get their figure; whoever was left blank takes the rest.
+    #[test]
+    fn declared_worth_is_met_first_and_the_rest_goes_to_blank_lines() {
+        let parts = split_realised(162.0, &[blank(1.0), worth(5.0), worth(5.0)]);
+        assert!((parts[0] - 152.0).abs() < 1e-9);
+        assert!((parts[1] - 5.0).abs() < 1e-9);
+        assert!((parts[2] - 5.0).abs() < 1e-9);
+    }
+
+    /// A sale that cannot cover the declared worths pays them pro rata and
+    /// leaves the blank source nothing.
+    #[test]
+    fn a_short_sale_pays_declared_lines_pro_rata() {
+        let parts = split_realised(4.0, &[blank(1.0), worth(5.0), worth(15.0)]);
+        assert!(parts[0].abs() < 1e-9);
+        assert!((parts[1] - 1.0).abs() < 1e-9);
+        assert!((parts[2] - 3.0).abs() < 1e-9);
+    }
+
+    /// A loss is never charged against a declared worth while a blank source
+    /// exists to carry it.
+    #[test]
+    fn a_loss_lands_on_blank_lines() {
+        let parts = split_realised(-6.0, &[blank(1.0), worth(5.0)]);
+        assert!((parts[0] + 6.0).abs() < 1e-9);
+        assert!(parts[1].abs() < 1e-9);
+    }
+
+    #[test]
+    fn with_no_blank_line_the_surplus_follows_declared_worth() {
+        let parts = split_realised(40.0, &[worth(5.0), worth(15.0)]);
+        assert!((parts[0] - 10.0).abs() < 1e-9);
+        assert!((parts[1] - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn blank_lines_share_by_weight() {
+        let parts = split_realised(9.0, &[blank(2.0), blank(1.0)]);
+        assert!((parts[0] - 6.0).abs() < 1e-9);
+        assert!((parts[1] - 3.0).abs() < 1e-9);
+    }
+
+    proptest! {
+        /// The sources always add back to the figure being divided, so a
+        /// conversion can never create or lose value in the split.
+        #[test]
+        fn a_split_always_reconciles(
+            net in -5_000.0f64..5_000.0,
+            lines in prop::collection::vec(
+                (0.0f64..10.0, prop::option::of(0.0f64..500.0)),
+                1..8,
+            ),
+        ) {
+            let lines: Vec<CreditLine> = lines
+                .into_iter()
+                .map(|(weight, worth)| CreditLine { weight, worth })
+                .collect();
+            let parts = split_realised(net, &lines);
+            prop_assert!((parts.iter().sum::<f64>() - net).abs() < 1e-6);
+        }
+
+        /// While any blank source exists, a declared line never receives more
+        /// than it was declared to be worth, and never carries a loss.
+        #[test]
+        fn declared_lines_stay_within_their_worth(
+            net in -5_000.0f64..5_000.0,
+            declared in prop::collection::vec(0.0f64..500.0, 1..6),
+        ) {
+            let mut lines = vec![blank(1.0)];
+            lines.extend(declared.iter().map(|amount| worth(*amount)));
+            let parts = split_realised(net, &lines);
+            for (part, amount) in parts[1..].iter().zip(&declared) {
+                prop_assert!(*part >= -1e-6);
+                prop_assert!(*part <= amount + 1e-6);
+            }
+        }
     }
 }

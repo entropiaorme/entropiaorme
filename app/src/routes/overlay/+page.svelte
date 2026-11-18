@@ -12,168 +12,132 @@
 		setSessionConfig,
 		getManualMobSuggestions,
 		lockManualMob,
+		pinMob,
+		unpinMob,
 		getActivityOptions,
 		activateActivity,
 		deactivateActivity,
 		beginQuestHandIn,
-		updateSettings,
+		decideWeaponMismatch,
 		type TrackingLive,
 		type TrackingStatus,
 		type TrackingSnapshot,
-		type ManualMobSuggestion
+		type WeaponMismatchDecision
 	} from '$lib/api';
-	import { tick, untrack } from 'svelte';
+	import { untrack } from 'svelte';
 	import { useVisiblePoll, windowGeometryPoll } from '$lib/realtime/useVisiblePoll';
 	import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
 	import { createPostSessionFlow } from '$lib/features/tracking/postSession.svelte';
 	import { createSessionFacets } from '$lib/features/tracking/sessionFacets.svelte';
 	import { createActivitiesModel } from '$lib/features/tracking/activitiesModel.svelte';
-	import { protectionCostAction } from '$lib/features/protection/protectionCostFlow';
-	import { createOverlayProtectionModel } from '$lib/features/protection/overlayProtectionModel.svelte';
-	import { createOverlayArmourCostModel } from '$lib/features/protection/overlayArmourCostModel.svelte';
-	import { createTypeahead } from '$lib/view/typeahead.svelte';
+	import { createMobSourceModel } from '$lib/features/tracking/mobSourceModel.svelte';
+	import { createMobEntry } from '$lib/features/tracking/mobEntry.svelte';
+	import { createOverlayNotices } from '$lib/features/tracking/overlayNotices.svelte';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
 	import { PhysicalPosition } from '@tauri-apps/api/dpi';
 	import { listen } from '@tauri-apps/api/event';
-	import { anchorBelow } from '$lib/windows/anchor';
-	import { createSatelliteWindow } from '$lib/windows/satellite';
+	import { createOverlaySubWindows } from '$lib/windows/overlaySubWindows.svelte';
 	import { createWindowSizeSync } from '$lib/windows/windowSize';
 	import {
-		OVERLAY_MENU_CLOSED_EVENT,
-		OVERLAY_MENU_HIDE_EVENT,
-		OVERLAY_MENU_INTERACT_EVENT,
-		OVERLAY_MENU_READY_EVENT,
 		OVERLAY_MENU_SELECT_EVENT,
-		OVERLAY_MENU_SHOW_EVENT,
-		OVERLAY_MENU_WINDOW_LABEL,
-		OVERLAY_MENU_MIN_WIDTH,
 		buildActivitiesMenuState,
+		buildConsumablesMenuState,
+		buildHeldToolState,
+		buildMobSourceState,
 		buildQuestHandInMenuState,
 		buildDefinitionMenuState,
-		computeMenuHeight,
-		computeMenuWidth,
-		menuRowCount,
 		type OverlayMenuKind,
 		type OverlayMenuSelection,
-		type OverlayMenuState
+		type OverlayMenuState,
+		type ReadoutPanel
 	} from '$lib/windows/overlayMenu';
+	import OverlayReadout from '$lib/components/overlay/OverlayReadout.svelte';
+	import { createAccountSignal } from '$lib/features/account/accountSignal.svelte';
+	import { inDevelopment } from '$lib/inDevelopment';
+	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
+	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
 	import {
-		OVERLAY_ARMOUR_COST_CLOSED_EVENT,
-		OVERLAY_ARMOUR_COST_HIDE_EVENT,
-		OVERLAY_ARMOUR_COST_READY_EVENT,
-		OVERLAY_ARMOUR_COST_SHOW_EVENT,
-		OVERLAY_ARMOUR_COST_WINDOW_LABEL
-	} from '$lib/windows/overlayArmourCost';
-	import OverlayStrip from '$lib/components/overlay/OverlayStrip.svelte';
+		cueCopy,
+		heldToolDisplay,
+		screenNotReadLine,
+		toolInHand
+	} from '$lib/features/tracking/heldTool';
+	import { isSteered } from '$lib/features/tracking/mobSource';
+	import { doseState } from '$lib/features/consumables/doses';
+	import OverlayNotices from '$lib/components/overlay/OverlayNotices.svelte';
+	import { attachLifetimeLootValuation } from '$lib/features/dashboard/lifetimeLootValuation.svelte';
+	import { overlayStats } from '$lib/statsCustomisation.svelte';
+	import { drawsLifetimeValuation } from '$lib/statsRegistry';
+	import { statsScope } from '$lib/statsScope.svelte';
+	import { attachLiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
+	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 
-	// The colon-form Tauri topic the event relay re-emits each backend tracking
-	// frame on (the wire topic `tracking.session.updated`; Tauri event names
-	// forbid dots). See lib/realtime/eventRelay.ts.
+	// The colon-form Tauri topic the shell's event bridge emits each backend
+	// tracking frame on (the wire topic `tracking.session.updated`; Tauri event
+	// names forbid dots).
 	const TRACKING_TOPIC = 'tracking:session:updated';
 	// Emitted by the shell (toggle_overlay) when this hidden window is shown, so
 	// the overlay can re-read config/runtime fields no tracking frame announces.
 	const OVERLAY_SHOWN_EVENT = 'overlay-shown';
-	const OVERLAY_MENU_VERTICAL_GAP = 6;
 
 	let overlayRoot: HTMLDivElement | null = $state(null);
-	let overlayMenuKind = $state<OverlayMenuKind | null>(null);
-	let postSessionArmourButton: HTMLButtonElement | null = $state(null);
-	let inSessionArmourButton: HTMLButtonElement | null = $state(null);
-	// Yellow attribution-not-ready warning that replaces the TRACK button when
-	// startTracking is refused by the backend (no hotbar slot bound in hotbar
-	// mode, or trifecta not configured in trifecta mode). Persists until the
-	// user closes it; clicking TRACK again clears it implicitly on success.
-	let attributionWarning = $state<string | null>(null);
-	let mobInput: HTMLInputElement | null = $state(null);
-	let mobInputFocused = $state(false);
-	let trifectaSaving = $state(false);
-	let trifectaError = $state<string | null>(null);
-	let overlayMenuLaunchError = $state<string | null>(null);
+	let decidingWeapon = $state(false);
 	let data = $state<TrackingLive>({ status: 'idle' });
 	let status = $state<TrackingStatus | null>(null);
+	// The session's loot at market markup, for the markup pills.
+	const liveValuation = attachLiveLootValuation(() => status, () => liveMarkupSettings.confidence);
+	const lifetimeValuation = attachLifetimeLootValuation(
+		() => status,
+		() => liveMarkupSettings.confidence,
+		() => statsScope.current === 'lifetime' && drawsLifetimeValuation(overlayStats.current),
+		() => liveValuation.loot,
+		() => liveValuation.rewardItems,
+	);
 	// Session start in epoch-ms (parsed from the snapshot's started_at), the basis
 	// for the client-side elapsed tick. null when no active session is timed.
 	let sessionStartedAtMs = $state<number | null>(null);
-	let releasing = $state(false);
 	let starting = $state(false);
 
-	let mobQuery = $state('');
-	// The mob lookup's error channel, shared between the typeahead (search
-	// failures, mirrored in by the presenter effect below) and the declare
-	// action.
-	let mobError = $state<string | null>(null);
-	let selectingMob = $state(false);
-	let mobCloseTimer: ReturnType<typeof setTimeout> | undefined;
 
 
-	// The two satellite popovers this window drives. The failure messages keep
-	// the overlay's established wording (they render in the strip).
-	const menuWindow = createSatelliteWindow({
-		label: OVERLAY_MENU_WINDOW_LABEL,
-		url: '/overlay-menu',
-		width: OVERLAY_MENU_MIN_WIDTH,
-		height: 44,
-		readyEvent: OVERLAY_MENU_READY_EVENT,
-		showEvent: OVERLAY_MENU_SHOW_EVENT,
-		hideEvent: OVERLAY_MENU_HIDE_EVENT,
-		messages: {
-			creationTimeout: 'Popup window creation timed out',
-			creationFailed: 'Unknown Tauri popup creation error',
-			readyTimeout: 'Popup route did not become ready'
-		}
+	// The overlay's sub-windows: every menu and panel it opens beside
+	// itself, all opened, placed and closed by the one host (the rules are
+	// in `lib/windows/subWindow.ts`).
+	const subWindows = createOverlaySubWindows({
+		onError: (id, error) => {
+			console.error(`Overlay ${id} popup failed`, error);
+			notices.push(describeOverlayMenuError(error));
+		},
+		// The typed mob's suggestions follow its field: anything that happens
+		// in them, or to them, settles the field's own pending close.
+		onClosed: (id) => id === 'mob' && mobEntry.clearCloseTimer(),
+		onInteract: (id) => id === 'mob' && mobEntry.clearCloseTimer()
 	});
-	const armourCostWindow = createSatelliteWindow({
-		label: OVERLAY_ARMOUR_COST_WINDOW_LABEL,
-		url: '/overlay-armour-cost',
-		width: 320,
-		height: 64,
-		readyEvent: OVERLAY_ARMOUR_COST_READY_EVENT,
-		showEvent: OVERLAY_ARMOUR_COST_SHOW_EVENT,
-		hideEvent: OVERLAY_ARMOUR_COST_HIDE_EVENT,
-		messages: {
-			creationTimeout: 'Armour cost popup creation timed out',
-			creationFailed: 'Unknown Tauri popup creation error',
-			readyTimeout: 'Armour cost popup did not become ready'
-		}
-	});
+	$effect(() => subWindows.connect());
+	/** What the menu window shows, if anything. */
+	const overlayMenuKind = $derived(subWindows.shownIn('menu') as OverlayMenuKind | 'screenUnread' | null);
 
 	// The consolidated snapshot, event-driven with coalesced re-reads (see the
 	// factory). Each webview is its own JS context, so the overlay keeps its
 	// own store instance beside the dashboard's.
 	const snapshot = createSnapshotStore<TrackingSnapshot>(TRACKING_TOPIC, getTrackingSnapshot);
-	const protection = createOverlayProtectionModel(() => snapshot.hydrate());
+	const account = inDevelopment.visible ? createAccountSignal() : null;
+	$effect(() => account?.connect());
 
-	// Post-session flow: the armour prompt gating the stop and the
-	// final-stats readout (see the module for the state machine). Render
-	// state comes off `flow`; the deps close over this window's snapshot
-	// and armour-cost popup.
+	// The stop flow (see the module). Render state comes off `flow`; the deps
+	// close over this window's snapshot.
 	const flow = createPostSessionFlow({
 		isSessionActive: () => data.status === 'active',
 		isBusy: () => toggling,
-		armourReminderEnabled: () =>
-			data.trackProtectionCosts !== false &&
-			data.endOfSessionArmourReminderEnabled === true &&
-			protectionCostAction(protection.overview, data.trackProtectionBySegment !== false)
-				.enabled,
 		refresh: () => snapshot.hydrate(),
-		readStats: () => ({
-			cost: snapshot.current?.cost ?? 0,
-			returns: snapshot.current?.returns ?? 0,
-			pes: snapshot.current?.pes ?? 0,
-			net: snapshot.current?.net ?? 0
-		}),
-		stopTracking,
-		captureArmourSetupOnLater: () =>
-			data.trackProtectionCosts !== false &&
-			data.trackProtectionBySegment === false &&
-			(protection.overview?.loadouts.length ?? 0) > 0,
-		showArmourPopup: (recordNow: boolean) => armourCost.showPostSession(recordNow),
-		showArmourWorkflowInSession: () => armourCost.showInSession(),
-		onPromptShown: () => {
-			void tick().then(() => armourCost.scheduleAnchorSync());
-		}
+		stopTracking
 	});
 	const toggling = $derived(starting || flow.stopping);
+
+	// Everything the strip has to say (a session's tracking warnings, a
+	// refused start, a failed action) surfaces as a self-clearing notice
+	// under it, never as text wedged between its controls.
+	const notices = createOverlayNotices();
 
 	// The session facets (the session it runs as, and the boost): state
 	// and writes live in the feature model; this route owns only the
@@ -188,6 +152,28 @@
 		refresh: () => snapshot.hydrate(),
 		setSessionConfig,
 		selectDefinition: (id) => selectDefinition(id)
+	});
+
+	// The mob source: what the strip shows of it, and the writes that steer it.
+	const mobSource = createMobSourceModel({
+		view: () => data.mobSource ?? null,
+		pin: pinMob,
+		unpin: unpinMob,
+		setTyped: lockManualMob,
+		clearTyped: releaseMob,
+		refresh: () => snapshot.hydrate()
+	});
+	// Its typed entry: the catalogue typeahead and the suggestion menu.
+	const mobEntry = createMobEntry({
+		source: mobSource,
+		available: () => data.status === 'active' || data.status === 'idle',
+		search: getManualMobSuggestions,
+		menu: {
+			show: (anchor, state) => showOverlayMenu('mob', anchor, state),
+			hide: () => subWindows.close('mob'),
+			isOpen: () => subWindows.isOpen('mob'),
+			isFocused: subWindows.menuFocused
+		}
 	});
 
 	// Activities owns offered/standing transitions; the strip reads live chips.
@@ -206,20 +192,11 @@
 	async function handleDrag(e: MouseEvent) {
 		const target = e.target as HTMLElement;
 		if (target.closest('button, [role="button"], input, select, textarea')) return;
-		if (overlayMenuKind) {
-			await hideOverlayMenu();
-		}
-		if (armourCost.open) {
-			await armourCost.hide();
-		}
+		// A sub-window hangs from where the overlay is: none follows a drag.
+		await subWindows.closeAll();
 		await getCurrentWindow().startDragging();
 	}
 
-	function clearMobCloseTimer() {
-		if (!mobCloseTimer) return;
-		clearTimeout(mobCloseTimer);
-		mobCloseTimer = undefined;
-	}
 
 
 	function describeOverlayMenuError(error: unknown) {
@@ -228,149 +205,61 @@
 		return 'Popup window failed to open';
 	}
 
-	function reportOverlayMenuOpenError(kind: OverlayMenuKind, error: unknown) {
-		const message = describeOverlayMenuError(error);
-		console.error(`Overlay ${kind} popup failed`, error);
-		if (kind === 'trifecta') {
-			trifectaError = message;
-			return;
-		}
-		overlayMenuLaunchError = message;
-	}
-
-	// Keep this window's OS size in step with the strip; each sync re-anchors
-	// the armour-cost popup, which hangs off a strip button.
+	// Keep this window's OS footprint exactly the readout and its notices;
+	// each sync lets the open sub-windows follow their controls.
 	const windowSizeSync = createWindowSizeSync(() => overlayRoot, {
-		afterSync: () => armourCost.scheduleAnchorSync()
+		afterSync: () => void subWindows.reanchor()
 	});
 
-	function buildMobMenuState(anchorWidth: number): OverlayMenuState | null {
-		const trimmedQuery = mobQuery.trim();
-		const shouldShow = mobLoading || !!mobError || mobSuggestions.length > 0 || !!trimmedQuery;
-		if (!shouldShow) return null;
 
-		const labels = mobLoading
-			? ['Searching...']
-			: mobError
-				? [mobError]
-				: (mobSuggestions.length > 0 ? mobSuggestions.map((option) => option.display) : ['No matches']);
-
-		return {
-			kind: 'mob',
-			width: computeMenuWidth(anchorWidth, labels, 28),
-			query: trimmedQuery,
-			loading: mobLoading,
-			error: mobError,
-			mobSuggestions
-		};
-	}
-
-	function buildTrifectaMenuState(anchorWidth: number): OverlayMenuState | null {
-		const trifecta = data.trifectaAttribution;
-		if (!trifecta || trifecta.presets.length === 0) return null;
-
-		return {
-			kind: 'trifecta',
-			width: computeMenuWidth(anchorWidth, trifecta.presets.map((preset) => preset.name), 88),
-			options: trifecta.presets.map((preset) => ({
-				id: preset.id,
-				name: preset.name,
-				active: preset.id === trifecta.activePresetId
-			}))
-		};
-	}
-
+	/** Show a menu or panel in the menu window. The typed mob's suggestions
+	 * follow its field and take no keyboard; a quest hand-in stays while
+	 * the player goes to hand the quest in. */
 	async function showOverlayMenu(
 		kind: OverlayMenuKind,
 		anchor: HTMLElement,
 		state: OverlayMenuState,
 		options: { focusPopup?: boolean } = {}
 	) {
-		try {
-			// Resolve the window (creating it on first use) while the anchor
-			// maths runs; the show below re-adopts the settled window.
-			const [, anchorPosition] = await Promise.all([
-				menuWindow.ensure(),
-				anchorBelow(anchor, OVERLAY_MENU_VERTICAL_GAP)
-			]);
-			const height = computeMenuHeight(menuRowCount(state));
+		await subWindows.open({
+			slot: 'menu',
+			id: kind,
+			anchor,
+			state,
+			focus: options.focusPopup === true,
+			attached: kind === 'mob',
+			stays: kind === 'questHandIn'
+		});
+	}
 
-			await menuWindow.show(
-				state,
-				{ x: anchorPosition.x, y: anchorPosition.y, width: state.width, height },
-				{ focus: options.focusPopup }
-			);
-			if (kind === 'mob') {
-				overlayMenuLaunchError = null;
+	/** A menu's control was clicked: close it when it is open, else open
+	 * it with what `build` reads for it. */
+	function toggleOverlayMenu(
+		kind: OverlayMenuKind,
+		anchor: HTMLElement,
+		build: () => OverlayMenuState | null | Promise<OverlayMenuState | null>
+	) {
+		return subWindows.toggleWith({ slot: 'menu', id: kind, anchor, focus: true }, build);
+	}
+
+
+	/** The session picker off its title: the authored definitions, fetched
+	 * fresh (the dashboard authors them; the overlay must never present a
+	 * stale catalogue), with the current selection marked. */
+	function toggleDefinitionMenu(anchor: HTMLButtonElement) {
+		return toggleOverlayMenu('definition', anchor, async () => {
+			try {
+				const definitions = await getSessionDefinitions();
+				return buildDefinitionMenuState(
+					anchor.getBoundingClientRect().width,
+					definitions,
+					data.sessionDefinitionId ?? null
+				);
+			} catch (error) {
+				notices.push(describeOverlayMenuError(error));
+				return null;
 			}
-			overlayMenuKind = kind;
-		} catch (error) {
-			overlayMenuKind = null;
-			reportOverlayMenuOpenError(kind, error);
-		}
-	}
-
-	async function hideOverlayMenu() {
-		if (overlayMenuKind === 'mob') {
-			clearMobCloseTimer();
-		}
-		overlayMenuKind = null;
-		await menuWindow.hide();
-	}
-
-	async function openMobMenu() {
-		if (!mobInput) return;
-		const state = buildMobMenuState(mobInput.getBoundingClientRect().width);
-		if (!state) return;
-		overlayMenuLaunchError = null;
-		await showOverlayMenu('mob', mobInput, state);
-	}
-
-	async function closeMobMenu() {
-		clearMobCloseTimer();
-		if (overlayMenuKind !== 'mob') return;
-		await hideOverlayMenu();
-	}
-
-	/** Open the session picker off its chip: fetch the authored
-	 * definitions fresh (the dashboard authors them; the overlay must
-	 * never present a stale catalogue) and present them with the
-	 * current selection marked. */
-	async function openDefinitionMenu(anchor: HTMLButtonElement) {
-		let definitions;
-		try {
-			definitions = await getSessionDefinitions();
-		} catch (error) {
-			facets.facetError = describeOverlayMenuError(error);
-			return;
-		}
-		facets.facetError = null;
-		const state = buildDefinitionMenuState(
-			anchor.getBoundingClientRect().width,
-			definitions,
-			data.sessionDefinitionId ?? null
-		);
-		await showOverlayMenu('definition', anchor, state, { focusPopup: true });
-	}
-
-	async function toggleDefinitionMenu(anchor: HTMLButtonElement) {
-		if (overlayMenuKind === 'definition') {
-			await hideOverlayMenu();
-			return;
-		}
-		await openDefinitionMenu(anchor);
-	}
-
-	async function toggleTrifectaMenu(anchor: HTMLButtonElement) {
-		if (overlayMenuKind === 'trifecta') {
-			await hideOverlayMenu();
-			return;
-		}
-
-		trifectaError = null;
-		const state = buildTrifectaMenuState(anchor.getBoundingClientRect().width);
-		if (!state) return;
-		await showOverlayMenu('trifecta', anchor, state, { focusPopup: true });
+		});
 	}
 
 	// The Activities control's anchor, kept so an action can re-present
@@ -380,13 +269,9 @@
 	let activitiesAnchor: HTMLElement | null = null;
 
 	async function openActivitiesMenu(anchor: HTMLElement) {
+		// A failed read reports through the activities error channel.
 		const options = await activities.load();
-		if (!options) {
-			facets.facetError = activities.error;
-			return;
-		}
-		// A successful open clears a prior open's failure message.
-		facets.facetError = null;
+		if (!options) return;
 		const state = buildActivitiesMenuState(
 			anchor.getBoundingClientRect().width,
 			options,
@@ -398,19 +283,113 @@
 	}
 
 	async function toggleActivitiesMenu(anchor: HTMLElement) {
-		if (overlayMenuKind === 'activities' || overlayMenuKind === 'questHandIn') {
-			await hideOverlayMenu();
+		// A hand-in is the activities control's too: its click closes either.
+		if (subWindows.isOpen('questHandIn')) {
+			await subWindows.close('questHandIn');
 			return;
 		}
+		if (subWindows.isOpen('activities')) {
+			await subWindows.close('activities');
+			return;
+		}
+		if (subWindows.reclicked('activities')) return;
 		await openActivitiesMenu(anchor);
 	}
+
+	// The doses in force, read on each consumables frame and ticked for
+	// their countdowns while any is on show. They belong to the running
+	// session, so its start or stop re-reads them.
+	const doses = createDosesModel();
+	$effect(() => doses.connect());
+	const sessionActive = $derived(data.status === 'active');
+	$effect(() => {
+		void sessionActive;
+		void doses.refresh();
+	});
+	$effect(() => {
+		if (!doses.ticking) return;
+		return useVisiblePoll(doses.tick, { intervalMs: 1000 });
+	});
+	$effect(() => {
+		if (doses.error) {
+			notices.push(doses.error);
+			doses.dismissError();
+		}
+	});
+
+	function toggleDosesMenu(anchor: HTMLElement) {
+		return toggleOverlayMenu('consumables', anchor, () => {
+			const running = doses.rows.flatMap((dose) =>
+				doseState(dose, doses.now) === 'running' && dose.equipmentId !== null ? [dose.equipmentId] : []
+			);
+			const width = anchor.getBoundingClientRect().width;
+			return buildConsumablesMenuState(width, doses.options, running);
+		});
+	}
+
+	// The equipment picker: declare what is in hand without a hotbar press.
+	const equipment = createEquipmentDeclare({
+		onDeclared: () => snapshot.hydrate(),
+		onError: (message) => notices.push(message)
+	});
+
+	function toggleEquipmentMenu(anchor: HTMLElement) {
+		return toggleOverlayMenu('equipment', anchor, async () => {
+			try {
+				const width = anchor.getBoundingClientRect().width;
+				const inHand = toolInHand(data.toolSource, data.currentTool);
+				return await equipment.menuState(width, inHand, status?.healing?.toolName ?? null);
+			} catch (error) {
+				notices.push(describeOverlayMenuError(error));
+				return null;
+			}
+		});
+	}
+
+	// The readout's lines that say more in a sub-window: where the mob
+	// comes from, the tool in hand in full, and why the screen is not read.
+	// Each is built from the snapshot, and kept up to date while it is open.
+	const inputAvailable = $derived(data.status === 'active' || data.status === 'idle');
+	const toolDisplay = $derived(heldToolDisplay(data.toolSource));
+	const unreadLine = $derived(screenNotReadLine(data.toolSource));
+	const panelStates = $derived<Record<ReadoutPanel, OverlayMenuState | null>>({
+		mobSource: isSteered(data.mobSource)
+			? buildMobSourceState(data.mobSource, inputAvailable, mobSource.busy !== null)
+			: null,
+		heldTool: toolDisplay
+			? buildHeldToolState(
+					toolDisplay,
+					data.weaponHitCue
+						? cueCopy(data.toolSource?.readingScreen === true).hit(data.weaponHitCue)
+						: null,
+					equipment.declaring
+				)
+			: null,
+		screenUnread: unreadLine ? { kind: 'note', heading: 'Tool', text: unreadLine } : null
+	});
+	// The control each panel hangs from, for what one panel opens in turn.
+	const panelAnchors: Partial<Record<ReadoutPanel, HTMLElement>> = {};
+
+	function togglePanel(panel: ReadoutPanel, anchor: HTMLElement) {
+		panelAnchors[panel] = anchor;
+		return subWindows.toggleWith({ slot: 'menu', id: panel, anchor, focus: true }, () => panelStates[panel]);
+	}
+
+	// An open panel follows the snapshot, and closes when its line no longer
+	// has anything to say (the session ended, the source moved).
+	$effect(() => {
+		for (const panel of ['mobSource', 'heldTool', 'screenUnread'] as const) {
+			const state = panelStates[panel];
+			if (!subWindows.isOpen(panel)) continue;
+			untrack(() => void (state ? subWindows.update(panel, state) : subWindows.close(panel)));
+		}
+	});
 
 	async function openQuestHandIn(key: string) {
 		const anchor = activitiesAnchor;
 		const option = activities.find(key);
 		if (!anchor?.isConnected || !option) return;
 		const handIn = await activities.beginHandIn(option);
-		facets.facetError = activities.error;
 		if (!handIn) return;
 		await showOverlayMenu('questHandIn', anchor, buildQuestHandInMenuState(anchor.getBoundingClientRect().width, handIn), { focusPopup: true });
 	}
@@ -422,43 +401,28 @@
 	 * anchor. */
 	async function handleActivityAction(action: () => Promise<unknown>) {
 		await action();
-		// Held across the re-present: re-opening the menu re-reads the
-		// offerings, and a successful read clears the error channel that
-		// the refusal just wrote to.
-		const failure = activities.error;
-		if (overlayMenuKind === 'activities' && activitiesAnchor?.isConnected) {
+		if (subWindows.isOpen('activities') && activitiesAnchor?.isConnected) {
 			await openActivitiesMenu(activitiesAnchor);
 		}
-		if (failure) facets.facetError = failure;
 	}
 
-	const armourCost = createOverlayArmourCostModel({
-		window: armourCostWindow,
-		anchorGap: OVERLAY_MENU_VERTICAL_GAP,
-		sessionId: () => armourSessionId,
-		repairOcrEnabled: () => data.repairOcrEnabled === true,
-		bySegment: () => data.trackProtectionBySegment !== false,
-		protection: () => protection.overview,
-		postSessionAnchor: () => postSessionArmourButton,
-		inSessionAnchor: () => inSessionArmourButton,
-		onClosed: () => flow.notifyArmourPopupClosed()
-	});
-
-	async function handleTrifectaPresetSelection(presetId: string) {
-		const trifecta = data.trifectaAttribution;
-		if (!trifecta || trifectaSaving || presetId === trifecta.activePresetId) return;
-
-		trifectaSaving = true;
-		trifectaError = null;
+	/** The player's call on a standing weapon mismatch. A stale control (the
+	 * cue already resolved by a press) changes nothing; either way the
+	 * readout re-reads. */
+	async function handleWeaponDecision(decision: WeaponMismatchDecision) {
+		if (decidingWeapon) return;
+		decidingWeapon = true;
 		try {
-			await updateSettings({ active_trifecta_preset_id: presetId });
+			await decideWeaponMismatch(decision);
 			await snapshot.hydrate();
 		} catch (error) {
-			trifectaError = error instanceof ApiError || error instanceof Error
-				? error.message
-				: 'Failed to switch trifecta preset';
+			notices.push(
+				error instanceof ApiError || error instanceof Error
+					? error.message
+					: 'The weapon decision could not be saved'
+			);
 		}
-		trifectaSaving = false;
+		decidingWeapon = false;
 	}
 
 	// Restore saved overlay position; periodically persist if moved
@@ -505,39 +469,29 @@
 	$effect(() => {
 		if (!overlayRoot) return;
 
-		windowSizeSync.schedule();
+		const disconnectSizeSync = windowSizeSync.connect();
 
 		const handleVisibilityChange = () => {
 			if (document.visibilityState === 'visible') {
 				windowSizeSync.schedule();
 			} else {
 				// A hand-in waits on the user going to the game to hand
-				// the quest in, so it outlives the strip going away.
-				if (overlayMenuKind !== 'questHandIn') {
-					void hideOverlayMenu();
-				}
-				void armourCost.hide();
+				// the quest in, so it outlives the overlay going away.
+				void subWindows.closeAll((id) => id === 'questHandIn');
 			}
 		};
 		const handleFocus = () => {
 			windowSizeSync.schedule();
-			armourCost.scheduleAnchorSync();
+			void subWindows.reanchor();
 		};
-
-		const resizeObserver = new ResizeObserver(() => {
-			windowSizeSync.schedule();
-			armourCost.scheduleAnchorSync();
-		});
-		resizeObserver.observe(overlayRoot);
 
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		window.addEventListener('focus', handleFocus);
 
 		return () => {
-			windowSizeSync.cancel();
+			disconnectSizeSync();
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.removeEventListener('focus', handleFocus);
-			resizeObserver.disconnect();
 		};
 	});
 
@@ -546,7 +500,7 @@
 	// Re-read the consolidated snapshot on each backend tracking frame. The
 	// listener attaches FIRST and the initial hydrate runs after it settles,
 	// so a frame arriving during subscription setup is not lost (it simply
-	// re-triggers a read). A payload-less reconnect nudge on this topic
+	// re-triggers a read). A payload-less frame on this topic
 	// re-hydrates the same way, so it can never be mistaken for an idle
 	// session.
 	$effect(() => {
@@ -560,7 +514,6 @@
 			}
 			unlisten = fn;
 			void snapshot.hydrate();
-			void protection.refresh();
 		});
 
 		return () => {
@@ -572,10 +525,10 @@
 	// The overlay is a hidden pre-spawned window shown (not focused) by
 	// toggle_overlay, so no focus/visibility event fires on the frontend when it
 	// appears. The shell emits `overlay-shown` from the show path; re-read on it
-	// to refresh config/runtime fields no tracking frame announces (weapon
-	// attribution, trifecta presets, mob-entry mode, repair-OCR, the armour
-	// reminder), which would otherwise stay stale and wedge a control after a
-	// settings change made while the overlay was hidden.
+	// to refresh config/runtime fields no tracking frame announces (the
+	// hotbar key setting, mob-entry mode, repair-OCR), which would
+	// otherwise stay stale and wedge a control after a settings change made
+	// while the overlay was hidden.
 	$effect(() => {
 		let disposed = false;
 		let unlisten: (() => void) | undefined;
@@ -584,7 +537,6 @@
 			unlisten = await listen(OVERLAY_SHOWN_EVENT, () => {
 				if (disposed) return;
 				void snapshot.hydrate();
-				void protection.refresh();
 			});
 		})();
 
@@ -615,26 +567,49 @@
 	$effect(() => {
 		let disposed = false;
 		let unlistenSelect: (() => void) | undefined;
-		let unlistenClosed: (() => void) | undefined;
-		let unlistenInteract: (() => void) | undefined;
 
 		void (async () => {
 			unlistenSelect = await listen<OverlayMenuSelection>(OVERLAY_MENU_SELECT_EVENT, async (event) => {
 				if (disposed) return;
 
-				if (event.payload.kind === 'trifecta') {
-					overlayMenuKind = null;
-					await handleTrifectaPresetSelection(event.payload.presetId);
-					return;
-				}
-
 				if (event.payload.kind === 'definition') {
-					overlayMenuKind = null;
 					// Tapping another row switches; tapping the selected one just
 					// closes. A session always runs under one, so there is no
 					// clear here any more than there is on the chip.
 					if (!event.payload.selected) {
 						await facets.selectDefinition(event.payload.definitionId);
+					}
+					return;
+				}
+
+				if (event.payload.kind === 'consumables') {
+					await doses.start(event.payload.equipmentId, event.payload.untimed);
+					return;
+				}
+
+				if (event.payload.kind === 'equipment') {
+					await equipment.declare(event.payload.equipmentId);
+					return;
+				}
+
+				if (event.payload.kind === 'mobSource') {
+					const picked = event.payload;
+					if (picked.action === 'clearBackstop') await mobSource.clearTyped();
+					else if (picked.action === 'pin') {
+						await mobSource.pinTyped(picked.species, picked.maturity);
+					} else await mobSource.backstop(picked.species, picked.maturity);
+					return;
+				}
+
+				if (event.payload.kind === 'heldTool') {
+					if (event.payload.action === 'declare') {
+						await equipment.declare(event.payload.equipmentId);
+						return;
+					}
+					// "Choose a tool": the picker opens where the panel hung.
+					const anchor = panelAnchors.heldTool;
+					if (anchor?.isConnected && !subWindows.isOpen('equipment')) {
+						await toggleEquipmentMenu(anchor);
 					}
 					return;
 				}
@@ -660,13 +635,11 @@
 				}
 
 				if (event.payload.kind === 'questHandIn') {
-					overlayMenuKind = null;
 					await activities.refresh();
 					return;
 				}
 
-				overlayMenuKind = null;
-				await handleSelectMob({
+				await mobEntry.select({
 					display: event.payload.maturity
 						? `${event.payload.species} ${event.payload.maturity}`.trim()
 						: event.payload.species,
@@ -675,45 +648,13 @@
 				});
 			});
 
-			unlistenClosed = await listen(OVERLAY_MENU_CLOSED_EVENT, async () => {
-				if (disposed) return;
-				overlayMenuKind = null;
-				clearMobCloseTimer();
-			});
-
-			unlistenInteract = await listen(OVERLAY_MENU_INTERACT_EVENT, async () => {
-				if (disposed) return;
-				if (overlayMenuKind === 'mob') clearMobCloseTimer();
-			});
 		})();
 
 		return () => {
 			disposed = true;
 			unlistenSelect?.();
-			unlistenClosed?.();
-			unlistenInteract?.();
 		};
 	});
-
-	$effect(() => {
-		let disposed = false;
-		let unlistenClosed: (() => void) | undefined;
-
-		void (async () => {
-			unlistenClosed = await listen(OVERLAY_ARMOUR_COST_CLOSED_EVENT, () => {
-				if (disposed) return;
-				armourCost.noteClosed();
-				void protection.refresh();
-			});
-		})();
-
-		return () => {
-			disposed = true;
-			unlistenClosed?.();
-		};
-	});
-
-
 
 	// Map the one consolidated snapshot onto the overlay's two render bindings:
 	// `data` (TrackingLive, the strip) and `status` (TrackingStatus, the stat
@@ -734,21 +675,24 @@
 			pes: snap.pes,
 			net: snap.net,
 			returnRate: snap.returnRate,
-			weaponAttribution: snap.weaponAttribution,
+			hotbarKeysEnabled: snap.hotbarKeysEnabled,
+			hotbarListenerActive: snap.hotbarListenerActive,
 			repairOcrEnabled: snap.repairOcrEnabled,
-			endOfSessionArmourReminderEnabled: snap.endOfSessionArmourReminderEnabled,
 			sessionName: snap.sessionName,
 			sessionDefinitionId: snap.sessionDefinitionId,
-			trackProtectionBySegment: snap.trackProtectionBySegment,
 			trackProtectionCosts: snap.trackProtectionCosts,
 			skillBoostPercent: snap.skillBoostPercent,
-			currentMob: snap.currentMob,
+			mobSource: snap.mobSource,
+			toolSource: snap.toolSource,
 			currentTool: snap.currentTool,
 			currentToolKind: snap.currentToolKind,
 			currentActivity: snap.currentActivity,
 			activities: snap.activities,
-			trifectaAttribution: snap.trifectaAttribution,
 			harvestGuardrail: snap.harvestGuardrail,
+			weaponGuardrail: snap.weaponGuardrail,
+			unpricedShots: snap.unpricedShots,
+			weaponDeclared: snap.weaponDeclared,
+			keylessInput: snap.keylessInput,
 			warnings: snap.warnings,
 		};
 		const startedMs = snap.started_at ? new Date(snap.started_at).getTime() : NaN;
@@ -761,217 +705,85 @@
 		applySnapshot(current);
 	});
 
-	const isTrifectaAttribution = $derived(data.weaponAttribution === 'trifecta');
-
-	const armourSessionId = $derived(data.sessionId ?? flow.lastSessionId);
-	const showManualInput = $derived(
-		(data.status === 'active' || data.status === 'idle') && !data.currentMob
-	);
-	// The declared-mob typeahead (the one remaining free-text facet; the
-	// session is picked from the authored definitions instead).
-	// Search failures are mapped to the overlay's established wording
-	// before the typeahead records them.
-	const mobTypeahead = createTypeahead<ManualMobSuggestion>({
-		search: async (query) => {
-			try {
-				return await getManualMobSuggestions(query);
-			} catch (error) {
-				throw new Error(error instanceof ApiError ? error.message : 'Mob lookup failed');
-			}
-		},
-		debounceMs: 120,
-		minLength: 1
-	});
-	const mobSuggestions = $derived(mobTypeahead.results);
-	const mobLoading = $derived(mobTypeahead.loading);
-
-	// Drive each typeahead from its input state. Hiding the input or
-	// emptying the query suspends the search and closes that menu, keeping
-	// the typed text.
+	// A session's warnings arrive as its cumulative list on every frame;
+	// each one notifies once, when it first appears.
 	$effect(() => {
-		if (!showManualInput) {
-			mobTypeahead.cancel();
-			void closeMobMenu();
-			overlayMenuLaunchError = null;
-			return;
-		}
-
-		mobTypeahead.query = mobQuery;
-		if (!mobQuery.trim()) {
-			mobTypeahead.cancel();
-			void closeMobMenu();
-			overlayMenuLaunchError = null;
-			return;
-		}
-
-		mobTypeahead.refresh();
+		const sessionId = data.sessionId ?? null;
+		const warnings = (data.warnings ?? []).map((warning) => warning.description);
+		untrack(() => notices.observeWarnings(sessionId, warnings));
 	});
 
-	// Present the search lifecycle in the menu window: mirror the typeahead's
-	// settled error into the shared channel and re-sync the menu at each
-	// transition (the loading flip, a results publication, an error) while the
-	// input is focused or the menu already open. Only the lifecycle is
-	// tracked; the gate reads are untracked so a bare focus change cannot
-	// re-open a menu with nothing new to show.
-	$effect(() => {
-		void mobTypeahead.loading;
-		void mobTypeahead.results;
-		mobError = mobTypeahead.error;
-		untrack(() => {
-			if (!showManualInput || !mobQuery.trim()) return;
-			if (mobInputFocused || overlayMenuKind === 'mob') {
-				void openMobMenu();
-			}
-		});
-	});
+	// The feature models' failure channels: each new message is a notice.
+	notices.follow(() => facets.facetError);
+	notices.follow(() => activities.error);
+	notices.follow(() => mobSource.error);
+	$effect(() => () => notices.destroy());
 
-	$effect(() => {
-		return () => {
-			mobTypeahead.destroy();
-		};
-	});
-
-	// Keep the boost buffer in step with its persisted facet while the
-	// user is not editing it (an idle overlay re-read, a session start
-	// snapshotting the declaration).
-	$effect(() => {
-		void data.skillBoostPercent;
-		untrack(() => {
-			facets.syncBoostDraft();
-		});
-	});
 
 	async function handleStart() {
 		starting = true;
-		attributionWarning = null;
 		try {
 			await startTracking();
 			await snapshot.hydrate();
 		} catch (error) {
+			// A refused start (no tool configured) says what to set up;
+			// TRACK stays in place for the retry.
 			if (error instanceof ApiError && error.kind === 'badRequest') {
-				attributionWarning = error.message;
+				notices.push(error.message, 'warning');
 			}
 		}
 		starting = false;
 	}
 
-	function dismissAttributionWarning() {
-		attributionWarning = null;
-	}
-
-	async function handleReleaseMob() {
-		releasing = true;
-		try {
-			await releaseMob();
-			mobQuery = '';
-			mobTypeahead.cancel();
-			await closeMobMenu();
-			mobError = null;
-			await snapshot.hydrate();
-		} catch { /* ignore */ }
-		releasing = false;
-	}
-
-	function handleMobFocus() {
-		clearMobCloseTimer();
-		mobInputFocused = true;
-		if (mobQuery.trim() && (mobSuggestions.length > 0 || mobLoading || !!mobError)) {
-			void openMobMenu();
-		}
-	}
-
-	function handleMobBlur() {
-		mobInputFocused = false;
-		clearMobCloseTimer();
-		mobCloseTimer = setTimeout(() => {
-			void closeMobMenu();
-		}, 120);
-	}
-
-	async function handleMobKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') {
-			await closeMobMenu();
-			return;
-		}
-		if (event.key !== 'Enter') return;
-
-		// Only a catalogue mob can be declared, so Enter takes the top
-		// match rather than inventing a name the catalogue cannot resolve.
-		if (mobSuggestions.length > 0) {
-			event.preventDefault();
-			await handleSelectMob(mobSuggestions[0]);
-		}
-	}
-
-	async function handleSelectMob(option: ManualMobSuggestion) {
-		clearMobCloseTimer();
-		selectingMob = true;
-		mobError = null;
-		try {
-			await lockManualMob(option.species, option.maturity);
-			mobQuery = '';
-			mobTypeahead.cancel();
-			overlayMenuLaunchError = null;
-			await closeMobMenu();
-			await snapshot.hydrate();
-		} catch (error) {
-			mobError = error instanceof ApiError ? error.message : 'Failed to declare mob';
-		}
-		selectingMob = false;
-	}
 </script>
 
 <!-- Kept: mousedown is the frameless overlay window's drag handle (pointer-only by nature); the controls inside are native buttons. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="p-2 flex flex-col items-start overlay-frame w-max" bind:this={overlayRoot} onmousedown={handleDrag}>
-	<OverlayStrip
+<div class="flex flex-col items-start overlay-frame w-max" bind:this={overlayRoot} onmousedown={handleDrag}>
+	<OverlayReadout
 		{data}
 		{status}
+		statContext={{
+			valuation: liveValuation.view,
+			lifetimeValuation: lifetimeValuation.view,
+			looterBasis: liveMarkupSettings.looterBasis,
+		}}
 		{toggling}
-		{releasing}
-		{selectingMob}
-		{trifectaSaving}
-		{trifectaError}
-		armourCostOpen={armourCost.open}
-		armourCostError={armourCost.error}
-		{armourSessionId}
-		protection={protection.overview}
-		protectionSaving={protection.saving}
-		protectionError={protection.error}
-		mobMenuOpen={overlayMenuKind === 'mob'}
+		releasing={mobEntry.releasing}
+		selectingMob={mobEntry.selecting}
+		{mobSource}
+		{decidingWeapon}
 		definitionMenuOpen={overlayMenuKind === 'definition'}
-		trifectaMenuOpen={overlayMenuKind === 'trifecta'}
-		{overlayMenuLaunchError}
 		savingDefinition={facets.savingDefinition}
 		definitionEditable={facets.definitionEditable}
-		savingBoost={facets.savingBoost}
 		savingActivity={activities.saving}
 		activitiesMenuOpen={overlayMenuKind === 'activities' || overlayMenuKind === 'questHandIn'}
-		facetError={facets.facetError}
-		lastSessionId={flow.lastSessionId}
-		lastSessionStats={flow.lastSessionStats}
-		bind:mobQuery
-		bind:mobInput
-		bind:boostDraft={facets.boostDraft}
-		bind:postSessionArmourButton
-		bind:inSessionArmourButton
+		bind:mobQuery={mobEntry.query}
+		bind:mobInput={mobEntry.input}
 		onStart={handleStart}
 		onStop={flow.requestStop}
-		awaitingArmourTrackDecision={flow.awaitingArmourDecision}
-		onArmourTrackDecision={flow.decideArmourTrack}
-		attributionWarning={attributionWarning}
-		onDismissAttributionWarning={dismissAttributionWarning}
-		onReleaseMob={handleReleaseMob}
-		onMobFocus={handleMobFocus}
-		onMobBlur={handleMobBlur}
-		onMobKeydown={handleMobKeydown}
+		onReleaseMob={mobEntry.release}
+		onMobFocus={mobEntry.focus}
+		onMobBlur={mobEntry.blur}
+		onMobKeydown={mobEntry.keydown}
 		onDefinitionTrigger={toggleDefinitionMenu}
-		onBoostCommit={facets.commitBoost}
 		onActivitiesTrigger={toggleActivitiesMenu}
-		onTrifectaTrigger={toggleTrifectaMenu}
-		onArmourCostToggle={armourCost.toggle}
-		onProtectionSelect={protection.select}
+		onWeaponDecision={handleWeaponDecision}
+		{doses}
+		dosesMenuOpen={overlayMenuKind === 'consumables'}
+		onDosesTrigger={toggleDosesMenu}
+		equipmentMenuOpen={overlayMenuKind === 'equipment'}
+		declaringEquipment={equipment.declaring}
+		onEquipmentTrigger={toggleEquipmentMenu}
+		openPanel={overlayMenuKind === 'mobSource' ||
+		overlayMenuKind === 'heldTool' ||
+		overlayMenuKind === 'screenUnread'
+			? overlayMenuKind
+			: null}
+		onPanelTrigger={togglePanel}
+		accountSignal={account?.current ?? null}
 	/>
+	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>
 <style>
 	.overlay-frame {

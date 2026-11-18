@@ -39,7 +39,7 @@
 	}
 </script>
 
-<div class="flex-1 min-h-0 flex flex-col gap-3 overflow-y-auto" data-guide-anchor="customise-stats-area">
+<div class="flex-1 min-h-0 flex flex-col gap-3 overflow-y-auto">
 	<div class="flex items-center justify-between gap-3 pb-3 border-b border-border/60">
 		<p class="text-xs text-text-tertiary">
 			Click a pill to show or hide it on that surface. Reorder by dragging directly on the dashboard.

@@ -1,28 +1,49 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppSettings, EquipmentDetail } from '$lib/api/commands.gen';
+import type { AppSettings, EquipmentDetail, EquipmentLibrary } from '$lib/api/commands.gen';
 import type { Equipment } from '$lib/types';
 import { createLibraryModel } from './libraryModel.svelte';
 
-vi.mock('$lib/api', () => ({
-	getEquipmentLibrary: vi.fn(),
-	getSettings: vi.fn(),
-	hotbarFromSettings: vi.fn(() => ({ '1': null })),
-	searchEquipmentItems: vi.fn(),
-	addToLibrary: vi.fn(),
-	updateLibrary: vi.fn(),
-	removeFromLibrary: vi.fn(),
-	getEquipmentDetail: vi.fn(),
-}));
+vi.mock('$lib/api', async () => {
+	// The wire narrowing is pure, so the model is tested through the real one.
+	const narrowing = await vi.importActual<typeof import('$lib/api/settings')>('$lib/api/settings');
+	return {
+		getEquipmentLibrary: vi.fn(),
+		getSettings: vi.fn(),
+		updateSettings: vi.fn(),
+		hotbarFromSettings: narrowing.hotbarFromSettings,
+		hotbarPresetFromSettings: narrowing.hotbarPresetFromSettings,
+		hotbarPresetsFromSettings: narrowing.hotbarPresetsFromSettings,
+		searchEquipmentItems: vi.fn(),
+		addToLibrary: vi.fn(),
+		updateLibrary: vi.fn(),
+		removeFromLibrary: vi.fn(),
+		setLibraryEnabled: vi.fn(),
+		getEquipmentDetail: vi.fn(),
+	};
+});
 
 import * as api from '$lib/api';
 
 const mocked = vi.mocked(api);
+
+// The in-development channel, switchable per test: a published build hides
+// surfaces still in development.
+const channel = vi.hoisted(() => ({ visible: true }));
+vi.mock('$lib/inDevelopment/channel', () => ({
+	isInDevelopmentVisible: (stable: boolean) => !stable,
+	inDevelopment: {
+		get visible() {
+			return channel.visible;
+		},
+	},
+}));
 
 function summary(overrides: Partial<Equipment> = {}): Equipment {
 	return {
 		id: '1',
 		name: 'Jester D-1',
 		type: 'weapon',
+		enabled: true,
 		amplifierName: null,
 		costPerUse: 0.42,
 		damageMin: 13,
@@ -32,8 +53,15 @@ function summary(overrides: Partial<Equipment> = {}): Equipment {
 		enrichmentLevel: 1,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
+		consumable: null,
 		...overrides,
 	};
+}
+
+/** The library read over `entries`, none of them indistinguishable. */
+function library(entries: Equipment[]): EquipmentLibrary {
+	return { entries, indistinguishable: [], lookalikeLabels: {} };
 }
 
 function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
@@ -56,25 +84,37 @@ function detail(overrides: Partial<EquipmentDetail> = {}): EquipmentDetail {
 		implant: null,
 		costBreakdown: [],
 		totalCostPerUse: 2.05,
-		expectedReturn: null,
+		expectedReturns: null,
 		healingProfile: null,
 		lifestealPercent: null,
+		effectProfile: null,
+		consumable: null,
+		attackRate: null,
 		...overrides,
 	};
 }
 
-function settings(): AppSettings {
+function settings(overrides: Partial<AppSettings> = {}): AppSettings {
 	return {
 		hotbarHooksEnabled: false,
-		hotbar: {},
-		trifecta: {
-			activePresetId: 'p1',
-			activePresetName: 'Preset',
-			presets: [],
-			ready: true,
-			message: null,
-		},
+		keyboard: { observer: 'xinput', keyless: false, keylessAvailable: true },
+		hotbar: { '1': null },
+		activeHotbarPreset: 1,
+		hotbarPresets: [{ '1': null }, { '1': 31 }, {}],
+		carriedWeaponIds: [7],
+		...overrides,
 	} as unknown as AppSettings;
+}
+
+/** A promise settled by hand, to hold a write in flight. */
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
 }
 
 const weaponHit = {
@@ -88,11 +128,13 @@ const weaponHit = {
 	healMax: null,
 	reloadSeconds: null,
 	lifestealPercent: null,
+	usesPerMinute: null,
+	consumable: null,
 };
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mocked.getEquipmentLibrary.mockResolvedValue([]);
+	mocked.getEquipmentLibrary.mockResolvedValue(library([]));
 	mocked.getSettings.mockResolvedValue(settings());
 	mocked.searchEquipmentItems.mockResolvedValue([]);
 });
@@ -103,14 +145,16 @@ afterEach(() => {
 
 describe('loadData', () => {
 	it('splits the library by kind and sorts the healing and consumable views', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([
-			summary({ id: '1', name: 'Zulu', type: 'weapon' }),
-			summary({ id: '2', name: 'Vivo T1', type: 'healing', costPerUse: 0.18, isLimited: true }),
-			summary({ id: '3', name: 'Adjusted Fap', type: 'healing' }),
-			summary({ id: '4', name: 'Oil', type: 'consumable' }),
-		]);
+		mocked.getEquipmentLibrary.mockResolvedValue(
+			library([
+				summary({ id: '1', name: 'Zulu', type: 'weapon' }),
+				summary({ id: '2', name: 'Vivo T1', type: 'healing', costPerUse: 0.18, isLimited: true }),
+				summary({ id: '3', name: 'Adjusted Fap', type: 'healing' }),
+				summary({ id: '4', name: 'Oil', type: 'consumable' }),
+			]),
+		);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 
 		expect(model.allEquipment).toHaveLength(4);
 		expect(model.sortedEquipment.map((e) => e.name)).toEqual(['Zulu']);
@@ -118,6 +162,7 @@ describe('loadData', () => {
 		expect(model.healingTools[1]).toEqual({
 			id: '2',
 			name: 'Vivo T1',
+			enabled: true,
 			costPerHeal: 0.18,
 			isLimited: true,
 			reloadSeconds: 2.5,
@@ -125,37 +170,155 @@ describe('loadData', () => {
 		});
 		expect(model.consumables.map((c) => c.name)).toEqual(['Oil']);
 		expect(model.hotbarHooksEnabled).toBe(false);
-		expect(model.trifecta.activePresetId).toBe('p1');
+		expect(model.carriedWeaponIds).toEqual([7]);
 		expect(model.hotbar).toEqual({ '1': null });
 	});
 
 	it('drops the detail cache on a live reload', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary()]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary()]));
 		mocked.getEquipmentDetail.mockResolvedValue(detail());
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.toggleExpand('1');
 		expect(model.detailCache['1']).toBeDefined();
 
-		await model.loadData(false);
+		await model.loadData();
 		expect(model.detailCache['1']).toBeUndefined();
-	});
-
-	it('seeds the guide fixtures without touching the API in guide mode', async () => {
-		const model = createLibraryModel();
-		await model.loadData(true);
-		expect(mocked.getEquipmentLibrary).not.toHaveBeenCalled();
-		expect(mocked.getSettings).not.toHaveBeenCalled();
-		expect(model.sortedEquipment.length).toBeGreaterThan(0);
-		expect(Object.keys(model.detailCache).length).toBeGreaterThan(0);
-		expect(model.hotbarHooksEnabled).toBe(true);
 	});
 
 	it('surfaces a load failure through the error strip', async () => {
 		mocked.getEquipmentLibrary.mockRejectedValue(new Error('backend unreachable'));
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		expect(model.error).toBe('backend unreachable');
+		expect(model.loading).toBe(false);
+	});
+
+	it('reads as loading until the first load settles, and not again on a reload', async () => {
+		let answer!: (library: EquipmentLibrary) => void;
+		mocked.getEquipmentLibrary.mockReturnValue(
+			new Promise<EquipmentLibrary>((resolve) => {
+				answer = resolve;
+			}),
+		);
+		const model = createLibraryModel();
+		expect(model.loading).toBe(true);
+		const first = model.loadData();
+		expect(model.loading).toBe(true);
+		answer(library([]));
+		await first;
+		expect(model.loading).toBe(false);
+
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary()]));
+		const reload = model.loadData();
+		expect(model.loading).toBe(false);
+		await reload;
+	});
+});
+
+describe('hotbar presets', () => {
+	it('loads every preset and the one in force', async () => {
+		mocked.getSettings.mockResolvedValue(settings({ activeHotbarPreset: 2, hotbar: { '1': 31 } }));
+		const model = createLibraryModel();
+		await model.loadData();
+		expect(model.activeHotbarPreset).toBe(2);
+		expect(model.hotbar).toEqual({ '1': 31 });
+		expect(model.hotbarPresets).toEqual([{ '1': null }, { '1': 31 }, {}]);
+	});
+
+	it('brings a preset live at once, persists the switch, and settles on the stored state', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		const write = deferred<AppSettings>();
+		mocked.updateSettings.mockReturnValue(write.promise);
+
+		const switching = model.switchHotbarPreset(2);
+		expect(model.activeHotbarPreset).toBe(2);
+		expect(model.hotbar).toEqual({ '1': 31 });
+		expect(mocked.updateSettings).toHaveBeenCalledWith({ active_hotbar_preset: 2 });
+
+		write.resolve(
+			settings({
+				activeHotbarPreset: 2,
+				hotbar: { '1': 31, '2': 5 },
+				hotbarPresets: [{ '1': null }, { '1': 31, '2': 5 }, {}],
+			}),
+		);
+		await switching;
+		expect(model.hotbar).toEqual({ '1': 31, '2': 5 });
+	});
+
+	it('does nothing for the preset already live, or before settings load', async () => {
+		const model = createLibraryModel();
+		await model.switchHotbarPreset(2);
+		expect(mocked.updateSettings).not.toHaveBeenCalled();
+
+		await model.loadData();
+		await model.switchHotbarPreset(1);
+		expect(mocked.updateSettings).not.toHaveBeenCalled();
+	});
+
+	it('restores the view and re-reads the stored hotbar when a switch fails', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		mocked.updateSettings.mockRejectedValue(new Error('disk full'));
+		mocked.getSettings.mockResolvedValue(settings());
+
+		await model.switchHotbarPreset(3);
+		expect(model.activeHotbarPreset).toBe(1);
+		expect(model.hotbar).toEqual({ '1': null });
+		expect(model.error).toBe('disk full');
+		expect(mocked.getSettings).toHaveBeenCalledTimes(2);
+	});
+
+	it('writes a slot to the live preset, naming it', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		mocked.updateSettings.mockResolvedValue(
+			settings({ hotbar: { '1': 12 }, hotbarPresets: [{ '1': 12 }, { '1': 31 }, {}] }),
+		);
+
+		const assigning = model.assignHotbarSlot('1', 12);
+		expect(model.hotbar).toEqual({ '1': 12 });
+		expect(model.hotbarPresets[0]).toEqual({ '1': 12 });
+		expect(mocked.updateSettings).toHaveBeenCalledWith({
+			active_hotbar_preset: 1,
+			hotbar: { '1': 12 },
+		});
+		await assigning;
+		expect(model.hotbarPresets[1]).toEqual({ '1': 31 });
+	});
+
+	it('keeps the latest write when an earlier reply arrives after it', async () => {
+		const model = createLibraryModel();
+		await model.loadData();
+		const first = deferred<AppSettings>();
+		const second = deferred<AppSettings>();
+		mocked.updateSettings.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+
+		const toTwo = model.switchHotbarPreset(2);
+		const toThree = model.switchHotbarPreset(3);
+		expect(model.activeHotbarPreset).toBe(3);
+
+		second.resolve(settings({ activeHotbarPreset: 3, hotbar: {} }));
+		await toThree;
+		first.resolve(settings({ activeHotbarPreset: 2, hotbar: { '1': 31 } }));
+		await toTwo;
+		expect(model.activeHotbarPreset).toBe(3);
+		expect(model.hotbar).toEqual({});
+
+		// A late failure of the earlier write is not reported either.
+		const third = deferred<AppSettings>();
+		const fourth = deferred<AppSettings>();
+		mocked.updateSettings.mockReturnValueOnce(third.promise).mockReturnValueOnce(fourth.promise);
+		const toOne = model.switchHotbarPreset(1);
+		const backToTwo = model.switchHotbarPreset(2);
+		fourth.resolve(settings({ activeHotbarPreset: 2, hotbar: { '1': 31 } }));
+		await backToTwo;
+		third.reject(new Error('stale'));
+		await toOne;
+		expect(model.activeHotbarPreset).toBe(2);
+		expect(model.error).toBeNull();
 	});
 });
 
@@ -198,6 +361,8 @@ describe('form open and reset', () => {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
+			consumable: null,
 		});
 		model.markupPercent = 150;
 		model.damageEnhancers = 3;
@@ -328,6 +493,8 @@ describe('setAddType clearing', () => {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
+			consumable: null,
 		});
 		return model;
 	}
@@ -408,18 +575,105 @@ describe('saveEquipment', () => {
 			damage_enhancers: 4,
 			implant_catalog_id: null,
 			implant_markup: 100,
+			weapon_effect: null,
 		});
 		expect(model.showAddModal).toBe(false);
 		expect(model.detailCache['9']).toBeDefined();
 		expect(model.sortedEquipment.map((e) => e.id)).toEqual(['9']);
 	});
 
+	it('sends no enhancer markup with a weapon: it is set per tier, not per weapon', async () => {
+		mocked.addToLibrary.mockResolvedValue(summary({ id: '9', name: 'Korss H400' }));
+		mocked.getEquipmentDetail.mockResolvedValue(detail({ id: '9' }));
+		const model = createLibraryModel();
+		model.openAddModal();
+		model.weaponPicker.select(weaponHit);
+		model.damageEnhancers = 2;
+		await model.saveEquipment();
+		const sent = mocked.addToLibrary.mock.lastCall?.[0] as unknown as Record<string, unknown>;
+		expect(sent.damage_enhancers).toBe(2);
+		expect(sent).not.toHaveProperty('enhancer_markup');
+	});
+
+	it('sends a declared damage-over-time effect, and gates the save until it is whole', async () => {
+		mocked.addToLibrary.mockResolvedValue(summary({ id: '9', name: 'Electrocution' }));
+		mocked.getEquipmentDetail.mockResolvedValue(detail({ id: '9' }));
+		const model = createLibraryModel();
+		model.openAddModal();
+		model.weaponPicker.select(weaponHit);
+		expect(model.weaponEffectProblem).toBeNull();
+		model.weaponEffectMode = 'compound';
+		expect(model.weaponEffectProblem).toBe('Enter the initial hit range');
+		model.hitMin = 100;
+		model.hitMax = 160;
+		expect(model.weaponEffectProblem).toBe('Enter how long the effect lasts');
+		model.effectDurationSeconds = 25;
+		model.tickMin = 80;
+		model.tickMax = 75;
+		expect(model.weaponEffectProblem).toBe('The tick minimum must not exceed its maximum');
+		model.tickMin = 35;
+		expect(model.weaponEffectProblem).toBeNull();
+		await model.saveEquipment();
+
+		expect(mocked.addToLibrary).toHaveBeenCalledWith(
+			expect.objectContaining({
+				weapon_effect: {
+					mode: 'compound',
+					hit_min: 100,
+					hit_max: 160,
+					duration_seconds: 25,
+					tick_min: 35,
+					tick_max: 75,
+					tick_seconds: null,
+				},
+			}),
+		);
+	});
+
+	it('prefills an edit with the declared effect, and Direct drops it', async () => {
+		const effectProfile = {
+			mode: 'over_time' as const,
+			hitMin: null,
+			hitMax: null,
+			durationSeconds: 12,
+			tickMin: 4,
+			tickMax: 6,
+			tickSeconds: 2,
+		};
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1', effectProfile })]));
+		mocked.getEquipmentDetail.mockResolvedValue(detail({ effectProfile }));
+		mocked.updateLibrary.mockResolvedValue(summary({ id: '1' }));
+		const model = createLibraryModel();
+		await model.loadData();
+		await model.openEditModal('1');
+		expect(model.weaponEffectMode).toBe('over_time');
+		expect(model.effectDurationSeconds).toBe(12);
+		expect(model.tickSeconds).toBe(2);
+		model.weaponEffectMode = 'direct';
+		await model.saveEquipment();
+		expect(mocked.updateLibrary).toHaveBeenCalledWith(
+			'1',
+			expect.objectContaining({ weapon_effect: null }),
+		);
+	});
+
+	it('starts the shared over-time fields afresh on a change of kind', () => {
+		const model = createLibraryModel();
+		model.openAddModal();
+		model.weaponEffectMode = 'over_time';
+		model.tickMin = 4;
+		model.setAddType('healing');
+		model.setAddType('weapon');
+		expect(model.weaponEffectMode).toBe('direct');
+		expect(model.tickMin).toBeNull();
+	});
+
 	it('routes an edit through updateLibrary and swaps the row in place', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1', name: 'Old' })]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1', name: 'Old' })]));
 		mocked.getEquipmentDetail.mockResolvedValue(detail());
 		mocked.updateLibrary.mockResolvedValue(summary({ id: '1', name: 'New' }));
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('1');
 		await model.saveEquipment();
 
@@ -432,13 +686,13 @@ describe('saveEquipment', () => {
 	});
 
 	it('evicts stale weapon detail when the post-save refresh fails', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1', name: 'Old' })]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1', name: 'Old' })]));
 		mocked.getEquipmentDetail
 			.mockResolvedValueOnce(detail())
 			.mockRejectedValueOnce(new Error('refresh failed'));
 		mocked.updateLibrary.mockResolvedValue(summary({ id: '1', name: 'New' }));
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('1');
 		await model.saveEquipment();
 
@@ -458,9 +712,9 @@ describe('saveEquipment', () => {
 			tickMax: null,
 			tickSeconds: null,
 		};
-		mocked.getEquipmentLibrary.mockResolvedValue([
-			summary({ id: '5', name: 'Old FAP', type: 'healing', healingProfile }),
-		]);
+		mocked.getEquipmentLibrary.mockResolvedValue(
+			library([summary({ id: '5', name: 'Old FAP', type: 'healing', healingProfile })]),
+		);
 		mocked.getEquipmentDetail
 			.mockResolvedValueOnce(
 				detail({
@@ -475,7 +729,7 @@ describe('saveEquipment', () => {
 			summary({ id: '5', name: 'New FAP', type: 'healing', healingProfile }),
 		);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('5');
 		await model.saveEquipment();
 
@@ -553,7 +807,7 @@ describe('saveEquipment', () => {
 	});
 
 	it('seeds and resets the implant picker through the edit cycle', async () => {
-		mocked.getEquipmentLibrary.mockResolvedValue([summary({ id: '1' })]);
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1' })]));
 		mocked.getEquipmentDetail.mockResolvedValue(
 			detail({
 				implant: {
@@ -568,7 +822,7 @@ describe('saveEquipment', () => {
 			}),
 		);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		await model.openEditModal('1');
 		expect(model.implantPicker.selected?.catalogId).toBe('i1');
 		expect(model.implantPicker.selected?.absorptionPercent).toBe(20);
@@ -583,13 +837,15 @@ describe('saveEquipment', () => {
 
 describe('removeEquipment', () => {
 	async function loadedModel() {
-		mocked.getEquipmentLibrary.mockResolvedValue([
-			summary({ id: '1', name: 'Weapon', type: 'weapon' }),
-			summary({ id: '2', name: 'Fap', type: 'healing' }),
-			summary({ id: '3', name: 'Oil', type: 'consumable' }),
-		]);
+		mocked.getEquipmentLibrary.mockResolvedValue(
+			library([
+				summary({ id: '1', name: 'Weapon', type: 'weapon' }),
+				summary({ id: '2', name: 'Fap', type: 'healing' }),
+				summary({ id: '3', name: 'Oil', type: 'consumable' }),
+			]),
+		);
 		const model = createLibraryModel();
-		await model.loadData(false);
+		await model.loadData();
 		return model;
 	}
 
@@ -640,5 +896,146 @@ describe('liveCostPreview', () => {
 		const before = model.liveCostPreview;
 		model.absorberPicker.select({ ...weaponHit, catalogId: 'abs-1', name: 'Absorber' });
 		expect(model.liveCostPreview).toBe(before);
+	});
+});
+
+describe('switching entries on and off while the tool in hand is read off the screen', () => {
+	async function loaded(entries: Equipment[], extra: Partial<EquipmentLibrary> = {}) {
+		mocked.getEquipmentLibrary.mockResolvedValue({ ...library(entries), ...extra });
+		mocked.getSettings.mockResolvedValue(settings({ toolReadingEnabled: true }));
+		const model = createLibraryModel();
+		await model.loadData();
+		return model;
+	}
+
+	it('reads the setting, the groups the bar cannot tell apart and how they are told apart', async () => {
+		const model = await loaded([summary({ id: '1' }), summary({ id: '2' })], {
+			indistinguishable: [['1', '2']],
+			lookalikeLabels: { '1': 'Jester D-1 + A101', '2': 'Jester D-1' },
+		});
+		expect(model.toolReading).toBe(true);
+		expect(model.indistinguishable).toEqual([['1', '2']]);
+		expect(model.lookalikeLabels['1']).toBe('Jester D-1 + A101');
+	});
+
+	it('follows the setting alone, in a build that hides surfaces in development too', async () => {
+		channel.visible = false;
+		try {
+			const model = await loaded([summary({ id: '1' })]);
+			expect(model.toolReading).toBe(true);
+		} finally {
+			channel.visible = true;
+		}
+	});
+
+	it('is off as the settings stand by default', async () => {
+		mocked.getSettings.mockResolvedValue(settings({ toolReadingEnabled: false }));
+		const model = createLibraryModel();
+		await model.loadData();
+		expect(model.toolReading).toBe(false);
+	});
+
+	it('shows the switch at once, persists it, and settles on what was stored', async () => {
+		const model = await loaded([
+			summary({ id: '1' }),
+			summary({ id: '2', name: 'FAP', type: 'healing' }),
+		]);
+		const write = deferred<Equipment>();
+		mocked.setLibraryEnabled.mockReturnValue(write.promise);
+		const pending = model.setEnabled('2', false);
+		await Promise.resolve();
+		expect(mocked.setLibraryEnabled).toHaveBeenCalledWith('2', false);
+		expect(model.healingTools[0].enabled).toBe(false);
+		write.resolve(summary({ id: '2', name: 'FAP', type: 'healing', enabled: false }));
+		await pending;
+		expect(model.healingTools[0].enabled).toBe(false);
+		expect(model.error).toBeNull();
+	});
+
+	it('puts back the value last stored when the write fails', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		mocked.setLibraryEnabled.mockRejectedValue(new Error('locked'));
+		await model.setEnabled('1', false);
+		expect(model.allEquipment[0].enabled).toBe(true);
+		expect(model.sortedEquipment[0].enabled).toBe(true);
+		expect(model.error).toBeTruthy();
+	});
+
+	it('stored on, off then on quickly, both failing: shows on', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		mocked.setLibraryEnabled.mockRejectedValue(new Error('locked'));
+		const off = model.setEnabled('1', false);
+		const on = model.setEnabled('1', true);
+		await Promise.all([off, on]);
+		expect(model.allEquipment[0].enabled).toBe(true);
+	});
+
+	it('stored on, off (which lands) then on (which fails): shows off, as stored', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		mocked.setLibraryEnabled
+			.mockResolvedValueOnce(summary({ id: '1', enabled: false }))
+			.mockRejectedValueOnce(new Error('locked'));
+		const off = model.setEnabled('1', false);
+		const on = model.setEnabled('1', true);
+		await Promise.all([off, on]);
+		expect(model.allEquipment[0].enabled).toBe(false);
+		expect(model.error).toBeTruthy();
+	});
+
+	it('sends one write for an entry at a time, in the order made, so the database and the view agree', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		const first = deferred<Equipment>();
+		const second = deferred<Equipment>();
+		mocked.setLibraryEnabled.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+		const off = model.setEnabled('1', false);
+		const on = model.setEnabled('1', true);
+		await Promise.resolve();
+		// The second waits for the first.
+		expect(mocked.setLibraryEnabled).toHaveBeenCalledTimes(1);
+		expect(mocked.setLibraryEnabled).toHaveBeenLastCalledWith('1', false);
+		first.resolve(summary({ id: '1', enabled: false }));
+		await off;
+		expect(mocked.setLibraryEnabled).toHaveBeenCalledTimes(2);
+		expect(mocked.setLibraryEnabled).toHaveBeenLastCalledWith('1', true);
+		// The view keeps the latest asked meanwhile.
+		expect(model.allEquipment[0].enabled).toBe(true);
+		second.resolve(summary({ id: '1', enabled: true }));
+		await on;
+		expect(model.allEquipment[0].enabled).toBe(true);
+	});
+
+	it('writes nothing for an entry already as asked, or one the library does not hold', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		await model.setEnabled('1', true);
+		await model.setEnabled('9', false);
+		expect(mocked.setLibraryEnabled).not.toHaveBeenCalled();
+	});
+
+	it('re-reads the look-alike groups once an entry is added, removed or switched', async () => {
+		const model = await loaded([summary({ id: '1' })]);
+		expect(model.indistinguishable).toEqual([]);
+		// An entry saved makes a second look-alike: the group appears at once.
+		const grouped = {
+			...library([summary({ id: '1' }), summary({ id: '2' })]),
+			indistinguishable: [['1', '2']],
+			lookalikeLabels: { '1': 'Jester D-1 (1)', '2': 'Jester D-1 (2)' },
+		};
+		mocked.getEquipmentLibrary.mockResolvedValue(grouped);
+		mocked.getEquipmentDetail.mockResolvedValue(detail());
+		mocked.updateLibrary.mockResolvedValue(summary({ id: '1' }));
+		await model.openEditModal('1');
+		await model.saveEquipment();
+		await vi.waitFor(() => expect(model.indistinguishable).toEqual([['1', '2']]));
+		expect(model.lookalikeLabels['2']).toBe('Jester D-1 (2)');
+		// Removed: the group goes.
+		mocked.getEquipmentLibrary.mockResolvedValue(library([summary({ id: '1' })]));
+		mocked.removeFromLibrary.mockResolvedValue(undefined);
+		await model.removeEquipment('2');
+		await vi.waitFor(() => expect(model.indistinguishable).toEqual([]));
+		// Switched: re-read too.
+		mocked.getEquipmentLibrary.mockClear();
+		mocked.setLibraryEnabled.mockResolvedValue(summary({ id: '1', enabled: false }));
+		await model.setEnabled('1', false);
+		expect(mocked.getEquipmentLibrary).toHaveBeenCalledTimes(1);
 	});
 });

@@ -1,11 +1,26 @@
 <script lang="ts">
-	import { Button, Card, Divider } from '$lib/components';
+	import { Button, Card, Divider, Skeleton } from '$lib/components';
 	import { IconConsumables, IconHealing, IconWeapons } from '$lib/icons';
-	import { formatPec } from './display';
+	import { describeEffects, formatDuration } from '$lib/features/consumables/doses';
+	import { formatReload } from './attackRate';
+	import { formatPec } from '$lib/utils/format';
 	import type { LibraryModel } from './libraryModel.svelte';
 	import WeaponRow from './WeaponRow.svelte';
+	import EntrySwitch from './EntrySwitch.svelte';
+	import LookalikeNote from './LookalikeNote.svelte';
+	import { type LookalikeNote as LookalikeNoteText, lookalikeNotes } from './toolReading';
 
 	let { model }: { model: LibraryModel } = $props();
+
+	// While the tool in hand is read off the screen: the entries the bar
+	// cannot tell apart, flagged on each member.
+	const notes = $derived(
+		model.toolReading
+			? lookalikeNotes(model.allEquipment, model.indistinguishable, model.lookalikeLabels)
+			: new Map<string, LookalikeNoteText>(),
+	);
+	const muted = (enabled: boolean) => model.toolReading && !enabled;
+	const labelOf = (id: string, name: string) => model.lookalikeLabels[id] ?? name;
 </script>
 
 <!-- Equipment library -->
@@ -16,7 +31,13 @@
 	</span>
 </div>
 
-{#if model.sortedEquipment.length === 0}
+{#if model.loading}
+	<div class="space-y-1" aria-busy="true" data-testid="equipment-pending">
+		{#each [0, 1, 2] as row (row)}
+			<Skeleton class="h-14 w-full rounded-md" />
+		{/each}
+	</div>
+{:else if model.sortedEquipment.length === 0}
 	<Card class="p-8">
 		<div class="flex flex-col items-center text-center gap-3">
 			<svg
@@ -40,7 +61,7 @@
 {:else}
 	<div class="space-y-1">
 		{#each model.sortedEquipment as item (item.id)}
-			<WeaponRow {model} {item} />
+			<WeaponRow {model} {item} note={notes.get(item.id)} />
 		{/each}
 	</div>
 {/if}
@@ -55,7 +76,13 @@
 		</span>
 	</div>
 
-	{#if model.consumables.length === 0}
+	{#if model.loading}
+		<div class="space-y-1" aria-busy="true">
+			{#each [0, 1] as row (row)}
+				<Skeleton class="h-14 w-full rounded-md" />
+			{/each}
+		</div>
+	{:else if model.consumables.length === 0}
 		<p class="text-sm text-text-tertiary py-4">
 			No consumables configured.
 		</p>
@@ -71,7 +98,31 @@
 					</div>
 					<div class="flex-1 min-w-0">
 						<span class="text-sm font-medium text-text">{item.name}</span>
+						{#if item.consumable}
+							{@const dose = item.consumable}
+							<div class="mt-0.5 text-xs text-text-tertiary">
+								{dose.effects.length > 0 ? describeEffects(dose.effects) : 'No evaluated effect'}
+								<span class="ml-2">{formatDuration(dose.durationSeconds)}</span>
+							</div>
+						{/if}
 					</div>
+					{#if item.consumable}
+						<div class="text-right shrink-0">
+							<span class="text-sm font-medium tabular-nums {item.consumable.trackCost ? 'text-text' : 'text-text-tertiary'}">
+								{item.consumable.doseCostPed.toFixed(2)}
+							</span>
+							<span class="text-xs text-text-tertiary ml-0.5">PED/dose</span>
+							<div class="text-[11px] text-text-tertiary">
+								{item.consumable.trackCost ? 'Booked' : 'Not booked'}
+							</div>
+						</div>
+					{/if}
+					<button
+						type="button" class="linklet shrink-0"
+						onclick={() => model.openEditModal(item.id)}
+					>
+						Edit
+					</button>
 					<button
 						type="button" class="linklet linklet-danger shrink-0"
 						aria-label="Remove {item.name}"
@@ -114,7 +165,7 @@
 					</div>
 					<div class="flex-1 min-w-0">
 						<div class="flex items-center gap-2">
-							<span class="text-sm font-medium text-text">{tool.name}</span>
+							<span class="text-sm font-medium {muted(tool.enabled) ? 'text-text-tertiary' : 'text-text'}">{tool.name}</span>
 						</div>
 						<div class="mt-0.5 text-xs text-text-tertiary">
 							{#if tool.profile?.mode === 'compound'}
@@ -125,9 +176,10 @@
 								Direct {tool.profile.directMin}–{tool.profile.directMax}
 							{/if}
 							{#if tool.reloadSeconds !== null}
-								<span class="ml-2">{tool.reloadSeconds}s reload</span>
+								<span class="ml-2">{formatReload(tool.reloadSeconds, model.reloadSpeed?.effectivePercent ?? 0)}</span>
 							{/if}
 						</div>
+						<LookalikeNote note={notes.get(tool.id)} />
 					</div>
 					<div class="text-right shrink-0">
 						<span class="text-sm font-medium tabular-nums text-text">
@@ -135,6 +187,9 @@
 						</span>
 						<span class="text-xs text-text-tertiary ml-0.5">PEC/heal</span>
 					</div>
+					{#if model.toolReading}
+						<EntrySwitch name={labelOf(tool.id, tool.name)} enabled={tool.enabled} onchange={(on) => void model.setEnabled(tool.id, on)} />
+					{/if}
 					<button
 						type="button" class="linklet shrink-0"
 						onclick={() => model.openEditModal(tool.id)}
@@ -180,11 +235,12 @@
 					</div>
 					<div class="flex-1 min-w-0">
 						<div class="flex items-center gap-2">
-							<span class="text-sm font-medium text-text">{tool.name}</span>
+							<span class="text-sm font-medium {muted(tool.enabled) ? 'text-text-tertiary' : 'text-text'}">{tool.name}</span>
 							{#if tool.isLimited}
 								<span class="text-xs text-text-tertiary">(L)</span>
 							{/if}
 						</div>
+						<LookalikeNote note={notes.get(tool.id)} />
 					</div>
 					<div class="text-right shrink-0">
 						<span class="text-sm font-medium tabular-nums text-text">
@@ -192,6 +248,9 @@
 						</span>
 						<span class="text-xs text-text-tertiary ml-0.5">PEC/swing</span>
 					</div>
+					{#if model.toolReading}
+						<EntrySwitch name={labelOf(tool.id, tool.name)} enabled={tool.enabled} onchange={(on) => void model.setEnabled(tool.id, on)} />
+					{/if}
 					<button
 						type="button" class="linklet linklet-danger shrink-0"
 						aria-label="Remove {tool.name}"

@@ -1,0 +1,57 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.0, "equipment_id": 3, "healing_profile": null, "item_kind": "weapon", "item_name": "Shock Chip", "lifesteal_percent": null, "occurred_at": "<TS_2>", "reload_seconds": 0.0, "slot": "3"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 130.0, "timestamp": "<TS_3>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_3>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_4>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 50.0, "timestamp": "<TS_5>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_5>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_6>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"session_id": "<UUID_2>"}, "topic": "session_started"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_7>", "payload": {"reason": "started", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 36.0, "timestamp": "<TS_8>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_8>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.0, "equipment_id": 3, "healing_profile": null, "item_kind": "weapon", "item_name": "Shock Chip", "lifesteal_percent": null, "occurred_at": "<TS_10>", "reload_seconds": 0.0, "slot": "3"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_11>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 140.0, "timestamp": "<TS_12>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_12>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_13>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 60.0, "timestamp": "<TS_14>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_14>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_15>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.0, "equipment_id": 2, "healing_profile": null, "item_kind": "weapon", "item_name": "Rifle", "lifesteal_percent": null, "occurred_at": "<TS_16>", "reload_seconds": 0.0, "slot": "2"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_17>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 55.0, "timestamp": "<TS_18>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_18>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_19>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 78.0, "timestamp": "<TS_20>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_20>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_21>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 100, "value_ped": 1.0}], "timestamp": "<TS_22>", "total_ped": 1.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_22>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_23>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.0, "equipment_id": 1, "healing_profile": null, "item_kind": "weapon", "item_name": "Pistol", "lifesteal_percent": null, "occurred_at": "<TS_24>", "reload_seconds": 0.0, "slot": "1"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_25>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 7.0, "timestamp": "<TS_26>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_26>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_27>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 120.0, "timestamp": "<TS_28>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_28>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_29>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 38.0, "timestamp": "<TS_30>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_30>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_31>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_32>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 36.0, "timestamp": "<TS_33>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_33>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_34>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 9.0, "timestamp": "<TS_35>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_35>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_36>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 200, "value_ped": 2.0}], "timestamp": "<TS_37>", "total_ped": 2.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_37>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_38>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"session_id": "<UUID_2>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_39>", "payload": {"reason": "stopped", "sessionId": "<UUID_2>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}

@@ -33,8 +33,10 @@ pub struct SessionDefinitionInput {
     pub ad_hoc_segments: bool,
     #[serde(default = "default_true")]
     pub track_protection_costs: bool,
+    /// The planet whose quests the session offers; null or blank keeps
+    /// the authored roster's quest entries.
     #[serde(default)]
-    pub track_protection_by_segment: bool,
+    pub quest_planet: Option<String>,
     #[serde(default)]
     pub roster: Vec<SessionRosterEntryInput>,
 }
@@ -88,7 +90,7 @@ impl SessionDefinitionInput {
             name: self.name.clone(),
             ad_hoc_segments: self.ad_hoc_segments,
             track_protection_costs: self.track_protection_costs,
-            track_protection_by_segment: self.track_protection_by_segment,
+            quest_planet: self.quest_planet.clone(),
             roster: self
                 .roster
                 .iter()
@@ -130,7 +132,9 @@ pub struct SessionDefinition {
     pub name: String,
     pub ad_hoc_segments: bool,
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
+    /// The planet whose quests the session offers; null when it offers
+    /// its authored roster's quests instead.
+    pub quest_planet: Nullable<String>,
     /// A session that cannot be archived, because tracking always needs
     /// one to run under. It renames and takes a roster like any other.
     pub is_protected: bool,
@@ -155,7 +159,7 @@ impl SessionDefinition {
             name: definition.name.clone(),
             ad_hoc_segments: definition.ad_hoc_segments,
             track_protection_costs: definition.track_protection_costs,
-            track_protection_by_segment: definition.track_protection_by_segment,
+            quest_planet: definition.quest_planet.clone().into(),
             is_protected: definition.is_protected,
             is_active: definition.is_active,
             instance_count: definition.instance_count,

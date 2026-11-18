@@ -1,83 +1,59 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { listen } from '@tauri-apps/api/event';
+	import { CONSUMABLES_TOPIC } from '$lib/api';
 	import { Button, ErrorNotice, Tabs } from '$lib/components';
+	import CompareTab from '$lib/features/equipment/compare/CompareTab.svelte';
 	import EquipmentFormModal from '$lib/features/equipment/EquipmentFormModal.svelte';
 	import EquipmentListView from '$lib/features/equipment/EquipmentListView.svelte';
-	import { createLibraryModel, type EquipmentFormType } from '$lib/features/equipment/libraryModel.svelte';
-	import ProtectionTab from '$lib/features/protection/ProtectionTab.svelte';
-	import { createProtectionModel } from '$lib/features/protection/protectionModel.svelte';
-	import { closeGuide, openGuide } from '$lib/guide/engine';
-	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
-	import { equipmentSurface } from '$lib/guide/surfaces/equipment';
-	import { getPreference } from '$lib/preferences';
+	import NotTracked from '$lib/features/equipment/NotTracked.svelte';
+	import HotbarPresetSwitcher from '$lib/features/equipment/HotbarPresetSwitcher.svelte';
+	import { createLibraryModel } from '$lib/features/equipment/libraryModel.svelte';
+	import ArmourTab from '$lib/features/armour/ArmourTab.svelte';
+	import EnhancersTab from '$lib/features/enhancers/EnhancersTab.svelte';
+	import { createArmourModel } from '$lib/features/armour/armourModel.svelte';
 	import { inDevelopment } from '$lib/inDevelopment';
-	import type { Hotbar } from '$lib/types/settings';
 	import GuardrailsTab from './GuardrailsTab.svelte';
 	import EffectsTab from './EffectsTab.svelte';
 	import HotbarTab from './HotbarTab.svelte';
-	import TrifectaTab from './TrifectaTab.svelte';
+	import MobsTab from './MobsTab.svelte';
 
 	const model = createLibraryModel();
-	const protection = createProtectionModel();
+	const armour = createArmourModel();
 
 	const tabs = $derived([
 		{ id: 'library', label: 'Library' },
+		{ id: 'compare', label: 'Compare' },
 		...(inDevelopment.visible ? [{ id: 'protection', label: 'Armour' }] : []),
+		{ id: 'enhancers', label: 'Enhancers' },
 		{ id: 'effects', label: 'Effects' },
-		{ id: 'trifecta', label: 'Trifecta' },
 		{ id: 'hotbar', label: 'Hotbar' },
-		{ id: 'guardrails', label: 'Guardrails' }
+		{ id: 'guardrails', label: 'Guardrails' },
+		{ id: 'mobs', label: 'Mobs' }
 	]);
 	let activeTab = $state('library');
 
-	// Guide-mode demo state for the hotbar/trifecta mutex (only consulted when guideState.isActive)
-	let demoHotbarEnabled = $state(true);
-	let guideSeen = $state(true);
-
-	// Reload data on initial mount and whenever guide-mode toggles.
+	// Load on mount; the Armour tab reads its own once shown.
 	$effect(() => {
-		void model.loadData(guideState.isActive);
-		if (inDevelopment.visible) void protection.load(guideState.isActive);
+		void model.loadData();
 	});
 
-	onMount(() => {
-		void (async () => {
-			guideSeen = await getPreference<boolean>('guide_seen_equipment', false);
-		})();
-		registerDemoApi('equipment', {
-			setActiveTab: (tab: string) => {
-				activeTab = tab;
-			},
-			expandRow: (id: string) => {
-				model.expandedId = id;
-			},
-			collapseRow: () => {
-				model.expandedId = null;
-			},
-			openAddModal: (type: EquipmentFormType = 'weapon') => {
-				model.openAddModal(undefined, type);
-			},
-			closeAddModal: () => {
-				model.showAddModal = false;
-			},
-			setDemoHotbarEnabled: (value: boolean) => {
-				demoHotbarEnabled = value;
-			}
+	// A dose starting or ending moves the reload speed every figure here is
+	// priced under.
+	$effect(() => {
+		let unlisten: (() => void) | undefined;
+		let closed = false;
+		void listen(CONSUMABLES_TOPIC, () => void model.refreshPricing()).then((stop) => {
+			if (closed) stop();
+			else unlisten = stop;
 		});
 		return () => {
-			unregisterDemoApi('equipment');
-			model.destroy();
+			closed = true;
+			unlisten?.();
 		};
 	});
 
-	function toggleSurfaceGuide(): void {
-		if (guideState.isActive) {
-			closeGuide();
-		} else {
-			guideSeen = true;
-			void openGuide(equipmentSurface);
-		}
-	}
+	onMount(() => () => model.destroy());
 </script>
 
 <ErrorNotice
@@ -96,27 +72,13 @@
 				Gear library with automatic cost-per-use calculation
 			</p>
 		</header>
-		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				onclick={toggleSurfaceGuide}
-				title={guideState.isActive ? 'Exit guide' : 'Open guide'}
-				aria-label={guideState.isActive ? 'Exit guide' : 'Open guide for this page'}
-				class="relative h-8 w-8 rounded-full border border-border bg-surface hover:bg-surface-hover text-text-secondary hover:text-text transition-colors flex items-center justify-center text-sm font-semibold {guideState.isActive ? 'z-[9100]' : ''}"
-			>
-				{#if guideState.isActive}
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3.5 h-3.5" aria-hidden="true">
-						<path d="M5.28 4.22a.75.75 0 00-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 101.06 1.06L8 9.06l2.72 2.72a.75.75 0 101.06-1.06L9.06 8l2.72-2.72a.75.75 0 00-1.06-1.06L8 6.94 5.28 4.22z" />
-					</svg>
-				{:else}
-					?
-				{/if}
-				{#if !guideSeen}
-					<span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-accent"></span>
-				{/if}
-			</button>
+		<div class="flex items-center gap-4">
+			<HotbarPresetSwitcher
+				active={model.activeHotbarPreset}
+				onchange={(preset) => void model.switchHotbarPreset(preset)}
+			/>
 			{#if activeTab === 'library'}
-				<Button size="sm" onclick={() => model.openAddModal()} data-guide-anchor="add-equipment-button">
+				<Button size="sm" onclick={() => model.openAddModal()}>
 					<svg
 						xmlns="http://www.w3.org/2000/svg"
 						viewBox="0 0 20 20"
@@ -134,7 +96,7 @@
 	</div>
 
 	<!-- Tabs -->
-	<div data-guide-anchor="equipment-tabs">
+	<div>
 		<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} />
 	</div>
 
@@ -142,18 +104,16 @@
 		<HotbarTab
 			equipment={model.allEquipment}
 			hotbar={model.hotbar}
-			enabled={guideState.isActive ? demoHotbarEnabled : true}
-			onchange={(value: Hotbar) => {
-				model.hotbar = { ...value };
-			}}
-		/>
-	{:else if activeTab === 'trifecta'}
-		<TrifectaTab
-			equipment={model.allEquipment}
-			trifecta={model.trifecta}
-			enabled={guideState.isActive ? !demoHotbarEnabled : true}
-			onchange={(value) => {
-				model.trifecta = value;
+			hotbarPresets={model.hotbarPresets}
+			activeHotbarPreset={model.activeHotbarPreset}
+			carriedWeaponIds={model.carriedWeaponIds}
+			hotbarHooksEnabled={model.hotbarHooksEnabled}
+			keyless={model.keyless}
+			toolReading={model.toolReading}
+			lookalikeLabels={model.lookalikeLabels}
+			onassign={(slot, id) => void model.assignHotbarSlot(slot, id)}
+			oncarriedchange={(ids) => {
+				model.carriedWeaponIds = ids;
 			}}
 		/>
 	{:else if activeTab === 'guardrails'}
@@ -167,14 +127,20 @@
 	{:else if activeTab === 'effects'}
 		<EffectsTab
 			sources={model.passiveEffectSources}
-			onchange={(value) => {
-				model.passiveEffectSources = value;
-			}}
+			reloadSpeed={model.reloadSpeed}
+			onchange={(settings) => model.effectsSaved(settings)}
 		/>
+	{:else if activeTab === 'mobs'}
+		<MobsTab />
+	{:else if activeTab === 'compare'}
+		<CompareTab />
+	{:else if activeTab === 'enhancers'}
+		<EnhancersTab />
 	{:else if activeTab === 'protection' && inDevelopment.visible}
-		<ProtectionTab model={protection} />
+		<ArmourTab model={armour} />
 	{:else}
 		<EquipmentListView {model} />
+		<NotTracked readingOn={model.toolReading} />
 	{/if}
 </div>
 

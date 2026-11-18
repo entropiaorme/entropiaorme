@@ -14,6 +14,12 @@ export interface Typeahead<T> {
 	readonly selected: T | null;
 	readonly loading: boolean;
 	readonly error: string | null;
+	/**
+	 * The trimmed query the current results (or error) answer, once its
+	 * search settles; null while nothing has been searched. A presenter
+	 * compares it with the live query to tell "no matches" from "not yet".
+	 */
+	readonly settledQuery: string | null;
 	select(item: T): void;
 	/**
 	 * Put text in the box without asking for suggestions: sets the query,
@@ -54,6 +60,7 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 	let selected = $state<T | null>(null);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+	let settledQuery = $state<string | null>(null);
 
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let destroyed = false;
@@ -78,11 +85,13 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 			if (isCurrent(searched, searchedEpoch)) {
 				results = items;
 				error = null;
+				settledQuery = searched;
 			}
 		} catch (e) {
 			if (isCurrent(searched, searchedEpoch)) {
 				results = [];
 				error = e instanceof Error ? e.message : String(e);
+				settledQuery = searched;
 			}
 		} finally {
 			if (isCurrent(searched, searchedEpoch)) loading = false;
@@ -96,6 +105,7 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 			results = [];
 			loading = false;
 			error = null;
+			settledQuery = null;
 			return;
 		}
 		timer = setTimeout(() => {
@@ -126,6 +136,9 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 		get error() {
 			return error;
 		},
+		get settledQuery() {
+			return settledQuery;
+		},
 		select(item: T) {
 			cancelPending();
 			selected = item;
@@ -133,6 +146,7 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 			results = [];
 			loading = false;
 			error = null;
+			settledQuery = null;
 		},
 		fill(value: string) {
 			cancelPending();
@@ -141,6 +155,7 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 			results = [];
 			loading = false;
 			error = null;
+			settledQuery = null;
 		},
 		clear() {
 			cancelPending();
@@ -149,6 +164,7 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 			results = [];
 			loading = false;
 			error = null;
+			settledQuery = null;
 		},
 		refresh() {
 			epoch += 1;
@@ -160,6 +176,7 @@ export function createTypeahead<T>(options: TypeaheadOptions<T>): Typeahead<T> {
 			results = [];
 			loading = false;
 			error = null;
+			settledQuery = null;
 		},
 		destroy() {
 			destroyed = true;

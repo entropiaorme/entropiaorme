@@ -26,7 +26,7 @@
 	const matchingDefinitions = $derived(filterDefinitions(model.definitions, filter));
 </script>
 
-<div class="flex items-center gap-1.5 min-w-0" data-guide-anchor="dashboard-session">
+<div class="flex items-center gap-1.5 min-w-0">
 	<h2 class="text-[15px] font-semibold text-text tracking-tight shrink-0">Session:</h2>
 
 	{#if model.definitions.length > 0}

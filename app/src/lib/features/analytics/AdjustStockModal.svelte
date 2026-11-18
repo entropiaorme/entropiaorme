@@ -1,9 +1,11 @@
 <script lang="ts">
 	import Modal from '$lib/components/Modal.svelte';
 	import Button from '$lib/components/Button.svelte';
-	import Input from '$lib/components/Input.svelte';
+	import AccountRecordHint from '$lib/features/inventory/AccountRecordHint.svelte';
+	import HeldAmountField from '$lib/features/inventory/HeldAmountField.svelte';
+	import { type AmountMode, pedForUnits } from '$lib/features/inventory/heldAmount';
 	import { formatPed } from '$lib/utils/format';
-	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
+	import { stockHasNoTt, type TreeCuttingStock } from './treeCuttingModel.svelte';
 
 	let {
 		item,
@@ -17,20 +19,25 @@
 		oncancel: () => void;
 	} = $props();
 
-	let ped = $state(0);
+	// Stock is held and thought of in PED of TT, so the amount opens in PED;
+	// a count is one toggle away for when the units are what is known. An item
+	// with no TT has no PED to enter, so it is entered by count.
+	let units = $state<number | null>(null);
+	let entry = $state<AmountMode>('ped');
 	let saving = $state(false);
 	let error = $state<string | null>(null);
 	let modalOpen = $state(false);
 	let initialisedFor = $state<string | null>(null);
-	const unitTt = $derived(item && item.heldQty > 0 ? item.heldTt / item.heldQty : 0);
-	const atMax = $derived(!!item && Math.abs(ped - item.heldTt) < 0.005);
+	const unitTt = $derived(
+		item && !stockHasNoTt(item) && item.heldQty > 0 ? item.heldTt / item.heldQty : 0,
+	);
+	const tooMany = $derived(!!item && units !== null && units > item.heldQty + 1e-9);
+	const valid = $derived(units !== null && units > 0 && !tooMany);
 
 	$effect(() => {
-		if (item && ped > item.heldTt) ped = item.heldTt;
-	});
-	$effect(() => {
 		if (item && initialisedFor !== item.itemName) {
-			ped = item.heldTt;
+			units = item.heldQty;
+			entry = 'ped';
 			error = null;
 			initialisedFor = item.itemName;
 			modalOpen = true;
@@ -45,13 +52,11 @@
 	});
 
 	async function submit() {
-		if (!item || saving || ped <= 0 || unitTt <= 0 || ped > item.heldTt) return;
-		const quantity = Math.min(item.heldQty, Math.round(ped / unitTt));
-		if (quantity <= 0) return;
+		if (!item || saving || !valid || units === null) return;
 		saving = true;
 		error = null;
 		try {
-			await onconfirm(item.itemName, quantity);
+			await onconfirm(item.itemName, units);
 			modalOpen = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : `Failed to ${mode === 'remove' ? 'remove' : 'convert'} the stock`;
@@ -69,34 +74,28 @@
 	>
 		<div class="space-y-5">
 			<div class="space-y-1.5">
-				<Input
-					type="number"
-					min="0"
-					max={item.heldTt}
-					step="0.01"
-					align="right"
-					aria-label={mode === 'remove' ? 'PED to remove' : 'PED to convert'}
-					bind:value={ped}
-				>
-					{#snippet suffix()}<span class="text-xs font-medium uppercase tracking-wider">PED</span>{/snippet}
-				</Input>
-				<div class="flex items-baseline justify-between gap-2 text-xs">
-					<span class="text-text-tertiary tabular-nums">
-						{mode === 'shrapnel'
-							? `${formatPed(ped * 1.01)} PED ammo after conversion`
-							: `${formatPed(item.heldTt)} PED in stock`}
-					</span>
-					<button
-						type="button"
-						disabled={atMax}
-						onclick={() => (ped = item.heldTt)}
-						class="cursor-pointer font-medium text-accent transition-colors
-							duration-[var(--duration-fast)] hover:text-text disabled:cursor-default
-							disabled:text-text-tertiary/50 disabled:hover:text-text-tertiary/50"
-					>
-						All of it
-					</button>
-				</div>
+				<HeldAmountField
+					bind:units
+					bind:mode={entry}
+					{unitTt}
+					held={item.heldQty}
+					subject={mode === 'remove' ? 'to remove' : 'to convert'}
+					describedby={mode === 'shrapnel' ? 'shrapnel-account-record' : undefined}
+				/>
+				{#if tooMany}
+					<p class="text-xs text-warning">More than the {item.itemName} in stock.</p>
+				{:else if mode === 'shrapnel' && units !== null && units > 0}
+					<p class="text-xs tabular-nums text-text-tertiary">
+						{formatPed(pedForUnits(units, unitTt) * 1.01)} PED ammo after conversion
+					</p>
+				{/if}
+				{#if mode === 'shrapnel'}
+					<AccountRecordHint
+						kind="conversion"
+						itemName={item.itemName}
+						id="shrapnel-account-record"
+					/>
+				{/if}
 			</div>
 
 			{#if mode === 'remove'}
@@ -107,7 +106,7 @@
 			{#if error}<p class="text-xs text-error">{error}</p>{/if}
 			<div class="flex items-center justify-end gap-2">
 				<Button variant="ghost" onclick={oncancel} disabled={saving}>Cancel</Button>
-				<Button onclick={submit} loading={saving} disabled={ped <= 0 || unitTt <= 0}>
+				<Button onclick={submit} loading={saving} disabled={!valid}>
 					{mode === 'remove' ? 'Remove' : 'Convert'}
 				</Button>
 			</div>

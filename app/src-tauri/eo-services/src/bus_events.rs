@@ -48,18 +48,50 @@ event_tag!(MissionReceivedTag, "mission_received");
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CombatPayload {
-    DamageDealt { amount: f64, timestamp: String },
-    CriticalHit { amount: f64, timestamp: String },
-    TargetDodge { timestamp: String },
-    TargetEvade { timestamp: String },
-    TargetJam { timestamp: String },
-    DamageReceived { amount: f64, timestamp: String },
-    PlayerDodge { timestamp: String },
-    PlayerEvade { timestamp: String },
-    PlayerJam { timestamp: String },
-    MobMiss { timestamp: String },
-    Deflect { timestamp: String },
-    SelfHeal { amount: f64, timestamp: String },
+    DamageDealt {
+        amount: f64,
+        timestamp: String,
+    },
+    CriticalHit {
+        amount: f64,
+        timestamp: String,
+    },
+    TargetDodge {
+        timestamp: String,
+    },
+    TargetEvade {
+        timestamp: String,
+    },
+    TargetJam {
+        timestamp: String,
+    },
+    /// The player's own attack missed: a paid shot with no outcome.
+    TargetMiss {
+        timestamp: String,
+    },
+    DamageReceived {
+        amount: f64,
+        timestamp: String,
+    },
+    PlayerDodge {
+        timestamp: String,
+    },
+    PlayerEvade {
+        timestamp: String,
+    },
+    PlayerJam {
+        timestamp: String,
+    },
+    MobMiss {
+        timestamp: String,
+    },
+    Deflect {
+        timestamp: String,
+    },
+    SelfHeal {
+        amount: f64,
+        timestamp: String,
+    },
 }
 
 /// One item within a settled loot tick: the tracking model's loot
@@ -79,6 +111,13 @@ pub struct LootGroupPayload {
     /// fingerprints predate manual reward capture.
     #[serde(skip)]
     pub source_id: Option<String>,
+    /// When the log reader read the group's first loot line, in epoch
+    /// milliseconds on the application's injected clock (see
+    /// [`crate::time::clock_epoch_ms`]): how late the kill's report came,
+    /// which creature detection weighs. Absent for a group not read live
+    /// off the log. Internal like the source id, and for the same reason.
+    #[serde(skip)]
+    pub arrived_ms: Option<i64>,
     pub timestamp: Option<String>,
     pub items: Vec<LootItem>,
     pub total_ped: f64,
@@ -188,6 +227,35 @@ pub enum HotbarItemKind {
     Harvesting,
 }
 
+/// Where an equipment intent came from: a hotbar key press, the player
+/// declaring the item in the overlay (the path a machine that cannot read
+/// keys relies on), or the tool in hand read off the game screen. Each
+/// declares the item in hand the same way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IntentSource {
+    #[default]
+    Key,
+    Overlay,
+    Screen,
+}
+
+impl IntentSource {
+    /// Key presses are the original intent and serialise as before (the
+    /// field is omitted), so the event fingerprints of keyed play hold.
+    pub fn is_key(&self) -> bool {
+        *self == IntentSource::Key
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IntentSource::Key => "key",
+            IntentSource::Overlay => "overlay",
+            IntentSource::Screen => "screen",
+        }
+    }
+}
+
 /// A hotbar press with its OS-observed occurrence instant and the equipment
 /// snapshot resolved for that slot. The tracker uses this as the intent
 /// boundary; the older tool-change events remain the weapon and harvesting
@@ -196,7 +264,10 @@ pub enum HotbarItemKind {
 pub struct HotbarIntentPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// The pressed slot; empty for an overlay declaration.
     pub slot: String,
+    #[serde(skip_serializing_if = "IntentSource::is_key")]
+    pub source: IntentSource,
     pub occurred_at: f64,
     pub equipment_id: i64,
     pub item_name: String,
@@ -205,6 +276,10 @@ pub struct HotbarIntentPayload {
     pub reload_seconds: f64,
     pub healing_profile: Option<HealingProfile>,
     pub lifesteal_percent: Option<f64>,
+    /// One dose of the consumable the slot holds, as the item stood at the
+    /// press; absent for every other kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consumable_profile: Option<crate::consumables::ConsumableProfile>,
 }
 
 /// A tracking-session lifecycle boundary (started / stopped).
@@ -245,7 +320,7 @@ pub enum BusEvent {
     ActiveToolChanged(ActiveToolChangedPayload),
     ActiveHealToolChanged(ActiveHealToolChangedPayload),
     ActiveHarvestToolChanged(ActiveHarvestToolChangedPayload),
-    HotbarIntent(HotbarIntentPayload),
+    HotbarIntent(Box<HotbarIntentPayload>),
     SessionStarted(SessionLifecyclePayload),
     SessionStopped(SessionLifecyclePayload),
     MissionReceived(MissionReceivedPayload),
@@ -254,6 +329,12 @@ pub enum BusEvent {
     ScanStatusChanged(ScanStatusChanged),
     HarvestRecorded(eo_wire::domain_events::HarvestRecorded),
     NavigationUpdated(eo_wire::domain_events::NavigationUpdated),
+    ProtectionUpdated(eo_wire::domain_events::ProtectionUpdated),
+    HealingUpdated(eo_wire::domain_events::HealingUpdated),
+    WeaponsUpdated(eo_wire::domain_events::WeaponsUpdated),
+    ConsumablesUpdated(eo_wire::domain_events::ConsumablesUpdated),
+    MarketUpdated(eo_wire::domain_events::MarketUpdated),
+    AccountUpdated(eo_wire::domain_events::AccountUpdated),
 }
 
 impl BusEvent {
@@ -278,6 +359,12 @@ impl BusEvent {
             BusEvent::ScanStatusChanged(_) => Topic::ScanStatusChanged,
             BusEvent::HarvestRecorded(_) => Topic::HarvestRecorded,
             BusEvent::NavigationUpdated(_) => Topic::NavigationUpdated,
+            BusEvent::ProtectionUpdated(_) => Topic::ProtectionUpdated,
+            BusEvent::HealingUpdated(_) => Topic::HealingUpdated,
+            BusEvent::WeaponsUpdated(_) => Topic::WeaponsUpdated,
+            BusEvent::ConsumablesUpdated(_) => Topic::ConsumablesUpdated,
+            BusEvent::MarketUpdated(_) => Topic::MarketUpdated,
+            BusEvent::AccountUpdated(_) => Topic::AccountUpdated,
         }
     }
 
@@ -340,6 +427,7 @@ mod tests {
         let event = BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: Some("2026-01-01T00:00:02".into()),
             items: vec![LootItem {
                 item_name: "Shrapnel".into(),
@@ -364,6 +452,7 @@ mod tests {
         let no_ts = BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: None,
+            arrived_ms: None,
             timestamp: None,
             items: vec![],
             total_ped: 0.0,

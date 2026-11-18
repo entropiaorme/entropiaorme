@@ -9,6 +9,10 @@
 //!   cargo run -p eo-services --features linux-capture --example capture_probe -- \
 //!   <x> <y> <width> <height>
 //! ```
+//!
+//! With `rate [seconds]` in place of the rectangle it measures the stream
+//! instead: the frames a second the compositor sends and how many are
+//! kept. It saves nothing.
 
 #[cfg(all(target_os = "linux", feature = "linux-capture"))]
 fn capture_region_from_args() -> Result<(i64, i64, i64, i64), String> {
@@ -30,6 +34,42 @@ fn capture_region_from_args() -> Result<(i64, i64, i64, i64), String> {
     Ok((parsed[0], parsed[1], parsed[2], parsed[3]))
 }
 
+/// Measure the stream for `seconds` while it is captured from: how many
+/// frames a second the compositor sends and how many are kept. Sent near
+/// the limit, the compositor is keeping to it; sent well past it, the
+/// frames are being dropped on arrival instead. Nothing captured is saved.
+#[cfg(all(target_os = "linux", feature = "linux-capture"))]
+fn measure_rate(seconds: u64) {
+    use eo_services::screen_capture::{
+        capturable_area, capture_frame_generation, capture_frames_offered, capture_region_bgr,
+    };
+    use std::time::{Duration, Instant};
+
+    if !eo_services::screen_capture::start_capture() {
+        eprintln!("probe rate: capture did not start");
+        std::process::exit(1);
+    }
+    let Some((x, y, _, _)) = capturable_area() else {
+        eprintln!("probe rate: no capturable area");
+        std::process::exit(1);
+    };
+    let generation = || capture_frame_generation().unwrap_or_default();
+    let (started, kept, offered) = (Instant::now(), generation(), capture_frames_offered());
+    while started.elapsed() < Duration::from_secs(seconds) {
+        if capture_region_bgr(x, y, 1, 1).is_none() {
+            eprintln!("probe rate: capture returned None");
+            std::process::exit(1);
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let per_second = |count: u64| count as f64 / seconds as f64;
+    eprintln!(
+        "probe rate: over {seconds} s the compositor sent {:.1} frames a second and {:.1} were kept",
+        per_second(capture_frames_offered() - offered),
+        per_second(generation() - kept),
+    );
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -38,6 +78,15 @@ fn main() {
         )
         .init();
 
+    #[cfg(all(target_os = "linux", feature = "linux-capture"))]
+    if std::env::args().nth(1).as_deref() == Some("rate") {
+        let seconds = std::env::args()
+            .nth(2)
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(10);
+        measure_rate(seconds);
+        return;
+    }
     #[cfg(all(target_os = "linux", feature = "linux-capture"))]
     {
         let (x, y, width, height) = capture_region_from_args().unwrap_or_else(|error| {

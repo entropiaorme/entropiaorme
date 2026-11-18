@@ -30,16 +30,19 @@ use crate::bus_events::{
 };
 use crate::chatlog_parser::{parse_line, ChatEvent, EventType};
 use crate::chatlog_time::{ChatLogClock, ChatLogReading};
+use crate::clock::Clock;
 use crate::event_bus::{EventBus, Topic};
 use crate::ped::Ped;
+use crate::time::clock_epoch_ms;
 
 /// Seconds between reads, exactly the original's tail interval.
 pub const TAIL_INTERVAL: Duration = Duration::from_millis(100);
 
-const COMBAT_MESSAGE_PREFIXES: [&str; 12] = [
+const COMBAT_MESSAGE_PREFIXES: [&str; 13] = [
     "Critical hit",
     "You inflicted",
     "The target Jammed",
+    "You missed",
     "The target Dodged",
     "The target Evaded",
     "You took",
@@ -115,6 +118,7 @@ fn bus_topic(event_type: EventType) -> Option<Topic> {
         | EventType::TargetDodge
         | EventType::TargetEvade
         | EventType::TargetJam
+        | EventType::TargetMiss
         | EventType::PlayerDodge
         | EventType::PlayerEvade
         | EventType::PlayerJam
@@ -173,6 +177,7 @@ fn typed_bus_event(event: &ChatEvent) -> Option<BusEvent> {
         EventType::TargetDodge => combat(CombatPayload::TargetDodge { timestamp }),
         EventType::TargetEvade => combat(CombatPayload::TargetEvade { timestamp }),
         EventType::TargetJam => combat(CombatPayload::TargetJam { timestamp }),
+        EventType::TargetMiss => combat(CombatPayload::TargetMiss { timestamp }),
         EventType::PlayerDodge => combat(CombatPayload::PlayerDodge { timestamp }),
         EventType::PlayerEvade => combat(CombatPayload::PlayerEvade { timestamp }),
         EventType::PlayerJam => combat(CombatPayload::PlayerJam { timestamp }),
@@ -258,6 +263,10 @@ struct Shared {
     signal_reward_filter: OnceLock<SignalRewardFilter>,
     signal_loot_probe: OnceLock<SignalLootProbe>,
     mission_complete_probe: OnceLock<MissionCompleteProbe>,
+    /// The clock a loot line's arrival is stamped on: the application's
+    /// injected clock, which the creature watcher stamps its looks on too.
+    /// Unset, no arrival is stamped and no kill can be told apart by it.
+    arrival_clock: OnceLock<Arc<dyn Clock>>,
     /// The base the lines this watcher reads resolve against. The tail
     /// is the only surface that can see a line's reading beside the
     /// instant it arrived, so it is the only one that can derive the
@@ -307,6 +316,7 @@ impl ChatlogWatcher {
                 signal_reward_filter: OnceLock::new(),
                 signal_loot_probe: OnceLock::new(),
                 mission_complete_probe: OnceLock::new(),
+                arrival_clock: OnceLock::new(),
                 chatlog_clock,
             }),
             thread: Mutex::new(None),
@@ -327,6 +337,13 @@ impl ChatlogWatcher {
     /// after the quest service exists; a second call is ignored.
     pub fn set_mission_complete_probe(&self, probe: MissionCompleteProbe) {
         let _ = self.shared.mission_complete_probe.set(probe);
+    }
+
+    /// Stamp each loot group with when its first line was read, on
+    /// `clock`. Composition calls this once with the application's clock;
+    /// a second call is ignored.
+    pub fn set_arrival_clock(&self, clock: Arc<dyn Clock>) {
+        let _ = self.shared.arrival_clock.set(clock);
     }
 
     pub fn is_running(&self) -> bool {
@@ -519,6 +536,9 @@ fn tail_loop(shared: &Shared) {
 struct TickBuffer {
     timestamp: Option<NaiveDateTime>,
     events: Vec<ChatEvent>,
+    /// When the tick's first loot line was read (see
+    /// [`LootGroupPayload::arrived_ms`]).
+    loot_arrived_ms: Option<i64>,
 }
 
 fn process_line(shared: &Shared, tick: &mut TickBuffer, line: &str) {
@@ -551,6 +571,12 @@ fn process_parsed_line(shared: &Shared, tick: &mut TickBuffer, line: &str) {
         }
     }
     tick.timestamp = Some(event.timestamp);
+    if event.event_type == EventType::Loot && tick.loot_arrived_ms.is_none() {
+        tick.loot_arrived_ms = shared
+            .arrival_clock
+            .get()
+            .map(|clock| clock_epoch_ms(clock.as_ref()));
+    }
     tick.events.push(event);
     shared.pending_tick.store(true, Ordering::SeqCst);
 }
@@ -579,6 +605,7 @@ fn flush_tick(shared: &Shared, tick: &mut TickBuffer) {
 
     let events = std::mem::take(&mut tick.events);
     let tick_ts = tick.timestamp;
+    let loot_arrived_ms = tick.loot_arrived_ms.take();
 
     // Read the tick's own reading against the moment it reached us
     // before anything downstream resolves it: the tail seeks to
@@ -800,6 +827,7 @@ fn flush_tick(shared: &Shared, tick: &mut TickBuffer) {
         shared.bus.publish(&BusEvent::LootGroup(LootGroupPayload {
             kind: LootTag,
             source_id: loot_source_id,
+            arrived_ms: loot_arrived_ms,
             timestamp: tick_ts.map(timestamp_string),
             items,
             total_ped: eo_wire::normalizer::round_half_even(total, 4),
@@ -1037,6 +1065,58 @@ mod tests {
         let received = received.lock().unwrap();
         assert_eq!(received.len(), 2, "the shutdown pass takes the tail line");
         assert_eq!(received[1]["amount"], 7.5);
+    }
+
+    /// Each loot group carries when its first line was read, on the clock
+    /// the watcher was given: the arrival creature detection weighs a
+    /// kill's report by. Without that clock, no arrival is claimed.
+    #[test]
+    fn a_loot_group_carries_when_its_first_line_was_read() {
+        let arrivals = |pipeline: &Pipeline| {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let sink = seen.clone();
+            pipeline.bus.subscribe(Topic::LootGroup, move |event| {
+                if let BusEvent::LootGroup(group) = event {
+                    sink.lock().unwrap().push(group.arrived_ms);
+                }
+            });
+            seen
+        };
+        let clock = Arc::new(crate::clock::MockClock::new(None, 0.0));
+        let pipeline = pipeline(None);
+        pipeline.watcher.set_arrival_clock(clock.clone());
+        let seen = arrivals(&pipeline);
+        let start = clock_epoch_ms(clock.as_ref());
+        append(
+            &pipeline,
+            &[
+                "2026-05-19 10:00:02 [System] [] You received Shrapnel x (500) Value: 5.00 PED",
+                "2026-05-19 10:00:02 [System] [] You received Wool Value: 1.50 PED",
+            ],
+        );
+        drain(&pipeline, 2);
+        clock.advance(4.25).unwrap();
+        append(
+            &pipeline,
+            &["2026-05-19 10:00:07 [System] [] You received Wool Value: 1.50 PED"],
+        );
+        drain(&pipeline, 3);
+        pipeline.watcher.stop();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [Some(start), Some(start + 4_250)],
+            "each group is stamped when its first line was read"
+        );
+
+        let unclocked = super::tests::pipeline(None);
+        let seen = arrivals(&unclocked);
+        append(
+            &unclocked,
+            &["2026-05-19 10:00:02 [System] [] You received Wool Value: 1.50 PED"],
+        );
+        drain(&unclocked, 1);
+        unclocked.watcher.stop();
+        assert_eq!(*seen.lock().unwrap(), [None]);
     }
 
     #[test]

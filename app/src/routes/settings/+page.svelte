@@ -3,18 +3,21 @@
 	import { Button, Divider, Toggle, Input, SegmentedControl } from '$lib/components';
 	import { theme, setTheme, type Theme } from '$lib/theme.svelte';
 	import { newsOptIn, setNewsOptIn } from '$lib/news.svelte';
-	import MarketDataSettings from '$lib/features/market/MarketDataSettings.svelte';
 	import AuctionFeeResearchSettings from '$lib/features/settings/AuctionFeeResearchSettings.svelte';
+	import AccountSettings from '$lib/features/account/AccountSettings.svelte';
+	import { inDevelopment } from '$lib/inDevelopment';
+	import { hotbarListenerCopy, keyboardNote } from '$lib/features/settings/keyboardAccess';
 	import { autoUpdateEnabled, setAutoUpdateEnabled } from '$lib/updater.svelte';
 	import { goto } from '$app/navigation';
-	import {
-		getSettings,
-		hideSaleCaptureOverlay,
-		stopAuctionFeeResearch,
-		updateSettings,
-	} from '$lib/api';
+	import { getSettings, updateSettings } from '$lib/api';
 	import type { AppSettings } from '$lib/types';
 	import { externalLinks } from '$lib/utils/openExternal';
+	import ScreenReadingSetting from '$lib/features/settings/ScreenReadingSetting.svelte';
+	import {
+		CREATURE_DETECTION,
+		HELD_TOOL_READING,
+		type ScreenReading,
+	} from '$lib/features/settings/screenReadingSetting';
 
 	let settings = $state<AppSettings | null>(null);
 	let loading = $state(true);
@@ -24,9 +27,10 @@
 
 	// Capability toggles
 	let savingField = $state<string | null>(null);
+	const keyNote = $derived(settings ? keyboardNote(settings.keyboard) : null);
 	let capabilityError: string | null = $state(null);
 
-	// Developer-only tooling renders only in dev builds (vite build strips it in production).
+	// The auction-fee research session runs only in dev builds (vite build strips it in production).
 	const isDev = import.meta.env.DEV;
 
 	// Loot filter
@@ -123,13 +127,6 @@
 
 	async function handleHotbarHooks(checked: boolean) {
 		if (!settings) return;
-		const trifectaReady = settings.trifecta.ready;
-		if (!checked && !trifectaReady) {
-			capabilityError =
-				settings.trifecta.message ??
-				'Configure the trifecta in Equipment before disabling the hotbar key listener.';
-			return;
-		}
 		savingField = 'hotbarHooks';
 		capabilityError = null;
 		try {
@@ -137,6 +134,20 @@
 			flashSaved('hotbarHooks');
 		} catch (e) {
 			capabilityError = e instanceof Error ? e.message : 'Failed to update hotbar key listener';
+		} finally {
+			savingField = null;
+		}
+	}
+
+	async function handleKeyless(checked: boolean) {
+		if (!settings) return;
+		savingField = 'keyless';
+		capabilityError = null;
+		try {
+			settings = await updateSettings({ keyless_input: checked });
+			flashSaved('keyless');
+		} catch (e) {
+			capabilityError = e instanceof Error ? e.message : 'Failed to update keyless tracking';
 		} finally {
 			savingField = null;
 		}
@@ -156,37 +167,34 @@
 		}
 	}
 
-	async function handleArmourReminder(checked: boolean) {
+	async function handleKeepUnreadPlates(checked: boolean) {
 		if (!settings) return;
-		savingField = 'armourReminder';
+		savingField = 'keepUnreadPlates';
 		capabilityError = null;
 		try {
-			settings = await updateSettings({ end_of_session_armour_reminder_enabled: checked });
-			flashSaved('armourReminder');
+			settings = await updateSettings({ keep_unread_plates: checked });
+			flashSaved('keepUnreadPlates');
 		} catch (e) {
-			capabilityError = e instanceof Error ? e.message : 'Failed to update armour reminder';
+			capabilityError = e instanceof Error ? e.message : 'Failed to update unread plates';
 		} finally {
 			savingField = null;
 		}
 	}
 
-	async function handleDeveloperMode(checked: boolean) {
+	async function handleScreenReading(reading: ScreenReading, checked: boolean) {
 		if (!settings) return;
-		savingField = 'developerMode';
+		savingField = reading.key;
 		capabilityError = null;
 		try {
-			if (!checked) {
-				await stopAuctionFeeResearch();
-				await hideSaleCaptureOverlay();
-			}
-			settings = await updateSettings({ developer_mode_enabled: checked });
-			flashSaved('developerMode');
+			settings = await updateSettings(reading.patch(checked));
+			flashSaved(reading.key);
 		} catch (e) {
-			capabilityError = e instanceof Error ? e.message : 'Failed to update developer mode';
+			capabilityError = e instanceof Error ? e.message : reading.failure;
 		} finally {
 			savingField = null;
 		}
 	}
+
 
 	async function addFilterItem() {
 		if (!settings || !newFilterItem.trim()) return;
@@ -209,6 +217,16 @@
 	}
 
 </script>
+
+{#snippet screenReading(reading: ScreenReading, current: AppSettings)}
+	<ScreenReadingSetting
+		{reading}
+		{...reading.state(current)}
+		disabled={savingField !== null}
+		saved={savedIndicator === reading.key}
+		onchange={(checked) => handleScreenReading(reading, checked)}
+	/>
+{/snippet}
 
 {#if loading}
 	<div class="px-6 pb-6 text-sm text-text-tertiary">Loading settings…</div>
@@ -281,6 +299,8 @@
 		</div>
 	</section>
 
+	{#if inDevelopment.visible}<AccountSettings />{/if}
+
 	<!-- Cluster: Session tracking -->
 	<section>
 		<h2 class="text-[11px] font-medium uppercase tracking-[0.12em] text-text-tertiary">
@@ -293,32 +313,60 @@
 				<div id="cost-attribution" class="flex items-start justify-between gap-6">
 					<div>
 						<p class="text-sm text-text">Hotbar key listener</p>
-						<p class="text-xs text-text-tertiary mt-0.5">
-							Use your number hotbar (1-9, 0) to switch cost tracking of weapons.
-							When off, trifecta mode is used (preset small weapon, big weapon, and healing item).
+						<p class="text-xs text-text-tertiary mt-0.5 max-w-xl">
+							{hotbarListenerCopy(settings.toolReadingEnabled)}
 						</p>
 					</div>
 					<Toggle
-						checked={settings.hotbarHooksEnabled}
-						disabled={savingField !== null}
+						checked={settings.hotbarHooksEnabled && !settings.keyboard.keyless}
+						disabled={savingField !== null || settings.keyboard.keyless}
 						onchange={handleHotbarHooks}
 						label="Enable hotbar key listener"
-						title={!settings.trifecta.ready && settings.hotbarHooksEnabled
-							? settings.trifecta.message ??
-								'Configure the trifecta in Equipment before disabling the hotbar key listener'
-							: undefined}
 					/>
 				</div>
-				{#if !settings.trifecta.ready}
-					<p class="text-xs text-text-tertiary">
-						Trifecta:
-						{settings.trifecta.message ??
-							'set a small weapon, big weapon, and healing tool in Equipment → Trifecta to enable trifecta attribution.'}
-					</p>
+				{#if keyNote}
+					<p class="text-xs {keyNote.attention ? 'text-warning' : 'text-text-tertiary'}">{keyNote.text}</p>
 				{/if}
 				{#if savedIndicator === 'hotbarHooks'}
 					<p class="text-xs text-success">Saved</p>
 				{/if}
+			</div>
+
+			<Divider />
+
+			<!-- Reading the held tool: takes over the hotbar keys' part above -->
+			{@render screenReading(HELD_TOOL_READING, settings)}
+
+			<Divider />
+
+			{@render screenReading(CREATURE_DETECTION, settings)}
+
+			<Divider />
+
+			<!-- Keyless tracking: this machine cannot read keys -->
+			<div class="py-5 flex items-start justify-between gap-6">
+				<div>
+					<p class="text-sm text-text">Keyless tracking</p>
+					<p class="text-xs text-text-tertiary mt-0.5 max-w-xl">
+						For a machine that cannot read keys. Pick the weapon, healer, or harvesting tool in
+						hand from the overlay's equipment glyph; a heal that fits the healer you picked
+						counts as a paid use. Applies to this machine only.
+					</p>
+					{#if !settings.keyboard.keylessAvailable}
+						<p class="text-xs text-text-tertiary mt-1">
+							Unavailable: this machine cannot be identified.
+						</p>
+					{/if}
+					{#if savedIndicator === 'keyless'}
+						<p class="text-xs text-success mt-1">Saved</p>
+					{/if}
+				</div>
+				<Toggle
+					checked={settings.keyboard.keyless}
+					disabled={savingField !== null || !settings.keyboard.keylessAvailable}
+					onchange={handleKeyless}
+					label="Enable keyless tracking"
+				/>
 			</div>
 
 			<Divider />
@@ -328,10 +376,8 @@
 				<div>
 					<p class="text-sm text-text">Repair-cost OCR</p>
 					<p class="text-xs text-text-tertiary mt-0.5">
-						For UL armour repair cost tracking. Dock the in-game repair terminal at the
-						bottom-right of the Entropia Universe window; the cost number is read from a
-						fixed region relative to that corner. Manual entry is always available from
-						the overlay.
+						Reads the repair cost off the Repair Terminal when you record an unlimited armour
+						repair. Manual entry stays available.
 					</p>
 					{#if savedIndicator === 'repairOcr'}
 						<p class="text-xs text-success mt-1">Saved</p>
@@ -342,29 +388,6 @@
 					disabled={savingField !== null}
 					onchange={handleRepairOcr}
 					label="Enable repair-cost OCR"
-				/>
-			</div>
-
-			<Divider />
-
-			<!-- End-of-session armour reminder -->
-			<div class="py-5 flex items-start justify-between gap-6">
-				<div>
-					<p class="text-sm text-text">End-of-session armour reminder</p>
-					<p class="text-xs text-text-tertiary mt-0.5">
-						When you stop a session that has an armour cost to record, the Stop button becomes a yellow "Record armour costs?"
-						prompt. Record opens the armour-cost popup; Later carries recorded defensive evidence forward.
-						Turn off to stop sessions in one click.
-					</p>
-					{#if savedIndicator === 'armourReminder'}
-						<p class="text-xs text-success mt-1">Saved</p>
-					{/if}
-				</div>
-				<Toggle
-					checked={settings.endOfSessionArmourReminderEnabled}
-					disabled={savingField !== null}
-					onchange={handleArmourReminder}
-					label="Enable end-of-session armour reminder"
 				/>
 			</div>
 
@@ -436,39 +459,51 @@
 		</div>
 	</section>
 
-	{#if isDev}
-		<!-- Cluster: Developer (dev builds only) -->
-		<section>
-			<h2 class="text-[11px] font-medium uppercase tracking-[0.12em] text-text-tertiary">
-				Developer
-			</h2>
+	<!-- Cluster: Diagnostics -->
+	<section>
+		<h2 class="text-[11px] font-medium uppercase tracking-[0.12em] text-text-tertiary">
+			Diagnostics
+		</h2>
 
-			<div class="mt-3">
-				<!-- Developer mode -->
-				<div class="py-5 flex items-start justify-between gap-6">
-					<div>
-						<p class="text-sm text-text">Developer mode</p>
-						<p class="text-xs text-text-tertiary mt-0.5">
-							Surfaces developer-only diagnostics. Off by default.
-						</p>
-						{#if savedIndicator === 'developerMode'}
-							<p class="text-xs text-success mt-1">Saved</p>
-						{/if}
-					</div>
-					<Toggle
-						checked={settings.developerModeEnabled}
-						disabled={savingField !== null}
-						onchange={handleDeveloperMode}
-						label="Enable developer mode"
-					/>
+		<div class="mt-3">
+			<div class="py-5 flex items-start justify-between gap-6">
+				<div>
+					<p class="text-sm text-text">Metrics</p>
+					<p class="text-xs text-text-tertiary mt-0.5">
+						What the app's own work costs, and its maintenance tools.
+					</p>
 				</div>
-
-				{#if settings.developerModeEnabled}
-					<AuctionFeeResearchSettings />
-				{/if}
+				<a class="linklet text-sm" href="/metrics">Open</a>
 			</div>
-		</section>
-	{/if}
+
+			<Divider />
+
+			<div class="py-5 flex items-start justify-between gap-6">
+				<div>
+					<p class="text-sm text-text">Keep plates that did not read</p>
+					<p class="text-xs text-text-tertiary mt-0.5 max-w-xl">
+						When a mob's name cannot be read, saves a small picture of its nameplate to find out
+						why. Kept on this computer only, the newest 200.
+					</p>
+					{#if savedIndicator === 'keepUnreadPlates'}
+						<p class="text-xs text-success mt-1">Saved</p>
+					{/if}
+				</div>
+				<Toggle
+					checked={settings.keepUnreadPlates}
+					disabled={savingField !== null}
+					onchange={handleKeepUnreadPlates}
+					label="Keep plates that did not read"
+				/>
+			</div>
+
+			{#if isDev}
+				<!-- The research session runs in development builds only. -->
+				<Divider />
+				<AuctionFeeResearchSettings />
+			{/if}
+		</div>
+	</section>
 
 	<!-- Cluster: Preferences -->
 	<section>
@@ -531,8 +566,6 @@
 					label="Enable automatic updates"
 				/>
 			</div>
-
-			<MarketDataSettings />
 		</div>
 	</section>
 

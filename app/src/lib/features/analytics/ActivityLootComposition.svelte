@@ -1,8 +1,14 @@
 <script lang="ts">
 	import InfoTip from '$lib/components/InfoTip.svelte';
+	import { filterByQuery } from '$lib/view/search';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
-	import { confidenceTip, confidenceTitle, markupLabel } from './marketConfidence';
+	import {
+		appliedMarkupText,
+		confidenceTip,
+		confidenceTitle,
+		markupLabel,
+	} from './marketConfidence';
 	import type { TreeCuttingItem } from './treeCuttingModel.svelte';
 
 	let {
@@ -21,11 +27,7 @@
 	let query = $state('');
 	let expanded = $state(false);
 	const searchable = $derived(!disclosure && (items.length > SEARCH_THRESHOLD || query !== ''));
-	const visible = $derived(
-		disclosure || query.trim() === ''
-			? items
-			: items.filter((item) => item.name.toLowerCase().includes(query.trim().toLowerCase())),
-	);
+	const visible = $derived(disclosure ? items : filterByQuery(items, query, (item) => item.name));
 	const disclosureId = $derived(disclosure ? `${disclosure}-loot-composition` : undefined);
 	$effect(() => {
 		void items;
@@ -111,16 +113,24 @@
 								class="inline-flex h-5 flex-col items-end justify-center tabular-nums"
 								aria-label={markupLabel(item)}
 							>
-								{#if (item.floored || item.markupBasis === 'shrapnel_conversion') && item.ownMarkupPct !== null}
+								{#if (item.floored || item.markupBasis === 'shrapnel_conversion' || item.markupBasis === 'manual') && item.ownMarkupPct !== null}
 									<span class="text-[9px] leading-[9px] text-text-tertiary line-through">
 										{formatPercent(item.ownMarkupPct / 100)}
 									</span>
-									<span class="text-xs leading-[11px] text-text-secondary">
-										{formatPercent(item.effectiveMarkupPct / 100)}
+									<span
+										class="text-xs leading-[11px] {item.markupBasis === 'manual'
+											? 'text-accent'
+											: 'text-text-secondary'}"
+									>
+										{appliedMarkupText(item.effectiveMarkupPct, item.markupBasis, item.manual)}
 									</span>
 								{:else}
-									<span class="text-sm leading-5 text-text-secondary">
-										{formatPercent(item.effectiveMarkupPct / 100)}
+									<span
+										class="text-sm leading-5 {item.markupBasis === 'manual'
+											? 'text-accent'
+											: 'text-text-secondary'}"
+									>
+										{appliedMarkupText(item.effectiveMarkupPct, item.markupBasis, item.manual)}
 									</span>
 								{/if}
 							</span>
@@ -132,6 +142,13 @@
 							<span class="text-sm text-text-tertiary">{NO_DATA}</span>
 						{:else if item.markupBasis === 'shrapnel_conversion'}
 							<InfoTip align="right" width="w-96" label="Fixed Shrapnel conversion value">
+								{@render confidenceBody(item)}
+							</InfoTip>
+						{:else if item.markupBasis === 'manual'}
+							<InfoTip align="right" width="w-96" label="Your markup">
+								{#snippet trigger()}
+									<span class="text-accent" aria-label="Your markup">✎</span>
+								{/snippet}
 								{@render confidenceBody(item)}
 							</InfoTip>
 						{:else}

@@ -1,20 +1,30 @@
-//! Combat-stream handlers: shot recording with tool attribution and
+//! Combat-stream handlers: shot recording with weapon attribution and
 //! cost phases, the per-kill accumulator, hotbar tool changes, and
 //! enhancer breaks.
 
 use eo_wire::domain_events::{TrackingReason, TrackingStatus};
 
 use crate::bus_events::{BusEvent, CombatPayload, HotbarItemKind};
+use crate::enhancer_breaks::{BreakPricing, EnhancerBreak};
 use crate::expected_hunting::OffensiveLoadoutEvidence;
 use crate::ped::Ped;
 use crate::tracking_models::ToolStats;
+use crate::weapon_review::UNDECLARED_WARNING_SHOTS;
 
 use super::actor::TrackerActor;
+use super::attribution::{
+    Attribution, Observation, ShotContext, ShotLocation, ShotRecord, UnpricedCharge,
+};
 use super::providers::Providers;
 use super::session::ActiveSession;
-use super::time::{instant_to_epoch, resolve_local};
+use super::time::{instant_to_epoch, parse_timestamp_instant, resolve_local};
+use super::weapon_effects::EffectActivation;
+use super::weapon_evidence::ShotEvidence;
 use super::weapons::break_matches_active_weapon;
-use super::HealTool;
+
+/// The phase an unpriced shot is counted under: no weapon is known, so
+/// the shot is recorded without a cost.
+pub(super) const UNPRICED_TOOL: &str = "Unknown";
 
 /// Combat stats since the last kill (or session start).
 #[derive(Default)]
@@ -23,16 +33,27 @@ pub(super) struct Accumulator {
     pub(super) damage_dealt: f64,
     pub(super) damage_taken: f64,
     pub(super) critical_hits: i64,
-    pub(super) enhancer_cost: Ped,
+    /// The enhancer breaks since the last kill: the next kill carries
+    /// their cost, and keeps them.
+    pub(super) breaks: Vec<EnhancerBreak>,
+    /// Shrapnel the game returned for breaks, arrived in a tick of its own:
+    /// no kill, so the next kill keeps it among its loot lines (tagged, so
+    /// never loot).
+    pub(super) returns: Vec<crate::tracking_models::LootItem>,
     /// Keyed by phase key (the bare tool name, then `name#2`...), in
     /// first-seen order.
     pub(super) tool_stats: Vec<(String, ToolStats)>,
+    /// Stored weapon evidence for this kill's shots, written with it.
+    pub(super) evidence: Vec<ShotEvidence>,
+    /// When each shot of this fight was recorded, in memory only: what of
+    /// its spend came after a given instant (the live costs time the
+    /// tracked play after the account's latest reading by it).
+    pub(super) shot_times: Vec<f64>,
 }
 
 struct DefenceEvidence {
     session_id: String,
     context_id: Option<i64>,
-    protection_interval_id: Option<i64>,
     damage: Option<f64>,
     deflected: bool,
 }
@@ -49,30 +70,30 @@ impl Accumulator {
             .sum()
     }
 
-    pub(super) fn total_cost(&self) -> Ped {
-        self.weapon_cost() + self.enhancer_cost
+    /// What the breaks since the last kill cost, as far as each is priced:
+    /// an unpriced break adds nothing here and is kept with its reason.
+    pub(super) fn enhancer_cost(&self) -> Ped {
+        self.breaks.iter().filter_map(EnhancerBreak::cost).sum()
     }
 }
 
 impl TrackerActor {
-    /// The accumulator's stats entry for this tool at this cost: an
-    /// existing phase within the cost tolerance, or a new phase keyed
-    /// `name`, then `name#2`...
+    /// The stats entry for this tool at this cost: an existing phase within
+    /// the cost tolerance, or a new phase keyed `name`, then `name#2`...
     pub(super) fn tool_stats_for_phase<'a>(
-        accumulator: &'a mut Accumulator,
+        tool_stats: &'a mut Vec<(String, ToolStats)>,
         tool_name: &str,
         cost_per_shot: Ped,
         expected_economics: Option<OffensiveLoadoutEvidence>,
     ) -> &'a mut ToolStats {
-        if let Some(index) = accumulator.tool_stats.iter().position(|(_, stats)| {
+        if let Some(index) = tool_stats.iter().position(|(_, stats)| {
             stats.tool_name == tool_name
                 && (stats.cost_per_shot.value() - cost_per_shot.value()).abs() < 1e-9
                 && stats.expected_economics == expected_economics
         }) {
-            return &mut accumulator.tool_stats[index].1;
+            return &mut tool_stats[index].1;
         }
-        let phase_count = accumulator
-            .tool_stats
+        let phase_count = tool_stats
             .iter()
             .filter(|(_, stats)| stats.tool_name == tool_name)
             .count();
@@ -81,123 +102,282 @@ impl TrackerActor {
         } else {
             format!("{tool_name}#{}", phase_count + 1)
         };
-        accumulator.tool_stats.push((
+        tool_stats.push((
             key,
             ToolStats::new(tool_name, cost_per_shot, expected_economics),
         ));
-        &mut accumulator.tool_stats.last_mut().expect("just pushed").1
+        &mut tool_stats.last_mut().expect("just pushed").1
     }
 
-    /// Accumulate one player attack, including jam/dodge/evade
-    /// countered shots.
+    /// Accumulate one offensive observation: a hit, or a jam/dodge/evade
+    /// countered shot. Attribution names the weapon (or leaves the shot
+    /// unpriced); an effect tick is damage an earlier activation already
+    /// paid for, so it counts no shot and books no cost. A priced hit of a
+    /// weapon with a declared damage-over-time effect opens its window at
+    /// once, and returns it for the caller to persist.
     fn record_offensive_shot(
         providers: &Providers,
         active: &mut ActiveSession,
-        amount: f64,
-        is_crit: bool,
-        allow_damage_inference: bool,
-    ) {
-        active.accumulator.shots_fired += 1;
+        observation: Observation,
+        observed_at: f64,
+    ) -> Option<EffectActivation> {
+        // A tool known only from the game's data is tested only while held
+        // and for the switch tail after.
+        active.weapons.expire_provisional(observed_at);
+        let resolved = active
+            .weapons
+            .attribution
+            .classify(observation, observed_at);
+        let seq = active.weapons.attribution.apply(&resolved, observed_at);
+        let charge = matches!(resolved.attribution, Attribution::Unresolved)
+            .then(|| Self::note_unpriced(providers, active, observation, &resolved.fits));
+        let (amount, critical) = match observation {
+            Observation::Hit { amount, critical } => (amount, critical),
+            Observation::Countered => (0.0, false),
+        };
         if amount > 0.0 {
             active.accumulator.damage_dealt += amount;
         }
-        if is_crit {
+        if matches!(resolved.attribution, Attribution::EffectTick { .. }) {
+            let row = ShotEvidence::for_shot(
+                active,
+                observation,
+                observed_at,
+                &resolved,
+                None,
+                Ped::ZERO,
+            );
+            if !active.weapons.attribution.retaining() {
+                active.accumulator.evidence.push(row);
+                return None;
+            }
+            let evidence_id = row.id.clone();
+            active.accumulator.evidence.push(row);
+            let context = ShotContext {
+                context_id: active.intervals.context_id(),
+                reload_speed_percent: active.reload_speed_percent,
+            };
+            active.weapons.attribution.retain_tick(
+                ShotRecord {
+                    seq,
+                    observed_at,
+                    observation,
+                    attribution: resolved.attribution,
+                    fits: resolved.fits,
+                    windows: resolved.windows,
+                    location: ShotLocation::Pending,
+                    evidence_id: Some(evidence_id),
+                    booked: None,
+                    cost: Ped::ZERO,
+                    opened_window: None,
+                },
+                context,
+            );
+            return None;
+        }
+        active.accumulator.shots_fired += 1;
+        active.accumulator.shot_times.push(observed_at);
+        if critical {
             active.accumulator.critical_hits += 1;
         }
 
-        let mut inferred_cost = Ped::ZERO;
-        let mut tool: Option<String> = None;
-        if providers.config.weapon_attribution_trifecta() {
-            if allow_damage_inference {
-                let attribution = active.weapons.attributor.match_damage(amount, is_crit);
-                if attribution.is_none() && !active.trifecta_unmatched_warning_emitted {
-                    active.warnings.push(
-                        "Trifecta attribution: damage fell outside both weapon ranges".to_string(),
+        let tool = resolved.attribution.priced_tool().map(str::to_string);
+        let cost = Self::book_shot(providers, active, tool.as_deref(), amount, critical);
+        let evidence_id =
+            ShotEvidence::keeps_row(&resolved.attribution, &active.weapons.attribution).then(
+                || {
+                    let row = ShotEvidence::for_shot(
+                        active,
+                        observation,
+                        observed_at,
+                        &resolved,
+                        tool.clone(),
+                        cost,
                     );
-                    active.trifecta_unmatched_warning_emitted = true;
-                }
-                if let Some(attribution) = attribution {
-                    tool = Some(attribution.tool_name);
-                    inferred_cost = Ped(attribution.cost_per_shot);
-                }
-            } else {
-                tool = active.weapons.last_offensive_tool.clone();
-            }
-        } else {
-            tool = active.weapons.hotbar_tool.clone();
-        }
-
-        if let Some(tool) = &tool {
-            active.weapons.last_offensive_tool = Some(tool.clone());
-        }
-
-        // `tool or "Unknown"`: the falsy coercion, so an empty name
-        // also keys the fallback entry.
-        let tool_key = tool
-            .as_deref()
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Unknown")
-            .to_string();
-        let mut current_cost = Ped::ZERO;
-        if let Some(tool) = &tool {
-            current_cost =
-                Self::current_cost_for_tool(providers, &mut active.weapons, tool, inferred_cost);
-        }
-        let expected_economics = tool.as_ref().and_then(|tool| {
-            Self::expected_evidence_for_tool(
-                providers,
-                &mut active.weapons,
-                tool,
-                active.hunting_looters,
-            )
+                    let id = row.id.clone();
+                    active.accumulator.evidence.push(row);
+                    id
+                },
+            );
+        let activation = tool.as_deref().and_then(|tool| {
+            EffectActivation::for_shot(active, tool, observation, observed_at, cost)
         });
+        if let Some(activation) = &activation {
+            active
+                .weapons
+                .attribution
+                .open_effect_window(activation.window.clone());
+        }
+        let context = ShotContext {
+            context_id: active.intervals.context_id(),
+            reload_speed_percent: active.reload_speed_percent,
+        };
+        active.weapons.attribution.remember_shot(
+            ShotRecord {
+                seq,
+                observed_at,
+                observation,
+                attribution: resolved.attribution,
+                fits: resolved.fits,
+                windows: resolved.windows,
+                location: ShotLocation::Pending,
+                evidence_id,
+                booked: tool,
+                cost,
+                opened_window: activation
+                    .as_ref()
+                    .map(|activation| activation.window.id.clone()),
+            },
+            context,
+            charge,
+        );
+        activation
+    }
 
-        let stats: &mut ToolStats = if let (Some(tool), true) = (&tool, current_cost.is_positive())
+    /// Account for an unpriced shot: bound what it could have cost at the
+    /// dearest carried weapon that fitted it or holds it in its margin (a
+    /// countered shot has neither), and once enough land with no weapon
+    /// declared, warn that the session is running undeclared. Answers what
+    /// it added to the bound.
+    pub(super) fn note_unpriced(
+        providers: &Providers,
+        active: &mut ActiveSession,
+        observation: Observation,
+        fits: &[String],
+    ) -> UnpricedCharge {
+        let explaining: Vec<String> = match observation {
+            Observation::Hit { amount, critical } => {
+                let mut names = fits.to_vec();
+                names.extend(active.weapons.attribution.in_margin(amount, critical));
+                names
+            }
+            Observation::Countered => Vec::new(),
+        };
+        let dearest = explaining
+            .iter()
+            .filter_map(|name| active.weapons.bound_price(name))
+            .max_by(|a, b| a.value().total_cmp(&b.value()));
+        let charge = match dearest {
+            Some(price) => {
+                active.unpriced_cost_bound += price;
+                UnpricedCharge::Bound(price)
+            }
+            None => {
+                active.unpriced_no_fit += 1;
+                UnpricedCharge::NoFit
+            }
+        };
+        // Reading the tool off the screen, no weapon declared is a state
+        // the screen states (nothing held, or uncertain), not a missing
+        // press.
+        if active.weapons.attribution.declared().is_some() || active.held_tool.is_some() {
+            return charge;
+        }
+        active.undeclared_unpriced += 1;
+        if active.undeclared_unpriced >= UNDECLARED_WARNING_SHOTS
+            && !active.undeclared_warning_emitted
         {
-            Self::tool_stats_for_phase(
-                &mut active.accumulator,
-                tool,
-                current_cost,
-                expected_economics,
-            )
-        } else {
-            let accumulator = &mut active.accumulator;
-            if !accumulator
-                .tool_stats
-                .iter()
-                .any(|(key, _)| key == &tool_key)
-            {
-                accumulator
-                    .tool_stats
-                    .push((tool_key.clone(), ToolStats::new(&tool_key, Ped::ZERO, None)));
+            active.undeclared_warning_emitted = true;
+            let fix = if providers.config.hotbar_hooks_enabled() {
+                "Press your weapon's hotbar slot, then assign the rest after the session."
+            } else {
+                "Assign them after the session."
+            };
+            active.warnings.push(format!(
+                "No weapon declared: {UNDECLARED_WARNING_SHOTS} shots are unpriced so far. {fix}"
+            ));
+        }
+        charge
+    }
+
+    /// Take back what an unpriced shot added to the bound: it is priced
+    /// now, or about to be placed again.
+    pub(super) fn unnote_unpriced(active: &mut ActiveSession, charge: UnpricedCharge) {
+        match charge {
+            UnpricedCharge::Bound(price) => {
+                active.unpriced_cost_bound = active.unpriced_cost_bound - price
             }
-            let index = accumulator
-                .tool_stats
-                .iter()
-                .position(|(key, _)| key == &tool_key)
-                .expect("just ensured");
-            let entry = &mut accumulator.tool_stats[index].1;
-            // The fallback cost resolves only for a still-costless
-            // entry, so the provider is not re-read on every shot.
-            if !entry.cost_per_shot.is_positive() {
-                let fallback_cost = if inferred_cost.is_positive() {
-                    inferred_cost
-                } else {
-                    Ped(providers.equipment.cost_per_shot(&tool_key))
+            UnpricedCharge::NoFit => active.unpriced_no_fit -= 1,
+        }
+    }
+
+    /// Count one shot into the accumulator's phase for its weapon, and
+    /// return the per-shot cost it was booked at. A shot with no weapon is
+    /// counted under the unpriced phase at no cost: a price is never
+    /// guessed.
+    pub(super) fn book_shot(
+        providers: &Providers,
+        active: &mut ActiveSession,
+        tool: Option<&str>,
+        amount: f64,
+        critical: bool,
+    ) -> Ped {
+        Self::book_into(
+            providers,
+            &mut active.weapons,
+            active.hunting_looters,
+            &mut active.accumulator.tool_stats,
+            tool,
+            amount,
+            critical,
+        )
+    }
+
+    /// [`Self::book_shot`] into the phases given: the accumulator's, or a
+    /// settled kill's for a shot placed again.
+    pub(super) fn book_into(
+        providers: &Providers,
+        weapons: &mut super::weapons::WeaponRuntime,
+        looters: crate::expected_hunting::HuntingLooterLevels,
+        tool_stats: &mut Vec<(String, ToolStats)>,
+        tool: Option<&str>,
+        amount: f64,
+        critical: bool,
+    ) -> Ped {
+        let (cost, expected_economics) = match tool {
+            Some(tool) => (
+                Self::current_cost_for_tool(providers, weapons, tool, Ped::ZERO),
+                Self::expected_evidence_for_tool(providers, weapons, tool, looters),
+            ),
+            None => (Ped::ZERO, None),
+        };
+        let stats: &mut ToolStats = match tool {
+            Some(tool) if cost.is_positive() => {
+                Self::tool_stats_for_phase(tool_stats, tool, cost, expected_economics)
+            }
+            _ => {
+                let key = tool
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(UNPRICED_TOOL);
+                let index = match tool_stats.iter().position(|(phase, _)| phase == key) {
+                    Some(index) => index,
+                    None => {
+                        tool_stats.push((key.to_string(), ToolStats::new(key, Ped::ZERO, None)));
+                        tool_stats.len() - 1
+                    }
                 };
-                if fallback_cost.is_positive() {
-                    entry.cost_per_shot = fallback_cost;
+                let entry = &mut tool_stats[index].1;
+                // A named weapon the profile lookup could not price may
+                // still have a library cost; it resolves once, for a
+                // still-costless entry. The unpriced phase never looks one
+                // up.
+                if tool.is_some() && !entry.cost_per_shot.is_positive() {
+                    let fallback = Ped(providers.equipment.cost_per_shot(key));
+                    if fallback.is_positive() {
+                        entry.cost_per_shot = fallback;
+                    }
                 }
+                entry
             }
-            entry
         };
         stats.shots_fired += 1;
         if amount > 0.0 {
             stats.damage_dealt += amount;
         }
-        if is_crit {
+        if critical {
             stats.critical_hits += 1;
         }
+        stats.cost_per_shot
     }
 
     /// Handle a parsed combat event from chat.log. The whole body
@@ -229,22 +409,37 @@ impl TrackerActor {
         // unhandled combat kind does not wake listeners for a no-op.
         let mut mutated = false;
         let mut defence: Option<DefenceEvidence> = None;
+        let mut effect: Option<EffectActivation> = None;
 
         match payload {
             CombatPayload::DamageDealt { amount, .. } => {
-                Self::record_offensive_shot(providers, active, *amount, false, true);
+                let hit = Observation::Hit {
+                    amount: *amount,
+                    critical: false,
+                };
+                effect = Self::record_offensive_shot(providers, active, hit, observed_at);
                 active.healing.note_damage(observed_at, *amount);
                 mutated = true;
             }
             CombatPayload::CriticalHit { amount, .. } => {
-                Self::record_offensive_shot(providers, active, *amount, true, true);
+                let hit = Observation::Hit {
+                    amount: *amount,
+                    critical: true,
+                };
+                effect = Self::record_offensive_shot(providers, active, hit, observed_at);
                 active.healing.note_damage(observed_at, *amount);
                 mutated = true;
             }
             CombatPayload::TargetDodge { .. }
             | CombatPayload::TargetEvade { .. }
-            | CombatPayload::TargetJam { .. } => {
-                Self::record_offensive_shot(providers, active, 0.0, false, false);
+            | CombatPayload::TargetJam { .. }
+            | CombatPayload::TargetMiss { .. } => {
+                effect = Self::record_offensive_shot(
+                    providers,
+                    active,
+                    Observation::Countered,
+                    observed_at,
+                );
                 mutated = true;
             }
             CombatPayload::DamageReceived { amount, .. } => {
@@ -252,10 +447,6 @@ impl TrackerActor {
                 defence = Some(DefenceEvidence {
                     session_id: active.session.id.clone(),
                     context_id: active.intervals.context_id(),
-                    protection_interval_id: active
-                        .intervals
-                        .open_of_kind(super::IntervalKind::Protection)
-                        .map(|interval| interval.id),
                     damage: Some(*amount),
                     deflected: false,
                 });
@@ -272,10 +463,6 @@ impl TrackerActor {
                 defence = Some(DefenceEvidence {
                     session_id: active.session.id.clone(),
                     context_id: active.intervals.context_id(),
-                    protection_interval_id: active
-                        .intervals
-                        .open_of_kind(super::IntervalKind::Protection)
-                        .map(|interval| interval.id),
                     damage: None,
                     deflected: true,
                 });
@@ -293,12 +480,11 @@ impl TrackerActor {
                 .with_writer(move |conn| {
                     conn.execute(
                         "INSERT INTO protection_defence_events \
-                         (session_id, context_id, protection_interval_id, damage, deflected) \
-                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                         (session_id, context_id, damage, deflected) \
+                         VALUES (?1, ?2, ?3, ?4)",
                         rusqlite::params![
                             defence.session_id,
                             defence.context_id,
-                            defence.protection_interval_id,
                             defence.damage,
                             defence.deflected as i64
                         ],
@@ -318,14 +504,29 @@ impl TrackerActor {
                 active.dirty = true;
             }
         }
+        if let Some(effect) = effect {
+            self.persist_effect_activation(effect).await;
+        }
     }
 
-    /// Handle hotbar-driven weapon tool change: merges any 'Unknown'
-    /// tool stats into the real tool when first detected.
+    /// Handle a weapon equip reported without its press instant: the press
+    /// is taken as now.
     pub(super) fn on_tool_changed(&mut self, event: &BusEvent) {
         let BusEvent::ActiveToolChanged(payload) = event else {
             return;
         };
+        let pressed_at = instant_to_epoch(resolve_local(self.clock.now()));
+        self.on_weapon_press(&payload.tool_name, pressed_at);
+    }
+
+    /// A hotbar weapon press: the pressed weapon is declared from here and
+    /// a new attribution regime starts. Shots already recorded keep their
+    /// attribution; the previous weapon's shots may still land for a
+    /// moment after the press.
+    pub(super) fn on_weapon_press(&mut self, tool_name: &str, pressed_at: f64) {
+        if tool_name.is_empty() {
+            return;
+        }
         let nudge_session_id = {
             let Self {
                 session,
@@ -333,96 +534,36 @@ impl TrackerActor {
                 held_item,
                 ..
             } = &mut *self;
-            if payload.tool_name.is_empty() {
-                return;
-            }
-            // A weapon equip takes the hand back from the harvesting
-            // tool (display state; see the actor field). Cleared
-            // before the trifecta early-return: the equip signal means
-            // the hand holds a weapon whatever the attribution mode,
-            // and a stale flag would pin the displayed tool.
+            // A weapon equip takes the hand back from the harvesting tool
+            // (display state; see the actor field).
             let hand_changed = held_item
                 .as_ref()
-                .is_none_or(|item| item.0 != payload.tool_name || item.1 != HotbarItemKind::Weapon);
-            *held_item = Some((payload.tool_name.clone(), HotbarItemKind::Weapon));
-            if providers.config.weapon_attribution_trifecta() {
-                return;
-            }
+                .is_none_or(|item| item.0 != tool_name || item.1 != HotbarItemKind::Weapon);
+            *held_item = Some((tool_name.to_string(), HotbarItemKind::Weapon));
             let Some(active) = session.active_mut() else {
                 return;
             };
-            let tool_name = payload.tool_name.clone();
-            // Any hotbar press re-syncs the app's belief with the game;
-            // a standing harvest-guardrail cue is resolved by it (a
-            // readout change worth a nudge), and the retro pass may
-            // not reach back past this point.
-            let cleared_mismatch = active.guardrail_mismatch.take().is_some();
+            // Any hotbar press re-syncs the app's belief with the game; a
+            // standing cue of either guardrail is resolved by it (a readout
+            // change worth a nudge), and no evidence may reach back past it.
+            let cleared_mismatch = active.guardrail_mismatch.take().is_some()
+                | active.weapons.attribution.mismatch().is_some();
             active.harvest_press_floor = active.session.harvests.len();
-            let tool_changed = hand_changed
-                || cleared_mismatch
-                || active.weapons.hotbar_tool.as_deref() != Some(tool_name.as_str());
-            active.weapons.hotbar_tool = Some(tool_name.clone());
-
-            let current_cost =
-                Self::current_cost_for_tool(providers, &mut active.weapons, &tool_name, Ped::ZERO);
-
-            // Retrospectively identify and price "Unknown" stats, but keep
-            // them in a model-neutral phase. Only shots observed after the
-            // loadout resolves may carry its expected-economics evidence.
-            let unknown = {
-                let accumulator = &mut active.accumulator;
-                accumulator
-                    .tool_stats
-                    .iter()
-                    .position(|(key, _)| key == "Unknown")
-                    .map(|index| accumulator.tool_stats.remove(index).1)
-            };
-            if let Some(unknown) = unknown {
-                let real: &mut ToolStats = if current_cost.is_positive() {
-                    Self::tool_stats_for_phase(
-                        &mut active.accumulator,
-                        &tool_name,
-                        current_cost,
-                        None,
-                    )
-                } else {
-                    let accumulator = &mut active.accumulator;
-                    if !accumulator
-                        .tool_stats
-                        .iter()
-                        .any(|(key, _)| key == &tool_name)
-                    {
-                        accumulator.tool_stats.push((
-                            tool_name.clone(),
-                            ToolStats::new(&tool_name, Ped::ZERO, None),
-                        ));
-                    }
-                    let index = accumulator
-                        .tool_stats
-                        .iter()
-                        .position(|(key, _)| key == &tool_name)
-                        .expect("just ensured");
-                    &mut accumulator.tool_stats[index].1
-                };
-                real.shots_fired += unknown.shots_fired;
-                real.damage_dealt += unknown.damage_dealt;
-                real.critical_hits += unknown.critical_hits;
+            let declared_changed = active.weapons.attribution.declared() != Some(tool_name);
+            active.weapons.attribution.declare(tool_name, pressed_at);
+            if declared_changed {
+                tracing::info!(target: "eo::tracker", "weapon declared by a hotbar press");
             }
+            // Resolve the weapon's cost state now, so an enhancer break
+            // before its first shot applies to it.
+            Self::current_cost_for_tool(providers, &mut active.weapons, tool_name, Ped::ZERO);
 
-            // A hotbar weapon-switch changes the overlay's active-weapon
-            // readout. The coalesced session-update tick only flushes on
-            // chat-log activity (the first attack), so a switch with no
-            // combat would leave the overlay stale; emit a re-hydrate
-            // nudge directly when the weapon actually changed during an
-            // active session. The active tool is already in the snapshot,
-            // so no new event or payload is needed. ActiveToolChanged
-            // carries no instant, so the nudge is stamped from the
-            // injected clock (matching the tick handler's fallback).
-            if tool_changed {
-                Some(active.session.id.clone())
-            } else {
-                None
-            }
+            // A switch changes the overlay's weapon readout. The coalesced
+            // session-update tick only flushes on chat-log activity, so a
+            // switch with no combat would leave the overlay stale; nudge a
+            // re-hydrate directly, stamped from the injected clock.
+            (hand_changed || cleared_mismatch || declared_changed)
+                .then(|| active.session.id.clone())
         };
 
         if let Some(session_id) = nudge_session_id {
@@ -435,45 +576,23 @@ impl TrackerActor {
         }
     }
 
-    /// Handle hotbar-driven heal tool equip. The equipped tool is
-    /// hotbar-equipment state (it outlives the session); the
+    /// Handle hotbar-driven heal tool equip: the hand now holds the healer
+    /// (display state; healing billing follows the intent path). The
     /// re-hydrate nudge fires only against an active session.
     pub(super) fn on_heal_tool_changed(&mut self, event: &BusEvent) {
         let BusEvent::ActiveHealToolChanged(payload) = event else {
             return;
         };
-        let name = Some(payload.tool_name.clone());
         let held_changed = self
             .held_item
             .as_ref()
             .is_none_or(|item| item.0 != payload.tool_name || item.1 != HotbarItemKind::Healing);
         self.held_item = Some((payload.tool_name.clone(), HotbarItemKind::Healing));
-        if self.providers.config.weapon_attribution_trifecta() {
-            return;
-        }
-
-        let nudge_session_id = {
-            let heal_tool_changed = self.heal_tool.name != name;
-            self.heal_tool = HealTool {
-                name,
-                cost_per_use: Ped(payload.cost_per_use_ped),
-                reload_seconds: payload.reload_seconds,
-                amount_min: None,
-                amount_max: None,
-            };
-            let Some(active) = self.session.active_mut() else {
-                return;
-            };
-            active.heal_warning_emitted = false;
-            // Equipping a different heal tool changes the overlay readout;
-            // emit a direct re-hydrate nudge (mirrors the weapon path).
-            if heal_tool_changed || held_changed {
-                Some(active.session.id.clone())
-            } else {
-                None
-            }
-        };
-
+        let nudge_session_id = self
+            .session
+            .active()
+            .filter(|_| held_changed)
+            .map(|active| active.session.id.clone());
         if let Some(session_id) = nudge_session_id {
             self.emit_session_event(
                 TrackingReason::Updated,
@@ -484,13 +603,22 @@ impl TrackerActor {
         }
     }
 
-    /// Handle an enhancer break event: update enhancer state for
-    /// future shots. There is no DB write or publish.
+    /// Handle an enhancer break event. A break of a damage enhancer on the
+    /// weapon in use updates its stacks for later shots and is kept, priced,
+    /// with the shots it was fired among: the next kill carries its cost.
+    /// Any other break leaves the session unchanged.
     pub(super) fn on_enhancer_break(&mut self, event: &BusEvent) {
         let BusEvent::EnhancerBreak(payload) = event else {
             return;
         };
-        let Some(active) = self.session.active_mut() else {
+        let Self {
+            session,
+            providers,
+            clock,
+            chatlog_clock,
+            ..
+        } = &mut *self;
+        let Some(active) = session.active_mut() else {
             return;
         };
 
@@ -525,11 +653,45 @@ impl TrackerActor {
         // the session unchanged.
         active.dirty = true;
         let key = active.weapons.active_key.clone().expect("checked above");
-        active
+        let state = active
             .weapons
             .enhancer_states
             .get_mut(&key)
-            .expect("checked above")
-            .apply_break(remaining);
+            .expect("checked above");
+        state.apply_break(remaining);
+
+        // Dated by its chat line, as a kill is by its loot line.
+        let observed_at = instant_to_epoch(
+            parse_timestamp_instant(chatlog_clock, &payload.timestamp)
+                .unwrap_or_else(|| resolve_local(clock.now())),
+        );
+        let returned = Ped(payload.shrapnel_ped);
+        let tt = providers
+            .enhancer_tt
+            .as_ref()
+            .and_then(|resolve| resolve(enhancer_name));
+        // The markup in force for its kind and tier as it broke.
+        let markup = providers
+            .enhancer_markup
+            .as_ref()
+            .and_then(|resolve| resolve(enhancer_name, observed_at));
+        let pricing = BreakPricing::price(tt, markup, returned);
+        let weapon_name = state.tool_name.clone();
+        let session_id = active.session.id.clone();
+        let context_id = active.intervals.context_id();
+        active.accumulator.breaks.push(EnhancerBreak {
+            id: uuid::Uuid::new_v4().to_string(),
+            session_id,
+            context_id,
+            observed_at,
+            enhancer_name: enhancer_name.to_string(),
+            weapon_name,
+            returned,
+            // The whole stated return while the session runs; its end
+            // settles it against the Shrapnel tagged as returns.
+            deducted: returned,
+            markup_percent: markup,
+            pricing,
+        });
     }
 }

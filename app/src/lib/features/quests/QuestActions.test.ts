@@ -35,6 +35,10 @@ function quest(completionTrigger: Quest['completionTrigger']): Quest {
 		familyCooldownAnchor: null,
 		familyCooldownExpiresAt: null,
 		rewardUndoAvailable: false,
+		curated: false,
+		catalogueKey: null,
+		lastAbandonedAt: null,
+		lastCompletedAt: null,
 	};
 }
 

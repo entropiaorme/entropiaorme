@@ -1,11 +1,13 @@
 <script lang="ts">
 	import type { EquipmentEffectiveEfficiency } from '$lib/api/commands.gen';
 	import { formatPercent } from '$lib/utils/format';
+	import { looterBasisCaption, type LooterBasis } from '$lib/looterBasis.svelte';
 	import InfoTip from './InfoTip.svelte';
 
 	let {
 		effectiveEfficiency,
 		looterLevel = null,
+		looterBasis = 'three_looter_mean',
 		weightedEfficiencyPct = null,
 		consumedPremiumLabel = null,
 		coverage = null,
@@ -14,6 +16,9 @@
 	}: {
 		effectiveEfficiency: EquipmentEffectiveEfficiency | null;
 		looterLevel?: number | null;
+		/** The basis `looterLevel` was read at (analytics replays the mean);
+		 * null for a level chosen between the bases. */
+		looterBasis?: LooterBasis | null;
 		weightedEfficiencyPct?: number | null;
 		consumedPremiumLabel?: string | null;
 		coverage?: number | null;
@@ -28,7 +33,7 @@
 	{#if scope === 'activity'}
 		<p class="mt-1 text-xs leading-relaxed text-text-secondary">
 			The Efficiency an otherwise identical unlimited offensive setup would need to match this
-			scope’s combined premium-adjusted expected return. Weapon and amplifier streams are
+			scope’s combined premium-adjusted expected return. Weapon, amplifier, and scope streams are
 			weighted by raw TT; consumed limited markup remains in economic cost.
 		</p>
 	{:else}
@@ -70,7 +75,7 @@
 	<p class="mt-2 text-[11px] leading-relaxed text-text-tertiary">
 		Community model v1
 		{#if looterLevel !== null}
-			· three-looter mean {looterLevel.toFixed(1)}
+			· {looterBasisCaption(looterBasis, looterLevel)}
 		{/if}
 		{#if coverage !== null}
 			· {formatPercent(coverage)} offensive basis coverage

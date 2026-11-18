@@ -1,0 +1,47 @@
+name: dot_weapon_rotation
+flavour: scripted
+description: >
+  A damage-over-time rotation replayed from a real capture: one
+  Electrocution Chip cast, a switch to the primary chip a second later,
+  and the primary firing to the kill while the Electrocution effect ticks
+  beside it. Pins the cast billing exactly once, every tick recorded as
+  an outcome of that cast at no cost (a sliver of damage short of every
+  band included, as the nearest source's), the primary billing every
+  genuine activation (hits short of its band, jams, and a miss included),
+  and no false switch raised by a tick. The session costs one cast plus 38
+  primary shots, 18.80 PED; charging the 21 ticks as shots nearly doubled
+  it.
+  The last primary hit prints in the same second as the loot, which the
+  pipeline settles first, so that one shot lands after the kill as the
+  session's dangling cost in the replay, which writes each second whole;
+  live tailing may settle it into the kill.
+surfaces:
+  - tracking-weapon-effect-window
+  - tracking-weapon-effect-tick
+  - tracking-weapon-effect-single-billing
+  - tracking-weapon-attribution-agreement
+  - tracking-kill-creation
+events: 94
+expected_kills: 1
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  The chat log is the capture's system lines from the cast to the loot,
+  verbatim (other players' channels left out). carried.json names the two
+  carried chips at their recorded per-use costs; the primary's amplifier
+  is folded into one impact figure (a 95.7-191.4 band), and the
+  Electrocution chip carries a declared effect fitted to this capture (a
+  100-160 opener, then 35-75 ticks for 25 seconds), not the in-game
+  values, which await a controlled capture. steps.jsonl presses the
+  Electrocution chip before the cast and the primary between the cast's
+  first two ticks, and advances the clock by the capture's own gaps.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus
+# replay test). The start instant is chosen away from the scenario's chat-log
+# instants so a plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

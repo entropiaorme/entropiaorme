@@ -18,16 +18,28 @@
 use crate::git;
 
 /// The accounting surface: tracked Rust sources under these paths may
-/// not reference the market layer. Extend the list when a new realised
-/// -figure surface is minted; never shrink it to admit a consumer.
-const ACCOUNTING_SURFACES: &[&str] = &[
+/// not reference the market layer, nor the account readings (the
+/// measured-isolation guard holds the same list). Extend the list when a
+/// new realised-figure surface is minted; never shrink it to admit a
+/// consumer.
+pub(crate) const ACCOUNTING_SURFACES: &[&str] = &[
     "app/src-tauri/eo-services/src/analytics.rs",
+    "app/src-tauri/eo-services/src/analytics/",
     "app/src-tauri/eo-services/src/cost_engine.rs",
     "app/src-tauri/eo-services/src/daily_rollup.rs",
     "app/src-tauri/eo-services/src/session_summary.rs",
+    "app/src-tauri/eo-services/src/session_costs.rs",
+    "app/src-tauri/eo-services/src/tracking_reads.rs",
+    "app/src-tauri/eo-services/src/session_weapon_rollup.rs",
+    "app/src-tauri/eo-services/src/skilling_forecast.rs",
+    "app/src-tauri/eo-services/src/session_definitions.rs",
+    "app/src-tauri/eo-services/src/session_expectation.rs",
+    "app/src-tauri/eo-services/src/loaded_expectation.rs",
+    "app/src-tauri/eo-services/src/maintenance.rs",
     "app/src-tauri/eo-services/src/tracker/",
     "app/src-tauri/eo-services/src/quests/",
     "app/src-tauri/eo-api/src/analytics.rs",
+    "app/src-tauri/eo-api/src/strongbox.rs",
     "app/src-tauri/eo-api/src/tracking.rs",
 ];
 
@@ -41,6 +53,9 @@ const MARKET_MARKERS: &[&str] = &[
     "eo_api::market",
     "market_observations",
     "market_submissions",
+    "market_unit_price_observations",
+    "market_manual_markups",
+    "market_live_nanocube_marks",
 ];
 
 /// A single lint violation: file, 1-based line number, detail.

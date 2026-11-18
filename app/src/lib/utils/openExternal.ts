@@ -7,11 +7,10 @@ type TauriWindow = Window & { __TAURI_INTERNALS__?: unknown };
  * Open an external URL in the OS browser / default handler.
  *
  * In the Tauri runtime a plain `target="_blank"` anchor does not reach the OS
- * browser, so external links must be handed to the shell `open` API (the same
- * path the interactive guide uses). Outside Tauri (e.g. a plain browser during
- * development) it uses `window.open` instead. No-ops on an empty or
- * non-allowlisted href, so callers can pass optional / untrusted values without
- * guarding.
+ * browser, so external links must be handed to the shell `open` API. Outside
+ * Tauri (e.g. a plain browser during development) it uses `window.open`
+ * instead. No-ops on an empty or non-allowlisted href, so callers can pass
+ * optional / untrusted values without guarding.
  */
 export async function openExternalUrl(href: string | null | undefined): Promise<void> {
 	if (!href) return;

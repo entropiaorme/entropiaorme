@@ -1,11 +1,13 @@
 # cargo-audit configuration
 #
-# Every advisory ignored here is on a transitive crate inside the Tauri
-# toolchain, not a direct dependency of entropia-orme. None are exploitable
-# in our Windows desktop embedding; none are fixable here without an
-# upstream Tauri release that bumps the relevant subtree. Resolution path
-# for each category is "wait for upstream"; the per-advisory comments below
-# spell out why each is non-actionable in the shipped Windows artefact.
+# Every advisory ignored here but one is on a transitive crate, not a direct
+# dependency: most sit inside the Tauri toolchain, and the zbus family sits
+# under the Linux screen-capture portal client. None are exploitable in the
+# shipped artefacts; none are fixable here without an upstream release that
+# bumps the relevant subtree. Resolution path for each of those is "wait for
+# upstream"; the per-advisory comments below spell out why each is
+# non-actionable. The exception is chrono, a direct dependency, whose entry
+# says what replaces it and when.
 #
 # Categorisation note: every entry below is an `unmaintained` / `unsound`
 # *warning*, not a vulnerability. Any future *vulnerability* suppression must
@@ -20,23 +22,6 @@
 
 [advisories]
 ignore = [
-    # GTK3 bindings: unmaintained advisories on the entire gtk-rs GTK3 family,
-    # transitive deps pulled by Tauri via webkit2gtk. The Linux build runs this
-    # stack (Tauri's Linux backend is GTK3-bound, so every Tauri Linux app
-    # carries these); the advisories are maintenance-status warnings, not
-    # vulnerabilities. Not actionable until Tauri migrates off GTK3; re-walk
-    # on every Tauri bump.
-    "RUSTSEC-2024-0411", # gdkwayland-sys
-    "RUSTSEC-2024-0412", # gdk
-    "RUSTSEC-2024-0413", # atk
-    "RUSTSEC-2024-0414", # gdkx11-sys
-    "RUSTSEC-2024-0415", # gtk
-    "RUSTSEC-2024-0416", # atk-sys
-    "RUSTSEC-2024-0417", # gdkx11
-    "RUSTSEC-2024-0418", # gdk-sys
-    "RUSTSEC-2024-0419", # gtk3-macros
-    "RUSTSEC-2024-0420", # gtk-sys
-
     # glib: Iterator/DoubleEndedIterator unsoundness on `VariantStrIter`.
     # Transitive dep of the GTK stack the Linux build runs; the unsound
     # iterator is not on any first-party code path (we call no VariantStrIter
@@ -66,4 +51,28 @@ ignore = [
     # attack vector is not present in our embedding. Single advisory ID
     # covers both rand versions.
     "RUSTSEC-2026-0097", # rand (0.7.3, 0.8.5)
+
+    # zvariant, zbus_names, zvariant_derive: unmaintained as standalone crates
+    # since zbus 6 absorbed them, not for any defect. They reach the graph only
+    # through zbus 5 <- ashpd (the ScreenCast portal client behind eo-services'
+    # `linux-capture` feature), so they are Linux-only and absent from the
+    # Windows artefact. No ashpd release is on zbus 6 yet; drop these when one
+    # is and the bump lands.
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+
+    # chrono: declared unmaintained (issued 2026-11-17), all versions, with no
+    # patched release; the advisory reports no defect and names jiff and time
+    # as successors. A direct dependency, unlike everything above: the
+    # backend's calendar arithmetic and timestamp formatting go through it,
+    # so replacing it is a migration of every date the accounting reads and
+    # writes, not a version bump, and is done as its own change with the
+    # goldens as the proof, not folded into an advisory response. Built with
+    # default features off (`std` and `clock` only), so the one historical
+    # chrono vulnerability class (RUSTSEC-2020-0159, the `localtime_r` path
+    # of the old `time` 0.1 dependency) is not in the graph. Drop this entry
+    # when the migration to a maintained crate lands; revisit at once if a
+    # vulnerability-class advisory is ever issued against chrono.
+    "RUSTSEC-2026-0543", # chrono
 ]

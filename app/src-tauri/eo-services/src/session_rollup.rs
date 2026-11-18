@@ -5,13 +5,14 @@
 //!
 //! ## The model
 //!
-//! An ended session's events aggregate to five cell sets no activity
+//! An ended session's events aggregate to cell sets no activity
 //! consumer folds finer than: kill cells by `(context, species, maturity)`
 //! (`session_kill_rollups`), active loot cells by `(species, shrapnel,
 //! item)` (`session_loot_rollups`, species pre-folded to the empty string
 //! for shrapnel rows exactly as the position reads fold it), loot-
-//! composition cells by context (`session_context_loot_rollups`), and
-//! skill-gain cells by context (`session_pes_rollups`). Model-neutral
+//! composition cells by context (`session_context_loot_rollups`),
+//! skill-gain cells by context (`session_pes_rollups`), and what each
+//! weapon did alone ([`crate::session_weapon_rollup`]). Model-neutral
 //! offensive evidence settles by `(context, species, evidence fingerprint)` in
 //! `session_offensive_evidence_rollups`, so Community Model replay remains
 //! independent of lifetime raw kill history. The raw tables
@@ -33,8 +34,11 @@
 use crate::db::DbError;
 
 /// Bump when a cell's meaning changes: below-version sessions are served
-/// raw and heal on the next read.
-pub const ROLLUP_VERSION: i64 = 4;
+/// raw and heal on the next read. 6: a quest reward claimed at a hand-in is
+/// no longer a kill in the cells' counts. 7: a kill's cycled spend is its
+/// tracked spend at its session's resolved scale ([`crate::session_costs`]),
+/// so a measured session's cells add up to its measured buckets.
+pub const ROLLUP_VERSION: i64 = 7;
 
 /// Drop one session's cells and marker. The session reads raw from this
 /// commit on; the delete path wants exactly that, and [`recompute_session`]
@@ -52,7 +56,10 @@ pub fn drop_session(conn: &rusqlite::Connection, session_id: &str) -> Result<(),
         "session_context_loot_rollups",
         "session_pes_rollups",
         "session_offensive_evidence_rollups",
-    ] {
+    ]
+    .into_iter()
+    .chain(crate::session_weapon_rollup::TABLES)
+    {
         conn.execute(
             &format!("DELETE FROM {table} WHERE session_id = ?"),
             rusqlite::params![session_id],
@@ -80,21 +87,30 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
         return Ok(());
     }
     conn.execute(
-        "INSERT INTO session_kill_rollups \
-             (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
-         SELECT session_id, context_id, \
-                COALESCE(mob_species, ''), COALESCE(mob_maturity, ''), \
-                COUNT(*), \
-                COALESCE(SUM(cost_ped + enhancer_cost), 0), \
-                COALESCE(SUM(loot_total_ped), 0) \
-         FROM kills WHERE session_id = ?1 \
-         GROUP BY 1, 2, 3, 4",
+        // every-kill: spend (cycled and loot sum every row; the count takes
+        // only the rows still counted as kills, and a claimed reward that
+        // spent nothing makes no cell).
+        &format!(
+            "INSERT INTO session_kill_rollups \
+                 (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
+             SELECT session_id, context_id, \
+                    COALESCE(mob_species, ''), COALESCE(mob_maturity, ''), \
+                    COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
+                    COALESCE(SUM({}), 0), \
+                    COALESCE(SUM(loot_total_ped), 0) \
+             FROM kills WHERE session_id = ?1 \
+             GROUP BY 1, 2, 3, 4 \
+             HAVING COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END) > 0 \
+                 OR SUM(cost_ped + enhancer_cost) > 0",
+            crate::session_costs::kill_cycled_sql("kills")
+        ),
         rusqlite::params![session_id],
     )?;
     // Shrapnel rows fold their species away here, not at read time: every
     // consumer either folds it (positions) or excludes the rows entirely
     // (composition), so the cell grain carries the flag and no species.
     conn.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_loot_rollups \
              (session_id, mob_species, is_enhancer_shrapnel, item_name, quantity, value_ped) \
          SELECT k.session_id, \
@@ -109,6 +125,7 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
         rusqlite::params![session_id],
     )?;
     conn.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_context_loot_rollups \
              (session_id, context_id, item_name, quantity, value_ped) \
          SELECT k.session_id, k.context_id, li.item_name, \
@@ -129,6 +146,7 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
         rusqlite::params![session_id],
     )?;
     conn.execute(
+        // every-kill: spend (every shot fired is evidence of the loadout).
         "INSERT INTO session_offensive_evidence_rollups \
              (session_id, mob_species, evidence_fingerprint, expected_economics_json, \
               shots_fired, missing_candidate_raw_tt, missing_basis_phases, context_id) \
@@ -148,6 +166,7 @@ pub fn recompute_session(conn: &rusqlite::Connection, session_id: &str) -> Resul
                   ts.expected_economics_json",
         rusqlite::params![session_id],
     )?;
+    crate::session_weapon_rollup::settle(conn, session_id)?;
     conn.execute(
         "INSERT INTO session_rollup_meta (session_id, rollup_version) VALUES (?, ?)",
         rusqlite::params![session_id, ROLLUP_VERSION],
@@ -169,6 +188,9 @@ pub fn rebuild(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
          DELETE FROM session_pes_rollups; \
          DELETE FROM session_offensive_evidence_rollups;",
     )?;
+    for table in crate::session_weapon_rollup::TABLES {
+        conn.execute(&format!("DELETE FROM {table}"), [])?;
+    }
     heal(conn)
 }
 
@@ -210,6 +232,7 @@ const SETTLED_HUNTING_LOOT_SQL: &str = "SELECT r.session_id, s.definition_id, r.
      JOIN tracking_sessions s ON s.id = r.session_id \
      WHERE (?1 IS NULL OR s.started_at >= ?1)";
 
+// every-kill: spend (loot lines; a claimed arrival's are deactivated).
 const UNSETTLED_HUNTING_LOOT_SQL: &str = "SELECT s.definition_id, \
             CASE WHEN li.is_enhancer_shrapnel = 0 THEN COALESCE(k.mob_species, '') \
                  ELSE '' END, \
@@ -269,6 +292,86 @@ pub(crate) fn effective_hunting_loot_cells(
     Ok(cells)
 }
 
+/// What one definition's ended instances looted, item by item: the
+/// composition its lifetime markup figures value. It spans exactly the
+/// instances the definition's lifetime totals sum, and reads each one's
+/// loot the way that session's own loot list does: kill and harvest loot
+/// merged, enhancer shrapnel and deactivated lines left out.
+///
+/// The cost follows the family's item cells and its harvest rows, never
+/// its kills, so a family hundreds of thousands of kills deep answers from
+/// a few thousand cells. Sorted by item name.
+pub(crate) fn definition_loot(
+    conn: &rusqlite::Connection,
+    definition_id: i64,
+) -> Result<Vec<(String, i64, f64)>, DbError> {
+    use rusqlite::OptionalExtension as _;
+
+    use crate::session_scope::{counts_on, StatsScope};
+    use crate::tracking_reads::{loot_agg, merge_loot_aggs};
+
+    let economy = counts_on(StatsScope::Economy, "s");
+    let aggregate = |sql: &str, params: &[&dyn rusqlite::ToSql]| {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params, |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1).unwrap_or(0),
+                row.get::<_, f64>(2).unwrap_or(0.0),
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    };
+
+    let mut merged = aggregate(
+        &format!(
+            "SELECT r.item_name, SUM(r.quantity), COALESCE(SUM(r.value_ped), 0) \
+             FROM tracking_sessions s \
+             JOIN session_summaries ss ON ss.session_id = s.id \
+             JOIN session_rollup_meta m ON m.session_id = s.id AND m.rollup_version >= ?2 \
+             JOIN session_loot_rollups r ON r.session_id = s.id \
+             WHERE s.definition_id = ?1 AND r.is_enhancer_shrapnel = 0 AND {economy} \
+             GROUP BY r.item_name"
+        ),
+        rusqlite::params![definition_id, ROLLUP_VERSION],
+    )?;
+
+    // A session not yet settled still counts, read from its own raw rows.
+    let mut in_family = conn.prepare(&format!(
+        "SELECT 1 FROM tracking_sessions s \
+         JOIN session_summaries ss ON ss.session_id = s.id \
+         WHERE s.id = ?1 AND s.definition_id = ?2 AND {economy}"
+    ))?;
+    for session_id in unsettled_sessions(conn)? {
+        let counts = in_family
+            .query_row(rusqlite::params![session_id, definition_id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if counts {
+            merged = merge_loot_aggs(
+                merged,
+                loot_agg(conn, &session_id, "l.deactivated_at IS NULL")?,
+            );
+        }
+    }
+
+    let harvested = aggregate(
+        &format!(
+            "SELECT l.item_name, SUM(l.quantity), COALESCE(SUM(l.value_ped), 0) \
+             FROM tracking_sessions s \
+             JOIN session_summaries ss ON ss.session_id = s.id \
+             JOIN harvest_events h ON h.session_id = s.id \
+             JOIN harvest_loot_items l ON l.harvest_id = h.id \
+             WHERE s.definition_id = ?1 AND l.deactivated_at IS NULL AND {economy} \
+             GROUP BY l.item_name"
+        ),
+        rusqlite::params![definition_id],
+    )?;
+    let mut merged = merge_loot_aggs(merged, harvested);
+    merged.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(merged)
+}
+
 /// One model-neutral offensive-evidence cell. Settled sessions come from the
 /// maintained projection; only explicitly unsettled sessions consult raw tool
 /// phases, scoped through their session id. Keeping the original evidence JSON
@@ -294,6 +397,7 @@ const SETTLED_OFFENSIVE_EVIDENCE_SQL: &str =
      JOIN tracking_sessions s ON s.id = r.session_id \
      WHERE (?1 IS NULL OR s.started_at >= ?1)";
 
+// every-kill: spend (every shot fired is evidence of the loadout).
 const UNSETTLED_OFFENSIVE_EVIDENCE_SQL: &str =
     "SELECT k.context_id, COALESCE(k.mob_species, ''), ts.expected_economics_json, \
             SUM(CASE WHEN ts.shots_fired > 0 THEN ts.shots_fired ELSE 0 END), \
@@ -368,6 +472,9 @@ pub(crate) fn effective_offensive_evidence_cells(
 /// steady-state case (one or two pending sessions) the named join order
 /// makes it the same indexed work.
 pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
+    // A session whose measured costs moved since its cells were settled
+    // settles again first.
+    crate::session_costs::heal(conn)?;
     let pending: i64 = conn.query_row(
         "SELECT COUNT(*) FROM tracking_sessions t \
          LEFT JOIN session_rollup_meta m \
@@ -407,7 +514,10 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
         "session_context_loot_rollups",
         "session_pes_rollups",
         "session_offensive_evidence_rollups",
-    ] {
+    ]
+    .into_iter()
+    .chain(crate::session_weapon_rollup::TABLES)
+    {
         tx.execute(
             &format!(
                 "DELETE FROM {table} \
@@ -420,19 +530,28 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
     // and kill indexes); a planner-chosen order could re-scan the whole
     // raw table for a single pending session.
     tx.execute(
-        "INSERT INTO session_kill_rollups \
-             (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
-         SELECT p.id, k.context_id, \
-                COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
-                COUNT(*), \
-                COALESCE(SUM(k.cost_ped + k.enhancer_cost), 0), \
-                COALESCE(SUM(k.loot_total_ped), 0) \
-         FROM pending_settlement p CROSS JOIN kills k \
-         WHERE k.session_id = p.id \
-         GROUP BY 1, 2, 3, 4",
+        // every-kill: spend (cycled and loot sum every row; the count takes
+        // only the rows still counted as kills, and a claimed reward that
+        // spent nothing makes no cell).
+        &format!(
+            "INSERT INTO session_kill_rollups \
+                 (session_id, context_id, mob_species, mob_maturity, kills, cycled_ped, loot_tt) \
+             SELECT p.id, k.context_id, \
+                    COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
+                    COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
+                    COALESCE(SUM({}), 0), \
+                    COALESCE(SUM(k.loot_total_ped), 0) \
+             FROM pending_settlement p CROSS JOIN kills k \
+             WHERE k.session_id = p.id \
+             GROUP BY 1, 2, 3, 4 \
+             HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
+                 OR SUM(k.cost_ped + k.enhancer_cost) > 0",
+            crate::session_costs::kill_cycled_sql("k")
+        ),
         [],
     )?;
     tx.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_loot_rollups \
              (session_id, mob_species, is_enhancer_shrapnel, item_name, quantity, value_ped) \
          SELECT p.id, \
@@ -446,6 +565,7 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
         [],
     )?;
     tx.execute(
+        // every-kill: spend (loot lines; a claimed arrival's are deactivated).
         "INSERT INTO session_context_loot_rollups \
              (session_id, context_id, item_name, quantity, value_ped) \
          SELECT p.id, k.context_id, li.item_name, \
@@ -465,6 +585,7 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
         [],
     )?;
     tx.execute(
+        // every-kill: spend (every shot fired is evidence of the loadout).
         "INSERT INTO session_offensive_evidence_rollups \
              (session_id, mob_species, evidence_fingerprint, expected_economics_json, \
               shots_fired, missing_candidate_raw_tt, missing_basis_phases, context_id) \
@@ -484,6 +605,17 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
                   ts.expected_economics_json",
         [],
     )?;
+    // The weapon cells attribute each skill gain to the next event in its
+    // session, an ordered walk no grouped pass expresses, so they settle
+    // one pending session at a time over the per-session indexes.
+    let pending_ids: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT id FROM pending_settlement")?;
+        let ids = stmt.query_map([], |row| row.get(0))?;
+        ids.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for session_id in &pending_ids {
+        crate::session_weapon_rollup::settle(&tx, session_id)?;
+    }
     tx.execute(
         "INSERT INTO session_rollup_meta (session_id, rollup_version) \
          SELECT id, ?1 FROM pending_settlement",
@@ -518,6 +650,15 @@ pub fn heal(conn: &mut rusqlite::Connection) -> Result<(), DbError> {
          WHERE session_id NOT IN (SELECT id FROM tracking_sessions)",
         [],
     )?;
+    for table in crate::session_weapon_rollup::TABLES {
+        tx.execute(
+            &format!(
+                "DELETE FROM {table} \
+                 WHERE session_id NOT IN (SELECT id FROM tracking_sessions)"
+            ),
+            [],
+        )?;
+    }
     tx.execute(
         "DELETE FROM session_rollup_meta \
          WHERE session_id NOT IN (SELECT id FROM tracking_sessions)",

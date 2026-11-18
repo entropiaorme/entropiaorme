@@ -6,6 +6,8 @@ import { createReviewModel } from './reviewModel.svelte';
 vi.mock('$lib/api', () => ({
 	getTrackingSessions: vi.fn(),
 	getSessionDetail: vi.fn(),
+	getUnrecordedArmourSessions: vi.fn(async () => []),
+	getUnpricedExposure: vi.fn(async () => []),
 	deleteSession: vi.fn(),
 	reassignSession: vi.fn(),
 	getAllSessionDefinitions: vi.fn(),
@@ -22,7 +24,7 @@ function definition(overrides: Partial<SessionDefinition> = {}): SessionDefiniti
 		name: 'Default Tracking',
 		adHocSegments: false,
 		trackProtectionCosts: true,
-		trackProtectionBySegment: true,
+		questPlanet: null,
 		isProtected: true,
 		isActive: true,
 		instanceCount: 0,

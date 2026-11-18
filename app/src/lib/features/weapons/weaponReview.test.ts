@@ -1,0 +1,377 @@
+import { describe, expect, it } from 'vitest';
+import type { WeaponAttributionSummary, WeaponShot } from '$lib/api/weapons';
+import { formatClock } from '$lib/features/healing/healingReview';
+import {
+	attributionTally,
+	describeBatch,
+	describeBulkAssign,
+	describeBulkDone,
+	describeBulkFit,
+	describeEffect,
+	describeHitMargins,
+	describeNoFit,
+	describeReview,
+	describeShot,
+	describeUnpriced,
+	effectTickLine,
+	formatDamage,
+	hasWeaponEvidence,
+	marginLabel,
+	reviewGroups,
+	shotStanding,
+	weaponOption,
+} from './weaponReview';
+
+function summary(overrides: Partial<WeaponAttributionSummary> = {}): WeaponAttributionSummary {
+	return {
+		correctable: true,
+		agreed: 398,
+		evidenced: 10,
+		evidenceShots: 6,
+		unresolved: 4,
+		unpriced: 3,
+		assigned: 1,
+		markedTicks: 0,
+		effectTicks: 0,
+		pricedTicks: 0,
+		boostedShots: 0,
+		reducedShots: 0,
+		hitMargins: [],
+		unclaimedTicks: 0,
+		undeclaredShots: 0,
+		ranUndeclared: false,
+		batches: [],
+		unpricedCostBound: 0,
+		unpricedNoFitShots: 0,
+		effects: [],
+		reviews: [],
+		...overrides,
+	};
+}
+
+function shot(overrides: Partial<WeaponShot> = {}): WeaponShot {
+	return {
+		id: 'e1',
+		group: 'unresolved',
+		observedAt: 1000,
+		amount: 30,
+		critical: false,
+		reason: 'r',
+		hotbarTool: 'Pistol',
+		toolName: null,
+		costPerShot: 0,
+		candidates: [
+			{ equipmentId: 1, name: 'Pistol', fits: false },
+			{ equipmentId: 2, name: 'Cannon', fits: true },
+			{ equipmentId: 3, name: 'Carbine', fits: true },
+		],
+		effectCandidates: [],
+		effectWindowId: null,
+		correctionId: null,
+		correctionKind: null,
+		correctionWindowId: null,
+		reviewDecision: null,
+		correctable: true,
+		...overrides,
+	};
+}
+
+describe('the attribution summary', () => {
+	it('tallies how shots were priced', () => {
+		expect(attributionTally(summary())).toBe(
+			'398 matched the hotbar · 10 by damage range · 4 unresolved',
+		);
+		expect(attributionTally(summary({ agreed: null, evidenced: null, effectTicks: 2 }))).toBe(
+			'4 unresolved · 2 effect ticks',
+		);
+	});
+
+	it('counts hits outside the listed range apart from those that matched', () => {
+		expect(attributionTally(summary({ boostedShots: 27, reducedShots: 3 }))).toBe(
+			'398 matched the hotbar · 27 boosted · 3 reduced · 10 by damage range · 4 unresolved',
+		);
+	});
+
+	it('has something to show when only margin hits were kept', () => {
+		const quiet = { agreed: 0, evidenced: 0, evidenceShots: 0, unresolved: 0 };
+		expect(hasWeaponEvidence(summary(quiet))).toBe(false);
+		expect(hasWeaponEvidence(summary({ ...quiet, boostedShots: 1 }))).toBe(true);
+		expect(hasWeaponEvidence(summary({ ...quiet, reducedShots: 1 }))).toBe(true);
+	});
+
+	it("states one weapon's hits outside its range, leaving out an empty side", () => {
+		expect(describeHitMargins({ toolName: 'Chip', boosted: 27, reduced: 3 })).toBe(
+			'Chip: 27 boosted, 3 reduced',
+		);
+		expect(describeHitMargins({ toolName: 'Chip', boosted: 27, reduced: 0 })).toBe(
+			'Chip: 27 boosted',
+		);
+		expect(describeHitMargins({ toolName: 'Chip', boosted: 0, reduced: 3 })).toBe(
+			'Chip: 3 reduced',
+		);
+	});
+
+	it('knows when there is nothing to show', () => {
+		expect(hasWeaponEvidence(summary())).toBe(true);
+		expect(
+			hasWeaponEvidence(
+				summary({
+					agreed: null,
+					evidenced: 0,
+					evidenceShots: 0,
+					unresolved: 0,
+					unpriced: 0,
+					assigned: 0,
+				}),
+			),
+		).toBe(false);
+		expect(
+			hasWeaponEvidence(summary({ agreed: 0, evidenced: 0, evidenceShots: 0, unresolved: 0 })),
+		).toBe(false);
+	});
+
+	it('offers only the groups with shots in them, unresolved first', () => {
+		expect(reviewGroups(summary()).map((g) => g.id)).toEqual(['unresolved', 'evidence']);
+		expect(reviewGroups(summary({ unresolved: 0 })).map((g) => g.id)).toEqual(['evidence']);
+		expect(reviewGroups(summary({ effectTicks: 21 })).map((g) => [g.id, g.count])).toEqual([
+			['unresolved', 4],
+			['evidence', 6],
+			['effect_tick', 21],
+		]);
+		expect(
+			reviewGroups(summary({ boostedShots: 2, reducedShots: 1, effectTicks: 1 })).map((g) => g.id),
+		).toEqual(['unresolved', 'evidence', 'boosted', 'reduced', 'effect_tick']);
+	});
+
+	it('has something to show when only an effect paid here ticked elsewhere', () => {
+		const quiet = summary({
+			agreed: 0,
+			evidenced: 0,
+			evidenceShots: 0,
+			unresolved: 0,
+		});
+		expect(hasWeaponEvidence(quiet)).toBe(false);
+		const effect = {
+			id: 'w',
+			toolName: 'Electrocution',
+			activatedAt: 1000,
+			expiresAt: 1025,
+			hitAmount: 129.2,
+			costPerShot: 4.8732,
+			paidHere: true,
+			withdrawn: false,
+			ticks: 0,
+			tickDamage: 0,
+		};
+		expect(hasWeaponEvidence({ ...quiet, effects: [effect] })).toBe(true);
+		expect(effectTickLine({ ticks: 21, tickDamage: 1183.8 })).toBe(
+			`21 ticks · ${(1183.8).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })} damage`,
+		);
+		expect(effectTickLine({ ticks: 1, tickDamage: 50 })).toBe('1 tick · 50.0 damage');
+	});
+});
+
+describe('a stored shot', () => {
+	it('says what the tracker knew about it', () => {
+		expect(describeShot(shot())).toBe('Fits Cannon and Carbine (hotbar: Pistol)');
+		expect(describeShot(shot({ candidates: [], hotbarTool: null }))).toBe(
+			'Fits no carried weapon (no hotbar press)',
+		);
+		expect(describeShot(shot({ amount: null }))).toBe(
+			'A jam, dodge, evade, or miss with no weapon known (hotbar: Pistol)',
+		);
+		expect(
+			describeShot(shot({ candidates: [{ equipmentId: 2, name: 'Cannon', fits: true }] })),
+		).toBe('Fits only Cannon (hotbar: Pistol)');
+		expect(describeShot(shot({ reviewDecision: 'kept', toolName: 'Pistol' }))).toBe(
+			'Fit Cannon, Carbine; you kept Pistol',
+		);
+	});
+
+	it('names the effect a tick belongs to, or the casts it could have been', () => {
+		const cast = { windowId: 'w1', toolName: 'Electrocution', activatedAt: 1000, standing: true };
+		const recast = { windowId: 'w2', toolName: 'Electrocution', activatedAt: 1010, standing: true };
+		expect(describeEffect(cast)).toBe(`Electrocution, cast ${formatClock(1000)}`);
+		const tick = shot({
+			group: 'effect_tick',
+			candidates: [],
+			effectCandidates: [cast],
+			effectWindowId: 'w1',
+		});
+		expect(describeShot(tick)).toBe(`A tick of Electrocution, cast ${formatClock(1000)}`);
+		expect(describeShot({ ...tick, effectWindowId: null, effectCandidates: [cast, recast] })).toBe(
+			'A tick shared by 2 overlapping casts of Electrocution',
+		);
+		expect(describeShot({ ...tick, effectCandidates: [{ ...cast, standing: false }] })).toBe(
+			`A tick of Electrocution, cast ${formatClock(1000)} (taken back)`,
+		);
+		expect(describeShot({ ...tick, effectWindowId: null })).toBe(
+			'A tick of a cast whose session was deleted',
+		);
+		expect(
+			describeShot(
+				shot({
+					candidates: [{ equipmentId: 1, name: 'Pistol', fits: true }],
+					effectCandidates: [cast],
+				}),
+			),
+		).toBe(`Fits Pistol, or a tick of Electrocution, cast ${formatClock(1000)} (hotbar: Pistol)`);
+		expect(describeShot(shot({ candidates: [], effectCandidates: [cast] }))).toBe(
+			`Could be a tick of Electrocution, cast ${formatClock(1000)} (hotbar: Pistol)`,
+		);
+	});
+
+	it('says where a tick stands', () => {
+		const cast = { windowId: 'w1', toolName: 'Electrocution', activatedAt: 1000, standing: true };
+		expect(shotStanding(shot({ group: 'effect_tick', effectWindowId: 'w1' }))).toEqual({
+			kind: 'tick',
+		});
+		expect(
+			shotStanding(
+				shot({
+					effectCandidates: [cast],
+					correctionId: 'c1',
+					correctionKind: 'effect_tick',
+					correctionWindowId: 'w1',
+				}),
+			),
+		).toEqual({ kind: 'marked', tool: 'Electrocution', correctionId: 'c1' });
+		// A tick priced as a shot stands like any assigned shot.
+		expect(
+			shotStanding(
+				shot({
+					group: 'effect_tick',
+					toolName: 'Cannon',
+					costPerShot: 0.2,
+					correctionId: 'c2',
+					correctionKind: 'priced',
+				}),
+			),
+		).toEqual({ kind: 'assigned', tool: 'Cannon', cost: 0.2, correctionId: 'c2' });
+	});
+
+	it('says where its price stands', () => {
+		expect(shotStanding(shot())).toEqual({ kind: 'unpriced' });
+		expect(
+			shotStanding(shot({ toolName: 'Cannon', costPerShot: 0.2, correctionId: 'c1' })),
+		).toEqual({
+			kind: 'assigned',
+			tool: 'Cannon',
+			cost: 0.2,
+			correctionId: 'c1',
+		});
+		expect(
+			shotStanding(shot({ toolName: 'Cannon', costPerShot: 0.2, reviewDecision: 'confirmed' })),
+		).toEqual({
+			kind: 'confirmed',
+			tool: 'Cannon',
+			cost: 0.2,
+		});
+		expect(shotStanding(shot({ toolName: 'Cannon', costPerShot: 0.2 }))).toEqual({
+			kind: 'priced',
+			tool: 'Cannon',
+			cost: 0.2,
+		});
+	});
+
+	it('formats damage as the game prints it', () => {
+		expect(formatDamage(30)).toBe('30.0');
+		expect(formatDamage(12.345)).toBe('12.3');
+	});
+});
+
+describe('a decision and an offered weapon', () => {
+	it('reads as a sentence', () => {
+		const review = {
+			id: 'r',
+			decision: 'confirmed' as const,
+			hotbarTool: 'Pistol',
+			evidenceTool: 'Cannon',
+			since: 1,
+			decidedAt: 2,
+			repricedShots: 1,
+			costDelta: 0.15,
+		};
+		expect(describeReview(review)).toBe('Switched to Cannon from Pistol; 1 shot repriced');
+		expect(describeReview({ ...review, decision: 'kept', repricedShots: 3 })).toBe(
+			'Kept Pistol over Cannon; 3 shots repriced',
+		);
+		expect(
+			weaponOption(
+				{ equipmentId: 2, name: 'Cannon', costPerShotPed: 0.2, fits: true, margin: null },
+				(v) => v.toFixed(2),
+			),
+		).toBe('Cannon, fits · 0.20 PED');
+		expect(
+			weaponOption(
+				{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: false, margin: 'boosted' },
+				(v) => v.toFixed(2),
+			),
+		).toBe('Pistol, if boosted · 0.05 PED');
+		expect(
+			weaponOption(
+				{ equipmentId: 1, name: 'Pistol', costPerShotPed: 0.05, fits: false, margin: null },
+				(v) => v.toFixed(2),
+			),
+		).toBe('Pistol · 0.05 PED');
+		expect(marginLabel('reduced')).toBe('Reduced');
+	});
+
+	it('says which side of the range a kept hit landed on', () => {
+		expect(describeShot(shot({ group: 'boosted', toolName: 'Pistol', costPerShot: 0.05 }))).toBe(
+			'Above the listed range of Pistol',
+		);
+		expect(describeShot(shot({ group: 'reduced', toolName: 'Pistol', costPerShot: 0.05 }))).toBe(
+			'Below the listed range of Pistol',
+		);
+	});
+});
+
+describe('unpriced exposure copy', () => {
+	it('states the unpriced shots as a bound, or alone without one', () => {
+		expect(describeUnpriced(3, 0.6)).toBe('3 shots unpriced, up to +0.60 PED');
+		expect(describeUnpriced(1, 0)).toBe('1 shot unpriced');
+		expect(describeUnpriced(2)).toBe('2 shots unpriced');
+		expect(describeNoFit(2)).toBe('2 fit no carried weapon');
+	});
+
+	it('states a bulk assignment before and after', () => {
+		const option = {
+			equipmentId: 2,
+			name: 'Cannon',
+			fittingShots: 1,
+			boostedShots: 0,
+			reducedShots: 0,
+			skippedShots: 0,
+			addedCostPed: 0.2,
+		};
+		expect(describeBulkAssign(option)).toBe('Assign 1 shot to Cannon: +0.20 PED.');
+		expect(describeBulkDone({ assigned: 1, skipped: 0 }, 'Cannon')).toBe(
+			'Assigned 1 shot to Cannon.',
+		);
+		expect(
+			describeBatch({ id: 'b', toolName: 'Rifle', shots: 24, costPed: 1.2, correctedAt: 0 }),
+		).toBe('24 shots assigned to Rifle');
+	});
+
+	it('says which shots a weapon only explains if they were boosted or reduced', () => {
+		const option = {
+			equipmentId: 1,
+			name: 'Chip',
+			fittingShots: 0,
+			boostedShots: 27,
+			reducedShots: 0,
+			skippedShots: 2,
+			addedCostPed: 9.9,
+		};
+		expect(describeBulkFit(option)).toBe('27 if boosted');
+		expect(describeBulkAssign(option)).toBe(
+			'Assign 27 shots to Chip (27 as boosted), skip 2 shots it does not explain: +9.90 PED.',
+		);
+		const mixed = { ...option, fittingShots: 3, reducedShots: 1, skippedShots: 0 };
+		expect(describeBulkFit(mixed)).toBe('fits 3 · 27 if boosted · 1 if reduced');
+		expect(describeBulkAssign(mixed)).toBe(
+			'Assign 31 shots to Chip (27 as boosted, 1 as reduced): +9.90 PED.',
+		);
+	});
+});

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MonthlyEntry, OverviewStats, TimelineDay } from '$lib/types/analytics';
-import { createOverviewModel, labelFor, PIE_C } from './overviewModel.svelte';
+import { createOverviewModel, labelFor, overheadBand, PIE_C } from './overviewModel.svelte';
 
 vi.mock('$lib/api', () => ({
 	getAnalyticsOverview: vi.fn(),
@@ -20,6 +20,8 @@ function day(overrides: Partial<TimelineDay> = {}): TimelineDay {
 		questPes: 0,
 		ledgerGains: {},
 		trackingCost: 0,
+		overheadCost: 0,
+		betweenSessionsCost: 0,
 		ledgerLosses: {},
 		...overrides,
 	};
@@ -35,6 +37,8 @@ function month(overrides: Partial<MonthlyEntry> = {}): MonthlyEntry {
 		questPes: 0,
 		ledgerGains: {},
 		trackingCost: 0,
+		overheadCost: 0,
+		betweenSessionsCost: 0,
 		ledgerLosses: {},
 		...overrides,
 	};
@@ -54,7 +58,16 @@ function overview(overrides: Partial<OverviewStats> = {}): OverviewStats {
 		},
 		lossesBreakdown: {
 			trackingCost: 1000,
-			cycledBreakdown: { weapon: 700, healing: 150, enhancer: 100, armour: 50, dangling: 0 },
+			cycledBreakdown: {
+				weapon: 700,
+				healing: 150,
+				enhancer: 100,
+				armour: 50,
+				dangling: 0,
+				harvest: 0,
+				consumables: 0,
+			},
+			overhead: { total: 0, travel: 0, fieldLogistics: 0, unclassified: 0, betweenSessions: 0 },
 			ledger: { equipment: 40, repair: 20 },
 		},
 		totalGains: 1000,
@@ -151,6 +164,46 @@ describe('pieView', () => {
 		expect(pie?.arcs.map((a) => a.label)).toEqual(['TT Loot', 'Quest Rewards']);
 	});
 
+	it("counts the sessions' overhead among the losses, beside Cycled", async () => {
+		const base = overview();
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				lossesBreakdown: {
+					...base.lossesBreakdown,
+					overhead: { total: 6, travel: 4, fieldLogistics: 2, unclassified: 0, betweenSessions: 0 },
+				},
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		expect(model.pieView?.losses).toBe(1066); // 1000 cycled + 6 overhead + 40 + 20
+	});
+
+	it('keeps what was billed between sessions in the costs and out of the rate', async () => {
+		const base = overview();
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				lossesBreakdown: {
+					...base.lossesBreakdown,
+					overhead: {
+						total: 66,
+						travel: 66,
+						fieldLogistics: 0,
+						unclassified: 0,
+						betweenSessions: 60,
+					},
+				},
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		expect(model.totals?.costs).toBe(1126); // 1000 cycled + 66 overhead + 40 + 20
+		expect(model.totals?.betweenSessions).toBe(60);
+		expect(model.pieView?.losses).toBe(1126);
+		// The rate's losses leave the 60 out: 1000 cycled + 6 + 40 + 20.
+		expect(model.pieView?.rate).toBeCloseTo((model.pieView?.gains ?? 0) / 1066, 10);
+	});
+
 	it('returns null when either side is empty', async () => {
 		mocked.getAnalyticsOverview.mockResolvedValue(
 			overview({
@@ -213,6 +266,20 @@ describe('timeline', () => {
 		expect(model.chartPoints.map((p) => p.value)).toEqual([2, -2]);
 	});
 
+	it("takes each day's overhead off the cumulative net", async () => {
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				timeline: [
+					day({ date: '2026-07-01', lootTt: 10, trackingCost: 4, overheadCost: 1 }),
+					day({ date: '2026-07-02', overheadCost: 2 }),
+				],
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		expect(model.chartPoints.map((p) => p.value)).toEqual([5, 3]);
+	});
+
 	it('returns no points for a sub-two-day timeline', async () => {
 		mocked.getAnalyticsOverview.mockResolvedValue(overview({ timeline: [day()] }));
 		const model = createOverviewModel();
@@ -259,11 +326,102 @@ describe('monthlyRows', () => {
 		expect(rows[1].lootRate).toBeNull();
 		expect(rows[1].globalRate).toBeNull();
 	});
+
+	it("counts a month's overhead in its cost and net, never in its loot rate", async () => {
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				monthlyBreakdown: [
+					month({ month: '2026-06', lootTt: 90, trackingCost: 100, overheadCost: 5 }),
+					month({ month: '2026-07' }),
+				],
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		const [june] = model.monthlyRows;
+		expect(june.cost).toBe(105);
+		expect(june.net).toBe(-15);
+		expect(june.lootRate).toBe(0.9);
+		expect(june.globalRate).toBeCloseTo(90 / 105, 10);
+	});
+
+	it("counts what was billed between a month's sessions in its cost, never in its rate", async () => {
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				monthlyBreakdown: [
+					month({
+						month: '2026-06',
+						lootTt: 90,
+						trackingCost: 100,
+						overheadCost: 15,
+						betweenSessionsCost: 10,
+					}),
+				],
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		const [june] = model.monthlyRows;
+		expect(june.cost).toBe(115);
+		expect(june.net).toBe(-25);
+		expect(june.globalRate).toBeCloseTo(90 / 105, 10);
+	});
 });
 
 describe('labelFor', () => {
 	it('maps known tags and title-cases unknown snake_case tags', () => {
 		expect(labelFor('item_sale')).toBe('Auction Sales');
 		expect(labelFor('space_travel')).toBe('Space travel');
+	});
+});
+
+describe("the sessions' overhead band", () => {
+	it('is a band of its own beside Cycled, by category, holding only what it has', () => {
+		const losses = overview({
+			lossesBreakdown: {
+				...overview().lossesBreakdown,
+				overhead: { total: 6, travel: 4, fieldLogistics: 0, unclassified: 2, betweenSessions: 0 },
+			},
+		}).lossesBreakdown;
+		expect(overheadBand(losses)).toEqual({
+			total: 6,
+			categories: [
+				{ key: 'travel', label: 'Travel', ped: 4 },
+				{ key: 'unclassified', label: 'Unclassified', ped: 2 },
+			],
+			betweenSessions: 0,
+		});
+		// Cycled is untouched by it.
+		expect(losses.trackingCost).toBe(1000);
+	});
+
+	it('is absent from a window without overhead', () => {
+		expect(overheadBand(overview().lossesBreakdown)).toBeNull();
+	});
+});
+
+describe('the cumulative breakdown', () => {
+	it("totals what the donut does: its Costs are the donut's losses, its Returns the gains", async () => {
+		const base = overview();
+		mocked.getAnalyticsOverview.mockResolvedValue(
+			overview({
+				returnsBreakdown: { ...base.returnsBreakdown, questItemTt: 25 },
+				lossesBreakdown: {
+					...base.lossesBreakdown,
+					overhead: { total: 6, travel: 4, fieldLogistics: 2, unclassified: 0, betweenSessions: 0 },
+				},
+			}),
+		);
+		const model = createOverviewModel();
+		await model.loadData('all');
+		const totals = model.totals;
+		expect(totals?.costs).toBe(model.pieView?.losses);
+		expect(totals?.returns).toBe(model.pieView?.gains);
+		expect(totals?.costs).toBe(1066); // 1000 cycled + 6 overhead + 40 + 20
+
+		// A toggled-off loss tag leaves both alike.
+		model.config.lossTags.repair = false;
+		expect(model.totals?.costs).toBe(1046);
+		expect(model.pieView?.losses).toBe(1046);
 	});
 });

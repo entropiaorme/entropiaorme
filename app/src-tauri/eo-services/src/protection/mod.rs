@@ -1,0 +1,585 @@
+//! Protection cost accounting at session grain.
+//!
+//! Nothing about protection is declared during play. The tracker records
+//! every observed defensive hit (numeric damage or a deflection) with its
+//! session and event context, and the player records costs afterwards, at
+//! the moment they repair or scan:
+//!
+//! - **Unlimited** protection is one pooled stream. A confirmed repair total
+//!   is consumed at raw TT; which piece or plate it came from is not asked.
+//! - Each **limited** set is its own stream, because its acquisition markup
+//!   is its own. Consumption is the TT lost between two Trade Terminal
+//!   readings at the set's frozen markup; the first reading is a baseline.
+//!
+//! A recording looks back to the previous recording of the same stream and
+//! is spread over the sessions the player ticks, by hit count, then within
+//! each session across its contexts by hit count. Streams that cover the
+//! same session add up. Session and account totals are exact; a segment's
+//! share is a hit-weighted estimate, which is the accepted trade for never
+//! asking what was worn.
+//!
+//! Where the player's account readings cover a session, its armour is
+//! billed from them instead: unlimited armour at what it lost, and a
+//! limited set at what its pieces lost times its markup, once the player
+//! has named the set's pieces ([`pieces`]). A recording then covers only
+//! what the readings did not: a session whose stream the readings measured
+//! is never offered nor accepted, and what a repair or a Trade Terminal
+//! reading measures that measured sessions already billed is taken off
+//! before it is spread ([`position`]). A limited set's Trade Terminal
+//! reading can measure from its pieces in an account reading, so no
+//! baseline reading is needed.
+
+#[cfg(test)]
+mod measured_tests;
+mod pieces;
+mod position;
+mod read;
+mod recording;
+mod sets;
+#[cfg(test)]
+mod tests;
+mod undo;
+#[cfg(test)]
+mod undo_tests;
+
+use std::sync::Arc;
+
+use crate::clock::Clock;
+use crate::db::{Db, DbError};
+use crate::game_data_store::GameDataStore;
+
+pub use recording::UNATTRIBUTED_REASON;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectionSetKind {
+    Armour,
+    Plates,
+}
+
+impl ProtectionSetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Armour => "armour",
+            Self::Plates => "plates",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ProtectionError> {
+        match value {
+            "armour" => Ok(Self::Armour),
+            "plates" => Ok(Self::Plates),
+            _ => Err(ProtectionError::Stored("unknown protection set kind")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObservationSource {
+    Ocr,
+    Manual,
+    /// The set's pieces as an account reading held them: the baseline a
+    /// Trade Terminal reading measured against, never entered by hand.
+    Account,
+}
+
+impl ObservationSource {
+    /// How the figure is stored. A reading taken from the account is
+    /// stored as `manual`, the only other way the stored column admits;
+    /// its link to the account reading is what marks it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ocr => "ocr",
+            Self::Manual | Self::Account => "manual",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ProtectionError> {
+        match value {
+            "ocr" => Ok(Self::Ocr),
+            "manual" => Ok(Self::Manual),
+            _ => Err(ProtectionError::Stored("unknown observation source")),
+        }
+    }
+}
+
+/// Whether a recorded cost reached any session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostStatus {
+    /// Spread over at least one session.
+    Booked,
+    /// Kept as an explicit amount no session carries: nothing was ticked,
+    /// no session had hits to carry it, or (for history) a baseline reset
+    /// left the amount unknown.
+    Pending,
+}
+
+impl CostStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Booked => "booked",
+            Self::Pending => "pending",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ProtectionError> {
+        match value {
+            "booked" => Ok(Self::Booked),
+            "pending" => Ok(Self::Pending),
+            _ => Err(ProtectionError::Stored("unknown protection cost status")),
+        }
+    }
+}
+
+/// What a recorded cost measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostKind {
+    /// TT lost by one limited set between two readings, at its markup.
+    LimitedDecay,
+    /// A confirmed unlimited repair total at raw TT.
+    Repair,
+}
+
+impl CostKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::LimitedDecay => "limited_decay",
+            Self::Repair => "repair",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, ProtectionError> {
+        match value {
+            "limited_decay" => Ok(Self::LimitedDecay),
+            "repair" => Ok(Self::Repair),
+            _ => Err(ProtectionError::Stored("unknown protection cost kind")),
+        }
+    }
+}
+
+/// One independently recorded and allocated protection cost stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtectionStream {
+    /// Every unlimited armour piece and plate, repaired as one pool.
+    Unlimited,
+    /// One limited armour or plate set.
+    Limited { set_id: i64 },
+}
+
+/// A limited armour or plate set: one aggregate layer with one approximate
+/// acquisition markup, measured by Trade Terminal readings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtectionSet {
+    pub id: i64,
+    pub kind: ProtectionSetKind,
+    pub name: String,
+    pub markup_percent: f64,
+    pub created_at: f64,
+    pub archived_at: Option<f64>,
+    pub latest_observation: Option<ProtectionObservation>,
+    /// The markup is frozen once the set has a reading, or once the
+    /// account readings billed a session with it.
+    pub basis_locked: bool,
+    /// Play since the set's latest reading; empty before its first.
+    pub backlog: StreamBacklog,
+    /// The item names the player confirmed as the set's pieces, in order.
+    pub pieces: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtectionObservation {
+    pub id: i64,
+    pub set_id: i64,
+    pub tt_value_ped: f64,
+    pub source: ObservationSource,
+    pub raw_text: Option<String>,
+    pub observed_at: f64,
+    pub reset_reason: Option<String>,
+    /// The reading measured a loss against the one before it. A baseline
+    /// or a reset measures nothing.
+    pub measured: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtectionCostAllocation {
+    pub session_id: String,
+    pub session_name: Option<String>,
+    /// The session type it was played under; absent for none.
+    pub definition_name: Option<String>,
+    pub started_at: f64,
+    pub hit_count: i64,
+    pub allocation_share: f64,
+    pub cost_ped: f64,
+    /// How the session's share split over the stretches of play its hits
+    /// landed in, in the order they were opened.
+    pub contexts: Vec<ContextShare>,
+}
+
+/// One stretch of a session's share of a recording.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ContextShare {
+    /// The segment and quest names in force; absent for hits taken
+    /// outside any named stretch.
+    pub label: Option<String>,
+    pub hit_count: i64,
+    pub cost_ped: f64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtectionCostWindow {
+    pub id: i64,
+    pub kind: CostKind,
+    pub set_id: Option<i64>,
+    /// The limited set's name, kept readable after the set is archived.
+    pub set_name: Option<String>,
+    pub consumed_tt_ped: Option<f64>,
+    pub markup_percent: Option<f64>,
+    pub cost_ped: f64,
+    pub cost_known: bool,
+    pub status: CostStatus,
+    pub reason: Option<String>,
+    pub created_at: f64,
+    /// When the recording was undone; an undone recording costs nothing
+    /// and stays only as provenance.
+    pub superseded_at: Option<f64>,
+    /// It is the latest live recording of its stream, so it can be undone.
+    pub undoable: bool,
+    pub allocations: Vec<ProtectionCostAllocation>,
+}
+
+/// What an undo takes back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndoTarget {
+    /// A recorded cost: an unlimited repair, or the limited reading that
+    /// measured it.
+    Recording { window_id: i64 },
+    /// A limited reading that booked nothing: a baseline or a reset.
+    Reading { observation_id: i64 },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservationOutcome {
+    pub observation: ProtectionObservation,
+    /// Absent for a baseline or a reset, which measure nothing.
+    pub cost_window: Option<ProtectionCostWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepairOutcome {
+    pub cost_window: ProtectionCostWindow,
+}
+
+/// One session a recording could be spread over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidateSession {
+    pub session_id: String,
+    /// The session's own name, when it was given one.
+    pub session_name: Option<String>,
+    /// The session type it was played under, which the recording surface
+    /// groups by; absent for a session recorded under none.
+    pub definition_id: Option<i64>,
+    pub definition_name: Option<String>,
+    pub started_at: f64,
+    /// Absent while the session is still running.
+    pub ended_at: Option<f64>,
+    /// The hits this recording would weigh the session by.
+    pub hit_count: i64,
+    /// An earlier recording of the same stream already covers it.
+    pub covered: bool,
+    /// No recording of any stream covers it yet.
+    pub unrecorded: bool,
+}
+
+/// Where a limited set's baseline comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaselineSource {
+    /// The set's own last Trade Terminal reading.
+    TradeTerminal,
+    /// The set's pieces in the latest account reading, newer than its own
+    /// last reading.
+    Account,
+}
+
+/// What a recording of one stream would look back over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordingCandidates {
+    pub stream: ProtectionStream,
+    /// When the stream was last recorded (for a limited set, its current
+    /// baseline reading); absent before the first.
+    pub since: Option<f64>,
+    /// The limited set's current baseline TT value.
+    pub baseline_tt_ped: Option<f64>,
+    /// Where that baseline comes from.
+    pub baseline_source: Option<BaselineSource>,
+    /// An account reading passed over as the set's baseline because it
+    /// does not hold every confirmed piece: when it was taken.
+    pub incomplete_account_reading_at: Option<f64>,
+    /// What the account readings already billed of what this recording
+    /// measures, in PED of TT: for unlimited armour, the decay of the
+    /// sessions they measured that no repair has restored since; for a
+    /// limited set, what its pieces lost in the sessions they measured
+    /// since the baseline. It is taken off before anything is spread.
+    pub billed_from_account_ped: f64,
+    /// How far a figure read from the account may stray: a PEC per piece,
+    /// since the site truncates every item's value to the PEC. Nothing when
+    /// no account figure is involved.
+    pub account_tolerance_ped: f64,
+    /// Sessions played since the stream's previous recording whose share
+    /// the account readings measured: left out, their armour already
+    /// billed.
+    pub measured_sessions: i64,
+    /// Sessions with hits since the previous recording, oldest first.
+    pub sessions: Vec<CandidateSession>,
+    /// Unlimited only: the most recent sessions from before the previous
+    /// recording, which a recording may re-include (a piece left
+    /// unrepaired last time). Oldest first.
+    pub earlier: Vec<CandidateSession>,
+}
+
+/// How far one stream's recordings lag the play since them.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StreamBacklog {
+    /// When the stream was last recorded (for a limited set, its current
+    /// reading); absent before the first.
+    pub last_recorded_at: Option<f64>,
+    /// Sessions with hits since then.
+    pub sessions: i64,
+    pub hits: i64,
+}
+
+/// Recorded hits that no protection cost covers yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UnrecordedProtection {
+    pub sessions: i64,
+    pub hits: i64,
+}
+
+/// One piece the player confirmed for a limited set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConfirmedPiece {
+    pub name: String,
+    pub confirmed_at: f64,
+}
+
+/// A limited set's pieces: those confirmed, and what the latest account
+/// reading suggests.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetPieces {
+    pub set_id: i64,
+    pub confirmed: Vec<ConfirmedPiece>,
+    /// Limited armour or plates in the latest account reading that the
+    /// set's name names, not yet confirmed for it.
+    pub suggested: Vec<String>,
+    /// The latest account reading's other limited armour and plates that
+    /// no set in use holds.
+    pub others: Vec<String>,
+    /// When that reading was taken; absent before any.
+    pub reading_taken_at: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProtectionOverview {
+    pub sets: Vec<ProtectionSet>,
+    /// Limited sets removed from the recording surface, newest removal
+    /// first; each can be restored.
+    pub removed_sets: Vec<ProtectionSet>,
+    /// The pooled unlimited repair stream's lag.
+    pub unlimited: StreamBacklog,
+    pub recent_cost_windows: Vec<ProtectionCostWindow>,
+    pub unrecorded: UnrecordedProtection,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProtectionError {
+    #[error(transparent)]
+    Db(#[from] DbError),
+    #[error("{0}")]
+    Invalid(&'static str),
+    #[error("{0}")]
+    NotFound(&'static str),
+    #[error("{0}")]
+    Conflict(&'static str),
+    #[error("stored protection data is invalid: {0}")]
+    Stored(&'static str),
+}
+
+impl From<rusqlite::Error> for ProtectionError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Db(DbError::Sqlite(error))
+    }
+}
+
+/// Told after any protection write commits, so other surfaces can re-read.
+pub type ChangedSink = Arc<dyn Fn() + Send + Sync>;
+
+/// Whether a session has recorded hits that no armour recording reaches
+/// yet, whatever the account readings measured: its tracked armour figure
+/// is then incomplete rather than a figure (the sense
+/// [`ProtectionService::sessions_without_a_recording`] answers for a page),
+/// for a reader already holding a connection.
+pub fn armour_unrecorded(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<bool, rusqlite::Error> {
+    Ok(!read::sessions_with_unrecorded_hits(
+        conn,
+        &[session_id.to_string()],
+        read::Covered::Recorded,
+    )?
+    .is_empty())
+}
+
+pub struct ProtectionService {
+    db: Db,
+    clock: Arc<dyn Clock>,
+    changed: Option<ChangedSink>,
+    /// The bundled game data, which places an item in a reading before a
+    /// set's name does (a weapon named after a maker is no armour piece).
+    game_data: Option<Arc<GameDataStore>>,
+}
+
+impl ProtectionService {
+    pub fn new(db: Db, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            db,
+            clock,
+            changed: None,
+            game_data: None,
+        }
+    }
+
+    /// Place the items in the account readings with the game data too.
+    pub fn with_game_data(mut self, game_data: Arc<GameDataStore>) -> Self {
+        self.game_data = Some(game_data);
+        self
+    }
+
+    /// Announce every committed write through `changed`.
+    pub fn with_changed(mut self, changed: ChangedSink) -> Self {
+        self.changed = Some(changed);
+        self
+    }
+
+    fn notify_changed(&self) {
+        if let Some(changed) = &self.changed {
+            changed();
+        }
+    }
+
+    fn now(&self) -> f64 {
+        self.clock.now().and_utc().timestamp_micros() as f64 / 1_000_000.0
+    }
+
+    pub async fn overview(&self) -> Result<ProtectionOverview, ProtectionError> {
+        self.db
+            .with_reader(|conn| read::read_overview(conn).map_err(protection_decode))
+            .await
+            .map_err(ProtectionError::from)
+    }
+
+    /// The sessions a recording of `stream` would be spread over, for the
+    /// recording surface to offer before the amount is confirmed.
+    pub async fn recording_candidates(
+        &self,
+        stream: ProtectionStream,
+    ) -> Result<RecordingCandidates, ProtectionError> {
+        if let ProtectionStream::Limited { set_id } = stream {
+            self.active_set(set_id).await?;
+        }
+        let game_data = self.game_data.clone();
+        self.db
+            .with_reader(move |conn| {
+                let roles = crate::account::KnownRoles::read(conn, game_data.as_deref())
+                    .map_err(account_error)
+                    .map_err(protection_decode)?;
+                recording::read_candidates(conn, stream, &roles).map_err(protection_decode)
+            })
+            .await
+            .map_err(ProtectionError::from)
+    }
+
+    /// Recorded hits on one session that no protection cost reaches yet,
+    /// so its armour cost can read as not recorded rather than zero.
+    pub async fn session_unrecorded_hits(&self, session_id: &str) -> Result<i64, ProtectionError> {
+        let session_id = session_id.to_string();
+        self.db
+            .with_reader(move |conn| {
+                read::session_unrecorded_hits(conn, &session_id).map_err(Into::into)
+            })
+            .await
+            .map_err(ProtectionError::from)
+    }
+
+    /// Which of `session_ids` have recorded hits no protection cost
+    /// reaches yet, so a session list can mark their cost as incomplete. A
+    /// session whose armour the account readings measured is complete.
+    pub async fn sessions_with_unrecorded_hits(
+        &self,
+        session_ids: Vec<String>,
+    ) -> Result<Vec<String>, ProtectionError> {
+        self.unrecorded_among(session_ids, read::Covered::Billed)
+            .await
+    }
+
+    /// Which of `session_ids` have recorded hits no recording reaches yet,
+    /// whatever the account readings measured: the sessions whose tracked
+    /// armour figure is incomplete, for setting it beside the measured one.
+    pub async fn sessions_without_a_recording(
+        &self,
+        session_ids: Vec<String>,
+    ) -> Result<Vec<String>, ProtectionError> {
+        self.unrecorded_among(session_ids, read::Covered::Recorded)
+            .await
+    }
+
+    async fn unrecorded_among(
+        &self,
+        session_ids: Vec<String>,
+        covered: read::Covered,
+    ) -> Result<Vec<String>, ProtectionError> {
+        self.db
+            .with_reader(move |conn| {
+                let unrecorded = read::sessions_with_unrecorded_hits(conn, &session_ids, covered)?;
+                // Keep the caller's order, so the answer reads like its page.
+                Ok(session_ids
+                    .into_iter()
+                    .filter(|id| unrecorded.contains(id))
+                    .collect())
+            })
+            .await
+            .map_err(ProtectionError::from)
+    }
+
+    async fn active_set(&self, id: i64) -> Result<ProtectionSet, ProtectionError> {
+        let set = self
+            .db
+            .with_reader(move |conn| read::read_set(conn, id).map_err(protection_decode))
+            .await?;
+        set.filter(|set| set.archived_at.is_none())
+            .ok_or(ProtectionError::NotFound("Protection set not found"))
+    }
+}
+
+/// An account reading that cannot be read, as a protection error.
+fn account_error(error: crate::account::AccountError) -> ProtectionError {
+    match error {
+        crate::account::AccountError::Db(error) => ProtectionError::Db(error),
+        _ => ProtectionError::Stored("an account reading cannot be read"),
+    }
+}
+
+fn protection_decode(error: ProtectionError) -> DbError {
+    match error {
+        ProtectionError::Db(error) => error,
+        other => DbError::Decode {
+            context: "stored protection record",
+            source: serde_json::Error::io(std::io::Error::other(other.to_string())),
+        },
+    }
+}
+
+fn map_constraint(message: &'static str) -> impl FnOnce(DbError) -> ProtectionError {
+    move |error| match error {
+        DbError::Sqlite(rusqlite::Error::SqliteFailure(_, _)) => ProtectionError::Conflict(message),
+        other => ProtectionError::Db(other),
+    }
+}

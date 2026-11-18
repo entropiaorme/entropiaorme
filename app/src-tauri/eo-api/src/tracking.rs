@@ -33,22 +33,24 @@
 
 use std::collections::HashMap;
 
-use eo_services::config_service::{active_trifecta_preset, load_config_readonly, AppConfig};
+use eo_services::config_service::{load_config_readonly, AppConfig};
 use eo_services::db::Db;
-use eo_services::mob_lookup_service::{python_whitespace, MobLookupService};
+use eo_services::mob_lookup_service::MobLookupService;
 use eo_services::session_definitions::SessionDefinitionService;
+use eo_services::session_scope::{self, StatsScope};
 use eo_services::time::{local_isoformat, naive_to_epoch};
 use eo_services::tracker::{HuntTracker, TrackerCommandError};
 use eo_services::tracking_models::ActiveSessionView;
-use eo_services::trifecta_service::{validate_trifecta, TrifectaPreset};
 use eo_wire::normalizer::round_half_even;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
+use eo_services::session_delete::delete_session_impl;
 use eo_services::tracking_reads::*;
 
 use crate::activities::ActivitySummary;
+use crate::protection::TerminalReadResult;
 use crate::Nullable;
 use crate::{Api, ApiError};
 
@@ -57,24 +59,23 @@ use crate::{Api, ApiError};
 /// The `TrackingSnapshot` response-model field order (the polymorphic
 /// dashboard hydration shape). The snake-case status trio sits among the
 /// camelCase headline numbers exactly as the model declares them.
-const SNAPSHOT_FIELDS: [&str; 51] = [
+const SNAPSHOT_FIELDS: [&str; 61] = [
     "status",
     "hotbarListenerActive",
-    "weaponAttribution",
+    "hotbarKeysEnabled",
+    "keylessInput",
     "repairOcrEnabled",
-    "endOfSessionArmourReminderEnabled",
     "sessionName",
     "sessionDefinitionId",
     "trackProtectionCosts",
-    "trackProtectionBySegment",
     "skillBoostPercent",
-    "currentMob",
+    "mobSource",
+    "toolSource",
     "currentTool",
     "currentToolKind",
     "currentActivity",
     "activities",
     "lifetime",
-    "trifectaAttribution",
     "recentEvents",
     "session_id",
     "started_at",
@@ -88,6 +89,11 @@ const SNAPSHOT_FIELDS: [&str; 51] = [
     "damageDealtTotal",
     "weaponDamageDealt",
     "weaponCost",
+    "armourCost",
+    "cycledBreakdown",
+    "overheadCost",
+    "costsMeasuredThrough",
+    "expectedCycle",
     "expectedTtRate",
     "expectedReturnCoverage",
     "expectedReturnModel",
@@ -107,12 +113,15 @@ const SNAPSHOT_FIELDS: [&str; 51] = [
     "harvestLoot",
     "harvestCost",
     "harvestGuardrail",
+    "weaponGuardrail",
+    "unpricedShots",
+    "unpricedCostBound",
+    "unpricedNoFitShots",
+    "weaponDeclared",
+    "weaponHitCue",
     "healing",
     "warnings",
 ];
-
-/// The repair-scan response-model field order (`exclude_unset`).
-const REPAIR_FIELDS: [&str; 4] = ["cost_ped", "raw_text", "confidence", "error"];
 
 /// A tracker-command precondition surfaced at the facade: a state
 /// conflict ("No active session"), mapped to 409 with the error's own
@@ -120,6 +129,10 @@ const REPAIR_FIELDS: [&str; 4] = ["cost_ped", "raw_text", "confidence", "error"]
 pub(crate) fn tracker_conflict(error: TrackerCommandError) -> ApiError {
     ApiError::conflict(error.to_string())
 }
+
+/// Why an equipment declaration was refused while the tool in hand is
+/// read off the screen and the screen shows it: said to the player as is.
+pub const SCREEN_SHOWS_TOOL: &str = "The screen shows what is held";
 
 fn edit_error(context: &'static str) -> impl Fn(EditError) -> ApiError {
     move |error| match error {
@@ -153,14 +166,6 @@ pub enum ToolActivity {
 pub enum TrackingState {
     Idle,
     Active,
-}
-
-/// Which attribution source prices weapon shots.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum WeaponAttribution {
-    Hotbar,
-    Trifecta,
 }
 
 /// The legacy exclusive-capture input mode recorded on pre-facet
@@ -198,6 +203,30 @@ pub enum NotableEventType {
 
 // ── Response DTOs ───────────────────────────────────────────────────
 
+/// Which app-wide statistics a recorded session is kept out of. The
+/// session stays on record with every figure of its own; an excluded
+/// scope's aggregates read as if it had never been recorded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionExclusion {
+    /// When the PED side (loot, costs, activity evidence) was excluded;
+    /// `null` while it counts.
+    pub economy_excluded_at: Nullable<String>,
+    /// When the skill gains (PES) were excluded; `null` while they count.
+    pub progression_excluded_at: Nullable<String>,
+    /// Why, as the player wrote it.
+    pub note: Nullable<String>,
+}
+
+/// The stats-exclusion write result: the session's exclusion as stored.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionExclusionResult {
+    pub session_id: String,
+    /// `null` once the session counts in every scope again.
+    pub exclusion: Nullable<SessionExclusion>,
+}
+
 /// One row of the session list.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -208,12 +237,16 @@ pub struct TrackingSession {
     pub duration: i64,
     pub primary_mobs: Vec<String>,
     pub primary_weapons: Vec<String>,
+    /// Cycled.
     pub cost: f64,
     pub returns: f64,
+    /// Returns less Cycled and the session's overhead.
     pub net: f64,
     pub return_rate: f64,
     pub globals: i64,
     pub hofs: i64,
+    /// `null` while the session counts in every stats scope.
+    pub exclusion: Nullable<SessionExclusion>,
 }
 
 /// A keyset page of session-list rows plus the opaque cursor for the
@@ -227,16 +260,302 @@ pub struct SessionPage {
     pub total: i64,
 }
 
-/// The session-detail cost split.
+/// What a cost figure rests on: the account readings' measurement, the
+/// chat log's tracking, or, for a figure summed from several, both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CostBasis {
+    Measured,
+    Tracked,
+    Mixed,
+}
+
+/// Why a cost bucket's figure is not what the account readings measured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum CostReason {
+    /// The session has no current measured costs: still running, never
+    /// read, its readings still being weighed, or read by rules since
+    /// replaced.
+    NoMeasuredCosts,
+    /// The readings do not read one of the session's ends.
+    PartialCoverage,
+    /// Two consecutive readings are too far apart.
+    Gap,
+    /// How much of the ammo's change was burned is not known.
+    AmmoUnsettled,
+    /// Universal Ammo was topped up mid-session: the ammo fired in the
+    /// span it arrived in is the tracked figure, and anything else the
+    /// readings measured of the weapon is in the figure beside it; when that
+    /// span runs past the last kill, the whole weapon is the tracked figure.
+    AmmoToppedUp,
+    /// A limited piece lost TT, and pricing it needs its set's pieces
+    /// confirmed. For armour whose other parts were measured, those parts
+    /// are in the figure and the limited part is what the recordings say.
+    LimitedSetUnconfirmed,
+    /// The readings never measure this bucket.
+    TrackedOnly,
+    /// An end is unread across a gap, and the chat log shows play outside
+    /// the session in it.
+    PlayInGap,
+    /// An end is unread across a gap the chat log does not cover.
+    ChatLogMissesGap,
+    /// An end is unread across a gap the chat log could not be checked
+    /// over.
+    ChatLogUnchecked,
+    /// An end is unread across a gap whose readings hold a repair, or a
+    /// cost of a kind the session's own play never had.
+    GapUnaccounted,
+    /// Overhead only: the session was measured across a gap, and this
+    /// category changed in the gap, so it may be the player's after the
+    /// session and is not billed to it.
+    OverheadInGap,
+}
+
+/// Why each bucket of a session's cost split is not measured; `null` for a
+/// measured bucket.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostBreakdownReasons {
+    pub weapon_cost: Nullable<CostReason>,
+    pub heal_cost: Nullable<CostReason>,
+    pub consumable_cost: Nullable<CostReason>,
+    pub enhancer_cost: Nullable<CostReason>,
+    pub armour_cost: Nullable<CostReason>,
+    pub harvest_cost: Nullable<CostReason>,
+}
+
+/// A session's overhead by category, PED: what it cost beyond performing
+/// its activity, as the account readings measured it. Zero where nothing
+/// was measured: overhead has no tracked figure.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOverhead {
+    /// Teleport chips, Mind Essence, vehicles and their fuel.
+    pub travel: f64,
+    /// Portable repair and Trade Terminal units, and their like.
+    pub field_logistics: f64,
+    /// What was used up that the app cannot place yet.
+    pub unclassified: f64,
+    /// Why each category is withheld from the figures above, where it is.
+    pub reasons: SessionOverheadReasons,
+}
+
+/// Why each overhead category of a session the readings measured is not
+/// billed: `null` for a category measured (its figure above is the
+/// measurement, zero included), and for every category of a session the
+/// readings never measured, which has no overhead.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionOverheadReasons {
+    pub travel: Nullable<CostReason>,
+    pub field_logistics: Nullable<CostReason>,
+    pub unclassified: Nullable<CostReason>,
+}
+
+/// A group of measured cost lines: one of Cycled's buckets, or one of the
+/// overhead categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostBucket {
+    Weapon,
+    Enhancer,
+    Harvesting,
+    Healing,
+    Armour,
+    Consumables,
+    Travel,
+    FieldLogistics,
+    Unclassified,
+}
+
+/// What a measured cost line measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostLineKind {
+    /// Ammo burned, in units at TT.
+    AmmoBurned,
+    /// An item's TT falls, summed.
+    Decay,
+    /// A limited piece's TT falls, summed: what it lost, which its set's
+    /// markup prices.
+    LimitedDecay,
+    /// A consumable's units used up.
+    Consumed,
+}
+
+/// Why a measured line is no cost of the session's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostUnpriced {
+    /// The player accounts for the item through the ledger, where its
+    /// purchase is recorded.
+    BoughtThroughLedger,
+    /// A limited piece no confirmed set holds: pricing it needs its set's
+    /// pieces confirmed.
+    LimitedSetUnconfirmed,
+    /// Units of a stack nothing names left: whether they were used up or
+    /// traded away is the player's to say. No cost until they place it.
+    NotPlaced,
+}
+
+/// How exactly a measured amount is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredCostPrecision {
+    Exact,
+    /// It rests on values the account site truncated to the whole PEC.
+    WholePec,
+}
+
+/// One item's measured use within a bucket.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredCostLine {
+    pub kind: MeasuredCostLineKind,
+    pub item: String,
+    /// The units, for ammo burned and a consumable used up.
+    pub units: Nullable<i64>,
+    /// What the line measured, PED: its cost, except for a limited piece,
+    /// whose amount is the TT it lost (its set's markup prices it).
+    /// `null` for a line charged nothing.
+    pub amount: Nullable<f64>,
+    pub precision: Nullable<MeasuredCostPrecision>,
+    /// The markup applied, percent of TT: the acquisition markup recorded
+    /// for a consumable, or a limited piece's set markup.
+    pub markup_percent: Nullable<f64>,
+    /// Units used up of an item bought at markup, billed at TT: the
+    /// markup paid for them is not included.
+    pub markup_not_included: bool,
+    /// Why the line is no cost of the session's; `null` when it is one.
+    pub unpriced: Nullable<MeasuredCostUnpriced>,
+    /// For an overhead line, a ledger expense pegged to the session whose
+    /// description names the item: it may repeat this measured cost.
+    /// Neither figure is adjusted.
+    pub pegged_ledger_entry_id: Nullable<String>,
+    /// That entry's description, as the player wrote it.
+    pub pegged_ledger_entry_description: Nullable<String>,
+}
+
+/// The measured lines of one bucket.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredCostGroup {
+    pub bucket: MeasuredCostBucket,
+    pub lines: Vec<MeasuredCostLine>,
+}
+
+/// One part of a session's measured armour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MeasuredArmourPartKind {
+    /// Unlimited armour and plates, billed at the TT they lost.
+    Unlimited,
+    /// A confirmed limited set's pieces, at the TT they lost times its
+    /// markup.
+    LimitedSet,
+    /// What limited pieces no confirmed set holds lost: no price yet.
+    Unconfirmed,
+    /// One limited piece, at the TT it lost times the markup set for it,
+    /// or at that TT when none was set.
+    LimitedPiece,
+}
+
+/// One part of a session's measured armour, and what it billed.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredArmourPart {
+    pub part: MeasuredArmourPartKind,
+    /// The limited set, for a set's part.
+    pub set_id: Nullable<i64>,
+    pub set_name: Nullable<String>,
+    /// The limited piece, for a piece's part.
+    #[serde(default)]
+    pub item: Nullable<String>,
+    pub markup_percent: Nullable<f64>,
+    /// The TT the part's pieces lost.
+    pub lost: f64,
+    pub lost_precision: MeasuredCostPrecision,
+    /// What the part billed; `null` while unpriced.
+    pub cost: Nullable<f64>,
+    pub cost_precision: Nullable<MeasuredCostPrecision>,
+}
+
+/// A session's measured costs, item by item, as the account readings
+/// measured them.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MeasuredCostDetail {
+    /// Cycled's buckets, then the overhead categories; only those holding
+    /// a line.
+    pub buckets: Vec<MeasuredCostGroup>,
+    /// Unlimited first, then each limited piece by name.
+    pub armour_parts: Vec<MeasuredArmourPart>,
+}
+
+/// The session-detail cost split. A bucket the account readings measured
+/// is the measured amount (the weapon's whole, shots after the last kill
+/// included); the rest are tracked. The buckets add up to Cycled; the
+/// session's overhead is beside them, in its Net and never in Cycled.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CostBreakdown {
     pub weapon_cost: f64,
     pub heal_cost: f64,
+    /// Consumed doses of cost-tracked items.
+    pub consumable_cost: f64,
     pub enhancer_cost: f64,
     pub armour_cost: f64,
     /// Harvesting (tree cutting) swing decay.
     pub harvest_cost: f64,
+    /// The same buckets as the chat log tracked them, whatever the
+    /// readings measured: what a measured figure is compared with.
+    pub tracked: TrackedCostBreakdown,
+    /// What each bucket above rests on.
+    pub basis: CostBreakdownBasis,
+    /// When the measured buckets were measured across a gap in the
+    /// session's readings (a sign-in dropped, the app closed), shown clean
+    /// by the chat log: how long the gap was, in whole minutes (at least
+    /// one). Absent for any other session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_across_gap_minutes: Option<i64>,
+    /// Why each bucket above is not measured.
+    pub reasons: CostBreakdownReasons,
+    /// The session's overhead, every category added up.
+    pub overhead_cost: f64,
+    pub overhead: SessionOverhead,
+    /// The measured lines behind the figures; `null` unless the readings
+    /// measured the session.
+    pub measured: Nullable<MeasuredCostDetail>,
+    /// The session has hits no armour recording covers: its tracked armour
+    /// figure is not a figure to show.
+    pub armour_unrecorded: bool,
+}
+
+/// A session's cost buckets as the chat log tracked them. The weapon's is
+/// every shot fired: its kills' spend and the shots after the last kill,
+/// as the measured weapon counts them.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedCostBreakdown {
+    pub weapon_cost: f64,
+    pub heal_cost: f64,
+    pub consumable_cost: f64,
+    pub enhancer_cost: f64,
+    pub armour_cost: f64,
+    pub harvest_cost: f64,
+}
+
+/// What each bucket of a session's cost split rests on.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CostBreakdownBasis {
+    pub weapon_cost: CostBasis,
+    pub heal_cost: CostBasis,
+    pub consumable_cost: CostBasis,
+    pub enhancer_cost: CostBasis,
+    pub armour_cost: CostBasis,
+    pub harvest_cost: CostBasis,
 }
 
 /// The session-detail headline summary.
@@ -250,6 +569,8 @@ pub struct SessionSummary {
     pub return_rate: f64,
     pub kills: i64,
     pub duration: i64,
+    /// What the session's cost rests on.
+    pub cost_basis: CostBasis,
     pub cost_breakdown: CostBreakdown,
 }
 
@@ -274,6 +595,49 @@ pub struct LootEntry {
     pub tt_value: f64,
 }
 
+/// One quest reward confirmed on a session: the completion that paid it
+/// and its lines as recorded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionQuestReward {
+    pub completion_id: i64,
+    pub quest_name: String,
+    /// When it was handed in, epoch seconds.
+    pub completed_at: f64,
+    pub items: Vec<SessionQuestRewardItem>,
+}
+
+/// One line of a quest reward.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionQuestRewardItem {
+    pub item_name: String,
+    pub quantity: i64,
+    /// Its TT value, PED.
+    pub value_ped: f64,
+    pub accounting: QuestRewardAccounting,
+}
+
+/// How a reward line is held: liquid (ammo, a ledger gain at face value)
+/// or stock (an item, worth its markup only once sold).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestRewardAccounting {
+    Liquid,
+    Stock,
+}
+
+impl QuestRewardAccounting {
+    /// The stored value, or `None` for one the app does not know.
+    pub fn parse(stored: &str) -> Option<Self> {
+        match stored {
+            "liquid" => Some(Self::Liquid),
+            "stock" => Some(Self::Stock),
+            _ => None,
+        }
+    }
+}
+
 /// One per-mob breakdown row.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -281,6 +645,24 @@ pub struct MobBreakdownRow {
     pub current_name: String,
     pub original_name: Nullable<String>,
     pub kill_count: i64,
+    /// How sure the kills' creature is.
+    pub certainty: MobCertainty,
+}
+
+/// How sure a kill's creature is, where its mob is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MobCertainty {
+    /// As the player declared or settled it, or as detection read it
+    /// clearly.
+    Recorded,
+    /// A listed creature detection read only probably.
+    Probable,
+    /// A creature on no list, under the spelling detection read, not yet
+    /// confirmed by the player.
+    Unlisted,
+    /// The same, read only probably.
+    UnlistedProbable,
 }
 
 /// One per-tool aggregate.
@@ -315,6 +697,20 @@ pub struct HarvestSummary {
     pub cost: f64,
 }
 
+/// How a paid healing activation was established.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum HealingActivationProvenance {
+    /// A fresh healer intent met a compatible heal.
+    Direct,
+    /// A below-interval heal a health cap explains.
+    HealthCapped,
+    /// A heal reconciled with a hotbar press that arrived after it.
+    Retrospective,
+    /// The player marked the heal as a paid use.
+    Corrected,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HealingActivationRow {
@@ -322,14 +718,23 @@ pub struct HealingActivationRow {
     pub tool_name: String,
     pub observed_at: f64,
     pub cost: f64,
-    pub provenance: String,
+    pub provenance: HealingActivationProvenance,
     pub effect_until: Nullable<f64>,
     pub output_count: i64,
+    /// The heal amount that confirmed it.
+    pub amount: Nullable<f64>,
+    /// It was marked as not a paid use: it costs nothing and stays listed
+    /// only until that correction is undone.
+    pub superseded: bool,
+    /// The live correction that minted or superseded it, which can be undone.
+    pub correction: Nullable<crate::healing::HealingCorrectionRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HealingSessionSummary {
+    /// The session has ended, so its healing evidence can be corrected.
+    pub correctable: bool,
     pub activations: Vec<HealingActivationRow>,
     pub activation_count: i64,
     pub output_count: i64,
@@ -337,6 +742,139 @@ pub struct HealingSessionSummary {
     pub effect_outputs: i64,
     pub passive_outputs: i64,
     pub unattributed_outputs: i64,
+}
+
+/// A decision the player made on a weapon mismatch while the session ran.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponReviewRow {
+    pub id: String,
+    pub decision: crate::weapons::WeaponReviewDecision,
+    /// The weapon the hotbar declared.
+    pub hotbar_tool: String,
+    /// The weapon the damage evidence named.
+    pub evidence_tool: String,
+    /// When the evidence first disagreed.
+    pub since: f64,
+    pub decided_at: f64,
+    pub repriced_shots: i64,
+    /// What the repricing moved the session's weapon cost by.
+    pub cost_delta: f64,
+}
+
+/// One damage-over-time effect the session paid for or saw tick: the paid
+/// hit that started it, and the ticks it claims in this session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponEffectRow {
+    pub id: String,
+    /// The weapon whose paid hit started it.
+    pub tool_name: String,
+    pub activated_at: f64,
+    pub expires_at: f64,
+    /// The damage that paid hit printed.
+    pub hit_amount: Nullable<f64>,
+    /// What that hit was booked at (in the session that paid for it).
+    pub cost_per_shot: f64,
+    /// This session paid for it; otherwise an earlier one did, and its
+    /// cost sits there.
+    pub paid_here: bool,
+    /// The player kept the hotbar's weapon over the damage evidence that
+    /// named this cast: its hit was repriced and it explains no later tick.
+    pub withdrawn: bool,
+    /// Its ticks standing in this session.
+    pub ticks: i64,
+    pub tick_damage: f64,
+}
+
+/// How a session's shots were attributed. The two tallies were kept from
+/// this app version on and are null for an older session; the counts of
+/// stored shots and the decisions exist for every session.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponAttributionSummary {
+    /// The session has ended, so its unpriced shots can be assigned.
+    pub correctable: bool,
+    /// Shots priced to the weapon the hotbar declared.
+    pub agreed: Nullable<i64>,
+    /// Shots priced to the weapon their damage named.
+    pub evidenced: Nullable<i64>,
+    /// Stored shots whose damage overrode the hotbar's weapon.
+    pub evidence_shots: i64,
+    /// Shots no single carried weapon explained.
+    pub unresolved: i64,
+    /// Of those, the ones still without a price.
+    pub unpriced: i64,
+    /// Of those, the ones assigned a weapon after play.
+    pub assigned: i64,
+    /// Of those, the ones marked as an effect's tick after play.
+    pub marked_ticks: i64,
+    /// Ticks of an effect an earlier paid activation owns.
+    pub effect_ticks: i64,
+    /// Of those, the ones priced as a paid shot after play.
+    pub priced_ticks: i64,
+    /// Hits above the held weapon's listed range, priced to it, as they
+    /// landed.
+    pub boosted_shots: i64,
+    /// Hits below the held weapon's listed range, priced to it, as they
+    /// landed.
+    pub reduced_shots: i64,
+    /// Those still standing, per weapon, the most boosted first.
+    pub hit_margins: Vec<WeaponHitMarginRow>,
+    /// Ticks standing as ticks that no one effect claims: several
+    /// overlapping effects explained them, or their effect's paying session
+    /// was deleted.
+    pub unclaimed_ticks: i64,
+    /// The effects the session paid for or saw tick, oldest first.
+    pub effects: Vec<WeaponEffectRow>,
+    pub reviews: Vec<WeaponReviewRow>,
+    /// Unresolved shots that landed with no weapon declared, however they
+    /// were corrected since.
+    pub undeclared_shots: i64,
+    /// Enough of them landed that the session ran with no weapon declared.
+    pub ran_undeclared: bool,
+    /// The live bulk assignments, oldest first.
+    pub batches: Vec<WeaponCorrectionBatch>,
+    /// The most the unpriced shots could have cost: each at the dearest
+    /// weapon that fitted it, priced as it is configured now.
+    #[serde(default)]
+    pub unpriced_cost_bound: f64,
+    /// Unpriced shots no weapon still in Equipment fitted, which add
+    /// nothing to the bound.
+    #[serde(default)]
+    pub unpriced_no_fit_shots: i64,
+}
+
+/// How many of one weapon's shots landed outside its listed range.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponHitMarginRow {
+    pub tool_name: String,
+    pub boosted: i64,
+    pub reduced: i64,
+}
+
+/// Which side of a weapon's listed range a hit landed on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WeaponHitMargin {
+    /// Above it: a temporary damage buff.
+    Boosted,
+    /// Below it: armour, or sub-maximal skill.
+    Reduced,
+}
+
+/// A bulk assignment still standing: every shot it priced, undoable as one.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponCorrectionBatch {
+    pub id: String,
+    pub tool_name: String,
+    /// Its corrections still live.
+    pub shots: i64,
+    /// What they add to the weapon cost.
+    pub cost_ped: f64,
+    pub corrected_at: f64,
 }
 
 /// The full session detail.
@@ -351,17 +889,64 @@ pub struct SessionDetail {
     /// a session starts.
     pub session_name: Nullable<String>,
     pub mob_entry_mode: MobEntryMode,
+    /// `null` while the session counts in every stats scope.
+    pub exclusion: Nullable<SessionExclusion>,
     pub notable_events: Vec<NotableEvent>,
     pub loot_breakdown: Vec<LootEntry>,
     pub deactivated_loot_breakdown: Vec<LootEntry>,
+    /// The quest rewards confirmed on the session, in the order they were
+    /// handed in. A reward is never loot: none of its lines is in either
+    /// loot breakdown.
+    pub quest_rewards: Vec<SessionQuestReward>,
     pub mob_breakdown: Vec<MobBreakdownRow>,
     pub effective_loot: f64,
     pub tool_stats: Vec<ToolStat>,
     pub skill_gains: Vec<SkillGain>,
+    pub weapon_attribution: WeaponAttributionSummary,
     pub healing: HealingSessionSummary,
+    /// Each enhancer break the session kept, in the order they broke. A
+    /// priced break's cost is inside the enhancer bucket; an unpriced one
+    /// is in no figure, and says why.
+    pub enhancer_breaks: Vec<SessionEnhancerBreak>,
 }
 
-/// One manual-mob autocomplete suggestion.
+/// One enhancer break a session kept, and what it cost.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionEnhancerBreak {
+    pub enhancer_name: String,
+    /// The weapon the enhancer was fitted to.
+    pub weapon_name: String,
+    /// When it broke, epoch seconds.
+    pub observed_at: f64,
+    /// The Shrapnel the game returned for it, PED.
+    pub returned_ped: f64,
+    pub pricing: EnhancerBreakPricing,
+    /// The enhancer's TT, PED, where the game data lists it.
+    pub tt_ped: Nullable<f64>,
+    /// The markup it consumed, PED, where the player set one.
+    pub markup_ped: Nullable<f64>,
+    /// What it cost, PED: its TT and markup less the return. Null when it
+    /// is unpriced.
+    pub cost_ped: Nullable<f64>,
+}
+
+/// How far an enhancer break's cost is known.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum EnhancerBreakPricing {
+    /// Its TT and markup are known.
+    Priced,
+    /// Its TT is known and no markup is set: it costs its TT less the
+    /// return, without the markup.
+    MarkupNotSet,
+    /// The game data lists no TT for the enhancer: it has no cost.
+    TtUnknown,
+    /// The return exceeds the TT the game data lists: it has no cost.
+    ReturnAboveTt,
+}
+
+/// One catalogue mob name, as the declared-mob picker offers it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ManualMobSuggestion {
     pub display: String,
@@ -419,27 +1004,6 @@ pub struct SessionIntervals {
     pub intervals: Vec<SessionIntervalRow>,
 }
 
-/// One preset reference inside the trifecta attribution summary.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TrifectaPresetRef {
-    pub id: String,
-    pub name: String,
-}
-
-/// The trifecta attribution summary (present when trifecta mode is active
-/// and a preset or binding exists). Its members are always emitted (a
-/// null binding stays on the wire), so none skip.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TrifectaAttribution {
-    pub active_preset_id: Nullable<String>,
-    pub preset_name: Nullable<String>,
-    pub presets: Vec<TrifectaPresetRef>,
-    pub small_weapon: Nullable<String>,
-    pub big_weapon: Nullable<String>,
-    pub heal_tool: Nullable<String>,
-}
-
 /// One recent event in the active-session snapshot feed.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RecentEvent {
@@ -486,10 +1050,76 @@ pub struct LifetimeStats {
     pub instance_count: i64,
     pub cycled: f64,
     pub loot_tt: f64,
+    /// Loot less Cycled and the instances' overhead.
     pub net: f64,
     pub return_rate: f64,
     pub pes: f64,
     pub duration_seconds: f64,
+    /// Shots across these instances recorded without a price: the cycled
+    /// figure (and everything derived from it) leaves them out.
+    pub unpriced_shots: i64,
+    /// PES per 100 PED cycled over only the instances both the progression
+    /// and economy statistics count, so the two halves describe the same
+    /// sessions. Null with no spend behind it.
+    pub pes_per_100: Nullable<f64>,
+    pub kills: i64,
+    pub damage_total: f64,
+    /// The damage `weapon_cost` bought, for damage per PEC.
+    pub weapon_damage: f64,
+    pub weapon_cost: f64,
+    /// The most damage dealt on any one kill.
+    pub max_damage: f64,
+    pub shots_fired: i64,
+    pub critical_hits: i64,
+    pub globals: i64,
+    pub hofs: i64,
+    pub harvest_swings: i64,
+    /// The mean over every kill with a recorded weapon cost, never the
+    /// mean of each instance's mean.
+    pub multiplier_avg: Nullable<f64>,
+    pub multiplier_max: Nullable<f64>,
+    /// The family's most recent kill: the running instance's once it has
+    /// one. Null also when that kill has no recorded weapon cost.
+    pub multiplier_last: Nullable<f64>,
+    pub latest_kill_loot: Nullable<f64>,
+    /// Expected loot over the instances that recorded weapon evidence.
+    /// Null when none of them did.
+    pub expected_cycle: Nullable<LifetimeExpectedCycle>,
+}
+
+/// One looter basis of a family's expected loot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LifetimeExpectedAtBasis {
+    pub expected_loot_tt_ped: f64,
+    /// The same with the unknown-efficiency TT at the model's 0% and 100%
+    /// Efficiency returns: the range the point lies in.
+    pub low_ped: f64,
+    pub high_ped: f64,
+}
+
+/// A family's expected loot at every looter basis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LifetimeExpectedBases {
+    pub three_looter_mean: LifetimeExpectedAtBasis,
+    pub animal: LifetimeExpectedAtBasis,
+    pub mutant: LifetimeExpectedAtBasis,
+    pub robot: LifetimeExpectedAtBasis,
+}
+
+/// Expected loot summed over the instances of a family that recorded weapon
+/// evidence, each at its own session-start looter levels. A planning
+/// estimate, never observed or realised.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LifetimeExpectedCycle {
+    /// How many instances this spans: the rest recorded no evidence and
+    /// are in neither side of the ratio.
+    pub sessions: i64,
+    /// Those instances' Cycled.
+    pub cycled_ped: f64,
+    pub bases: LifetimeExpectedBases,
 }
 
 /// The consolidated dashboard hydration snapshot: the polymorphic idle /
@@ -503,12 +1133,18 @@ pub struct TrackingSnapshot {
     pub status: Option<TrackingState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hotbar_listener_active: Option<bool>,
+    /// Whether the player enabled the hotbar key listener: hotbar presses
+    /// then declare the weapon in hand. Without it, costs follow the
+    /// carried weapons' damage ranges alone.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub weapon_attribution: Option<WeaponAttribution>,
+    pub hotbar_keys_enabled: Option<bool>,
+    /// Keyless tracking: the active session's input mode while tracking,
+    /// this machine's setting while idle. Equipment is then declared in the
+    /// overlay and healing uses are inferred from the chat log.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyless_input: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair_ocr_enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_of_session_armour_reminder_enabled: Option<bool>,
     /// The session-name facet: the active session's when tracking, the
     /// configured next-session value when idle.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -521,14 +1157,22 @@ pub struct TrackingSnapshot {
     pub session_definition_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track_protection_costs: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub track_protection_by_segment: Option<bool>,
     /// The skill-boost facet (labelled percent), same idle/active
     /// sourcing as the session name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_boost_percent: Option<i64>,
+    /// The session's one source for its kills' creature: the typed
+    /// creature (idle: the one the next session starts with), the pin, and
+    /// what the screen reads.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_mob: Option<String>,
+    pub mob_source: Option<crate::mob_detection::MobSourceView>,
+    /// Where the tool in hand comes from (the hotbar keys, or the game
+    /// screen) and, while it is the screen, what the screen shows of it.
+    /// While the screen is the source, the tool held is this one, never
+    /// `current_tool`, which may then be only what the damage last
+    /// pointed to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_source: Option<crate::held_tool::ToolSourceView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_tool: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -553,8 +1197,6 @@ pub struct TrackingSnapshot {
     /// and the surfaces read that absence as "offer no control".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifetime: Option<LifetimeStats>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub trifecta_attribution: Option<TrifectaAttribution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recent_events: Option<Vec<RecentEvent>>,
     #[serde(rename = "session_id", skip_serializing_if = "Option::is_none")]
@@ -581,6 +1223,34 @@ pub struct TrackingSnapshot {
     pub weapon_damage_dealt: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub weapon_cost: Option<f64>,
+    /// Armour and plate cost against the session so far; part of `cost`.
+    /// What the account readings measured up to their latest reading when
+    /// they measured it; otherwise it arrives when a repair or Trade
+    /// Terminal reading is recorded, not per hit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub armour_cost: Option<f64>,
+    /// `cost` split by what it was spent on, one line per weapon, healing
+    /// tool, armour stream, consumable, or harvesting tool; the lines sum
+    /// to `cost`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycled_breakdown: Option<Vec<CycledLine>>,
+    /// What the session cost beyond performing its activity (travel, field
+    /// logistics, what the app cannot place yet), as the account readings
+    /// measured it so far: in `net`, never in `cost`. Absent while none of
+    /// the costs rests on the readings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overhead_cost: Option<f64>,
+    /// When the costs the account readings measured run to: where they
+    /// measured a bucket, `cost` holds what they measured up to then and
+    /// the tracked cost of the play since. Absent while none of the costs
+    /// rests on the readings (the player is not signed in, or no reading
+    /// after the session's first has measured it yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub costs_measured_through: Option<String>,
+    /// Expected loot over the whole `cost` at every looter basis; absent
+    /// until a modelled shot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_cycle: Option<LiveExpectedCycle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_tt_rate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -622,10 +1292,155 @@ pub struct TrackingSnapshot {
     /// the loot evidence contradicts the hotbar-equipped tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harvest_guardrail: Option<HarvestGuardrailAlert>,
+    /// The standing weapon mismatch; present only while the damage
+    /// evidence contradicts the weapon the hotbar declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_guardrail: Option<WeaponGuardrailAlert>,
+    /// Shots this session recorded without a price because no single
+    /// carried weapon explains them: the cost leaves them out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_shots: Option<i64>,
+    /// The most those shots could have cost: each at the dearest carried
+    /// weapon that fitted it. Absent while idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_cost_bound: Option<f64>,
+    /// Of those shots, the ones no carried weapon fitted, which add nothing
+    /// to the bound. Absent while idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unpriced_no_fit_shots: Option<i64>,
+    /// Whether the active session has a weapon declared (pressed on the
+    /// hotbar, or held from a press before the session). Without one,
+    /// `current_tool` is only what the damage last pointed to, and hits
+    /// several carried weapons explain go unpriced. Absent while idle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_declared: Option<bool>,
+    /// What the held weapon's latest hits say about its damage, when they
+    /// land outside its listed range. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weapon_hit_cue: Option<WeaponHitMargin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healing: Option<HealingStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warnings: Option<Vec<Warning>>,
+}
+
+/// The Cycled bucket a live breakdown line belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CycledBucket {
+    Weapon,
+    Enhancer,
+    Healing,
+    Armour,
+    Consumable,
+    Harvesting,
+}
+
+impl From<eo_services::tracking_models::CycledBucket> for CycledBucket {
+    fn from(bucket: eo_services::tracking_models::CycledBucket) -> Self {
+        use eo_services::tracking_models::CycledBucket as Source;
+        match bucket {
+            Source::Weapon => Self::Weapon,
+            Source::Enhancer => Self::Enhancer,
+            Source::Healing => Self::Healing,
+            Source::Armour => Self::Armour,
+            Source::Consumable => Self::Consumable,
+            Source::Harvesting => Self::Harvesting,
+        }
+    }
+}
+
+/// One line of the live Cycled breakdown: what one item cost the session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CycledLine {
+    pub bucket: CycledBucket,
+    pub label: String,
+    pub cost_ped: f64,
+}
+
+impl From<&eo_services::tracking_models::CycledLine> for CycledLine {
+    fn from(line: &eo_services::tracking_models::CycledLine) -> Self {
+        Self {
+            bucket: line.bucket.into(),
+            label: line.label.clone(),
+            cost_ped: round_half_even(line.cost_ped, 4) + 0.0,
+        }
+    }
+}
+
+/// Expected loot over the live session's whole Cycled at one looter basis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveExpectedAtBasis {
+    pub looter_level: f64,
+    /// Modelled offensive loot plus the unknown-efficiency TT at the
+    /// session's own offensive recovery.
+    pub expected_loot_tt_ped: f64,
+    /// The same with the unknown-efficiency TT at the model's 0% and 100%
+    /// Efficiency returns: the range the point lies in.
+    pub low_ped: f64,
+    pub high_ped: f64,
+    /// The modelled offensive streams alone.
+    pub modelled_expected_loot_tt_ped: f64,
+}
+
+impl From<&eo_services::loaded_expectation::LoadedExpectation> for LiveExpectedAtBasis {
+    fn from(at: &eo_services::loaded_expectation::LoadedExpectation) -> Self {
+        Self {
+            looter_level: round_half_even(at.looter_level, 2),
+            expected_loot_tt_ped: round_half_even(at.expected_loot_tt, 6),
+            low_ped: round_half_even(at.expected_loot_tt_low, 6),
+            high_ped: round_half_even(at.expected_loot_tt_high, 6),
+            modelled_expected_loot_tt_ped: round_half_even(at.modelled_expected_loot_tt, 6),
+        }
+    }
+}
+
+/// The live expectation at every looter basis, keyed as the wire keys every
+/// per-basis figure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveExpectedBases {
+    pub three_looter_mean: LiveExpectedAtBasis,
+    pub animal: LiveExpectedAtBasis,
+    pub mutant: LiveExpectedAtBasis,
+    pub robot: LiveExpectedAtBasis,
+}
+
+/// Expected loot over the live session's whole Cycled: Community Model v1
+/// for the weapon, amplifier, and scope phases fired; the model's whole
+/// Efficiency span for loot-bearing spend of unknown efficiency; nothing for
+/// lost spend (limited markup over TT, doses, enhancer breakage). A planning
+/// estimate, never observed or realised.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveExpectedCycle {
+    pub model_version: String,
+    pub cycled_ped: f64,
+    pub modelled_cost_ped: f64,
+    pub unknown_efficiency_tt_ped: f64,
+    pub lost_ped: f64,
+    pub bases: LiveExpectedBases,
+}
+
+impl From<&eo_services::tracking_models::LiveExpectation> for LiveExpectedCycle {
+    fn from(live: &eo_services::tracking_models::LiveExpectation) -> Self {
+        let round = |value: f64| round_half_even(value, 6) + 0.0;
+        Self {
+            model_version: live.model_version.to_string(),
+            cycled_ped: round(live.split.cycled),
+            modelled_cost_ped: round(live.split.modelled_cost),
+            unknown_efficiency_tt_ped: round(live.split.unknown_efficiency_tt),
+            lost_ped: round(live.split.lost),
+            bases: LiveExpectedBases {
+                three_looter_mean: (&live.three_looter_mean).into(),
+                animal: (&live.animal).into(),
+                mutant: (&live.mutant).into(),
+                robot: (&live.robot).into(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
@@ -635,6 +1450,26 @@ pub enum HeldItemKind {
     Healing,
     Consumable,
     Harvesting,
+}
+
+impl From<eo_services::bus_events::HotbarItemKind> for HeldItemKind {
+    fn from(kind: eo_services::bus_events::HotbarItemKind) -> Self {
+        use eo_services::bus_events::HotbarItemKind;
+        match kind {
+            HotbarItemKind::Weapon => HeldItemKind::Weapon,
+            HotbarItemKind::Healing => HeldItemKind::Healing,
+            HotbarItemKind::Consumable => HeldItemKind::Consumable,
+            HotbarItemKind::Harvesting => HeldItemKind::Harvesting,
+        }
+    }
+}
+
+/// What an overlay declaration put in hand.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeclaredEquipment {
+    pub name: String,
+    pub kind: HeldItemKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -670,6 +1505,19 @@ pub struct HarvestGuardrailAlert {
     pub observed_tool: Nullable<String>,
     pub tree_size: TreeSizeName,
     pub at_epoch: f64,
+}
+
+/// A weapon-guardrail disagreement on the snapshot: the weapon the hotbar
+/// declared, the weapon the damage evidence says is being fired (and what is
+/// being recorded), when the evidence first disagreed, and the shots it has
+/// recorded since.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponGuardrailAlert {
+    pub hotbar_tool: String,
+    pub recording_tool: String,
+    pub since: f64,
+    pub shots: i64,
 }
 
 /// The guardrail's closed board-yield vocabulary: the yield tier evidenced by
@@ -772,20 +1620,6 @@ pub struct ArmourCostResult {
     pub armour_cost: f64,
 }
 
-/// The one-shot repair-cost read (`exclude_unset`): the cost / raw text /
-/// confidence on success, plus `error` on a logical refusal.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct RepairScanResult {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_ped: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 // ── Facade methods ──────────────────────────────────────────────────
 
 impl Api {
@@ -833,26 +1667,34 @@ impl Api {
             .await
             .map_err(ApiError::internal("tracking session detail"))?
         {
-            Some(value) => serde_json::from_value(value)
-                .map_err(ApiError::internal("tracking session detail shaping")),
+            Some(value) => {
+                let mut detail: SessionDetail = serde_json::from_value(value)
+                    .map_err(ApiError::internal("tracking session detail shaping"))?;
+                // The bound prices weapons through the review's pricing, which
+                // the detail read does not carry.
+                if detail.weapon_attribution.unpriced > 0 {
+                    let exposure = self
+                        .weapon_review
+                        .unpriced_exposure(vec![session_id])
+                        .await
+                        .map_err(ApiError::internal("tracking session unpriced exposure"))?;
+                    if let Some(exposure) = exposure.first() {
+                        detail.weapon_attribution.unpriced_cost_bound = exposure.cost_bound_ped;
+                        detail.weapon_attribution.unpriced_no_fit_shots = exposure.no_fit_shots;
+                    }
+                }
+                Ok(detail)
+            }
             None => Err(ApiError::not_found("Session not found")),
         }
     }
 
-    /// Catalogue mob-name autocomplete for the declared-mob typeahead.
-    pub async fn tracking_manual_mob_suggestions(
-        &self,
-        q: String,
-        limit: Option<i64>,
-    ) -> Result<Vec<ManualMobSuggestion>, ApiError> {
-        let query = q.trim_matches(python_whitespace);
-        if query.is_empty() {
-            return Ok(Vec::new());
-        }
-        let bounded = limit.unwrap_or(10).clamp(1, 20) as usize;
+    /// Every catalogue mob name, for the declared-mob picker's shared
+    /// search to match against.
+    pub async fn tracking_mob_catalogue(&self) -> Result<Vec<ManualMobSuggestion>, ApiError> {
         let lookup = MobLookupService::new(&self.game_data);
         lookup
-            .search_mob_names(query, bounded)
+            .mob_names()
             .into_iter()
             .map(|value| {
                 serde_json::from_value(value)
@@ -870,11 +1712,60 @@ impl Api {
             &self.tracker,
             &config,
             self.hotbar.is_running(),
+            config.keyless_input_on(self.input.machine_id()),
             Some(&self.session_definitions),
             naive_to_epoch(self.clock.now()),
         )
         .await?;
         serde_json::from_value(value).map_err(ApiError::internal("tracking snapshot shaping"))
+    }
+
+    /// What a session definition's ended instances looted, item by item:
+    /// the composition its lifetime markup figures value. It costs a read
+    /// of the family's item cells, so the surfaces make it only while those
+    /// figures are on show, and add the running instance's loot themselves.
+    pub async fn tracking_definition_loot(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<LootEntry>, ApiError> {
+        let items = self
+            .session_definitions
+            .lifetime_loot(definition_id)
+            .await
+            .map_err(ApiError::internal("definition loot"))?;
+        Ok(items
+            .into_iter()
+            .map(|(name, quantity, tt_value)| LootEntry {
+                name,
+                quantity,
+                tt_value: round_half_even(tt_value, 2),
+            })
+            .collect())
+    }
+
+    /// The quest rewards confirmed on a session family's ended instances,
+    /// line by item: what the lifetime forms of the reward figures fold.
+    pub async fn tracking_definition_rewards(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<SessionQuestRewardItem>, ApiError> {
+        let lines = self
+            .session_definitions
+            .lifetime_rewards(definition_id)
+            .await
+            .map_err(ApiError::internal("definition rewards"))?;
+        lines
+            .into_iter()
+            .map(|(item_name, quantity, value_ped, accounting)| {
+                Ok(SessionQuestRewardItem {
+                    item_name,
+                    quantity,
+                    value_ped: round_half_even(value_ped, 4),
+                    accounting: QuestRewardAccounting::parse(&accounting)
+                        .ok_or_else(|| ApiError::invalid_state("unknown reward accounting"))?,
+                })
+            })
+            .collect()
     }
 
     /// A session's recorded intervals with bounds and attributed event
@@ -916,10 +1807,14 @@ impl Api {
                     .collect::<rusqlite::Result<Vec<_>>>()?;
 
                 // One count map per event table: every event whose
-                // stamped context names the interval belongs to it.
+                // stamped context names the interval belongs to it. A quest
+                // reward claimed at a hand-in is no kill of its interval.
                 let mut counts: HashMap<i64, (i64, i64, i64)> = HashMap::new();
-                for (table, slot) in [("kills", 0usize), ("harvest_events", 1), ("skill_gains", 2)]
-                {
+                for (table, slot) in [
+                    ("counted_kills", 0usize),
+                    ("harvest_events", 1),
+                    ("skill_gains", 2),
+                ] {
                     let sql = format!(
                         "SELECT sci.interval_id, COUNT(*) \
                          FROM session_context_intervals sci \
@@ -984,38 +1879,19 @@ impl Api {
     }
 
     /// Begin a tracking session. 409 if one is already active (before the
-    /// attribution gate), 400 if the attribution requirement is unmet.
+    /// tool gate), 400 while no tool is configured.
     pub async fn tracking_start(&self) -> Result<StartResult, ApiError> {
         if self.tracker.is_tracking() {
             return Err(ApiError::conflict("Session already active"));
         }
         let config = load_config_readonly(&self.data_dir)
             .map_err(ApiError::internal("tracking start config"))?;
-        let (ready, message) = if config.hotbar_hooks_enabled {
-            validate_hotbar(&config)
-        } else {
-            let preset = active_trifecta_preset(&config).map(|p| TrifectaPreset {
-                small_weapon_id: p.small_weapon_id,
-                big_weapon_id: p.big_weapon_id,
-                heal_id: p.heal_id,
-            });
-            let (ready, reason) = validate_trifecta(&self.db, preset.as_ref())
-                .await
-                .map_err(ApiError::internal("tracking start validate"))?;
-            (
-                ready,
-                reason.or_else(|| {
-                    Some(
-                        "Configure the trifecta in the Equipment page before tracking.".to_string(),
-                    )
-                }),
-            )
-        };
+        let (ready, message) = validate_tools(&config);
         if !ready {
-            let detail_message = message.unwrap_or_else(|| {
-                "Configure the trifecta in the Equipment page before tracking.".to_string()
-            });
-            return Err(ApiError::bad_request(detail_message));
+            return Err(ApiError::bad_request(message.unwrap_or_else(|| {
+                "Bind a hotbar slot or add a carried weapon in Equipment before tracking."
+                    .to_string()
+            })));
         }
         let session = self
             .tracker
@@ -1044,13 +1920,59 @@ impl Api {
                 session_id: session.id.clone(),
                 started_at: local_isoformat(session.start_time),
                 ended_at: session.end_time.map(local_isoformat).into(),
-                kill_count: session.kills.len() as i64,
+                kill_count: session
+                    .kills
+                    .iter()
+                    .filter(|kill| !kill.reward_claimed)
+                    .count() as i64,
             }),
             // Defensive: `is_tracking` was true above, so a None is a broken
             // invariant. The transport's 500 message does not survive (the
             // boundary reply is fixed); logged server-side.
             None => Err(ApiError::invalid_state("tracking stop returned no session")),
         }
+    }
+
+    /// Declare an equipment-library item as in hand, as its hotbar press
+    /// would: the overlay's equipment picker. A keyless machine relies on it;
+    /// with keys it corrects the hand without a press. While the tool in
+    /// hand is read off the screen, the tracker decides: a tool is taken
+    /// where the screen cannot say and refused where it shows the tool in
+    /// hand. A consumable, used and never held, is never refused.
+    pub async fn tracking_declare_equipment(
+        &self,
+        equipment_id: i64,
+    ) -> Result<DeclaredEquipment, ApiError> {
+        use eo_services::hotbar_listener::DeclareError;
+        use eo_services::tracker::ToolDeclared;
+        let declare_error = |error: DeclareError| match error {
+            DeclareError::NoSession => ApiError::conflict(error.to_string()),
+            DeclareError::UnknownItem => ApiError::not_found(error.to_string()),
+        };
+        let hotbar = self.hotbar.clone();
+        let occurred_at =
+            eo_services::time::instant_to_epoch(eo_services::time::resolve_local(self.clock.now()));
+        let (session_id, item) = tokio::task::spawn_blocking(move || hotbar.resolve(equipment_id))
+            .await
+            .map_err(ApiError::internal("equipment declaration"))?
+            .map_err(declare_error)?;
+        let declared = self
+            .tracker
+            .declare_tool(item.clone(), occurred_at)
+            .await
+            .map_err(|error| match error {
+                TrackerCommandError::ScreenShowsTool => ApiError::conflict(SCREEN_SHOWS_TOOL),
+                other => tracker_conflict(other),
+            })?;
+        if declared == ToolDeclared::KeysAreSource {
+            self.hotbar
+                .declare_resolved(&session_id, &item, occurred_at)
+                .map_err(declare_error)?;
+        }
+        Ok(DeclaredEquipment {
+            name: item.name,
+            kind: item.kind.into(),
+        })
     }
 
     /// Clear the declared mob, echoing what was released.
@@ -1095,11 +2017,7 @@ impl Api {
         let maturity = maturity.unwrap_or_default();
         let species = species.trim();
         let maturity = maturity.trim();
-        let display = if maturity.is_empty() {
-            species.to_string()
-        } else {
-            format!("{maturity} {species}")
-        };
+        let display = eo_services::mob_display::printed(species, maturity);
         // Validate and write inside a block so the (non-`Send`) config
         // guard is gone before the tracker await below.
         {
@@ -1334,30 +2252,59 @@ impl Api {
         let value = set_armour_cost_impl(&self.db, &session_id, cost)
             .await
             .map_err(edit_error("tracking armour cost"))?;
+        // The running session's live Cycled carries its armour cost too.
+        if let Err(error) = self.tracker.refresh_armour().await {
+            tracing::warn!(target: "eo::api", %error, "live armour cost refresh failed");
+        }
         serde_json::from_value(value).map_err(ApiError::internal("tracking armour cost shaping"))
     }
 
-    /// The one-shot repair-cost OCR read, gated on `repair_ocr_enabled`
-    /// (400 when disabled). The `session_id` is unused (the reference
-    /// ignores it too); it stays in the signature for the route mapping.
-    pub fn tracking_repair_scan(&self, session_id: String) -> Result<RepairScanResult, ApiError> {
+    /// Read the Repair Terminal's repair cost off the game window, gated
+    /// on `repair_ocr_enabled` (400 when disabled). The `session_id` is
+    /// unused: the terminal is read, not a session.
+    pub fn tracking_repair_scan(&self, session_id: String) -> Result<TerminalReadResult, ApiError> {
         let _ = session_id;
         let config = load_config_readonly(&self.data_dir)
             .map_err(ApiError::internal("repair scan config"))?;
         if !config.repair_ocr_enabled {
             return Err(ApiError::bad_request("Repair OCR is disabled"));
         }
-        let value = project(&self.repair_ocr.scan_repair_cost(), &REPAIR_FIELDS);
-        serde_json::from_value(value).map_err(ApiError::internal("repair scan shaping"))
+        Ok(self.repair_ocr.scan_repair_cost().into())
+    }
+
+    /// Set which app-wide statistics an ended session is kept out of: the
+    /// whole desired state (`economy`, `progression`) plus an optional
+    /// note, so repeating a request is harmless. An active session is a
+    /// conflict, a missing one a not-found. The aggregate surfaces read the
+    /// flags on their next load, as they do after a delete.
+    pub async fn tracking_session_exclusion(
+        &self,
+        session_id: String,
+        economy: bool,
+        progression: bool,
+        note: Option<String>,
+    ) -> Result<SessionExclusionResult, ApiError> {
+        let now = naive_to_epoch(self.clock.now());
+        let value =
+            set_session_exclusion_impl(&self.db, &session_id, economy, progression, note, now)
+                .await
+                .map_err(edit_error("tracking session exclusion"))?;
+        serde_json::from_value(value)
+            .map_err(ApiError::internal("tracking session exclusion shaping"))
     }
 
     /// Delete a session and all of its data (an active session cannot be
     /// deleted; a missing one is a not-found). The rollups are repaired for
-    /// the days it touched.
+    /// the days it touched. Its healing evidence can explain another
+    /// session's heals and a running session's effect windows, so the
+    /// deletion is announced as a healing change.
     pub async fn tracking_session_delete(&self, session_id: String) -> Result<(), ApiError> {
         delete_session_impl(&self.db, &session_id)
             .await
-            .map_err(edit_error("tracking session delete"))
+            .map_err(edit_error("tracking session delete"))?;
+        self.healing_review.announce_changed();
+        self.equipment_changed().await;
+        Ok(())
     }
 
     // ── Private snapshot assembly ────────────────────────────────────
@@ -1370,7 +2317,7 @@ impl Api {
     }
 }
 
-// ── Snapshot assembly (shared by the live and demo snapshots) ────────
+// ── Snapshot assembly ───────────────────────────────────────────────
 
 /// The definition's lifetime figures for the instance-versus-family
 /// flip, or `None` when no definition is in force (a legacy or
@@ -1384,6 +2331,7 @@ impl Api {
 /// user is watching would be a trap; the summaries cover ended sessions
 /// only, so there is no double count.
 async fn lifetime_stats(
+    db: &Db,
     definitions: Option<&SessionDefinitionService>,
     active: Option<&ActiveSessionView>,
     idle_definition_id: Option<i64>,
@@ -1395,78 +2343,131 @@ async fn lifetime_stats(
     let (Some(service), Some(definition_id)) = (definitions, definition_id) else {
         return Ok(None);
     };
-    let stored = service
+    let mut family = service
         .lifetime_stats(definition_id)
         .await
         .map_err(ApiError::internal("snapshot lifetime stats"))?;
 
-    let mut instance_count = stored.instance_count;
-    let mut cycled = stored.cycled;
-    let mut loot_tt = stored.loot_tt;
-    let mut pes = stored.pes;
-    let mut duration_seconds = stored.duration_seconds;
+    // The ended instances' unpriced shots are stored; the running one's are
+    // counted live (most are still waiting for their kill to be written).
+    let mut unpriced_shots = db
+        .with_reader(move |conn| {
+            Ok(conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM weapon_shot_evidence e \
+                     JOIN tracking_sessions s ON s.id = e.session_id \
+                     WHERE s.definition_id = ?1 AND s.is_active = 0 \
+                       AND e.attribution = 'unresolved' AND e.tool_name IS NULL AND {}",
+                    session_scope::counts_on(StatsScope::Economy, "s")
+                ),
+                [definition_id],
+                |row| row.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .map_err(ApiError::internal("snapshot lifetime unpriced shots"))?;
     // Only when the running session belongs to THIS definition: a
     // selection changed while idle reads the newly-picked family's
     // history, not the running instance's figures.
     if let Some(active) = active.filter(|active| active.definition_id == Some(definition_id)) {
-        instance_count += 1;
-        cycled += active.cost;
-        loot_tt += active.returns;
-        pes += active.pes;
-        duration_seconds += active.elapsed as f64;
+        family.fold_live(active);
+        unpriced_shots += active.unpriced_shots;
     }
 
+    let round_opt = |value: Option<f64>, places| -> Nullable<f64> {
+        value.map(|inner| round_half_even(inner, places)).into()
+    };
+    let multiplier_avg = (family.multiplier_count > 0)
+        .then(|| family.multiplier_sum / family.multiplier_count as f64);
+    let pes_per_100 =
+        (family.ratio_cycled > 0.0).then(|| family.ratio_pes / family.ratio_cycled * 100.0);
+
     Ok(Some(LifetimeStats {
-        instance_count,
-        cycled: round_half_even(cycled, 2),
-        loot_tt: round_half_even(loot_tt, 2),
-        net: round_half_even(loot_tt - cycled, 2),
+        instance_count: family.instance_count,
+        cycled: round_half_even(family.cycled, 2),
+        loot_tt: round_half_even(family.loot_tt, 2),
+        net: round_half_even(family.loot_tt - family.cycled - family.overhead, 2),
         // The ratio of the summed parts, never the mean of the
         // per-instance rates. Zero spend reads as zero, matching the
         // instance figure's own rule.
-        return_rate: if cycled > 0.0 {
-            round_half_even(loot_tt / cycled, 4)
+        return_rate: if family.cycled > 0.0 {
+            round_half_even(family.loot_tt / family.cycled, 4)
         } else {
             0.0
         },
-        pes: round_half_even(pes, 2),
-        duration_seconds: round_half_even(duration_seconds, 0),
+        pes: round_half_even(family.pes, 2),
+        duration_seconds: round_half_even(family.duration_seconds, 0),
+        unpriced_shots,
+        pes_per_100: round_opt(pes_per_100, 2),
+        kills: family.kills,
+        damage_total: round_half_even(family.damage_total, 1),
+        weapon_damage: round_half_even(family.weapon_damage, 1),
+        weapon_cost: round_half_even(family.weapon_cost, 6),
+        max_damage: round_half_even(family.damage_max, 1),
+        shots_fired: family.shots,
+        critical_hits: family.crits,
+        globals: family.globals,
+        hofs: family.hofs,
+        harvest_swings: family.harvest_swings,
+        multiplier_avg: round_opt(multiplier_avg, 4),
+        multiplier_max: round_opt(family.multiplier_max, 4),
+        multiplier_last: round_opt(family.last_kill_multiplier, 4),
+        latest_kill_loot: round_opt(family.last_kill_loot, 2),
+        expected_cycle: family
+            .expected
+            .map(|expected| {
+                let round = |value: f64| round_half_even(value, 6) + 0.0;
+                let at = |span: eo_services::session_expectation::ExpectedSpan| {
+                    LifetimeExpectedAtBasis {
+                        expected_loot_tt_ped: round(span.expected),
+                        low_ped: round(span.low),
+                        high_ped: round(span.high),
+                    }
+                };
+                LifetimeExpectedCycle {
+                    sessions: expected.sessions,
+                    cycled_ped: round(expected.cycled),
+                    bases: LifetimeExpectedBases {
+                        three_looter_mean: at(expected.spans.three_looter_mean),
+                        animal: at(expected.spans.animal),
+                        mutant: at(expected.spans.mutant),
+                        robot: at(expected.spans.robot),
+                    },
+                }
+            })
+            .into(),
     }))
 }
 
+/// The mob source as the snapshot's JSON carries it.
+fn mob_source_value(view: crate::mob_detection::MobSourceView) -> Result<Value, ApiError> {
+    serde_json::to_value(view).map_err(ApiError::internal("mob source shaping"))
+}
+
 /// Assemble the projected snapshot value from the tracker readout, the
-/// resolved config, and the hotbar listener's running state. A free
-/// function (rather than an `Api` method) so both the live snapshot and
-/// the guide-mode demo snapshot, which runs over its own parallel tracker
-/// and database, share one assembly.
+/// resolved config, and the hotbar listener's running state.
 pub(crate) async fn build_snapshot_value(
     db: &Db,
     tracker: &HuntTracker,
     config: &AppConfig,
     hotbar_active: bool,
+    keyless: bool,
     definitions: Option<&SessionDefinitionService>,
     now: f64,
 ) -> Result<Value, ApiError> {
-    let weapon_attribution = if config.hotbar_hooks_enabled {
-        "hotbar"
-    } else {
-        "trifecta"
-    };
-    let trifecta_attribution = if weapon_attribution == "trifecta" {
-        trifecta_attribution_summary(db, config)
-            .await
-            .map_err(ApiError::internal("snapshot trifecta summary"))?
-    } else {
-        Value::Null
-    };
-    let readout = tracker
-        .snapshot()
+    // The readout and where the tool in hand comes from, read in one turn
+    // of the tracker so the two describe the same moment.
+    let (readout, tool_display) = tracker
+        .snapshot_with_tool()
         .await
         .map_err(ApiError::internal("snapshot readout"))?;
     let current_tool = match &readout.current_tool {
         Some(tool) => Value::String(tool.clone()),
         None => Value::Null,
     };
+    let tool_source = crate::held_tool::tool_source_view(db, tool_display).await?;
+    let tool_source =
+        serde_json::to_value(tool_source).map_err(ApiError::internal("tool source shaping"))?;
     // The derived-activity feedback: what the held tool implies the
     // next action is recorded as (absent when no tool is known).
     let current_activity = match readout.current_tool_kind {
@@ -1517,13 +2518,10 @@ pub(crate) async fn build_snapshot_value(
         eo_services::session_definitions::resolve_selection(db, config.session_definition_id)
             .await
             .map_err(ApiError::internal("snapshot definition selection"))?;
-    let idle_definition_id = idle_selection.as_ref().map(|(id, _, _, _)| *id);
+    let idle_definition_id = idle_selection.as_ref().map(|(id, _, _)| *id);
     let idle_track_protection_costs = idle_selection
         .as_ref()
-        .is_none_or(|(_, _, track_costs, _)| *track_costs);
-    let idle_track_protection_by_segment = idle_selection
-        .as_ref()
-        .is_some_and(|(_, _, track_costs, track_by_segment)| *track_costs && *track_by_segment);
+        .is_none_or(|(_, _, track_costs)| *track_costs);
 
     // The Activities control's strip-level readout: whether the control
     // appears at all, how many rows a tap could start, and what is
@@ -1542,7 +2540,8 @@ pub(crate) async fn build_snapshot_value(
     // The family side of the instance-versus-family flip, resolved over
     // the same definition the Activities control reads: the stamped one
     // while tracking, otherwise the one a start would stamp.
-    let lifetime = lifetime_stats(definitions, readout.active.as_ref(), idle_definition_id).await?;
+    let lifetime =
+        lifetime_stats(db, definitions, readout.active.as_ref(), idle_definition_id).await?;
     let lifetime = match lifetime {
         Some(stats) => json!(stats),
         None => Value::Null,
@@ -1553,23 +2552,24 @@ pub(crate) async fn build_snapshot_value(
             json!({
                 "status": "idle",
                 "hotbarListenerActive": hotbar_active,
-                "weaponAttribution": weapon_attribution,
+                "hotbarKeysEnabled": config.hotbar_hooks_enabled && !keyless,
+                "keylessInput": keyless,
                 "repairOcrEnabled": config.repair_ocr_enabled,
-                "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
                 "currentTool": current_tool,
                 "currentToolKind": current_tool_kind,
                 "currentActivity": current_activity,
-                "trifectaAttribution": trifecta_attribution,
                 "sessionName": name_value(Some(if config.session_name.trim().is_empty() {
-                    idle_selection.as_ref().map_or("", |(_, name, _, _)| name.as_str())
+                    idle_selection.as_ref().map_or("", |(_, name, _)| name.as_str())
                 } else {
                     config.session_name.trim()
                 })),
                 "sessionDefinitionId": definition_value(idle_definition_id),
                 "trackProtectionCosts": idle_track_protection_costs,
-                "trackProtectionBySegment": idle_track_protection_by_segment,
                 "skillBoostPercent": boost_value(config.declared_skill_boost_percent),
-                "currentMob": declared_mob_label(config),
+                "mobSource": mob_source_value(crate::mob_detection::MobSourceView::idle(
+                    declared_mob(config),
+                ))?,
+                "toolSource": tool_source,
                 "activities": activities,
                 "lifetime": lifetime,
                 "recentEvents": [],
@@ -1620,6 +2620,17 @@ pub(crate) async fn build_snapshot_value(
                 "damageDealtTotal": active.damage_dealt_total,
                 "weaponDamageDealt": active.weapon_damage_dealt,
                 "weaponCost": active.weapon_cost,
+                "armourCost": active.armour_cost,
+                "cycledBreakdown": active
+                    .cycled_breakdown
+                    .iter()
+                    .map(CycledLine::from)
+                    .collect::<Vec<_>>(),
+                "overheadCost": active.overhead_cost,
+                "costsMeasuredThrough": active
+                    .costs_measured_through
+                    .map(eo_services::time::to_iso_utc),
+                "expectedCycle": active.expected_cycle.as_ref().map(LiveExpectedCycle::from),
                 "expectedTtRate": active.expected_tt_rate,
                 "expectedReturnCoverage": active.expected_return_coverage,
                 "expectedReturnModel": active.expected_return_model.clone(),
@@ -1638,6 +2649,11 @@ pub(crate) async fn build_snapshot_value(
                 "harvestSuccesses": active.harvest_successes,
                 "harvestLoot": active.harvest_loot,
                 "harvestCost": active.harvest_cost,
+                "unpricedShots": active.unpriced_shots,
+                "unpricedCostBound": active.unpriced_cost_bound,
+                "unpricedNoFitShots": active.unpriced_no_fit,
+                "weaponDeclared": active.weapon_declared,
+                "weaponHitCue": active.weapon_hit_cue.map(WeaponHitMargin::from),
                 "healing": {
                     "toolName": active.healing.tool_name.clone(),
                     "state": active.healing.state.clone(),
@@ -1650,29 +2666,73 @@ pub(crate) async fn build_snapshot_value(
                     "unattributedOutputs": active.healing.unattributed_output_count,
                 },
                 "hotbarListenerActive": hotbar_active,
-                "weaponAttribution": weapon_attribution,
+                "hotbarKeysEnabled": config.hotbar_hooks_enabled && !keyless,
+                "keylessInput": active.keyless,
                 "repairOcrEnabled": config.repair_ocr_enabled,
-                "endOfSessionArmourReminderEnabled": config.end_of_session_armour_reminder_enabled,
                 "currentTool": current_tool,
                 "currentToolKind": current_tool_kind,
                 "currentActivity": current_activity,
                 "activities": activities,
                 "lifetime": lifetime,
-                "trifectaAttribution": trifecta_attribution,
                 "sessionName": name_value(active.session_name.as_deref()),
                 "sessionDefinitionId": definition_value(active.definition_id),
                 "trackProtectionCosts": active.track_protection_costs,
-                "trackProtectionBySegment": active.track_protection_by_segment,
                 "skillBoostPercent": boost_value(active.skill_boost_percent),
-                "currentMob": active.current_mob.clone(),
+                "mobSource": mob_source_value(active.mob_source.clone().into())?,
+                "toolSource": tool_source,
                 "recentEvents": recent_events,
                 "warnings": warnings,
             });
             if let (Some(mismatch), Some(object)) = (harvest_guardrail, value.as_object_mut()) {
                 object.insert("harvestGuardrail".to_string(), mismatch);
             }
+            // Likewise the weapon guardrail: absent while the evidence
+            // agrees with the hotbar.
+            let weapon_guardrail = active.weapon_guardrail_mismatch.as_ref().map(|mismatch| {
+                json!({
+                    "hotbarTool": mismatch.hotbar_tool.clone(),
+                    "recordingTool": mismatch.recording_tool.clone(),
+                    "since": mismatch.since,
+                    "shots": mismatch.shots,
+                })
+            });
+            if let (Some(mismatch), Some(object)) = (weapon_guardrail, value.as_object_mut()) {
+                object.insert("weaponGuardrail".to_string(), mismatch);
+            }
             value
         }
     };
     Ok(project(&value, &SNAPSHOT_FIELDS))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CostReason;
+    use eo_services::session_costs::TrackedReason;
+
+    /// Every reason the resolver gives a bucket or an overhead category,
+    /// stored or not, is one the wire names, and the wire names no other: a reason added on one side
+    /// alone fails here, never at a session's detail.
+    #[test]
+    fn every_resolved_reason_is_one_wire_reason() {
+        // The overhead's own reason beside them: a category changed in the
+        // gap a session was measured across.
+        let resolved: Vec<&str> = std::iter::once(TrackedReason::NoMeasuredCosts)
+            .chain(TrackedReason::STORED)
+            .map(TrackedReason::as_str)
+            .chain(["overheadInGap"])
+            .collect();
+        for reason in &resolved {
+            let wire: CostReason = serde_json::from_value(serde_json::json!(reason))
+                .unwrap_or_else(|_| panic!("{reason} has no wire reason"));
+            assert_eq!(serde_json::to_value(wire).unwrap(), *reason);
+        }
+        let schema = serde_json::to_value(schemars::schema_for!(CostReason)).unwrap();
+        let named = schema["enum"]
+            .as_array()
+            .map(|values| values.len())
+            .or_else(|| schema["oneOf"].as_array().map(|values| values.len()))
+            .expect("a closed set");
+        assert_eq!(named, resolved.len());
+    }
 }

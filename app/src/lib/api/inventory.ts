@@ -14,6 +14,7 @@ import type {
 	EquipmentTradeInput,
 	InventoryHoldingCandidate,
 	InventorySaleDraft,
+	ListingFieldSourceInput,
 	Profession,
 } from './commands.gen';
 import * as commands from './commands.gen';
@@ -53,6 +54,8 @@ export const tradeLoot = (input: Omit<commands.PrivateSaleInput, 'profession'>) 
 	commands.stockPrivateSale({ profession: 'inventory', ...input });
 export const convertLoot = (input: Omit<commands.StockConversionInput, 'profession'>) =>
 	commands.stockConvert({ profession: 'inventory', ...input });
+export const convertItems = (input: commands.ItemConversionInput) =>
+	commands.stockConvertItems(input);
 export const removeLoot = (input: Omit<commands.StockRemovalInput, 'profession'>) =>
 	commands.stockRemove({ profession: 'inventory', ...input });
 export const convertLootShrapnel = (input: Omit<commands.ShrapnelConversionInput, 'profession'>) =>
@@ -67,21 +70,46 @@ export const confirmInventoryListing = commands.auctionListingConfirm;
 export const expireInventoryListing = commands.auctionListingExpire;
 export const revertInventorySale = commands.auctionSaleRevert;
 export const undoInventoryListing = commands.auctionListingUndo;
+/** Put a listing that came back from the auction on it again: an expiry
+ * taken back, the stock returned to the auction. Loot listings only. */
+export const reopenInventoryListing = commands.auctionListingReopen;
 export const undoInventoryConversion = commands.stockConversionUndo;
 export const undoInventoryTrade = commands.privateSaleUndo;
 export const undoInventoryRemoval = commands.stockRemovalUndo;
+/** The latest conversion of an item the account readings recorded within
+ * the last hour, or `null`: shown beside a manual conversion form so the
+ * same conversion is not entered twice. */
+export const getConversionFromAccount = commands.stockConversionFromAccount;
+/** The latest Trade Terminal sale of an item the account readings recorded
+ * within the last hour, or `null`: shown beside the trade form. */
+export const getSaleFromAccount = commands.stockSaleFromAccount;
+
+/** Read a pasted Inventory Changes export as an opening of one box type. */
+export const readStrongboxExport = commands.strongboxExportRead;
+/** Record a run of strongbox openings, all or nothing. */
+export const recordStrongboxOpening = commands.strongboxOpen;
+export const getStrongboxOpenings = commands.strongboxOpenings;
+/** Take a recorded run back whole. */
+export const undoStrongboxOpening = commands.strongboxOpeningUndo;
 
 export const addEquipmentHolding = commands.inventoryCreate;
+/** Record buying more of an asset, which moves its average cost. */
+export const addAssetPurchase = commands.inventoryPurchaseAdd;
+/** Correct a purchase that no sale or listing has drawn on yet. */
+export const updateAssetPurchase = commands.inventoryPurchaseUpdate;
+/** Take back a purchase that no sale or listing has drawn on yet. */
+export const deleteAssetPurchase = commands.inventoryPurchaseDelete;
 export const updateEquipmentHolding = commands.inventoryUpdate;
 export const deleteEquipmentHolding = commands.inventoryDelete;
 export const resolveInventoryDraft = (draft: InventorySaleDraft) =>
 	commands.inventoryDraftResolve(draft);
 
-/** Read the game's sale window once. Fills the form; commits nothing. */
+/** Read the game's sell queue once: a draft per queued item, or why there
+ * are none. Fills the form; commits nothing. */
 export const captureSaleWindow = () => commands.inventorySaleWindowCapture();
 
 /** Collect a capture taken while the form was not on screen, clearing it.
- * The overlay's button can be pressed from inside the game, so its read
+ * The overlay's button can be pressed from inside the game, so its capture
  * waits here until the form opens. */
 export const takeSaleWindowCapture = () => commands.inventorySaleWindowTakeCapture();
 
@@ -92,25 +120,32 @@ export interface ResolvedInventorySaleDraft {
 	draft: InventorySaleDraft;
 	holding: InventoryHoldingCandidate;
 	occurredAt: string | null;
+	/** Where each figure of an auction listing came from, for one drafted
+	 * from a capture of the sell queue; absent for one entered by hand. */
+	fieldSources?: ListingFieldSourceInput[] | null;
 }
 
 export async function commitInventorySaleDraft({
 	draft,
 	holding,
 	occurredAt,
+	fieldSources = null,
 }: ResolvedInventorySaleDraft): Promise<unknown> {
 	if (holding.kind === 'equipment') {
 		return draft.channel === 'auction'
 			? createEquipmentListing({
 					itemId: holding.holdingId,
+					quantity: draft.quantity,
 					startingBid: draft.startingBid ?? 0,
 					buyout: draft.buyout,
 					listingFee: draft.listingFee ?? 0,
 					listedAt: occurredAt,
 					auctionDays: draft.auctionDays,
+					fieldSources,
 				})
 			: tradeEquipment({
 					itemId: holding.holdingId,
+					quantity: draft.quantity,
 					soldFor: draft.finalPrice ?? 0,
 					soldAt: occurredAt,
 				});
@@ -128,6 +163,7 @@ export async function commitInventorySaleDraft({
 				listingFee: draft.listingFee ?? 0,
 				listedAt: occurredAt,
 				auctionDays: draft.auctionDays,
+				fieldSources,
 			})
 		: tradeLoot({
 				itemName: holding.name,

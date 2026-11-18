@@ -6,6 +6,7 @@
  */
 
 import { getPreference, setPreference } from '$lib/preferences';
+import { filterByQuery } from '$lib/view/search';
 
 export type CodexRankingTarget =
 	| { kind: 'none' }
@@ -84,19 +85,27 @@ export function rowToTarget(row: PickerRow): CodexRankingTarget {
 
 /**
  * The picker's rows for a query: the fixed targets and families first,
- * then favourite professions, then the rest, all filtered by
- * case-insensitive substring (a family also matches on its members).
+ * then favourite professions, then the rest, all filtered through the
+ * shared search (a family also matches on its members).
+ * A surface where "no target" is not a choice drops the none row.
  */
 export function filterRows(
 	professionNames: string[],
 	favourites: string[],
 	query: string,
+	{ includeNone = true }: { includeNone?: boolean } = {},
 ): PickerRow[] {
-	const q = query.trim().toLowerCase();
-	const matches = (label: string) => q === '' || label.toLowerCase().includes(q);
+	const labels = [
+		'No profession',
+		'HP gain',
+		...PROFESSION_FAMILIES.flatMap((family) => [family.label, ...family.professions]),
+		...professionNames,
+	];
+	const matched = new Set(filterByQuery(labels, query, (label) => label));
+	const matches = (label: string) => matched.has(label);
 
 	const rows: PickerRow[] = [];
-	if (matches('No profession')) rows.push({ kind: 'none', label: 'No profession' });
+	if (includeNone && matches('No profession')) rows.push({ kind: 'none', label: 'No profession' });
 	if (matches('HP gain')) rows.push({ kind: 'hp', label: 'HP gain' });
 	for (const family of PROFESSION_FAMILIES) {
 		if (matches(family.label) || family.professions.some((name) => matches(name))) {

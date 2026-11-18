@@ -147,7 +147,8 @@ fn join_normalised(dir: &str, path: &str) -> String {
 fn markdown_path_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(?:\.\./)*(?:\.?[\w-]+/)*[\w-]+\.md$").expect("valid markdown path pattern")
+        Regex::new(r"^(?:\./|\.\./)*(?:\.?[\w-]+/)*[\w-]+\.md$")
+            .expect("valid markdown path pattern")
     })
 }
 
@@ -160,7 +161,7 @@ fn source_path_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^(?:\.\./)*[\w-]+/(?:[\w.-]+/)*[\w.-]+\.(?:rs|ts|js|mjs|cjs|svelte|py|sh|ps1|yml|yaml|json|toml|txt|sql|css|html)$",
+            r"^(?:\./|\.\./)*[\w-]+/(?:[\w.-]+/)*[\w.-]+\.(?:rs|ts|js|mjs|cjs|svelte|py|sh|ps1|yml|yaml|json|toml|txt|sql|css|html)$",
         )
         .expect("valid source path pattern")
     })
@@ -362,7 +363,9 @@ pub fn drop_ignored(findings: Vec<Finding>, ignored: &HashSet<String>) -> Vec<Fi
 /// The subset of `paths` the repository's ignore rules match.
 ///
 /// `git check-ignore` exits 1 when nothing matched, which is a clean answer
-/// rather than a failure, so this does not go through the shared helper.
+/// rather than a failure, so this does not go through the shared helper. The
+/// candidates are fed from a separate thread while the output is drained, so
+/// a large batch cannot deadlock on a full pipe in either direction.
 pub fn ignored_paths(paths: &[String], repo_root: &Path) -> Result<HashSet<String>, String> {
     if paths.is_empty() {
         return Ok(HashSet::new());
@@ -375,16 +378,21 @@ pub fn ignored_paths(paths: &[String], repo_root: &Path) -> Result<HashSet<Strin
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("failed to run git check-ignore: {e}"))?;
-    {
-        let stdin = child.stdin.as_mut().expect("piped stdin");
-        for path in paths {
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let batch: Vec<String> = paths.to_vec();
+    let feeder = std::thread::spawn(move || -> Result<(), String> {
+        for path in batch {
             writeln!(stdin, "{path}")
                 .map_err(|e| format!("failed to feed git check-ignore: {e}"))?;
         }
-    }
+        Ok(())
+    });
     let output = child
         .wait_with_output()
         .map_err(|e| format!("failed to wait for git check-ignore: {e}"))?;
+    feeder
+        .join()
+        .map_err(|_| "the git check-ignore feeder thread panicked".to_string())??;
     match output.status.code() {
         Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -634,6 +642,21 @@ mod tests {
         let f = scan_messages(&commit("docs: (see `notes/plan.md:12-14`)."), &known());
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].candidates, ["notes/plan.md"]);
+    }
+
+    #[test]
+    fn dot_slash_prefixed_paths_are_scanned() {
+        let f = scan_messages(
+            &commit("docs: see ./notes/plan.md and ./README.md"),
+            &known(),
+        );
+        assert_eq!(rules(&f), ["absent-path"]);
+        assert_eq!(f[0].candidates, ["notes/plan.md"]);
+        let f = scan_messages(
+            &commit("refactor: touch ./app/src-tauri/eo-api/src/settings.rs"),
+            &known(),
+        );
+        assert!(f.is_empty(), "{f:?}");
     }
 
     #[test]

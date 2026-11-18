@@ -4,6 +4,7 @@
 use serde_json::{Map, Value};
 
 use crate::game_data_store::GameDataStore;
+use crate::skilling_routes::MobMaturity;
 
 pub struct MobLookupService<'a> {
     game_data: &'a GameDataStore,
@@ -14,27 +15,16 @@ impl<'a> MobLookupService<'a> {
         Self { game_data }
     }
 
-    /// Exact mob display names as `{maturity} {species}` suggestions:
-    /// matched on the whole query or on every whitespace token,
-    /// deduplicated by (species, maturity), sorted stably by
-    /// (starts-with-query, display), and truncated to `limit`.
-    pub fn search_mob_names(&self, query: &str, limit: usize) -> Vec<Value> {
-        let q = query.trim_matches(python_whitespace).to_lowercase();
-        if q.is_empty() {
-            return Vec::new();
-        }
-        let q_parts: Vec<&str> = q
-            .split(python_whitespace)
-            .filter(|part| !part.is_empty())
-            .collect();
-
+    /// Every mob the catalogue names, as `{display, species, maturity}`
+    /// rows (`display` is the mob as the game prints it, `{species}
+    /// {maturity}`, or the bare species when it has no maturities), deduplicated by (species, maturity) and
+    /// sorted by display. The declared-mob picker searches this list with
+    /// the frontend's shared search.
+    pub fn mob_names(&self) -> Vec<Value> {
         let mut results: Vec<Value> = Vec::new();
         let mut seen: std::collections::BTreeSet<(String, String)> =
             std::collections::BTreeSet::new();
 
-        let matches = |display_lower: &str| {
-            display_lower.contains(&q) || q_parts.iter().all(|part| display_lower.contains(part))
-        };
         let row = |display: &str, species: &str, maturity: &str| {
             let mut map = Map::new();
             map.insert("display".into(), Value::from(display));
@@ -54,10 +44,7 @@ impl<'a> MobLookupService<'a> {
                 .and_then(Value::as_array)
                 .filter(|list| !list.is_empty());
             let Some(maturities) = maturities else {
-                let key = (species.clone(), String::new());
-                let display_lower = species.to_lowercase();
-                if !seen.contains(&key) && matches(&display_lower) {
-                    seen.insert(key);
+                if seen.insert((species.clone(), String::new())) {
                     results.push(row(&species, &species, ""));
                 }
                 continue;
@@ -70,32 +57,14 @@ impl<'a> MobLookupService<'a> {
                     .unwrap_or("")
                     .trim()
                     .to_string();
-                let display = if maturity.is_empty() {
-                    species.clone()
-                } else {
-                    format!("{maturity} {species}")
-                };
-                let key = (species.clone(), maturity.clone());
-                let display_lower = display.to_lowercase();
-                if seen.contains(&key) || !matches(&display_lower) {
-                    continue;
+                let display = crate::mob_display::printed(&species, &maturity);
+                if seen.insert((species.clone(), maturity.clone())) {
+                    results.push(row(&display, &species, &maturity));
                 }
-                seen.insert(key);
-                results.push(row(&display, &species, &maturity));
             }
         }
 
-        // Stable sort by (starts-with-query, display), as the backend's
-        // tuple key sorts.
-        results.sort_by(|a, b| {
-            let rank = |value: &Value| {
-                let display = value["display"].as_str().unwrap_or("");
-                let starts = i32::from(!display.to_lowercase().starts_with(&q));
-                (starts, display.to_string())
-            };
-            rank(a).cmp(&rank(b))
-        });
-        results.truncate(limit);
+        results.sort_by(|a, b| a["display"].as_str().cmp(&b["display"].as_str()));
         results
     }
 
@@ -133,6 +102,32 @@ impl<'a> MobLookupService<'a> {
             });
         }
         false
+    }
+
+    /// A maturity's HP and level, from the first catalogue mob of that
+    /// species (or uncatalogued mob name) listing it with both. None when
+    /// no mob records them.
+    pub fn maturity_stats(&self, species: &str, maturity: &str) -> Option<MobMaturity> {
+        let species = species.trim_matches(python_whitespace);
+        let maturity = maturity.trim_matches(python_whitespace);
+        self.game_data
+            .get_entities("mobs")
+            .iter()
+            .filter(|mob| species_name(mob) == species)
+            .flat_map(|mob| {
+                mob.get("maturities")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+            })
+            .filter(|entry| {
+                entry.get("name").and_then(Value::as_str).map(str::trim) == Some(maturity)
+            })
+            .find_map(|entry| {
+                let hp = entry.get("hp").and_then(Value::as_f64)?;
+                let level = entry.get("level").and_then(Value::as_f64)?;
+                Some(MobMaturity { hp, level })
+            })
     }
 }
 
@@ -178,53 +173,31 @@ mod tests {
     }
 
     #[test]
-    fn suggestions_match_tokens_dedupe_and_sort_stably() {
+    fn names_list_every_maturity_once_sorted_by_display() {
         let (_dir, store) = store();
         let lookup = MobLookupService::new(&store);
-
-        let rows = lookup.search_mob_names("young atrox", 10);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["display"], "Young Atrox");
-        assert_eq!(rows[0]["species"], "Atrox");
-        assert_eq!(rows[0]["maturity"], "Young");
-
-        // Reversed token order still matches (every token, any position).
-        let rows = lookup.search_mob_names("atrox young", 10);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["display"], "Young Atrox");
-
-        // Prefix matches rank before substring matches.
-        let rows = lookup.search_mob_names("old", 10);
+        let rows = lookup.mob_names();
         let displays: Vec<&str> = rows
             .iter()
             .map(|row| row["display"].as_str().unwrap())
             .collect();
-        assert_eq!(displays, ["Old Atrox", "Young Kold"]);
-
-        // Duplicate maturity entries deduplicate by (species, maturity).
-        let rows = lookup.search_mob_names("atrox", 10);
-        let displays: Vec<&str> = rows
-            .iter()
-            .map(|row| row["display"].as_str().unwrap())
-            .collect();
-        // starts-with ranks "Atrox..." never (query "atrox" prefixes no
-        // display? "Atrox" alone is not a row: every maturity prefixes);
-        // alphabetical within the non-prefix rank.
-        assert_eq!(displays, ["Old Atrox", "Young Atrox"]);
-
-        // Maturity-less species suggest the bare name; prefix rank wins.
-        let rows = lookup.search_mob_names("dai", 10);
-        assert_eq!(rows[0]["display"], "Daikiba");
-        assert_eq!(rows[0]["maturity"], "");
-
-        // The species fallback to the top-level name.
-        let rows = lookup.search_mob_names("snable", 10);
-        assert_eq!(rows[0]["display"], "Young Snablesnot Female");
-
-        // Blank and whitespace queries return nothing.
-        assert!(lookup.search_mob_names("   ", 10).is_empty());
-        // Limit truncates after the sort.
-        assert_eq!(lookup.search_mob_names("young", 1).len(), 1);
+        // The duplicate Atrox Young entry collapses; the unnamed species
+        // is skipped; a maturity-less species is its bare name; the
+        // species falls back to the top-level name.
+        assert_eq!(
+            displays,
+            [
+                "Atrox Old",
+                "Atrox Young",
+                "Daikiba",
+                "Kold Young",
+                "Snablesnot Female Young"
+            ]
+        );
+        let young_atrox = &rows[1];
+        assert_eq!(young_atrox["species"], "Atrox");
+        assert_eq!(young_atrox["maturity"], "Young");
+        assert_eq!(rows[2]["maturity"], "");
     }
 
     #[test]
@@ -239,5 +212,39 @@ mod tests {
         assert!(!lookup.has_mob_name("Daikiba", "Young"));
         assert!(!lookup.has_mob_name("", "Young"));
         assert!(!lookup.has_mob_name("Unknown", ""));
+    }
+
+    /// HP and level come from the first mob listing the maturity with
+    /// both, matched by species or, for an uncatalogued mob, its name.
+    #[test]
+    fn maturity_stats_read_hp_and_level() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mobs.json"),
+            r#"[
+                {"name": "Atrox", "species": {"name": "Atrox"}, "maturities": [{"name": "Young", "hp": null, "level": null}]},
+                {"name": "Atrox", "species": {"name": "Atrox"}, "maturities": [{"name": "Young", "hp": 300, "level": 12}]},
+                {"name": "Bank Robber", "species": {"name": null}, "maturities": [{"name": "Default", "hp": 2, "level": 4}]}
+            ]"#,
+        )
+        .unwrap();
+        let store = GameDataStore::new(dir.path()).unwrap();
+        let lookup = MobLookupService::new(&store);
+        assert_eq!(
+            lookup.maturity_stats("Atrox", " Young "),
+            Some(MobMaturity {
+                hp: 300.0,
+                level: 12.0
+            })
+        );
+        assert_eq!(
+            lookup.maturity_stats("Bank Robber", "Default"),
+            Some(MobMaturity {
+                hp: 2.0,
+                level: 4.0
+            })
+        );
+        assert_eq!(lookup.maturity_stats("Atrox", "Old"), None);
+        assert_eq!(lookup.maturity_stats("Nobody", "Young"), None);
     }
 }

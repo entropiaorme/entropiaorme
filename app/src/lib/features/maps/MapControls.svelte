@@ -29,8 +29,10 @@
 
 	const setupItems = $derived([
 		{ label: 'Configure pin overlay', onSelect: onconfigure },
-		{ label: 'Calibrate coordinate capture', onSelect: oncalibrate },
-		{ label: 'Calibrate radar guidance', onSelect: onradarcalibrate },
+		// Escape hatches for a setup where the radar cannot be found: both
+		// are read only when the automatic find fails.
+		{ label: 'Set the coordinate region by hand', onSelect: oncalibrate },
+		{ label: 'Set the radar by hand', onSelect: onradarcalibrate },
 		{
 			label: searchOpen ? 'Hide pin search' : 'Search pins',
 			onSelect: () => (searchOpen = !searchOpen),

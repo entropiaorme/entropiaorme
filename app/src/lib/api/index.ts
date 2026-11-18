@@ -7,10 +7,11 @@
  * from the Rust command DTOs), which types the arguments and return
  * value against the backend contract at compile time; the generated
  * types are the authoritative contract, and the wrappers add only
- * argument shaping and the guide-mode read swap (`./guide`). The
+ * argument shaping. The
  * shell's bespoke window/byte commands live in `./shell`.
  */
 
+export * from './account';
 export * from './analytics';
 export * from './character';
 export { ApiError, type ThrownErrorKind } from './client';
@@ -28,10 +29,19 @@ export type {
 	AnalyticsHunting as HuntingData,
 	AnalyticsHuntingActivity as HuntingActivityData,
 	ApiErrorKind,
+	AssetPurchase,
+	AssetPurchaseInput,
 	AuctionConfirmInput,
 	AuctionExpireInput,
 	AuctionListing,
 	AuctionListingInput,
+	CreatureEntry,
+	CreatureEntryCheck,
+	CreatureEntrySource,
+	CycledBucket,
+	CycledLine,
+	DetectedCreature,
+	DismissedToolName,
 	EquipmentListingInput,
 	EquipmentTradeInput,
 	ExpectedHuntingEconomics,
@@ -40,23 +50,36 @@ export type {
 	InventoryItem,
 	InventorySaleDraft,
 	LifetimeStats,
+	ListingFieldSourceInput,
+	LiveExpectedCycle,
+	LootEntry,
 	ManualMobSuggestion,
-	MarketBreakEven,
 	MarketCommitResult,
 	MarketHarvestData,
 	MarketHarvestHorizon,
 	MarketHarvestItem,
 	MarketHistoryPoint,
 	MarketHorizon,
-	MarketLooterLevel,
-	MarketMobRankingRow,
+	MarketManualMarkup,
+	MarketManualMarkupInput,
+	MarketManualMarkupKind,
+	MarketMarkupSource,
 	MarketOverviewRow,
 	MarketPastePreview,
 	MarketPastePreviewRow,
 	MarketReading,
 	MarketSkippedLine,
 	MarketUnitPriceResult,
-	MarketWeaponBreakEven,
+	MobCertainty,
+	MobDetectionReview,
+	MobDetectionSettled,
+	MobDetectionTarget,
+	MobLabel,
+	MobPin,
+	MobPinnedBy,
+	MobPinTarget,
+	MobReviewRef,
+	MobSourceView,
 	PrivateSaleInput,
 	Profession,
 	QuestHandInCandidate,
@@ -64,16 +87,52 @@ export type {
 	QuestHandInState,
 	QuestRewardCandidate,
 	QuestRewardReviewInput,
+	QueuedListingDraft,
 	RealisedSpeciesMarkup,
 	RealisedTierMarkup,
+	ReviewedMob,
+	SaleQueueCapture,
+	SaleQueueRefusal,
+	ScreenCapture,
+	SessionQuestReward,
+	SessionQuestRewardItem,
+	SettingsPatch,
 	ShrapnelConversionInput,
+	SightedToolKind,
 	StockConversionInput,
 	StockPosition,
 	StockRemovalInput,
+	ToolCandidate,
+	ToolEnhancers,
+	ToolEntry,
+	ToolEntryKeptBecause,
+	ToolHeld,
+	ToolPart,
+	ToolPartRole,
+	ToolScreenUnread,
+	ToolSetupView,
+	ToolSighted,
+	ToolSighting,
+	ToolSightingAction,
+	ToolSightingChange,
+	ToolSightingEntry,
+	ToolSightingEntryOnUndo,
+	ToolSightingRefusal,
+	ToolSightingReview,
+	ToolSightingSettled,
+	ToolSightingSettledKind,
+	ToolSightingSettleResult,
+	ToolSourceView,
+	ToolUncertainty,
+	ToolUse,
+	ToolUsesCosting,
 	UnresolvedQuestReward,
 } from './commands.gen';
+export * from './comparison';
+export * from './consumables';
 export * from './dev';
 export * from './equipment';
+export * from './healing';
 export * from './inventory';
 export * from './maps';
 export * from './market';
@@ -90,12 +149,14 @@ export {
 	hideNavigationOverlays,
 	hideSaleCaptureOverlay,
 	hideScanOverlay,
-	manualSkillScanCapturePng,
+	type OverlayCaptureReply,
 	planetMapImage,
 	showNavigationOverlays,
 	showSaleCaptureOverlay,
 	showScanOverlay,
+	signInToAccount,
 	toggleCartographyOverlay,
 	toggleOverlay,
 } from './shell';
 export * from './tracking';
+export * from './weapons';

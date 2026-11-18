@@ -59,15 +59,15 @@ describe('realtime store->render path', () => {
 		});
 	});
 
-	it('treats a payload-less reconnect nudge as re-hydrate, never as idle', async () => {
+	it('treats a payload-less frame as re-hydrate, never as idle', async () => {
 		getTrackingSnapshot.mockResolvedValue({ status: 'active', kill_count: 4 });
 		render(TrackingConsumer);
 		await waitFor(() => {
 			expect(screen.getByTestId('status').textContent?.trim()).toBe('active:4');
 		});
 
-		// The relay's reconnect nudge carries no payload; the consumer must
-		// re-read rather than blank into an idle render.
+		// A payload-less frame carries no state; the consumer must re-read
+		// rather than blank into an idle render.
 		const onFrame = listen.mock.calls[0][1] as (event: unknown) => void;
 		onFrame({});
 

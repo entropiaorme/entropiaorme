@@ -15,7 +15,6 @@
 //! silently wrong here (the two clocks are an hour apart).
 
 use crate::db::{Db, DbError};
-use crate::protection::ProtectionSelection;
 
 /// What an interval records. An open vocabulary rather than a closed
 /// enum at the schema boundary: adding a kind is a product decision, and
@@ -31,12 +30,14 @@ pub enum IntervalKind {
     Segment,
     /// The stretch a declared quest spans.
     Quest,
-    /// Reserved for a later consumable-timer kind; nothing writes it
-    /// yet, and the engine needs no change when something does.
+    /// A consumable dose in force: one per running dose (stacking), from
+    /// its start until its expiry, removal, or a re-dose of its item. Its
+    /// reference is the item's library id and its magnitude the reload
+    /// speed the dose adds, when it adds any.
     Consumable,
-    /// The protection loadout believed active from this point onward.
-    /// Its resolved armour and plate identities are snapshotted beside
-    /// the interval so later catalogue edits cannot rewrite play.
+    /// A protection loadout declared during play. Retired: protection
+    /// costs are now spread by hits when recorded, so nothing opens one;
+    /// the kind is still read so older sessions stay interpretable.
     Protection,
 }
 
@@ -137,21 +138,6 @@ pub struct IntervalSpec {
     pub label: Option<String>,
     pub ref_id: Option<i64>,
     pub magnitude: Option<f64>,
-    /// A resolved protection snapshot written atomically with this
-    /// interval. None for every other interval kind.
-    pub protection: Option<ProtectionSelection>,
-    /// Whether the same transaction also adopts this loadout as the
-    /// persisted default. Session-start replay uses false; a live user
-    /// selection uses true.
-    pub persist_protection_default: bool,
-    /// Whether the same transaction back-stamps the session's defence
-    /// evidence that no settled cost has claimed yet onto this
-    /// interval. A whole-session declaration made part-way through a
-    /// session sets this: the user is naming what they have been
-    /// wearing all along, so the hits already recorded belong to it.
-    /// Never set once a cost has settled, because the events a
-    /// superseded declaration paid for are not the new one's to take.
-    pub adopts_unsettled_defence: bool,
     /// What this open seals first; same-kind by default, which is the
     /// rule for every kind that admits one at a time.
     pub closes: CloseScope,
@@ -164,9 +150,6 @@ impl IntervalSpec {
             label: None,
             ref_id: None,
             magnitude: None,
-            protection: None,
-            persist_protection_default: false,
-            adopts_unsettled_defence: false,
             closes: CloseScope::SameKind,
         }
     }
@@ -183,19 +166,6 @@ impl IntervalSpec {
 
     pub fn magnitude(mut self, magnitude: Option<f64>) -> Self {
         self.magnitude = magnitude;
-        self
-    }
-
-    pub fn protection(mut self, selection: ProtectionSelection, persist_default: bool) -> Self {
-        self.protection = Some(selection);
-        self.persist_protection_default = persist_default;
-        self
-    }
-
-    /// Back-stamp the session's unsettled defence evidence onto this
-    /// interval; see [`IntervalSpec::adopts_unsettled_defence`].
-    pub fn adopting_unsettled_defence(mut self) -> Self {
-        self.adopts_unsettled_defence = true;
         self
     }
 
@@ -382,9 +352,6 @@ impl IntervalState {
             label,
             ref_id,
             magnitude,
-            protection,
-            persist_protection_default,
-            adopts_unsettled_defence,
             closes,
         } = spec;
         let closing: Vec<i64> = self
@@ -420,54 +387,6 @@ impl IntervalState {
                     rusqlite::params![session, kind_str, insert_label, ref_id, magnitude, now],
                 )?;
                 let interval_id = tx.last_insert_rowid();
-                if let Some(protection) = &protection {
-                    tx.execute(
-                        "INSERT INTO session_protection_intervals \
-                         (interval_id, loadout_id, loadout_name, \
-                          armour_set_id, armour_set_name, armour_economy_kind, armour_markup_percent, \
-                          plate_set_id, plate_set_name, plate_economy_kind, plate_markup_percent) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                        rusqlite::params![
-                            interval_id,
-                            protection.loadout_id,
-                            protection.loadout_name,
-                            protection.armour.as_ref().map(|set| set.id),
-                            protection.armour.as_ref().map(|set| set.name.as_str()),
-                            protection
-                                .armour
-                                .as_ref()
-                                .map(|set| set.economy_kind.as_str()),
-                            protection.armour.as_ref().and_then(|set| set.markup_percent),
-                            protection.plates.as_ref().map(|set| set.id),
-                            protection.plates.as_ref().map(|set| set.name.as_str()),
-                            protection
-                                .plates
-                                .as_ref()
-                                .map(|set| set.economy_kind.as_str()),
-                            protection.plates.as_ref().and_then(|set| set.markup_percent),
-                        ],
-                    )?;
-                    if persist_protection_default {
-                        tx.execute(
-                            "INSERT INTO protection_state(singleton, active_loadout_id, updated_at) \
-                             VALUES (1, ?1, ?2) \
-                             ON CONFLICT(singleton) DO UPDATE SET \
-                             active_loadout_id = excluded.active_loadout_id, \
-                             updated_at = excluded.updated_at",
-                            rusqlite::params![protection.loadout_id, now],
-                        )?;
-                    }
-                }
-                if adopts_unsettled_defence {
-                    tx.execute(
-                        "UPDATE protection_defence_events \
-                         SET protection_interval_id = ?1 \
-                         WHERE session_id = ?2 \
-                           AND NOT EXISTS (SELECT 1 FROM protection_cost_evidence ce \
-                                           WHERE ce.defence_event_id = protection_defence_events.id)",
-                        rusqlite::params![interval_id, session],
-                    )?;
-                }
                 tx.execute(
                     "INSERT INTO session_contexts (session_id, created_at) VALUES (?, ?)",
                     rusqlite::params![session, now],
@@ -625,6 +544,110 @@ impl IntervalState {
         self.open = keeping;
         self.context_id = Some(context_id);
         Ok(closed)
+    }
+
+    /// One transition that also carries the caller's own writes: close the
+    /// named open intervals, open `open` when given (with whatever its
+    /// scope seals), mint the context for the resulting set, and run `also`
+    /// with the new interval's id and the new context's id, all in one
+    /// transaction. Memory adopts the new set only after it commits, so a
+    /// failure anywhere leaves both the rows and the live set as they were.
+    /// How a record whose existence is itself an interval (a dose) keeps
+    /// the two from ever disagreeing.
+    pub async fn transition_with<R: Send + 'static>(
+        &mut self,
+        db: &Db,
+        session_id: &str,
+        now: f64,
+        close_ids: &[i64],
+        open: Option<IntervalSpec>,
+        also: impl FnOnce(&rusqlite::Transaction<'_>, Option<i64>, i64) -> Result<R, DbError>
+            + Send
+            + 'static,
+    ) -> Result<(Option<i64>, R), DbError> {
+        let closing: Vec<i64> = self
+            .open
+            .iter()
+            .filter(|interval| {
+                close_ids.contains(&interval.id)
+                    || open
+                        .as_ref()
+                        .is_some_and(|spec| spec.closes.seals(spec.kind, interval.kind))
+            })
+            .map(|interval| interval.id)
+            .collect();
+        let survivors: Vec<i64> = self
+            .open
+            .iter()
+            .filter(|interval| !closing.contains(&interval.id))
+            .map(|interval| interval.id)
+            .collect();
+        let session = session_id.to_string();
+        let closing_tx = closing.clone();
+        let insert = open.clone();
+        let (interval_id, context_id, result) = db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                for id in &closing_tx {
+                    tx.execute(
+                        "UPDATE session_intervals SET ended_at = ? \
+                         WHERE id = ? AND ended_at IS NULL",
+                        rusqlite::params![now, id],
+                    )?;
+                }
+                let interval_id = match &insert {
+                    Some(spec) => {
+                        tx.execute(
+                            "INSERT INTO session_intervals \
+                             (session_id, kind, label, ref_id, magnitude, started_at) \
+                             VALUES (?, ?, ?, ?, ?, ?)",
+                            rusqlite::params![
+                                session,
+                                spec.kind.as_str(),
+                                spec.label,
+                                spec.ref_id,
+                                spec.magnitude,
+                                now
+                            ],
+                        )?;
+                        Some(tx.last_insert_rowid())
+                    }
+                    None => None,
+                };
+                tx.execute(
+                    "INSERT INTO session_contexts (session_id, created_at) VALUES (?, ?)",
+                    rusqlite::params![session, now],
+                )?;
+                let context_id = tx.last_insert_rowid();
+                for member in survivors.iter().chain(interval_id.iter()) {
+                    tx.execute(
+                        "INSERT INTO session_context_intervals (context_id, interval_id) \
+                         VALUES (?, ?)",
+                        rusqlite::params![context_id, member],
+                    )?;
+                }
+                let result = also(&tx, interval_id, context_id)?;
+                tx.commit()?;
+                Ok((interval_id, context_id, result))
+            })
+            .await?;
+        self.open.retain(|interval| !closing.contains(&interval.id));
+        if let (Some(spec), Some(id)) = (open, interval_id) {
+            self.open.push(OpenInterval {
+                id,
+                kind: spec.kind,
+                label: spec.label,
+                ref_id: spec.ref_id,
+                magnitude: spec.magnitude,
+            });
+        }
+        self.context_id = Some(context_id);
+        Ok((interval_id, result))
+    }
+
+    /// Whether an interval is still open.
+    pub fn is_open(&self, interval_id: i64) -> bool {
+        self.open.iter().any(|interval| interval.id == interval_id)
     }
 
     /// Close everything still open at the session's end, so no interval

@@ -13,14 +13,17 @@
 		STATS_SCOPE_CHANGED_EVENT,
 		type StatsScope
 	} from '$lib/statsScope.svelte';
+	import { followLiveMarkupSettings, initLiveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 
 	let { children } = $props();
 
 	onMount(() => {
 		void initStatsCustomisation();
 		void initStatsScope();
+		void initLiveMarkupSettings();
 		let unlisten: (() => void) | undefined;
 		let unlistenScope: (() => void) | undefined;
+		let unlistenLive: (() => void) | undefined;
 		// Guards the unmount-before-resolve race on both registrations: if
 		// teardown already ran, detach immediately rather than leaking.
 		let unmounted = false;
@@ -42,10 +45,16 @@
 			if (unmounted) detach();
 			else unlistenScope = detach;
 		})();
+		// The live markup settings are chosen on the dashboard.
+		void followLiveMarkupSettings().then((detach) => {
+			if (unmounted) detach();
+			else unlistenLive = detach;
+		});
 		return () => {
 			unmounted = true;
 			unlisten?.();
 			unlistenScope?.();
+			unlistenLive?.();
 		};
 	});
 </script>

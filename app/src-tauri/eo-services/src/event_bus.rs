@@ -43,6 +43,12 @@ pub enum Topic {
     ScanStatusChanged,
     HarvestRecorded,
     NavigationUpdated,
+    ProtectionUpdated,
+    HealingUpdated,
+    WeaponsUpdated,
+    ConsumablesUpdated,
+    MarketUpdated,
+    AccountUpdated,
 }
 
 impl Topic {
@@ -67,6 +73,12 @@ impl Topic {
             Topic::ScanStatusChanged => eo_wire::domain_events::TOPIC_SCAN_STATUS_CHANGED,
             Topic::HarvestRecorded => eo_wire::domain_events::TOPIC_HARVEST_RECORDED,
             Topic::NavigationUpdated => eo_wire::domain_events::TOPIC_NAVIGATION_UPDATED,
+            Topic::ProtectionUpdated => eo_wire::domain_events::TOPIC_PROTECTION_UPDATED,
+            Topic::HealingUpdated => eo_wire::domain_events::TOPIC_HEALING_UPDATED,
+            Topic::WeaponsUpdated => eo_wire::domain_events::TOPIC_WEAPONS_UPDATED,
+            Topic::ConsumablesUpdated => eo_wire::domain_events::TOPIC_CONSUMABLES_UPDATED,
+            Topic::MarketUpdated => eo_wire::domain_events::TOPIC_MARKET_UPDATED,
+            Topic::AccountUpdated => eo_wire::domain_events::TOPIC_ACCOUNT_UPDATED,
         }
     }
 }
@@ -296,6 +308,8 @@ mod tests {
             (Topic::TickFlushed, "tick_flushed"),
             (Topic::TrackingSessionUpdated, "tracking.session.updated"),
             (Topic::ScanStatusChanged, "scan.status.changed"),
+            (Topic::MarketUpdated, "market.updated"),
+            (Topic::AccountUpdated, "account.updated"),
         ];
         for (topic, wire) in expected {
             assert_eq!(topic.as_str(), wire);

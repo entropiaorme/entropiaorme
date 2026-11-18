@@ -1,4 +1,5 @@
 import type { SessionDefinition } from '$lib/api';
+import { filterByQuery } from '$lib/view/search';
 
 /** One catalogue order everywhere definitions are offered: readable,
  * case-insensitive, numeric-aware, and deterministic for equal names. */
@@ -17,7 +18,5 @@ export function filterDefinitions(
 	definitions: SessionDefinition[],
 	query: string,
 ): SessionDefinition[] {
-	const needle = query.trim().toLocaleLowerCase();
-	if (!needle) return definitions;
-	return definitions.filter((definition) => definition.name.toLocaleLowerCase().includes(needle));
+	return filterByQuery(definitions, query, (definition) => definition.name);
 }

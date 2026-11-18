@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { fade, scale } from 'svelte/transition';
 	import { quintOut } from 'svelte/easing';
+	import { portal } from '$lib/utils/portal';
 
 	let {
 		open = $bindable(false),
@@ -82,7 +83,11 @@
 {#if open}
 	<!-- Kept: backdrop click-to-dismiss is a pointer convenience; Escape (window keydown above) and the Close button are the keyboard paths. -->
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<!-- Portalled: a dialog covers the window, not its owner. An owner inside
+		 a dashboard panel (whose backdrop-filter re-anchors `fixed`) would
+		 otherwise trap the dialog within the panel's box. -->
 	<div
+		use:portal
 		class="fixed inset-0 z-50 flex items-center justify-center p-6"
 		onclick={handleBackdropClick}
 		onkeydown={handleKeydown}
@@ -94,7 +99,7 @@
 
 		<div
 			bind:this={panelEl}
-			class="relative z-10 w-full {sizeClass} rounded-lg border border-border-bright/60
+			class="relative z-10 flex max-h-full w-full flex-col {sizeClass} rounded-lg border border-border-bright/60
 				bg-surface-raised/95 shadow-lg backdrop-blur-md
 				focus:outline-hidden
 				before:pointer-events-none before:absolute before:inset-0 before:rounded-[inherit]
@@ -107,7 +112,7 @@
 			transition:scale={{ duration: 220, start: 0.96, easing: quintOut }}
 		>
 			{#if title}
-				<div class="relative flex items-center justify-between mb-5 pb-4 border-b border-border/50">
+				<div class="relative flex shrink-0 items-center justify-between mb-5 pb-4 border-b border-border/50">
 					<h2 class="text-base font-semibold text-text tracking-tight">{title}</h2>
 					<button
 						class="h-7 w-7 flex items-center justify-center rounded-md
@@ -131,7 +136,9 @@
 				</div>
 			{/if}
 
-			<div class="relative">
+			<!-- The content scrolls inside the panel whatever its length, so no
+				dialog ever runs off the window. -->
+			<div class="relative -mx-1 min-h-0 overflow-y-auto px-1">
 				{@render children()}
 			</div>
 		</div>

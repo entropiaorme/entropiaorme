@@ -1,0 +1,11 @@
+{
+  "bundled": [
+    {
+      "endpoint": "weapons",
+      "item_id": "900",
+      "name": "Rusty Rifle",
+      "damage": 200.0,
+      "decay": 100.0
+    }
+  ]
+}

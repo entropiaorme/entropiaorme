@@ -35,6 +35,8 @@ impl TrackerActor {
                 let latest = self
                     .db
                     .with_reader(move |conn| {
+                        // every-kill: write (the session's last recorded row
+                        // dates the recovered end, whatever the row is).
                         Ok(conn.query_row(
                             "SELECT MAX(timestamp) FROM (\
                                  SELECT timestamp FROM kills WHERE session_id = ? \
@@ -57,6 +59,7 @@ impl TrackerActor {
                 // grouping the stop path uses, so a failure mid-recovery
                 // leaves that session untouched and still recoverable.
                 let sid = session_id.clone();
+                let enhancer_tt = self.providers.enhancer_tt.clone();
                 self.db
                     .with_writer(move |conn| {
                         let tx = conn.transaction()?;
@@ -66,6 +69,12 @@ impl TrackerActor {
                         )?;
 
                         let end_dt = epoch_to_instant(ended_at);
+                        // Its kept breaks are priced from their inputs, as
+                        // a stop prices them, before the rebate.
+                        let markups = crate::enhancer_breaks::TierMarkups::read(&tx)?;
+                        let tt =
+                            |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
+                        crate::enhancer_breaks::reprice_session(&tx, &sid, &tt, &markups)?;
                         Self::create_enhancer_rebate_ledger_entry(&tx, &sid, end_dt)?;
                         write_session_summary(&tx, &sid)?;
                         crate::daily_rollup::refresh_session_days(&tx, &sid)?;
@@ -78,12 +87,35 @@ impl TrackerActor {
             Ok(())
         }
     }
-    /// Write a finalised kill to the database: the kill row, the
-    /// per-tool stats (`INSERT OR REPLACE` keyed on the tool name, so
-    /// among same-name phases the last written wins, as the
-    /// original's insertion-ordered iteration does), and the loot
-    /// items, under one commit.
-    pub(super) async fn persist_kill(&self, kill: &Kill) {
+    /// Price again every ended session's kept enhancer breaks whose TT or
+    /// weapon markup has moved since they were priced. A failure is logged:
+    /// the breaks keep their prices until the next start.
+    pub(super) async fn heal_break_prices(&self) {
+        let enhancer_tt = self.providers.enhancer_tt.clone();
+        let healed = self
+            .db
+            .with_writer(move |conn| {
+                let tt = |name: &str| enhancer_tt.as_ref().and_then(|resolve| resolve(name));
+                crate::enhancer_breaks::heal_prices(conn, &tt)
+            })
+            .await;
+        if let Err(error) = healed {
+            tracing::warn!(target: "eo::tracker", %error, "enhancer break prices could not be healed");
+        }
+    }
+
+    /// Write a finalised kill to the database: the kill row, its weapon
+    /// phases, its loot items, the stored weapon evidence of its shots, the
+    /// enhancer breaks whose cost it carries, and (for a kill pinned to a
+    /// creature on no list) the answer kept for the review, under one
+    /// commit.
+    pub(super) async fn persist_kill(
+        &self,
+        kill: &Kill,
+        evidence: Vec<super::weapon_evidence::ShotEvidence>,
+        breaks: Vec<crate::enhancer_breaks::EnhancerBreak>,
+        carried: Option<Box<super::detection::KillDetection>>,
+    ) {
         let kill = kill.clone();
         let result = self
             .db
@@ -92,10 +124,10 @@ impl TrackerActor {
                 tx.execute(
                     "INSERT OR REPLACE INTO kills \
                      (id, loot_source_id, session_id, mob_name, mob_species, mob_maturity, \
-                      mob_stamp_source, timestamp, shots_fired, damage_dealt, damage_taken, \
-                      critical_hits, cost_ped, enhancer_cost, \
+                      mob_stamp_source, mob_route, timestamp, shots_fired, damage_dealt, \
+                      damage_taken, critical_hits, cost_ped, enhancer_cost, \
                       loot_total_ped, is_global, is_hof, context_id) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     rusqlite::params![
                         kill.id,
                         kill.loot_source_id,
@@ -104,6 +136,7 @@ impl TrackerActor {
                         kill.mob_species,
                         kill.mob_maturity,
                         kill.mob_stamp_source.map(|source| source.as_str()),
+                        kill.mob_route.map(|route| route.as_str()),
                         kill.timestamp,
                         kill.shots_fired,
                         kill.damage_dealt,
@@ -118,34 +151,7 @@ impl TrackerActor {
                     ],
                 )?;
 
-                for (_, stats) in &kill.tool_stats {
-                    let expected_economics_json = stats
-                        .expected_economics
-                        .as_ref()
-                        .map(serde_json::to_string)
-                        .transpose()
-                        .map_err(|source| DbError::Decode {
-                            context: "kill tool expected economics encode",
-                            source,
-                        })?;
-                    tx.execute(
-                        "INSERT OR REPLACE INTO kill_tool_stats \
-                         (kill_id, tool_name, shots_fired, damage_dealt, \
-                          critical_hits, cost_per_shot, expected_economics_json, \
-                          evidence_fingerprint) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![
-                            kill.id,
-                            stats.tool_name,
-                            stats.shots_fired,
-                            stats.damage_dealt,
-                            stats.critical_hits,
-                            stats.cost_per_shot.value(),
-                            expected_economics_json,
-                            expected_economics_json.as_deref().unwrap_or(""),
-                        ],
-                    )?;
-                }
+                super::weapon_evidence::write_kill_phases(&tx, &kill)?;
 
                 for item in &kill.loot_items {
                     tx.execute(
@@ -160,6 +166,15 @@ impl TrackerActor {
                             i64::from(item.is_enhancer_shrapnel),
                         ],
                     )?;
+                }
+                for row in &evidence {
+                    row.insert(&tx, Some(&kill.id))?;
+                }
+                for enhancer_break in &breaks {
+                    enhancer_break.insert(&tx, Some(&kill.id))?;
+                }
+                if let Some(answer) = &carried {
+                    super::detection::write_detection(&tx, answer)?;
                 }
                 tx.commit()?;
                 Ok(())
@@ -288,36 +303,50 @@ impl TrackerActor {
         let _ = result;
     }
 
-    /// Session-end rebate on enhancer-break Shrapnel (full TT value
-    /// returned by breaks), recorded as a markup ledger gain.
+    /// Session-end rebate on the enhancer-break Shrapnel that no kept break
+    /// claimed, recorded as a markup ledger gain derived from the session.
+    /// A kept break claims its return from the tagged Shrapnel when it is
+    /// priced (`crate::enhancer_breaks::reprice_session`, run first), so that
+    /// Shrapnel is never rebated as well, whether the break was priced or
+    /// not; the Shrapnel of a break it does not keep (on a weapon not in
+    /// use, or of an enhancer it does not track) is rebated as it always
+    /// was. The two are set against each other over the session, never
+    /// matched break by break.
     pub(super) fn create_enhancer_rebate_ledger_entry(
         conn: &rusqlite::Connection,
         session_id: &str,
         end_time: DateTime<Utc>,
     ) -> Result<(), DbError> {
         let rebate: f64 = conn.query_row(
-            "SELECT COALESCE(SUM(kli.value_ped), 0) \
-             FROM kill_loot_items kli \
-             JOIN kills k ON kli.kill_id = k.id \
-             WHERE k.session_id = ? AND COALESCE(kli.is_enhancer_shrapnel, 0) = 1 \
-             AND kli.deactivated_at IS NULL",
+            // every-kill: spend (active loot lines of every row).
+            "SELECT (SELECT COALESCE(SUM(kli.value_ped), 0) \
+                     FROM kill_loot_items kli \
+                     JOIN kills k ON kli.kill_id = k.id \
+                     WHERE k.session_id = ?1 AND COALESCE(kli.is_enhancer_shrapnel, 0) = 1 \
+                       AND kli.deactivated_at IS NULL) \
+                  - (SELECT COALESCE(SUM(deducted_ped), 0) FROM enhancer_breaks \
+                     WHERE session_id = ?1)",
             rusqlite::params![session_id],
             |row| row.get::<_, f64>(0),
         )?;
+        let rebate = round_half_even(rebate, 4);
         if rebate <= 0.0 {
             return Ok(());
         }
         let date = local_isoformat(end_time);
+        // Linked to its session, so the entry follows that session's
+        // economy scope (`crate::session_scope`) and leaves with it on delete.
         conn.execute(
-            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag, \
+             source_session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
             rusqlite::params![
                 uuid::Uuid::new_v4().to_string(),
                 date,
                 "markup",
                 "Enhancer Shrapnel Rebate",
-                round_half_even(rebate, 4),
+                rebate,
                 "enhancer",
+                session_id,
             ],
         )?;
         // Same watermark reasoning as the shrapnel-conversion entry:

@@ -3,17 +3,28 @@
 	import Modal from '$lib/components/Modal.svelte';
 	import {
 		cancelRadarCalibration,
+		confirmRadarCalibration,
 		getRadarCalibrationStatus,
 		getRadarGeometry,
 		startRadarCalibration,
 		type RadarCalibrationStatus,
 	} from '$lib/api';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
+	import CountdownCapture from './CountdownCapture.svelte';
 
 	let { open = $bindable(false), oncomplete }: { open?: boolean; oncomplete: () => void } = $props();
 	let phase = $state<RadarCalibrationStatus>('idle');
 	let completed = $state(false);
 	let error = $state<string | null>(null);
+
+	// Without Enter: the countdown takes the point at the cursor at zero.
+	async function confirmAtCursor() {
+		try {
+			phase = await confirmRadarCalibration();
+		} catch {
+			// The poll re-reads the flow on its next tick.
+		}
+	}
 
 	async function begin() {
 		completed = false;
@@ -21,7 +32,7 @@
 		try {
 			phase = await startRadarCalibration();
 		} catch {
-			error = 'Radar calibration is unavailable on this installation.';
+			error = 'Setting the radar is unavailable on this installation.';
 		}
 	}
 
@@ -46,7 +57,7 @@
 	});
 </script>
 
-<Modal bind:open title="Calibrate radar guidance">
+<Modal bind:open title="Set the radar by hand">
 	<div class="space-y-4 text-sm text-text-secondary">
 		{#if error}
 			<p>{error}</p>
@@ -55,11 +66,17 @@
 		{:else if phase === 'awaitNorthEdge'}
 			<p class="text-text">Step 2 of 2: hover the top edge of the radar circle at north, then press <kbd class="rounded border border-border bg-surface px-1">Enter</kbd>.</p>
 		{:else if completed}
-			<p class="text-text">Radar guidance is calibrated.</p>
+			<p class="text-text">The radar is set. It is used whenever the radar is not found on the screen.</p>
 		{:else}
-			<p>Preparing calibration…</p>
+			<p>Preparing…</p>
+		{/if}
+		{#if !completed && (phase === 'awaitCentre' || phase === 'awaitNorthEdge')}
+			<p>Or start the capture and hover there before it ends.</p>
 		{/if}
 		<div class="flex justify-end gap-2">
+			{#if !completed && (phase === 'awaitCentre' || phase === 'awaitNorthEdge')}
+				<CountdownCapture oncapture={confirmAtCursor} />
+			{/if}
 			{#if completed}<Button onclick={() => (open = false)}>Done</Button>{:else}<Button variant="ghost" onclick={() => (open = false)}>Cancel</Button>{/if}
 		</div>
 	</div>

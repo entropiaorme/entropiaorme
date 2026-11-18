@@ -6,7 +6,7 @@ use serde_json::{json, Map, Value};
 use crate::db::DbError;
 use crate::time::to_iso_utc;
 
-use super::families::cooldown_lift;
+use super::families::{completion_anchor_instant, cooldown_lift, curated_refusal};
 use super::payload::{json_truthy, value_to_sql};
 use super::{QuestError, QuestService};
 
@@ -25,7 +25,7 @@ const QUEST_SELECT: &str = "\
            q.completion_mode AS completion_trigger, \
            CASE q.reward_policy WHEN 'fixed_ped' THEN 'none' ELSE q.reward_policy END \
              AS reward_policy, \
-           q.family_id, q.cooldown_anchor, q.last_started_at, \
+           q.family_id, q.cooldown_anchor, q.last_started_at, q.catalogue_key, \
            f.name AS family_name, \
            f.cooldown_hours AS family_cooldown_hours, \
            f.cooldown_anchor AS family_cooldown_anchor, \
@@ -42,6 +42,11 @@ const QUEST_SELECT: &str = "\
             WHERE c.quest_id = q.id \
               AND NOT EXISTS (SELECT 1 FROM quest_cooldown_resets r \
                               WHERE r.completion_id = c.id)) AS last_completed_at, \
+           (SELECT MAX(r.abandoned_at) FROM quest_runs r \
+            WHERE r.quest_id = q.id) AS last_abandoned_at, \
+           (SELECT MAX(r.abandoned_at) FROM quest_runs r \
+            JOIN quests m ON m.id = r.quest_id \
+            WHERE m.family_id = q.family_id) AS family_last_abandoned_at, \
            EXISTS(SELECT 1 FROM session_quest_completions c \
                   WHERE c.id = (SELECT latest.id FROM session_quest_completions latest \
                                 WHERE latest.quest_id = q.id \
@@ -253,6 +258,9 @@ impl QuestService {
         let Some(existing) = self.get_quest(quest_id).await? else {
             return Ok(None);
         };
+        if existing.get("curated").and_then(Value::as_bool) == Some(true) {
+            return Err(curated_refusal("quest"));
+        }
 
         const ALLOWED: [&str; 14] = [
             "name",
@@ -433,6 +441,11 @@ impl QuestService {
 
     /// Soft-delete a quest.
     pub async fn delete_quest(&self, quest_id: i64) -> Result<bool, QuestError> {
+        if let Some(quest) = self.get_quest(quest_id).await? {
+            if quest.get("curated").and_then(Value::as_bool) == Some(true) {
+                return Err(curated_refusal("quest"));
+            }
+        }
         let affected = self
             .db
             .with_writer(move |conn| {
@@ -593,6 +606,9 @@ fn row_to_quest(row: &rusqlite::Row) -> Map<String, Value> {
         "family_id".into(),
         json!(row.get_unwrap::<_, Option<i64>>("family_id")),
     );
+    let catalogue_key = row.get_unwrap::<_, Option<String>>("catalogue_key");
+    quest.insert("curated".into(), json!(catalogue_key.is_some()));
+    quest.insert("catalogue_key".into(), json!(catalogue_key));
     let anchor = row.get_unwrap::<_, String>("cooldown_anchor");
     quest.insert("cooldown_anchor".into(), json!(anchor));
     let last_started = row.get_unwrap::<_, Option<f64>>("last_started_at");
@@ -607,6 +623,8 @@ fn row_to_quest(row: &rusqlite::Row) -> Map<String, Value> {
     quest.insert("family_cooldown_anchor".into(), json!(family_anchor));
     let last_completed = row.get_unwrap::<_, Option<f64>>("last_completed_at");
     quest.insert("last_completed_at".into(), json!(last_completed));
+    let last_abandoned = row.get_unwrap::<_, Option<f64>>("last_abandoned_at");
+    quest.insert("last_abandoned_at".into(), json!(last_abandoned));
     quest.insert(
         "reward_undo_available".into(),
         json!(row.get_unwrap::<_, i64>("reward_undo_available") != 0),
@@ -618,7 +636,7 @@ fn row_to_quest(row: &rusqlite::Row) -> Map<String, Value> {
     let cooldown_hours = row.get_unwrap::<_, Option<f64>>("cooldown_hours");
     let own_anchor_instant = match anchor.as_str() {
         "pickup" => last_started,
-        _ => last_completed,
+        _ => completion_anchor_instant(last_completed, last_abandoned),
     };
     let expires = cooldown_lift(own_anchor_instant, cooldown_hours).map(to_iso_utc);
     quest.insert("cooldown_expires_at".into(), json!(expires));
@@ -628,7 +646,10 @@ fn row_to_quest(row: &rusqlite::Row) -> Map<String, Value> {
     // expiries; the frontend derives that, keeping both visible.
     let family_anchor_instant = match family_anchor.as_deref() {
         Some("pickup") => row.get_unwrap::<_, Option<f64>>("family_last_started_at"),
-        Some(_) => row.get_unwrap::<_, Option<f64>>("family_last_completed_at"),
+        Some(_) => completion_anchor_instant(
+            row.get_unwrap::<_, Option<f64>>("family_last_completed_at"),
+            row.get_unwrap::<_, Option<f64>>("family_last_abandoned_at"),
+        ),
         None => None,
     };
     let family_expires =

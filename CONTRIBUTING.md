@@ -1,6 +1,6 @@
 # Contributing
 
-EntropiaOrme is a personal-use-first open-core project: built primarily for my own use, with public source under MIT. It's released openly so anyone who finds it useful is free to use, fork, or adapt it. Right now I'm not accepting external contributions.
+EntropiaOrme's source is public under MIT: anyone who finds it useful is free to use, fork, or adapt it. Right now I'm not accepting external contributions.
 
 ## Bug reports
 
@@ -14,10 +14,10 @@ For security-related issues see [SECURITY.md](SECURITY.md); please do not file p
 
 ## Contributions
 
-Pull requests for new features, refactors, or non-bug-fix changes are on hold for now. This keeps the maintenance surface small enough that the project stays sustainable as a one-person effort.
+Pull requests for new features, refactors, or non-bug-fix changes are on hold for now.
 
 If you're interested in contributing, please reach out first at MikelWL@protonmail.com with what you have in mind. I'll reconsider the posture if enough interest is expressed.
 
 ## Development setup
 
-If you're working on the code (forking or adapting it), the build-from-source steps are in the [README](README.md#build-from-source-windows). Development happens on the `next` branch and reaches `main`, the stable line releases are cut from, by promotion once the changes have been run for a while; build from `main` for stability and from `next` for the latest. After installing the development dependencies, run `pre-commit install` once so the local hooks run the same lint, type, test, and hygiene checks as continuous integration before each commit. See [TESTING.md](TESTING.md#local-checks-pre-commit) for what the hooks cover and how to run them on demand.
+If you're working on the code (forking or adapting it), the build-from-source steps are in the [README](README.md#build-windows). Development happens on the `next` branch and reaches `main`, the stable line releases are cut from, by promotion once the changes have been run for a while; build from `main` for stability and from `next` for the latest. After installing the development dependencies, run `pre-commit install` once so the local hooks run the same lint, type, test, and hygiene checks as continuous integration before each commit. See [TESTING.md](TESTING.md#local-checks-pre-commit) for what the hooks cover and how to run them on demand.

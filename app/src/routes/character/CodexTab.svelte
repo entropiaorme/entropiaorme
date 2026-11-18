@@ -4,7 +4,6 @@
 		CodexRankBreakdown,
 		CodexRankItem,
 		CodexSkillOption,
-		CodexMetaAttribute,
 		ProfessionLevel,
 	} from '$lib/types/analytics';
 	import {
@@ -18,8 +17,6 @@
 		claimCodexMastery,
 		unclaimCodexMastery,
 		getCharacterProfessions,
-		getCodexMetaAttributes,
-		claimCodexMeta,
 	} from '$lib/api';
 	import { formatPed, formatPedHalfEven } from '$lib/utils/format';
 	import Card from '$lib/components/Card.svelte';
@@ -28,40 +25,25 @@
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import CodexProfessionPicker from '$lib/features/character/CodexProfessionPicker.svelte';
 	import CodexSkillOptionList from '$lib/features/character/CodexSkillOptionList.svelte';
+	import CodexMeta from '$lib/features/character/CodexMeta.svelte';
+	import CodexMetaTargets from '$lib/features/character/CodexMetaTargets.svelte';
 	import {
 		targetProfessions,
 		type CodexRankingTarget,
 	} from '$lib/features/character/codexRankingTarget';
-	import { guideState } from '$lib/guide/state.svelte';
 	import { createTableModel } from '$lib/view/tableModel.svelte';
-	import {
-		characterDemoProfessions,
-		characterDemoCodexSpecies,
-		characterDemoCodexRankBreakdown,
-		characterDemoCodexSkillOptions,
-		characterDemoCodexSelectedSpecies,
-		characterDemoCodexSelectedProfession,
-	} from '$lib/guide/fixtures/character';
-
-	let { seedActive = false } = $props<{ seedActive?: boolean }>();
 
 	const PAGE_SIZE = 20;
 
 	// ── Top-level mode ──────────────────────────────────────────────────────────
 
-	let codexMode = $state<'mobs' | 'meta'>('mobs');
+	let codexMode = $state<'mobs' | 'meta' | 'recommended'>('mobs');
 
 	// ── Data state ──────────────────────────────────────────────────────────────
 
 	let species = $state([] as CodexSpecies[]);
 	let professions = $state([] as ProfessionLevel[]);
 	let loading = $state(true);
-
-	// ── Meta state ──────────────────────────────────────────────────────────────
-
-	let metaAttributes = $state([] as CodexMetaAttribute[]);
-	let metaLoading = $state(false);
-	let metaClaimMessage = $state<string | null>(null);
 
 	// ── Controls ────────────────────────────────────────────────────────────────
 
@@ -113,12 +95,6 @@
 	});
 
 	async function loadData() {
-		if (guideState.isActive) {
-			species = characterDemoCodexSpecies;
-			professions = characterDemoProfessions;
-			loading = false;
-			return;
-		}
 		try {
 			const [sp, pr] = await Promise.all([
 				getCodexSpecies(),
@@ -132,55 +108,6 @@
 			loading = false;
 		}
 	}
-
-	// Seed-active reactive effect: when the parent flips the codex-seed flag on,
-	// pre-select the demo species + profession + rank breakdown so the recommendation
-	// panel is fully populated for the guide card.
-	$effect(() => {
-		if (seedActive) {
-			selectedSpecies = characterDemoCodexSelectedSpecies;
-			rankingTarget = { kind: 'profession', name: characterDemoCodexSelectedProfession };
-			rankBreakdown = characterDemoCodexRankBreakdown;
-			skillOptions = characterDemoCodexSkillOptions;
-			panelLoading = false;
-			loading = false;
-		} else if (selectedSpecies === characterDemoCodexSelectedSpecies) {
-			selectedSpecies = null;
-			rankingTarget = { kind: 'none' };
-			rankBreakdown = null;
-			skillOptions = [];
-		}
-	});
-
-	// ── Meta functions ──────────────────────────────────────────────────────────
-
-	async function loadMeta() {
-		metaLoading = true;
-		metaClaimMessage = null;
-		try {
-			metaAttributes = await getCodexMetaAttributes();
-		} catch {
-			metaAttributes = [];
-		} finally {
-			metaLoading = false;
-		}
-	}
-
-	async function handleMetaClaim(attributeName: string) {
-		try {
-			const result = await claimCodexMeta(attributeName);
-			metaClaimMessage = `Claimed! ${result.attributeName} +${formatPed(result.pedValue)} PES`;
-			metaAttributes = await getCodexMetaAttributes();
-		} catch (err: any) {
-			metaClaimMessage = `Error: ${err.message}`;
-		}
-	}
-
-	$effect(() => {
-		if (codexMode === 'meta' && metaAttributes.length === 0) {
-			loadMeta();
-		}
-	});
 
 	// ── Filtering & pagination ──────────────────────────────────────────────────
 
@@ -218,7 +145,6 @@
 	}
 
 	async function loadRecommendations(speciesName: string, rank: number) {
-		if (guideState.isActive) return;
 		skillOptions = await getCodexRecommendation(
 			speciesName,
 			rank,
@@ -227,7 +153,6 @@
 	}
 
 	async function loadMasteryOptions() {
-		if (guideState.isActive) return;
 		masteryOptions = await getCodexMasteryOptions(getRecommendationRequest());
 	}
 
@@ -249,7 +174,6 @@
 	// ── Select species → load detail + auto-select next rank ────────────────────
 
 	async function selectSpecies(name: string) {
-		if (guideState.isActive) return;
 		if (selectedSpecies === name) {
 			selectedSpecies = null;
 			rankBreakdown = null;
@@ -271,12 +195,17 @@
 		}
 	}
 
+	/** Open a species from the meta-target ranking in the species view. */
+	function openSpecies(name: string) {
+		codexMode = 'mobs';
+		if (selectedSpecies !== name) void selectSpecies(name);
+	}
+
 	// ── Claim / unclaim (ranks and mastery) ─────────────────────────────────────
 
-	/** Shared claim-action shell: guide/selection guard, success message,
+	/** Shared claim-action shell: selection guard, success message,
 	 *  species reload, panel refresh, and error feedback. */
 	async function runClaimAction(action: (speciesName: string) => Promise<string>) {
-		if (guideState.isActive) return;
 		if (!selectedSpecies) return;
 		const speciesName = selectedSpecies;
 		try {
@@ -322,7 +251,6 @@
 	// ── Calibrate ───────────────────────────────────────────────────────────────
 
 	async function handleCalibrate(speciesName: string, delta: number) {
-		if (guideState.isActive) return;
 		const sp = species.find(s => s.name === speciesName);
 		if (!sp) return;
 		const newRank = Math.max(0, Math.min(25, sp.currentRank + delta));
@@ -368,6 +296,11 @@
 					{codexMode === 'meta' ? 'bg-surface-hover text-text' : 'text-text-secondary hover:text-text'}"
 				onclick={() => codexMode = 'meta'}
 			>Meta</button>
+			<button
+				class="px-3 py-1.5 text-xs font-medium rounded transition-colors cursor-pointer
+					{codexMode === 'recommended' ? 'bg-surface-hover text-text' : 'text-text-secondary hover:text-text'}"
+				onclick={() => codexMode = 'recommended'}
+			>Recommended</button>
 		</div>
 
 		{#if codexMode === 'mobs'}
@@ -390,43 +323,10 @@
 		{/if}
 	</div>
 
-	{#if codexMode === 'meta'}
-		<!-- ═══ Meta codex view ═══ -->
-		<Card class="p-4 space-y-4">
-			<div>
-				<h3 class="text-sm font-medium text-text">Meta Codex Reward</h3>
-			</div>
-
-			{#if metaLoading}
-				<p class="text-sm text-text-tertiary py-4 text-center">Loading...</p>
-			{:else}
-				<div class="space-y-1">
-					{#each metaAttributes as attr}
-						<div class="flex items-center justify-between py-2 px-3 rounded hover:bg-surface-hover/50 transition-colors group">
-							<div class="flex items-center gap-3">
-								<span class="text-sm font-medium text-text w-24">{attr.name}</span>
-								{#if attr.currentLevel != null}
-									<span class="text-xs text-text-secondary tabular-nums">Lv {attr.currentLevel.toFixed(1)}</span>
-								{:else}
-									<span class="text-xs text-text-tertiary">Not scanned</span>
-								{/if}
-							</div>
-							<button
-								class="px-3 py-1 text-xs font-medium text-accent bg-accent/10 hover:bg-accent/20 rounded transition-colors cursor-pointer opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-								onclick={() => handleMetaClaim(attr.name)}
-							>Claim 1 PES</button>
-						</div>
-					{/each}
-				</div>
-			{/if}
-
-			{#if metaClaimMessage}
-				<div class="text-sm text-center {metaClaimMessage.startsWith('Error') ? 'text-negative' : 'text-positive'}">
-					{metaClaimMessage}
-				</div>
-			{/if}
-		</Card>
-
+	{#if codexMode === 'recommended'}
+		<CodexMetaTargets onOpenSpecies={openSpecies} />
+	{:else if codexMode === 'meta'}
+		<CodexMeta />
 	{:else}
 		<!-- ═══ Mobs codex view ═══ -->
 
@@ -479,7 +379,7 @@
 					{/each}
 				{/if}
 			</div>
-			<div class="h-0 w-full" data-guide-anchor="character-codex-mobs-list-placement"></div>
+			<div class="h-0 w-full"></div>
 
 			<!-- Pagination -->
 			{#if table.totalPages > 1}
@@ -506,7 +406,7 @@
 		</div>
 
 		<!-- Right: Detail panel -->
-		<div class="flex-1 min-w-0 overflow-y-auto border border-border rounded-md" data-guide-anchor="character-codex-recommendation">
+		<div class="flex-1 min-w-0 overflow-y-auto border border-border rounded-md">
 			{#if !selectedSpecies}
 				<div class="h-full flex items-center justify-center">
 					<p class="text-sm text-text-tertiary">Select a species to view codex details</p>
@@ -545,7 +445,7 @@
 
 							<p class="text-xs text-text-tertiary/70">
 								Mastery choices and values reflect limited in-game observation and may
-								vary by creature; if the game offers different options, please report
+								vary by mob; if the game offers different options, please report
 								it on the project's GitHub issues.
 							</p>
 						</Card>

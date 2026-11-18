@@ -1,0 +1,847 @@
+//! What an enhancer break costs, and how each one is kept and priced.
+//!
+//! A break consumes the enhancer: its TT, and the markup the player paid
+//! over it, which is most of what the break costs. The game returns part of
+//! the TT as Shrapnel and states how much on the break's own chat line, so
+//! the break costs its TT plus its markup less that return. The fraction
+//! returned is read per break, never assumed.
+//!
+//! The TT is the game data's, found by the enhancer's name (the game's own
+//! spelling, or the catalogue's for the same item: [`catalogue_name`]); the
+//! markup is the one the player set for enhancers of its kind and tier
+//! ([`TierMarkups`]), as it stood when the enhancer broke: enhancers are
+//! bought on their own and fitted to any weapon, so what was paid is a fact
+//! of the kind and tier, and a later value never moves a break already
+//! kept. Neither is ever guessed: a break whose markup is not set costs its TT
+//! less the return and says the markup is absent, and a break whose TT is
+//! not known, or whose stated return exceeds the TT known, has no cost and
+//! says why.
+//!
+//! A return is either loot or a deduction, never both. The chat log watcher
+//! tags a return on its loot row when it arrives with its break, and every
+//! loot reader leaves tagged rows out. The session's kept breaks deduct
+//! their stated returns, in the order they broke, only as far as the
+//! Shrapnel tagged in the session reaches; a return that stayed untagged is
+//! loot and deducts nothing. Tagged Shrapnel no kept break claims (the
+//! return of a break the tracker did not apply) is rebated at the session's
+//! end. An unpriced break has no cost, yet it still claims its return: that
+//! Shrapnel stays out of loot and is not rebated, so the break is absent
+//! from every figure rather than turned into a gain.
+//!
+//! A kept break is priced from its inputs (its enhancer, when it broke, its
+//! stated return) whenever they are read again: when its session ends, and
+//! whenever the game data's TT, or the markup in force when it broke, no
+//! longer matches what priced it ([`heal_prices`]). Its cost is carried by the kill its shots
+//! went towards (`kills.enhancer_cost`, kept in step with the rows), or,
+//! for a break after the session's last kill, by the session itself; the
+//! session's tracked enhancer bucket is derived from both in one place
+//! (`crate::session_costs`).
+
+use std::sync::Arc;
+
+use serde_json::Value;
+
+use crate::db::DbError;
+use crate::game_data_store::GameDataStore;
+use crate::ped::Ped;
+
+/// The game-data collection enhancers are listed in.
+const ENHANCERS: &str = "enhancers";
+
+/// The kinds of enhancer whose markup is set per tier. Weapon Damage
+/// Enhancers today; the others join as rows of the same table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EnhancerKind {
+    WeaponDamage,
+}
+
+impl EnhancerKind {
+    pub const ALL: [EnhancerKind; 1] = [EnhancerKind::WeaponDamage];
+
+    /// The stored spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EnhancerKind::WeaponDamage => "weaponDamage",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<EnhancerKind> {
+        EnhancerKind::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+    }
+
+    /// The kind as the catalogue names it, between the tier and
+    /// `Enhancer`.
+    fn catalogue_kind(self) -> &'static str {
+        match self {
+            EnhancerKind::WeaponDamage => "Weapon Damage",
+        }
+    }
+}
+
+/// The tiers an enhancer comes in.
+pub const TIERS: std::ops::RangeInclusive<u8> = 1..=10;
+
+/// An enhancer's kind and tier, from its name in either spelling ("T3
+/// Weapon Damage Enhancer", or the game's "Weapon Damage Enhancer 3");
+/// none for a kind whose markup is not set per tier.
+pub fn kind_and_tier(name: &str) -> Option<(EnhancerKind, u8)> {
+    let catalogue = catalogue_name(name).unwrap_or_else(|| normalise(name));
+    let rest = catalogue.strip_prefix('T')?;
+    let (tier, kind) = rest.split_once(' ')?;
+    let tier: u8 = tier.parse().ok().filter(|tier| TIERS.contains(tier))?;
+    let kind = kind.strip_suffix(" Enhancer")?;
+    EnhancerKind::ALL
+        .into_iter()
+        .find(|known| known.catalogue_kind() == kind)
+        .map(|known| (known, tier))
+}
+
+/// An enhancer's markup by its name and when it broke (epoch seconds),
+/// for pricing a break as it happens.
+pub type EnhancerMarkupResolver = Arc<dyn Fn(&str, f64) -> Option<f64> + Send + Sync>;
+
+/// Every markup set per kind and tier, in the order they were set.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TierMarkups {
+    rows: Vec<(EnhancerKind, u8, Option<f64>, f64)>,
+}
+
+impl TierMarkups {
+    /// Read every value set.
+    pub fn read(conn: &rusqlite::Connection) -> rusqlite::Result<TierMarkups> {
+        let mut stmt = conn.prepare_cached(
+            // id-order: insertion (values set at one instant keep their order)
+            "SELECT kind, tier, markup_percent, set_at FROM enhancer_tier_markups \
+             ORDER BY set_at, id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (kind, tier, markup, set_at) = row?;
+            let (Some(kind), Ok(tier)) = (EnhancerKind::parse(&kind), u8::try_from(tier)) else {
+                continue;
+            };
+            out.push((kind, tier, markup, set_at));
+        }
+        Ok(TierMarkups { rows: out })
+    }
+
+    /// The markup in force for the enhancer `name` at `at`: the latest value
+    /// set for its kind and tier no later than then. None when none was
+    /// set, or the one in force returned the tier to TT.
+    pub fn at(&self, name: &str, at: f64) -> Option<f64> {
+        let (kind, tier) = kind_and_tier(name)?;
+        self.rows
+            .iter()
+            .rev()
+            .find(|(k, t, _, set_at)| *k == kind && *t == tier && *set_at <= at)
+            .and_then(|(_, _, markup, _)| *markup)
+    }
+
+    /// The value in force now for each tier of `kind`, with when it was
+    /// set; `(None, None)` for a tier never set.
+    pub fn current(&self, kind: EnhancerKind) -> Vec<(u8, Option<f64>, Option<f64>)> {
+        TIERS
+            .map(|tier| {
+                self.rows
+                    .iter()
+                    .rev()
+                    .find(|(k, t, _, _)| *k == kind && *t == tier)
+                    .map_or((tier, None, None), |(_, _, markup, set_at)| {
+                        (tier, *markup, Some(*set_at))
+                    })
+            })
+            .collect()
+    }
+}
+
+/// Set the markup paid for enhancers of `kind` and `tier` from `now` on
+/// (`None`: at TT). The caller has checked the tier and the markup.
+pub fn set_tier_markup(
+    conn: &rusqlite::Connection,
+    kind: EnhancerKind,
+    tier: u8,
+    markup_percent: Option<f64>,
+    now: f64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO enhancer_tier_markups (kind, tier, markup_percent, set_at) \
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![kind.as_str(), tier, markup_percent, now],
+    )?;
+    Ok(())
+}
+
+/// How far a break's cost is known.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BreakPricing {
+    /// The enhancer's TT and the markup the player set: the break costs
+    /// both, less the return.
+    Priced { tt: Ped, markup: Ped },
+    /// The TT is known and the markup is not set: the break costs its TT
+    /// less the return, and the markup part is absent.
+    MarkupNotSet { tt: Ped },
+    /// The enhancer's TT is not known: the break has no cost.
+    TtUnknown,
+    /// The return the game stated exceeds the TT known for the enhancer:
+    /// the two disagree, so the break has no cost.
+    ReturnAboveTt { tt: Ped },
+}
+
+impl BreakPricing {
+    /// Price a break from what is known of it: the enhancer's TT, the
+    /// markup the player set (percent of TT), and the Shrapnel the game
+    /// stated it returned.
+    pub fn price(tt: Option<Ped>, markup_percent: Option<f64>, returned: Ped) -> BreakPricing {
+        let Some(tt) = tt else {
+            return BreakPricing::TtUnknown;
+        };
+        if returned.value() > tt.value() {
+            return BreakPricing::ReturnAboveTt { tt };
+        }
+        match markup_percent {
+            Some(percent) => BreakPricing::Priced {
+                tt,
+                markup: tt * ((percent - 100.0) / 100.0),
+            },
+            None => BreakPricing::MarkupNotSet { tt },
+        }
+    }
+
+    /// The stored spelling.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BreakPricing::Priced { .. } => "priced",
+            BreakPricing::MarkupNotSet { .. } => "markupNotSet",
+            BreakPricing::TtUnknown => "ttUnknown",
+            BreakPricing::ReturnAboveTt { .. } => "returnAboveTt",
+        }
+    }
+
+    /// The enhancer's TT, where it is known.
+    pub fn tt(&self) -> Option<Ped> {
+        match self {
+            BreakPricing::Priced { tt, .. }
+            | BreakPricing::MarkupNotSet { tt }
+            | BreakPricing::ReturnAboveTt { tt } => Some(*tt),
+            BreakPricing::TtUnknown => None,
+        }
+    }
+
+    /// The markup consumed, where the player set one.
+    pub fn markup(&self) -> Option<Ped> {
+        match self {
+            BreakPricing::Priced { markup, .. } => Some(*markup),
+            _ => None,
+        }
+    }
+
+    /// What a break so priced cost, deducting `deducted` of its return.
+    /// None for an unpriced break: it has no cost, never a zero one.
+    pub fn cost(&self, deducted: Ped) -> Option<Ped> {
+        match *self {
+            BreakPricing::Priced { tt, markup } => Some(tt + markup - deducted),
+            BreakPricing::MarkupNotSet { tt } => Some(tt - deducted),
+            BreakPricing::TtUnknown | BreakPricing::ReturnAboveTt { .. } => None,
+        }
+    }
+}
+
+/// One break the tracker applied to the weapon in use.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnhancerBreak {
+    pub id: String,
+    pub session_id: String,
+    /// The activity context in force at the break.
+    pub context_id: Option<i64>,
+    /// When the chat line says the break happened, epoch seconds.
+    pub observed_at: f64,
+    pub enhancer_name: String,
+    /// The weapon the enhancer was fitted to.
+    pub weapon_name: String,
+    /// The Shrapnel the break's chat line says came back.
+    pub returned: Ped,
+    /// The part of the return deducted from its cost. While the session
+    /// runs it is the whole stated return; the session's end settles it
+    /// against the Shrapnel tagged as returns.
+    pub deducted: Ped,
+    /// The markup in force for its kind and tier when it broke, percent of
+    /// TT.
+    pub markup_percent: Option<f64>,
+    pub pricing: BreakPricing,
+}
+
+impl EnhancerBreak {
+    /// What the break cost, where it is known: the TT and any markup set,
+    /// less the return deducted.
+    pub fn cost(&self) -> Option<Ped> {
+        self.pricing.cost(self.deducted)
+    }
+
+    /// Keep the break, carried by `kill_id`, or by the session when no kill
+    /// followed it. Run in the write that stores what carries its cost.
+    pub fn insert(
+        &self,
+        conn: &rusqlite::Connection,
+        kill_id: Option<&str>,
+    ) -> rusqlite::Result<()> {
+        conn.prepare_cached(
+            "INSERT INTO enhancer_breaks \
+             (id, session_id, kill_id, context_id, observed_at, enhancer_name, weapon_name, \
+              returned_ped, deducted_ped, markup_percent, pricing, tt_ped, markup_ped, cost_ped) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        )?
+        .execute(rusqlite::params![
+            self.id,
+            self.session_id,
+            kill_id,
+            self.context_id,
+            self.observed_at,
+            self.enhancer_name,
+            self.weapon_name,
+            self.returned.value(),
+            self.deducted.value(),
+            self.markup_percent,
+            self.pricing.as_str(),
+            self.pricing.tt().map(Ped::value),
+            self.pricing.markup().map(Ped::value),
+            self.cost().map(Ped::value),
+        ])?;
+        Ok(())
+    }
+}
+
+// ── The enhancer's TT ───────────────────────────────────────────────
+
+/// An enhancer's TT by its name, from the game data.
+pub type EnhancerTtResolver = Arc<dyn Fn(&str) -> Option<Ped> + Send + Sync>;
+
+/// A name with its surrounding space trimmed and every inner run of space
+/// read as one: how two spellings of a name are compared, exactly.
+fn normalise(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The catalogue's name for an enhancer the game names "<Kind> Enhancer
+/// <N>": "T<N> <Kind> Enhancer" (the game's "Weapon Damage Enhancer 1" is
+/// the catalogue's "T1 Weapon Damage Enhancer"). None for a name of any
+/// other shape.
+pub fn catalogue_name(game_name: &str) -> Option<String> {
+    let name = normalise(game_name);
+    let (kind, tier) = name.rsplit_once(' ')?;
+    let tier_is_number = !tier.is_empty() && tier.chars().all(|c| c.is_ascii_digit());
+    let kind_is_enhancer = kind.ends_with(" Enhancer") && kind.len() > " Enhancer".len();
+    (tier_is_number && kind_is_enhancer).then(|| format!("T{tier} {kind}"))
+}
+
+/// The TT the game data lists for the enhancer `name`: the entry of that
+/// exact name, else the entry of its catalogue name, each compared after
+/// normalising space and nothing else.
+pub fn tt_from_game_data(store: &GameDataStore, name: &str) -> Option<Ped> {
+    let entities = store.get_entities(ENHANCERS);
+    let named = |wanted: &str| {
+        entities.iter().find(|entity| {
+            entity
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| normalise(name) == wanted)
+        })
+    };
+    let entity = named(&normalise(name)).or_else(|| named(&catalogue_name(name)?))?;
+    entity
+        .get("economy")?
+        .get("max_tt")?
+        .as_f64()
+        .filter(|tt| tt.is_finite() && *tt >= 0.0)
+        .map(Ped)
+}
+
+/// [`tt_from_game_data`] over a store the resolver keeps.
+pub fn tt_resolver(store: Arc<GameDataStore>) -> EnhancerTtResolver {
+    Arc::new(move |name: &str| tt_from_game_data(&store, name))
+}
+
+// ── Pricing kept breaks from their inputs ───────────────────────────
+
+/// A PED amount in millionths, for settling returns exactly.
+fn micro(ped: f64) -> i64 {
+    (ped * 1_000_000.0).round() as i64
+}
+
+/// Price a session's kept breaks again from their inputs: the game data's
+/// TT through `tt`, the markup in force when each broke through `markups`,
+/// and each
+/// stated return deducted, in the order they broke, only as far as the
+/// session's tagged Shrapnel reaches. Every row that moves is written, and
+/// every kill carrying one of the session's breaks takes their cost again.
+/// Answers whether anything moved.
+pub fn reprice_session(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    tt: &dyn Fn(&str) -> Option<Ped>,
+    markups: &TierMarkups,
+) -> rusqlite::Result<bool> {
+    // The Shrapnel tagged as enhancer returns in the session: what its
+    // breaks' stated returns may be deducted from.
+    let tagged: f64 = conn
+        .prepare_cached(
+            // every-kill: spend (the session's active loot lines, every row).
+            "SELECT COALESCE(SUM(li.value_ped), 0) FROM kill_loot_items li \
+             JOIN kills k ON k.id = li.kill_id \
+             WHERE k.session_id = ?1 AND li.is_enhancer_shrapnel = 1 \
+               AND li.deactivated_at IS NULL",
+        )?
+        .query_row([session_id], |row| row.get(0))?;
+    type Row = (
+        String,
+        String,
+        f64,
+        f64,
+        f64,
+        Option<f64>,
+        String,
+        Option<f64>,
+        Option<f64>,
+        Option<f64>,
+    );
+    let rows: Vec<Row> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, enhancer_name, observed_at, returned_ped, deducted_ped, markup_percent, \
+                    pricing, tt_ped, markup_ped, cost_ped \
+             FROM enhancer_breaks WHERE session_id = ?1 ORDER BY observed_at, id",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut pool = micro(tagged).max(0);
+    let mut moved = false;
+    for (
+        id,
+        enhancer,
+        observed_at,
+        returned,
+        deducted,
+        markup_percent,
+        pricing,
+        tt_ped,
+        markup_ped,
+        cost,
+    ) in rows
+    {
+        // Every kept break claims its return from the tagged Shrapnel,
+        // priced or not: an unpriced break has no cost, and its return is
+        // neither loot nor rebated.
+        let wanted = micro(returned);
+        let new_deducted = if pool >= wanted {
+            returned
+        } else {
+            (pool as f64 / 1_000_000.0).min(returned)
+        };
+        pool = (pool - wanted).max(0);
+        let new_markup_percent = markups.at(&enhancer, observed_at);
+        let new_pricing = BreakPricing::price(tt(&enhancer), new_markup_percent, Ped(returned));
+        let new_cost = new_pricing.cost(Ped(new_deducted)).map(Ped::value);
+        let same = new_deducted == deducted
+            && new_markup_percent == markup_percent
+            && new_pricing.as_str() == pricing
+            && new_pricing.tt().map(Ped::value) == tt_ped
+            && new_pricing.markup().map(Ped::value) == markup_ped
+            && new_cost == cost;
+        if same {
+            continue;
+        }
+        moved = true;
+        conn.prepare_cached(
+            "UPDATE enhancer_breaks SET deducted_ped = ?2, markup_percent = ?3, pricing = ?4, \
+                    tt_ped = ?5, markup_ped = ?6, cost_ped = ?7 \
+             WHERE id = ?1",
+        )?
+        .execute(rusqlite::params![
+            id,
+            new_deducted,
+            new_markup_percent,
+            new_pricing.as_str(),
+            new_pricing.tt().map(Ped::value),
+            new_pricing.markup().map(Ped::value),
+            new_cost,
+        ])?;
+    }
+    if moved {
+        conn.prepare_cached(
+            "UPDATE kills SET enhancer_cost = \
+                 (SELECT COALESCE(SUM(b.cost_ped), 0) FROM enhancer_breaks b \
+                  WHERE b.kill_id = kills.id) \
+             WHERE id IN (SELECT kill_id FROM enhancer_breaks \
+                          WHERE session_id = ?1 AND kill_id IS NOT NULL)",
+        )?
+        .execute([session_id])?;
+    }
+    Ok(moved)
+}
+
+/// Price again every ended session's kept breaks whose game-data TT, or
+/// the markup in force when they broke, no longer matches what priced them, and bring every figure
+/// derived from those sessions' costs up to date. A running session is
+/// left to its end, which prices its breaks anyway. Idempotent, and cheap
+/// once nothing has moved; run as the tracker starts and when a tier's
+/// markup is set.
+pub fn heal_prices(
+    conn: &rusqlite::Connection,
+    tt: &dyn Fn(&str) -> Option<Ped>,
+) -> Result<(), DbError> {
+    let markups = TierMarkups::read(conn)?;
+    type Inputs = (String, String, f64, Option<f64>, Option<f64>);
+    let kept: Vec<Inputs> = {
+        let mut stmt = conn.prepare_cached(
+            "SELECT b.session_id, b.enhancer_name, b.observed_at, b.tt_ped, b.markup_percent \
+             FROM enhancer_breaks b JOIN tracking_sessions s ON s.id = b.session_id \
+             WHERE s.is_active = 0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut stale: Vec<String> = Vec::new();
+    for (session_id, enhancer, observed_at, tt_ped, markup_percent) in kept {
+        let now_tt = tt(&enhancer).map(Ped::value);
+        let now_markup = markups.at(&enhancer, observed_at);
+        if (now_tt != tt_ped || now_markup != markup_percent) && !stale.contains(&session_id) {
+            stale.push(session_id);
+        }
+    }
+    for session_id in stale {
+        // A session's breaks, its kills and its derived figures move
+        // together or not at all.
+        conn.execute_batch("SAVEPOINT break_prices")?;
+        let healed = reprice_session(conn, &session_id, tt, &markups)
+            .map_err(DbError::from)
+            .and_then(|moved| {
+                if moved {
+                    crate::session_costs::refresh_derived(conn, &session_id)?;
+                }
+                Ok(())
+            });
+        match healed {
+            Ok(()) => conn.execute_batch("RELEASE break_prices")?,
+            Err(error) => {
+                conn.execute_batch("ROLLBACK TO break_prices; RELEASE break_prices")?;
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn approx(actual: Option<Ped>, expected: f64) {
+        let actual = actual.expect("a cost").value();
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    }
+
+    #[test]
+    fn a_break_costs_its_tt_and_markup_less_the_return() {
+        let pricing = BreakPricing::price(Some(Ped(1.0)), Some(150.0), Ped(0.8));
+        assert_eq!(pricing.as_str(), "priced");
+        approx(pricing.markup(), 0.5);
+        approx(pricing.cost(Ped(0.8)), 0.7);
+        // A return that stayed loot is not deducted.
+        approx(pricing.cost(Ped::ZERO), 1.5);
+    }
+
+    #[test]
+    fn a_break_with_no_markup_set_costs_its_tt_less_the_return() {
+        let pricing = BreakPricing::price(Some(Ped(1.0)), None, Ped(0.8));
+        assert_eq!(pricing, BreakPricing::MarkupNotSet { tt: Ped(1.0) });
+        assert_eq!(pricing.markup(), None);
+        approx(pricing.cost(Ped(0.8)), 0.2);
+    }
+
+    #[test]
+    fn a_break_of_unknown_tt_or_a_return_above_it_has_no_cost() {
+        let unknown = BreakPricing::price(None, Some(150.0), Ped(0.8));
+        assert_eq!(unknown, BreakPricing::TtUnknown);
+        assert_eq!(unknown.cost(Ped(0.8)), None);
+
+        let above = BreakPricing::price(Some(Ped(0.5)), Some(150.0), Ped(0.8));
+        assert_eq!(above, BreakPricing::ReturnAboveTt { tt: Ped(0.5) });
+        assert_eq!(above.cost(Ped(0.8)), None);
+
+        // A return equal to the TT is a break that cost its markup alone.
+        let whole = BreakPricing::price(Some(Ped(0.8)), Some(200.0), Ped(0.8));
+        approx(whole.cost(Ped(0.8)), 0.8);
+    }
+
+    #[test]
+    fn the_game_s_enhancer_names_map_to_the_catalogue_s() {
+        assert_eq!(
+            catalogue_name("Weapon Damage Enhancer 1").as_deref(),
+            Some("T1 Weapon Damage Enhancer")
+        );
+        assert_eq!(
+            catalogue_name("  Armor  Defense Enhancer 10 ").as_deref(),
+            Some("T10 Armor Defense Enhancer")
+        );
+        // Only the one shape maps; nothing is matched loosely.
+        assert_eq!(catalogue_name("T1 Weapon Damage Enhancer"), None);
+        assert_eq!(catalogue_name("Weapon Damage Enhancer"), None);
+        assert_eq!(catalogue_name("Weapon Damage Enhancer I"), None);
+        assert_eq!(catalogue_name("Weapon Damage Amplifier 1"), None);
+        assert_eq!(catalogue_name("Enhancer 1"), None);
+    }
+
+    fn store() -> (tempfile::TempDir, GameDataStore) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("enhancers.json"),
+            json!([
+                {"name": "T1 Weapon Damage Enhancer", "economy": {"max_tt": 1.0}},
+                {"name": "Odd Enhancer", "economy": {}},
+            ])
+            .to_string(),
+        )
+        .unwrap();
+        let store = GameDataStore::new(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn the_tt_is_found_by_the_exact_name_or_its_catalogue_name() {
+        let (_dir, store) = store();
+        approx(tt_from_game_data(&store, "T1 Weapon Damage Enhancer"), 1.0);
+        approx(tt_from_game_data(&store, "Weapon Damage Enhancer 1"), 1.0);
+        approx(tt_from_game_data(&store, " Weapon  Damage Enhancer 1"), 1.0);
+        assert_eq!(tt_from_game_data(&store, "t1 weapon damage enhancer"), None);
+        assert_eq!(tt_from_game_data(&store, "weapon damage enhancer 1"), None);
+        assert_eq!(tt_from_game_data(&store, "Weapon Damage Enhancer 2"), None);
+        assert_eq!(tt_from_game_data(&store, "Odd Enhancer"), None);
+    }
+
+    #[test]
+    fn an_enhancer_s_kind_and_tier_are_read_from_either_spelling() {
+        assert_eq!(
+            kind_and_tier("T3 Weapon Damage Enhancer"),
+            Some((EnhancerKind::WeaponDamage, 3))
+        );
+        assert_eq!(
+            kind_and_tier("Weapon Damage Enhancer 10"),
+            Some((EnhancerKind::WeaponDamage, 10))
+        );
+        // A kind not set per tier, a tier out of range, or no enhancer.
+        assert_eq!(kind_and_tier("T3 Armor Defense Enhancer"), None);
+        assert_eq!(kind_and_tier("T11 Weapon Damage Enhancer"), None);
+        assert_eq!(kind_and_tier("T0 Weapon Damage Enhancer"), None);
+        assert_eq!(kind_and_tier("Odd Enhancer"), None);
+    }
+
+    #[test]
+    fn a_tier_s_markup_is_the_one_in_force_when_it_broke() {
+        let conn = crate::db::migrated_in_memory().unwrap();
+        let wde = EnhancerKind::WeaponDamage;
+        set_tier_markup(&conn, wde, 1, Some(150.0), 100.0).unwrap();
+        set_tier_markup(&conn, wde, 1, Some(180.0), 200.0).unwrap();
+        set_tier_markup(&conn, wde, 1, None, 300.0).unwrap();
+        set_tier_markup(&conn, wde, 2, Some(300.0), 100.0).unwrap();
+        let markups = TierMarkups::read(&conn).unwrap();
+        let t1 = "T1 Weapon Damage Enhancer";
+        assert_eq!(markups.at(t1, 50.0), None, "before any value was set");
+        assert_eq!(markups.at(t1, 100.0), Some(150.0));
+        assert_eq!(markups.at("Weapon Damage Enhancer 1", 199.0), Some(150.0));
+        assert_eq!(markups.at(t1, 250.0), Some(180.0));
+        assert_eq!(markups.at(t1, 400.0), None, "returned to TT");
+        assert_eq!(markups.at("T2 Weapon Damage Enhancer", 400.0), Some(300.0));
+        assert_eq!(markups.at("T3 Weapon Damage Enhancer", 400.0), None);
+        // What is in force now, tier by tier, with when it was set.
+        let current = markups.current(wde);
+        assert_eq!(current.len(), 10);
+        assert_eq!(current[0], (1, None, Some(300.0)));
+        assert_eq!(current[1], (2, Some(300.0), Some(100.0)));
+        assert_eq!(current[2], (3, None, None));
+    }
+
+    // ── Pricing kept breaks again ───────────────────────────────────
+
+    /// An ended session with one kill carrying `tagged` PED of Shrapnel
+    /// tagged as returns, and a tier 1 Weapon Damage markup of `markup`
+    /// set before it started.
+    fn hunt(conn: &rusqlite::Connection, tagged: f64, markup: Option<i64>) {
+        conn.execute_batch(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, session_name) \
+             VALUES ('s1', 1000.0, 4600.0, 0, 'Run');
+             INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, enhancer_cost, \
+                                loot_total_ped) \
+             VALUES ('k1', 's1', 'Atrox', 1500.0, 1.0, 0.0, 2.0);
+             INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, \
+                                          is_enhancer_shrapnel) \
+             VALUES ('k1', 'Animal Hide', 1, 2.0, 0);",
+        )
+        .unwrap();
+        if tagged > 0.0 {
+            conn.execute(
+                "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, \
+                                              is_enhancer_shrapnel) \
+                 VALUES ('k1', 'Shrapnel', 8000, ?1, 1)",
+                [tagged],
+            )
+            .unwrap();
+        }
+        if let Some(markup) = markup {
+            set_markup(conn, Some(markup), 0.0);
+        }
+    }
+
+    /// The player sets tier 1's markup at `at`.
+    fn set_markup(conn: &rusqlite::Connection, markup: Option<i64>, at: f64) {
+        set_tier_markup(
+            conn,
+            EnhancerKind::WeaponDamage,
+            1,
+            markup.map(|markup| markup as f64),
+            at,
+        )
+        .unwrap();
+    }
+
+    /// A break kept on k1 as the tracker keeps it while the session runs,
+    /// priced with no TT known.
+    fn kept(conn: &rusqlite::Connection, id: &str, at: f64) {
+        EnhancerBreak {
+            id: id.into(),
+            session_id: "s1".into(),
+            context_id: None,
+            observed_at: at,
+            enhancer_name: "Weapon Damage Enhancer 1".into(),
+            weapon_name: "Rifle".into(),
+            returned: Ped(0.8),
+            deducted: Ped(0.8),
+            markup_percent: None,
+            pricing: BreakPricing::TtUnknown,
+        }
+        .insert(conn, Some("k1"))
+        .unwrap();
+    }
+
+    fn scalar(conn: &rusqlite::Connection, sql: &str) -> f64 {
+        conn.query_row(sql, [], |row| row.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_kept_break_is_priced_again_when_its_tt_arrives_at_the_markup_of_its_time() {
+        let conn = crate::db::migrated_in_memory().unwrap();
+        hunt(&conn, 0.8, None);
+        kept(&conn, "b1", 1400.0);
+        let (_dir, store) = store();
+        let tt = |name: &str| tt_from_game_data(&store, name);
+
+        // The game's name now maps to the catalogue's: 1.00 TT less 0.80.
+        heal_prices(&conn, &tt).unwrap();
+        let pricing: String = conn
+            .query_row("SELECT pricing FROM enhancer_breaks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(pricing, "markupNotSet");
+        approx(
+            Some(Ped(scalar(&conn, "SELECT enhancer_cost FROM kills"))),
+            0.2,
+        );
+        approx(
+            Some(Ped(scalar(
+                &conn,
+                "SELECT enhancer_cost FROM session_summaries WHERE session_id = 's1'",
+            ))),
+            0.2,
+        );
+
+        // A markup set after it broke leaves it as it was priced.
+        set_markup(&conn, Some(150), 1_500.0);
+        heal_prices(&conn, &tt).unwrap();
+        approx(
+            Some(Ped(scalar(&conn, "SELECT cost_ped FROM enhancer_breaks"))),
+            0.2,
+        );
+
+        // One in force when it broke prices it: 1.00 + 0.50 - 0.80.
+        set_markup(&conn, Some(150), 1_300.0);
+        heal_prices(&conn, &tt).unwrap();
+        approx(
+            Some(Ped(scalar(&conn, "SELECT cost_ped FROM enhancer_breaks"))),
+            0.7,
+        );
+        approx(
+            Some(Ped(scalar(&conn, "SELECT enhancer_cost FROM kills"))),
+            0.7,
+        );
+        approx(
+            Some(Ped(scalar(
+                &conn,
+                "SELECT enhancer_cost FROM session_summaries WHERE session_id = 's1'",
+            ))),
+            0.7,
+        );
+        // Nothing moved since: priced again, nothing is written.
+        assert!(!reprice_session(&conn, "s1", &tt, &TierMarkups::read(&conn).unwrap()).unwrap());
+    }
+
+    #[test]
+    fn a_return_is_deducted_only_as_far_as_the_tagged_shrapnel_reaches() {
+        let conn = crate::db::migrated_in_memory().unwrap();
+        // Two breaks of 0.80 each; only one return arrived tagged, the
+        // other stayed loot.
+        hunt(&conn, 0.8, Some(150));
+        kept(&conn, "b1", 1400.0);
+        kept(&conn, "b2", 1450.0);
+        let (_dir, store) = store();
+        let tt = |name: &str| tt_from_game_data(&store, name);
+        reprice_session(&conn, "s1", &tt, &TierMarkups::read(&conn).unwrap()).unwrap();
+        // The first claims the tagged 0.80; the second deducts nothing.
+        approx(
+            Some(Ped(scalar(
+                &conn,
+                "SELECT deducted_ped FROM enhancer_breaks WHERE id = 'b1'",
+            ))),
+            0.8,
+        );
+        approx(
+            Some(Ped(scalar(
+                &conn,
+                "SELECT deducted_ped FROM enhancer_breaks WHERE id = 'b2'",
+            ))),
+            0.0,
+        );
+        approx(
+            Some(Ped(scalar(&conn, "SELECT enhancer_cost FROM kills"))),
+            0.7 + 1.5,
+        );
+    }
+}

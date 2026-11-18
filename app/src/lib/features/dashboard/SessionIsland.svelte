@@ -3,7 +3,7 @@
 	import { quintOut } from 'svelte/easing';
 	import { startTracking, toggleOverlay } from '$lib/api';
 	import type { TrackingSnapshot } from '$lib/api';
-	import { Button, ErrorNotice } from '$lib/components';
+	import { Button, ErrorNotice, Skeleton } from '$lib/components';
 	import DefinitionPicker from '$lib/features/sessions/DefinitionPicker.svelte';
 	import type { DefinitionsModel } from '$lib/features/sessions/definitionsModel.svelte';
 	import { shouldSettleInstantly } from '$lib/motion/testMotion';
@@ -12,16 +12,28 @@
 	import { getStatDef } from '$lib/statsRegistry';
 	import { setStatsScope } from '$lib/statsScope.svelte';
 	import { describeError } from '$lib/view/errorState';
+	import type { LifetimeLootValuation } from './lifetimeLootValuation.svelte';
+	import type { LiveLootValuation } from './liveLootValuation.svelte';
+	import StatTip from './StatTip.svelte';
+	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
+	import { listenerInactiveCopy } from '$lib/features/settings/keyboardAccess';
 	import type { StatsGridModel } from './statsGridModel.svelte';
 
 	let {
 		status,
 		statsGrid,
 		definitions,
+		valuation = null,
+		lifetimeValuation = null,
 		onReview
 	}: {
 		status: TrackingSnapshot | null;
 		statsGrid: StatsGridModel;
+		/** The session's loot at market markup, for the markup stats. */
+		valuation?: LiveLootValuation | null;
+		/** The session family's loot at market markup, for the lifetime
+		 * markup stats. */
+		lifetimeValuation?: LifetimeLootValuation | null;
 		/** The sessions model; the route hosts it (and the authoring
 		 * environment) so the surface can replace the whole dashboard. */
 		definitions: DefinitionsModel;
@@ -90,6 +102,10 @@
 	}
 
 	const isActive = $derived(status?.status === 'active');
+	// No snapshot read has answered yet (the first read, which the transport
+	// holds while the backend starts). Until one does, the island cannot say
+	// whether a session is running, so it shows neither state.
+	const pending = $derived(status === null);
 	const selectedDefinitionId = $derived(status?.sessionDefinitionId ?? null);
 
 	let starting = $state(false);
@@ -145,7 +161,7 @@
 {/snippet}
 
 <!-- Island: Session -->
-<section class="panel p-4 flex flex-col gap-3 flex-shrink-0">
+<section class="panel p-4 flex flex-col gap-3 flex-shrink-0" aria-busy={pending}>
 	<!-- Session strip -->
 	<div class="relative flex items-center justify-between">
 		{#if status?.status === 'active'}
@@ -175,6 +191,10 @@
 					</span>
 				{/if}
 				{@render reviewChip()}
+			</div>
+		{:else if pending}
+			<div class="flex items-center min-w-0" data-testid="session-strip-pending">
+				<Skeleton class="h-4 w-44" />
 			</div>
 		{:else}
 			<!-- At rest the island is titled by the session it will run as;
@@ -244,12 +264,12 @@
 			<!-- The overlay is the surface play actually happens on, so it
 				 carries the emphasis; starting is the once-per-session act
 				 beside it. -->
-			{#if !isActive}
+			{#if !isActive && !pending}
 				<Button size="sm" variant="secondary" disabled={starting} onclick={handleStart}>
 					{#snippet children()}{starting ? 'Starting...' : 'Start tracking'}{/snippet}
 				</Button>
 			{/if}
-			<span class="inline-flex" data-guide-anchor="dashboard-overlay-btn">
+			<span class="inline-flex">
 				<Button size="sm" variant="primary" onclick={() => toggleOverlay().catch(() => {})}>
 					{#snippet children()}Overlay{/snippet}
 				</Button>
@@ -268,14 +288,20 @@
 	<!-- Session stats -->
 	<div
 		class="dashboard-stat-grid relative grid gap-2"
-		data-guide-anchor="dashboard-stats-grid"
+		data-testid="dashboard-stats-grid"
 	>
 		{#each statsGrid.enabledStats as pref, i (pref.id)}
 			{@const def = getStatDef(pref.id)}
 			{@const r = def
-				? showingLifetime && def.renderLifetime && lifetime
-					? def.renderLifetime(lifetime)
-					: def.render(status)
+				? showingLifetime && lifetime
+					? def.renderLifetime(lifetime, {
+							lifetimeValuation: lifetimeValuation?.view ?? null,
+							looterBasis: liveMarkupSettings.looterBasis,
+						})
+					: def.render(status, {
+							valuation: valuation?.view ?? null,
+							looterBasis: liveMarkupSettings.looterBasis,
+						})
 				: { value: '\u2014', color: 'text-text-tertiary' }}
 			{@const isDragged = statsGrid.dragFilteredIndex === i}
 			<div
@@ -284,8 +310,7 @@
 				role="group"
 				aria-label={def?.label ?? pref.id}
 				class="relative rounded-md border border-border/60 bg-base/40 px-3 py-2.5 flex flex-col gap-1
-					min-w-0 select-none touch-none
-					{statsGrid.reorderable ? 'cursor-grab' : ''}
+					min-w-0 select-none touch-none cursor-grab
 					transition-[opacity,box-shadow,border-color] duration-[var(--duration-base)] ease-[var(--ease-out)]
 					before:pointer-events-none before:absolute before:inset-0 before:rounded-[inherit]
 					before:[box-shadow:inset_0_1px_0_0_rgba(255,255,255,0.03)]
@@ -297,17 +322,31 @@
 			>
 				<span class="flex min-w-0 items-center gap-1 eyebrow">
 					<span class="truncate">{def?.shortLabel ?? def?.label ?? pref.id}</span>
+					{#if def && !pending && !showingLifetime}
+						<StatTip id={def.id} {status} render={r} valuation={valuation?.view ?? null} />
+					{/if}
 				</span>
-				<span class="truncate text-[17px] font-semibold tabular-nums leading-none tracking-tight
-					{r.value === '\u2014' ? 'text-text-tertiary' : r.color}">
-					{r.value}
-				</span>
+				{#if pending}
+					<Skeleton class="h-[17px] w-14" />
+				{:else}
+					<span class="truncate text-[17px] font-semibold tabular-nums leading-none tracking-tight
+						{r.value === '\u2014' ? 'text-text-tertiary' : r.color}"
+						title={'incomplete' in r ? r.incomplete : undefined}
+					>
+						{r.value}{#if 'incomplete' in r && r.incomplete}<span
+								class="ml-0.5 align-super text-[10px] font-normal text-warning"
+								aria-hidden="true">*</span
+							><span class="sr-only">, {r.incomplete}</span>{/if}{#if 'detail' in r && r.detail}<span
+								class="ml-1 text-[11px] font-normal text-text-tertiary">{r.detail}</span
+							>{/if}
+					</span>
+				{/if}
 			</div>
 		{/each}
 	</div>
 
 	{#if status?.status === 'active'}
-		{#if status.weaponAttribution === 'hotbar' && status.hotbarListenerActive === false}
+		{#if status.hotbarKeysEnabled === true && status.hotbarListenerActive === false}
 			<div class="relative flex items-start gap-3 px-3.5 py-3 rounded-md border border-warning/30 bg-warning/[0.06]">
 				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4.5 w-4.5 mt-0.5 text-warning shrink-0">
 					<path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
@@ -315,7 +354,7 @@
 				<div class="flex flex-col gap-0.5">
 					<p class="text-sm font-medium text-warning tracking-tight">Hotbar key listener not active</p>
 					<p class="text-xs text-text-secondary leading-relaxed">
-						Cost attribution is using the hotbar but the listener isn't running. Check that the hotbar key listener is enabled in Settings.
+						{listenerInactiveCopy(status.toolSource?.readingScreen === true)}
 					</p>
 				</div>
 			</div>

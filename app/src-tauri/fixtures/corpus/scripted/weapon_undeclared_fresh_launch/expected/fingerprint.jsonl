@@ -1,0 +1,88 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 7.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_2>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_3>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_4>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_4>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_5>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_6>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_6>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_7>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_8>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_8>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_10>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_10>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_11>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_12>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_12>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_13>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_14>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_14>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_15>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_16>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_16>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_17>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_18>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_18>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_19>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_20>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_20>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_21>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_22>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_22>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_23>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_24>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_24>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_25>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_26>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_26>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_27>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_28>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_28>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_29>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_30>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_30>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_31>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_32>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_32>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_33>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_34>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_34>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_35>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_36>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_36>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_37>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_38>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_38>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_39>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_40>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_40>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_41>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_42>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_42>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_43>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_44>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_44>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_45>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_46>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_46>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_47>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_48>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_48>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_49>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_50>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_50>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_51>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 25.0, "timestamp": "<TS_52>", "type": "critical_hit"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_52>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_53>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 90.0, "timestamp": "<TS_54>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_54>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_55>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 900, "value_ped": 9.0}], "timestamp": "<TS_56>", "total_ped": 9.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_56>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_57>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_58>", "payload": {"reason": "stopped", "sessionId": "<UUID_1>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}

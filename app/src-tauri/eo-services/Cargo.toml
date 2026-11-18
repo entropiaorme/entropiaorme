@@ -36,6 +36,18 @@ tracing = { workspace = true }
 rusqlite = { workspace = true }
 # SHA-384 for the migration ledger's checksum accounting.
 sha2 = { workspace = true }
+# The account connection's reader: HTTPS to the one account site host,
+# over rustls with the ring provider and the platform's verifier (see the
+# workspace manifest for the feature set).
+reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-platform-verifier = { workspace = true }
+# The operating system's keyring, where the shell keeps the account site's
+# sign-in between launches: the Windows Credential Manager or the Linux
+# Secret Service, so it is declared for every target. Behind the
+# `session-keyring` feature so backend member builds need no keyring
+# service.
+keyring = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -47,13 +59,16 @@ windows = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Passive global key observation via the kernel input layer: the Linux
-# implementation behind the keystroke source seam (keystroke_source.rs).
+# fallback behind the keystroke source seam (keystroke_source.rs) when no
+# X server answers.
 # Pure-Rust (no system libraries), so a backend-member build stays free of
 # the Tauri system stack.
 evdev = { workspace = true }
 libc = { workspace = true }
-# Game-window discovery + geometry over X11/XWayland (eu_window.rs).
-# Pure-Rust X11 protocol bindings, likewise system-library-free.
+# Game-window discovery + geometry over X11/XWayland (eu_window.rs), and
+# the primary Linux keystroke observer over XInput2 raw key events
+# (keystroke_source.rs). Pure-Rust X11 protocol bindings, likewise
+# system-library-free.
 x11rb = { workspace = true }
 # ScreenCast-portal + PipeWire screen capture (screen_capture.rs). GStreamer
 # links the system glib/gstreamer libraries, which the backend members must
@@ -71,6 +86,13 @@ gstreamer-video = { workspace = true, optional = true }
 # dependencies. Off by default so backend-member builds need no system stack;
 # the shell turns it on for Linux packaging.
 linux-capture = ["dep:ashpd", "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
+# Exposes the interface readers' test fixtures (drawn windows and a
+# stand-in recogniser) to the facade's tests. Enabled only as a
+# dev-dependency feature; no build that ships turns it on.
+test-support = []
+# Keeps the account site's sign-in in the operating system's keyring
+# between launches (the shell turns it on).
+session-keyring = ["dep:keyring"]
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -78,6 +100,9 @@ proptest = { workspace = true }
 tempfile = { workspace = true }
 # Test-only: a capturing layer for the eo::input breadcrumb instrument test.
 tracing-subscriber = { workspace = true }
+# Test-only: paused time, so the account recorder's minute cadence is driven
+# deterministically.
+tokio = { workspace = true, features = ["test-util"] }
 
 [[bench]]
 name = "smoke"

@@ -1,8 +1,8 @@
 /**
- * The Maps route's pin-lifecycle controller: the pin form's transient state
+ * The maps surface's pin-lifecycle controller: the pin form's transient state
  * (drop point, edit target, feedback) and the create/edit/delete/copy handlers
- * over the view model. Selection and viewport wiring stay in the route; this
- * keeps the route a thin shell over the feature modules.
+ * over the view model. Selection and viewport wiring stay in the surface
+ * (`MapsSurface.svelte`); this keeps that wiring apart from the pin lifecycle.
  */
 
 import { getNearbyMapPin, type MapPin } from '$lib/api';

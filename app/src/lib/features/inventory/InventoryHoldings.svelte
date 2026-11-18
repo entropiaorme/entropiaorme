@@ -1,9 +1,10 @@
 <script lang="ts">
 	import Button from '$lib/components/Button.svelte';
+	import { filterByQuery, isSearchQuery } from '$lib/view/search';
 	import ExpandingActionButton from '$lib/components/ExpandingActionButton.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import SegmentedControl from '$lib/components/SegmentedControl.svelte';
-	import type { InventoryItem } from '$lib/api';
+	import type { AssetPurchase, InventoryItem } from '$lib/api';
 	import MarkupConfidenceInfo from '$lib/features/analytics/MarkupConfidenceInfo.svelte';
 	import MarkupConfidenceSelector from '$lib/features/analytics/MarkupConfidenceSelector.svelte';
 	import TreeCuttingStockView from '$lib/features/analytics/TreeCuttingStock.svelte';
@@ -11,7 +12,16 @@
 		ConfidenceMode,
 		TreeCuttingStock,
 	} from '$lib/features/analytics/treeCuttingModel.svelte';
-	import { formatLedgerDate, formatPed } from '$lib/utils/format';
+	import {
+		NO_TT_TITLE,
+		formatLedgerDate,
+		formatPed,
+		formatQuantity,
+		formatTt,
+		isZeroTt,
+	} from '$lib/utils/format';
+	import { isStack, perUnit } from './assetPosition';
+	import { derivedFromLabel } from './conversionDraft';
 	import type { InventoryKind } from './inventoryModel.svelte';
 	import PacketFeeInfo from './PacketFeeInfo.svelte';
 	import PacketFeeSelector from './PacketFeeSelector.svelte';
@@ -29,11 +39,17 @@
 		onconvert,
 		onremove,
 		onshrapnel,
+		onconvertitems,
+		onopenboxes,
+		onreconcile,
 		onaddequipment,
 		oncreatelisting,
 		oneditequipment,
 		onsellequipment,
 		ondeleteequipment,
+		onaddpurchase,
+		oneditpurchase,
+		ondeletepurchase,
 	}: {
 		kind: InventoryKind;
 		onkindchange: (id: string) => void;
@@ -47,18 +63,36 @@
 		onconvert: (item: TreeCuttingStock) => void;
 		onremove: (item: TreeCuttingStock) => void;
 		onshrapnel: (item: TreeCuttingStock) => void;
+		/** Start a conversion, from one holding or from nothing in particular. */
+		onconvertitems: (start: { name: string; assetId: string | null } | null) => void;
+		/** Go to the strongbox opening view. */
+		onopenboxes?: () => void;
+		/** Go to the check of the stock against the account. */
+		onreconcile?: () => void;
 		onaddequipment: () => void;
 		oncreatelisting: () => void;
 		oneditequipment: (item: InventoryItem) => void;
 		onsellequipment: (item: InventoryItem) => void;
 		ondeleteequipment: (item: InventoryItem) => void;
+		/** Record buying more of an asset. */
+		onaddpurchase: (item: InventoryItem) => void;
+		oneditpurchase: (item: InventoryItem, purchase: AssetPurchase) => void;
+		ondeletepurchase: (item: InventoryItem, purchase: AssetPurchase) => void;
 	} = $props();
 
+	/** The assets whose purchases are showing. */
+	let expanded = $state<Set<string>>(new Set());
+	function toggle(id: string) {
+		const next = new Set(expanded);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		expanded = next;
+	}
+	const FIXED_PURCHASE =
+		'Units it paid for were sold, listed, or converted, so what it cost is fixed.';
+
 	let query = $state('');
-	const normalisedQuery = $derived(query.trim().toLowerCase());
-	const visibleEquipment = $derived(
-		equipment.filter((item) => !normalisedQuery || item.name.toLowerCase().includes(normalisedQuery)),
-	);
+	const visibleEquipment = $derived(filterByQuery(equipment, query, (item) => item.name));
 	const kindOptions = [
 		{ id: 'loot', label: 'Loot' },
 		{ id: 'equipment', label: 'Assets' },
@@ -76,6 +110,7 @@
 			onconvert={onconvert}
 			onremove={onremove}
 			onshrapnelconvert={onshrapnel}
+			onconvertitems={(item) => onconvertitems({ name: item.itemName, assetId: null })}
 			actionLayout="inventory"
 			alwaysSearch
 			fillAvailable
@@ -103,6 +138,9 @@
 				</div>
 			{/snippet}
 			{#snippet actions()}
+				{#if onreconcile}<Button size="sm" variant="ghost" onclick={onreconcile}>Check against your account</Button>{/if}
+				{#if onopenboxes}<Button size="sm" variant="secondary" onclick={onopenboxes}>Open strongboxes</Button>{/if}
+				<Button size="sm" variant="secondary" onclick={() => onconvertitems(null)}>Convert items</Button>
 				<Button size="sm" onclick={oncreatelisting}>Create listing</Button>
 			{/snippet}
 		</TreeCuttingStockView>
@@ -126,6 +164,8 @@
 				/>
 			</div>
 			<div class="flex h-full items-end justify-end gap-2">
+				{#if onopenboxes}<Button size="sm" variant="secondary" onclick={onopenboxes}>Open strongboxes</Button>{/if}
+				<Button size="sm" variant="secondary" onclick={() => onconvertitems(null)}>Convert items</Button>
 				<Button size="sm" variant="secondary" onclick={onaddequipment}>Add asset</Button>
 				<Button size="sm" onclick={oncreatelisting}>Create listing</Button>
 			</div>
@@ -141,11 +181,12 @@
 				role="row"
 			>
 				<span class="eyebrow min-w-0 flex-1" role="columnheader">Asset</span>
+				<span class="eyebrow w-16 shrink-0 text-right" role="columnheader">Qty</span>
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">TT</span>
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">MU paid</span>
 				<span class="eyebrow w-24 shrink-0 text-right" role="columnheader">Total cost</span>
 				<span class="eyebrow w-28 shrink-0 text-right" role="columnheader">Acquired</span>
-				<span class="eyebrow w-[5.25rem] shrink-0 text-right" role="columnheader">Actions</span>
+				<span class="eyebrow w-[9rem] shrink-0 text-right" role="columnheader">Actions</span>
 			</div>
 
 		<ul
@@ -154,26 +195,83 @@
 			data-testid="equipment-scroll-list"
 		>
 			{#each visibleEquipment as item (item.id)}
+				{@const stack = isStack(item)}
+				{@const open = expanded.has(item.id)}
 				<li class="flex items-center gap-3 rounded-md px-2.5 py-2" role="row">
 					<div class="min-w-0 flex-1" role="cell">
 						<p class="truncate text-sm font-medium tracking-tight text-text">{item.name}</p>
+						{#if derivedFromLabel(item.derivedFrom)}
+							<p class="mt-0.5 truncate text-xs text-text-tertiary">
+								{derivedFromLabel(item.derivedFrom)}
+							</p>
+						{/if}
 						{#if item.notes}
 							<p class="mt-0.5 truncate text-xs text-text-tertiary">{item.notes}</p>
 						{/if}
+						{#if item.purchases.length > 1}
+							<button
+								type="button"
+								class="mt-0.5 text-xs text-text-tertiary hover:text-text"
+								aria-expanded={open}
+								aria-controls={`purchases-${item.id}`}
+								onclick={() => toggle(item.id)}
+							>
+								{open ? 'Hide' : 'Show'} {item.purchases.length} purchases
+							</button>
+						{/if}
 					</div>
-					<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
-						{formatPed(item.ttValue)}
+					<span class="w-16 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
+						{formatQuantity(item.quantity)}
 					</span>
-					<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
-						{formatPed(item.markupPaid)}
+					<!-- The Qty column already says how many: an item with no TT says
+						so here rather than claim a TT of 0.00. -->
+					{#if isZeroTt(item.ttValue)}
+						<span
+							class="w-24 shrink-0 text-right text-xs text-text-tertiary"
+							role="cell"
+							title={NO_TT_TITLE}
+						>
+							No TT
+						</span>
+					{:else}
+						<span class="w-24 shrink-0 text-right text-sm tabular-nums text-text-secondary" role="cell">
+							{formatTt(item.ttValue)}
+						</span>
+					{/if}
+					<span class="w-24 shrink-0 text-right tabular-nums" role="cell">
+						<span class="block text-sm text-text-secondary">{formatPed(item.markupPaid)}</span>
+						{#if stack}
+							<span class="block text-xs text-text-tertiary">
+								{formatPed(perUnit(item.markupPaid, item.quantity) ?? 0)} each
+							</span>
+						{/if}
 					</span>
-					<span class="w-24 shrink-0 text-right text-sm font-medium tabular-nums text-text" role="cell">
-						{formatPed(item.ttValue + item.markupPaid)}
+					<span class="w-24 shrink-0 text-right tabular-nums" role="cell">
+						<span class="block text-sm font-medium text-text">
+							{formatPed(item.ttValue + item.markupPaid)}
+						</span>
+						{#if stack}
+							<span class="block text-xs text-text-tertiary">
+								{formatPed(perUnit(item.ttValue + item.markupPaid, item.quantity) ?? 0)} each
+							</span>
+						{/if}
 					</span>
 					<span class="w-28 shrink-0 text-right text-xs tabular-nums text-text-tertiary" role="cell">
 						{formatLedgerDate(item.acquiredAt)}
 					</span>
-					<div class="flex min-w-[5.25rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+					<div class="flex min-w-[9rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+						{#if item.divisible}
+							<ExpandingActionButton
+								letter="B"
+								label="Buy more"
+								onclick={() => onaddpurchase(item)}
+							/>
+						{/if}
+						<ExpandingActionButton
+							letter="C"
+							label="Convert"
+							onclick={() => onconvertitems({ name: item.name, assetId: item.id })}
+						/>
 						<ExpandingActionButton
 							letter="E"
 							label="Edit"
@@ -191,8 +289,64 @@
 						/>
 					</div>
 				</li>
+				{#if open}
+					{#each item.purchases as purchase (purchase.id)}
+						<li
+							id={purchase === item.purchases[0] ? `purchases-${item.id}` : undefined}
+							class="flex items-center gap-3 px-2.5 py-1"
+							role="row"
+							aria-label={`Purchase of ${item.name} on ${formatLedgerDate(purchase.acquiredAt)}`}
+						>
+							<span class="min-w-0 flex-1 truncate pl-4 text-xs text-text-tertiary" role="cell">
+								{purchase.fromConversion ? 'Made by a conversion' : 'Bought'}
+							</span>
+							<span class="w-16 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
+								{formatQuantity(purchase.quantity)}
+							</span>
+							<span
+								class="w-24 shrink-0 text-right text-xs tabular-nums {isZeroTt(purchase.ttValue)
+									? 'text-text-tertiary'
+									: 'text-text-secondary'}"
+								role="cell"
+								title={isZeroTt(purchase.ttValue) ? NO_TT_TITLE : undefined}
+							>
+								{isZeroTt(purchase.ttValue) ? 'No TT' : formatTt(purchase.ttValue)}
+							</span>
+							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
+								{formatPed(purchase.markupPaid)}
+								<span class="block text-text-tertiary">
+									{formatPed(perUnit(purchase.markupPaid, purchase.quantity) ?? 0)} each
+								</span>
+							</span>
+							<span class="w-24 shrink-0 text-right text-xs tabular-nums text-text-secondary" role="cell">
+								{formatPed(purchase.ttValue + purchase.markupPaid)}
+							</span>
+							<span class="w-28 shrink-0 text-right text-xs tabular-nums text-text-tertiary" role="cell">
+								{formatLedgerDate(purchase.acquiredAt)}
+							</span>
+							<div class="flex min-w-[9rem] shrink-0 items-center justify-end gap-1.5" role="cell">
+								{#if !purchase.fromConversion}
+									<ExpandingActionButton
+										letter="E"
+										label="Edit purchase"
+										disabled={!purchase.editable}
+										title={purchase.editable ? '' : FIXED_PURCHASE}
+										onclick={() => oneditpurchase(item, purchase)}
+									/>
+									<ExpandingActionButton
+										letter="X"
+										label="Remove purchase"
+										disabled={!purchase.editable}
+										title={purchase.editable ? '' : FIXED_PURCHASE}
+										onclick={() => ondeletepurchase(item, purchase)}
+									/>
+								{/if}
+							</div>
+						</li>
+					{/each}
+				{/if}
 			{/each}
-			{#if visibleEquipment.length === 0 && normalisedQuery}
+			{#if visibleEquipment.length === 0 && isSearchQuery(query)}
 				<li class="px-2.5 py-3 text-center text-xs text-text-tertiary" role="row">
 					<span role="cell">No asset matches that search.</span>
 				</li>

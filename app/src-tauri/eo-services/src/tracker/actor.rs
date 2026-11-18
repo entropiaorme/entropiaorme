@@ -25,14 +25,16 @@ use crate::clock::Clock;
 use crate::db::{Db, DbError};
 use crate::event_bus::{EventBus, Registration, Topic};
 use crate::loot_filter::normalize_blacklist;
-use crate::protection::ProtectionSelection;
 use crate::tracking_models::TrackingSession;
 
+use crate::consumables::{DoseRecord, DoseRemoval, DoseSource};
+
+use super::doses::{DoseError, DoseRuntime, DoseStart};
 use super::intervals::{ActiveActivity, ActivityKey, ActivityRef};
-use super::mob::DeclaredMob;
 use super::providers::Providers;
-use super::session::{SessionAggregate, SessionFacets};
-use super::{HarvestTool, HealTool, SessionState, TrackerCommandError};
+use super::session::SessionAggregate;
+use super::weapon_evidence::{MismatchDecision, WeaponDecisionError};
+use super::{HarvestTool, SessionState, TrackerCommandError};
 
 /// The cheap, always-current readout of the actor's session phase,
 /// published on every transition so callers answer `is_tracking`
@@ -54,7 +56,15 @@ pub(super) enum TrackerMsg {
     /// session aggregate (None when idle). The session-scoped database
     /// reads run on the caller's side, off the actor.
     Aggregate(Box<AggregateReply>),
+    /// The in-memory half of the snapshot together with where the tool in
+    /// hand comes from, read in one turn so the two agree.
+    AggregateWithTool(Box<AggregateWithToolReply>),
     ReloadConfig(oneshot::Sender<()>),
+    /// The player's decision on a standing weapon mismatch.
+    DecideWeaponMismatch(
+        MismatchDecision,
+        oneshot::Sender<Result<bool, WeaponDecisionError>>,
+    ),
     SetSkillBoost(
         Option<i64>,
         oneshot::Sender<Result<(), TrackerCommandError>>,
@@ -86,22 +96,59 @@ pub(super) enum TrackerMsg {
         source_id: String,
         reply: oneshot::Sender<Result<bool, DbError>>,
     },
-    SetProtection {
-        selection: ProtectionSelection,
-        reply: oneshot::Sender<Result<(), TrackerCommandError>>,
-    },
-    DeclareWholeSessionProtection {
-        session_id: String,
-        selection: ProtectionSelection,
-        reply: oneshot::Sender<Result<(), TrackerCommandError>>,
-    },
-    ActiveSessionId(oneshot::Sender<Option<String>>),
     ReleaseMob(oneshot::Sender<Option<String>>),
-    PrimeDemo {
-        session: TrackingSession,
-        declared_mob: Option<DeclaredMob>,
-        facets: SessionFacets,
-        reply: oneshot::Sender<()>,
+    /// Pin the creature the screen reads, provided it is still the one
+    /// the player saw.
+    PinShown {
+        expected: super::mob::DeclaredMob,
+        reply: oneshot::Sender<Result<super::mob::DeclaredMob, TrackerCommandError>>,
+    },
+    /// Pin a creature the player typed.
+    PinTyped {
+        mob: super::mob::DeclaredMob,
+        reply: oneshot::Sender<Result<(), TrackerCommandError>>,
+    },
+    /// Release the pin; the reply says whether one stood.
+    Unpin(oneshot::Sender<Result<bool, TrackerCommandError>>),
+    /// A session's armour cost was set directly (outside a protection
+    /// recording, which announces itself on the bus): re-read the running
+    /// session's share. The reply says whether the live readout changed.
+    RefreshArmour(oneshot::Sender<Result<bool, DbError>>),
+    /// Start a dose of a consumable by hand.
+    StartDose(DoseStart, oneshot::Sender<Result<DoseRecord, DoseError>>),
+    /// End an untimed dose's effect now.
+    EndDose(String, oneshot::Sender<Result<DoseRecord, DoseError>>),
+    /// Remove a dose, or restore a removed one (`restore`).
+    CorrectDose {
+        id: String,
+        restore: bool,
+        reply: oneshot::Sender<Result<DoseRecord, DoseError>>,
+    },
+    /// The wake-up at a dose's expiry: nothing to do beyond the sweep every
+    /// message runs first.
+    DoseWake,
+    /// One look of the creature watcher: no reply, since the watcher's
+    /// thread never waits on the tracker (see `detection`).
+    MobPulse(crate::mob_watch::MobPulse),
+    /// The creature watcher's watch for this session ended by itself: no
+    /// reply, as for a look.
+    WatchEnded(String),
+    /// One change the held-tool watcher saw: no reply, since its thread
+    /// never waits on the tracker (see `held_tool`).
+    /// Each carries the watch it came from.
+    ToolPulse(crate::tool_watch::ToolPulse, u64),
+    /// The held-tool watcher's watch for this session ended by itself.
+    ToolWatchEnded(String, u64),
+    /// What the account readings measured of a session so far, read off
+    /// the loop after the account announced a change: no reply.
+    MeasuredSoFar(String, Option<crate::session_costs::MeasuredSoFar>),
+    /// Where the tool in hand comes from, and what the screen showed of it.
+    ToolSource(oneshot::Sender<super::held_tool::ToolSource>),
+    /// A tool the player declared by hand, resolved as a press resolves it.
+    DeclareTool {
+        item: Box<crate::hotbar_listener::ResolvedHotbarItem>,
+        occurred_at: f64,
+        reply: oneshot::Sender<Result<super::held_tool::ToolDeclared, TrackerCommandError>>,
     },
     /// Test-only structural inspection: run a closure against the
     /// actor's owned state (the typestate replaced the lockable state
@@ -114,6 +161,15 @@ type AggregateReply = oneshot::Sender<(
     Option<String>,
     Option<crate::bus_events::HotbarItemKind>,
     Option<SessionAggregate>,
+)>;
+
+type AggregateWithToolReply = oneshot::Sender<(
+    (
+        Option<String>,
+        Option<crate::bus_events::HotbarItemKind>,
+        Option<SessionAggregate>,
+    ),
+    super::held_tool::ToolDisplay,
 )>;
 
 tokio::task_local! {
@@ -144,7 +200,6 @@ pub(super) struct TrackerActor {
     pub(super) providers: Providers,
     pub(super) session: SessionState,
     pub(super) loot_blacklist: BTreeSet<String>,
-    pub(super) heal_tool: HealTool,
     /// The last harvesting tool seen (hotbar-equipment state). Wood
     /// loot groups and failed swings price against it; routing itself
     /// is by the wood taxonomy, so it works with no hotbar signal.
@@ -155,11 +210,25 @@ pub(super) struct TrackerActor {
     /// The one item currently held in the game. This is display truth only;
     /// each accounting domain retains its own attribution state.
     pub(super) held_item: Option<(String, crate::bus_events::HotbarItemKind)>,
+    /// The healer last declared (pressed or picked in the overlay), held for
+    /// the process like `held_item`: a keyless session starts with it in hand.
+    pub(super) declared_healer: Option<super::healing::HealingIntent>,
+    /// The consumable doses still running (tracker state, not session
+    /// state: a dose outlives the session it was taken in).
+    pub(super) doses: DoseRuntime,
     /// The actor's own sender, cloned into the bus forwarders it
-    /// installs at session start.
-    sender: mpsc::UnboundedSender<TrackerMsg>,
+    /// installs at session start and into the dose wake-up.
+    pub(super) sender: mpsc::UnboundedSender<TrackerMsg>,
     subscriptions: Vec<(Topic, Registration)>,
     status: watch::Sender<TrackerStatus>,
+    /// The detection setting as last applied: turning it on lets the
+    /// watcher ask for a capture the desktop refused before.
+    pub(super) detection_setting: bool,
+    /// The held-tool reading setting as last applied, likewise.
+    pub(super) tool_reading_setting: bool,
+    /// Counts the held-tool watches started: a message of an earlier one
+    /// is dropped.
+    pub(super) tool_watch_generation: u64,
 }
 
 impl TrackerActor {
@@ -187,18 +256,32 @@ impl TrackerActor {
             providers,
             session: SessionState::Idle,
             loot_blacklist: BTreeSet::new(),
-            heal_tool: HealTool::default(),
             harvest_tool: None,
             harvest_guardrail: None,
             held_item: None,
+            declared_healer: None,
+            doses: DoseRuntime::default(),
             sender,
             subscriptions: Vec::new(),
             status,
+            detection_setting: false,
+            tool_reading_setting: false,
+            tool_watch_generation: 0,
         };
+        actor.detection_setting = actor.providers.config.mob_detection_enabled();
+        actor.tool_reading_setting = actor.providers.config.tool_reading_enabled();
         actor.refresh_loot_filter();
 
         let recovered = actor.recover_orphaned_sessions().await;
         let failed = recovered.is_err();
+        if !failed {
+            // No session is live after recovery, so no dose runs either.
+            actor.settle_stray_doses().await;
+            actor.restore_doses().await;
+            // Kept enhancer breaks follow the game data and the library as
+            // they stand now.
+            actor.heal_break_prices().await;
+        }
         let _ = ready.send(recovered);
         if failed {
             return;
@@ -213,6 +296,9 @@ impl TrackerActor {
     }
 
     async fn dispatch(&mut self, message: TrackerMsg) {
+        // A dose whose expiry passed since the last message ends first, so
+        // nothing below is priced or stamped under it.
+        self.sweep_doses().await;
         match message {
             TrackerMsg::Event(event, done) => {
                 self.on_event(&event).await;
@@ -227,9 +313,17 @@ impl TrackerActor {
             TrackerMsg::Aggregate(reply) => {
                 let _ = reply.send(self.aggregate());
             }
+            TrackerMsg::AggregateWithTool(reply) => {
+                let _ = reply.send((self.aggregate(), self.tool_display()));
+            }
             TrackerMsg::ReloadConfig(reply) => {
                 self.reload_config();
+                self.sync_detection().await;
+                self.sync_tool_reading().await;
                 let _ = reply.send(());
+            }
+            TrackerMsg::DecideWeaponMismatch(decision, reply) => {
+                let _ = reply.send(self.decide_weapon_mismatch(decision).await);
             }
             TrackerMsg::SetSkillBoost(percent, reply) => {
                 let _ = reply.send(self.set_skill_boost(percent).await);
@@ -247,26 +341,6 @@ impl TrackerActor {
             TrackerMsg::ReconcileLootSource { source_id, reply } => {
                 let _ = reply.send(self.reconcile_loot_source(&source_id).await);
             }
-            TrackerMsg::SetProtection { selection, reply } => {
-                let _ = reply.send(self.set_protection(selection).await);
-            }
-            TrackerMsg::DeclareWholeSessionProtection {
-                session_id,
-                selection,
-                reply,
-            } => {
-                let _ = reply.send(
-                    self.declare_whole_session_protection(&session_id, selection)
-                        .await,
-                );
-            }
-            TrackerMsg::ActiveSessionId(reply) => {
-                let _ = reply.send(
-                    self.session
-                        .active()
-                        .map(|active| active.session.id.clone()),
-                );
-            }
             TrackerMsg::SetDeclaredMob {
                 name,
                 species,
@@ -278,14 +352,57 @@ impl TrackerActor {
             TrackerMsg::ReleaseMob(reply) => {
                 let _ = reply.send(self.release_declared_mob());
             }
-            TrackerMsg::PrimeDemo {
-                session,
-                declared_mob,
-                facets,
+            TrackerMsg::PinShown { expected, reply } => {
+                let _ = reply.send(self.pin_shown(expected).await);
+            }
+            TrackerMsg::PinTyped { mob, reply } => {
+                let _ = reply.send(self.pin_typed(mob).await);
+            }
+            TrackerMsg::Unpin(reply) => {
+                let _ = reply.send(self.unpin().await);
+            }
+            TrackerMsg::RefreshArmour(reply) => {
+                let _ = reply.send(self.refresh_armour().await);
+            }
+            TrackerMsg::StartDose(start, reply) => {
+                let _ = reply.send(self.start_dose(start, DoseSource::Manual, None).await);
+            }
+            TrackerMsg::EndDose(id, reply) => {
+                let _ = reply.send(self.end_dose(&id).await);
+            }
+            TrackerMsg::CorrectDose { id, restore, reply } => {
+                let result = if restore {
+                    self.restore_dose(&id, DoseRemoval::Player).await
+                } else {
+                    self.remove_dose(&id, DoseRemoval::Player).await
+                };
+                let _ = reply.send(result);
+            }
+            TrackerMsg::DoseWake => {}
+            TrackerMsg::MobPulse(pulse) => {
+                self.on_mob_pulse(pulse).await;
+                self.keep_look_minutes().await;
+            }
+            TrackerMsg::WatchEnded(session_id) => self.on_watch_ended(&session_id).await,
+            TrackerMsg::ToolPulse(pulse, generation) => {
+                self.on_tool_pulse(pulse, generation).await;
+                self.keep_look_minutes().await;
+            }
+            TrackerMsg::ToolWatchEnded(session_id, generation) => {
+                self.on_tool_watch_ended(&session_id, generation).await;
+            }
+            TrackerMsg::MeasuredSoFar(session_id, so_far) => {
+                self.on_measured_so_far(session_id, so_far);
+            }
+            TrackerMsg::ToolSource(reply) => {
+                let _ = reply.send(self.tool_source());
+            }
+            TrackerMsg::DeclareTool {
+                item,
+                occurred_at,
                 reply,
             } => {
-                self.prime_demo(session, declared_mob, facets);
-                let _ = reply.send(());
+                let _ = reply.send(self.declare_by_hand(*item, occurred_at).await);
             }
             #[cfg(test)]
             TrackerMsg::Inspect(probe) => probe(self),
@@ -302,11 +419,14 @@ impl TrackerActor {
             BusEvent::ActiveToolChanged(_) => self.on_tool_changed(event),
             BusEvent::ActiveHealToolChanged(_) => self.on_heal_tool_changed(event),
             BusEvent::ActiveHarvestToolChanged(_) => self.on_harvest_tool_changed(event),
-            BusEvent::HotbarIntent(_) => self.on_hotbar_intent(event).await,
+            BusEvent::HotbarIntent(_) => self.on_intent(event).await,
             BusEvent::HarvestFail(_) => self.on_harvest_fail(event).await,
             BusEvent::Global(_) => self.on_global(event).await,
             BusEvent::EnhancerBreak(_) => self.on_enhancer_break(event),
             BusEvent::TickFlushed(_) => self.on_tick_flushed(event),
+            BusEvent::HealingUpdated(_) => self.on_healing_updated().await,
+            BusEvent::ProtectionUpdated(_) => self.on_protection_updated().await,
+            BusEvent::AccountUpdated(_) => self.on_account_updated(),
             _ => {}
         }
     }
@@ -340,6 +460,9 @@ impl TrackerActor {
             Topic::Global,
             Topic::EnhancerBreak,
             Topic::TickFlushed,
+            Topic::HealingUpdated,
+            Topic::ProtectionUpdated,
+            Topic::AccountUpdated,
         ] {
             let sender = self.sender.clone();
             let registration = self.bus.subscribe(topic, move |event| {

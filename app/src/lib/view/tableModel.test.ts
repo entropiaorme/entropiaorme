@@ -43,6 +43,18 @@ describe('filtering', () => {
 		expect(names(model.filtered)).toEqual(names(baseRows));
 	});
 
+	it('matches through the shared search: any word order, across fields', () => {
+		const model = createTableModel<Row>({
+			rows: () => baseRows,
+			pageSize: 10,
+			searchText: (r) => [r.name, r.category],
+		});
+		model.search = 'melee club';
+		expect(names(model.filtered)).toEqual(['Club']);
+		model.search = 'ranged -bow';
+		expect(names(model.filtered)).toEqual(['Rifle', 'Pistol']);
+	});
+
 	it('matches the search query case-insensitively as a substring of any search field', () => {
 		const model = makeModel();
 		model.search = 'AX';

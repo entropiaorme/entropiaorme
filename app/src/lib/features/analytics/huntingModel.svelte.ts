@@ -20,6 +20,7 @@ import {
 	type MarketHarvestData,
 	type MarketHarvestItem,
 } from '$lib/api';
+import type { RealisedDerivedMarkup } from '$lib/api/commands.gen';
 import type {
 	HuntingActivityComparison,
 	HuntingDefinitionComparison,
@@ -29,12 +30,11 @@ import type {
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyticsRange';
+import { projectRewardValue } from './rewardValue';
 import {
 	type ConfidenceMode,
-	effectiveMarkup,
-	marketOpportunity,
-	NANOCUBE_FALLBACK_MARKUP,
 	projectLoot,
+	realisedRateOver,
 	type TreeCuttingItem,
 } from './treeCuttingModel.svelte';
 
@@ -85,12 +85,15 @@ export type HuntingSessionSection = Omit<HuntingDefinitionComparison, 'activitie
 	rewardMuRate: number | null;
 	expectedTotalRate: number | null;
 	realisedMarkup: number;
+	realisedDerived: RealisedDerivedMarkup[];
 	muProjectedReturns: number | null;
 	muRate: number | null;
 	lootMarkupFactor: number | null;
 	expectedTtRate: number | null;
 	expectedMarketRate: number | null;
 	realisedReturns: number;
+	/** Realised returns over Cycled and the overhead (`overhead`, from the
+	 * comparison row): a cost beside Cycled, which Realised Net takes off. */
 	realisedRate: number;
 	items: TreeCuttingItem[];
 	activities: HuntingActivitySection[];
@@ -102,6 +105,25 @@ export type HuntingSessionSortKey = 'name' | 'cycled' | 'realisedRate' | 'muRate
 
 /** The stable label retained for diagnostics and contract-level proofs. */
 export const UNCLASSIFIED_LABEL = 'Unclassified';
+
+/** The same root item across definitions reads as one line on Overall. */
+function mergeDerived(rows: RealisedDerivedMarkup[]): RealisedDerivedMarkup[] {
+	const merged = new Map<string, RealisedDerivedMarkup>();
+	for (const row of rows) {
+		const existing = merged.get(row.originItem);
+		merged.set(
+			row.originItem,
+			existing
+				? {
+						...existing,
+						quantity: existing.quantity + row.quantity,
+						netMarkup: existing.netMarkup + row.netMarkup,
+					}
+				: { ...row },
+		);
+	}
+	return [...merged.values()];
+}
 
 /** One species row with the merged market layer. Kept internally so Overall
  * remains reconcilable while the species comparison UI is dormant. */
@@ -135,7 +157,12 @@ export type HuntingOverallLine = {
 	expectedMarketRate: number | null;
 	expected: HuntingActivityData['overall']['expected'];
 	realisedMarkup: number;
+	realisedDerived: RealisedDerivedMarkup[];
 	realisedReturns: number;
+	/** The period's overhead shared to its hunting, the unassigned
+	 * bucket's included. */
+	overhead: number;
+	/** Realised returns over Cycled and the overhead. */
 	realisedRate: number;
 	/** Confirmed markup whose species has no economic row in the selected period:
 	 * still real, still counted, and disclosed rather than dropped. */
@@ -147,6 +174,7 @@ export function createHuntingModel() {
 	let market = $state<MarketHarvestData | null>(null);
 	let realisedBySpecies = $state<Map<string, number>>(new Map());
 	let realisedByDefinition = $state<Map<number, number>>(new Map());
+	let realisedDerived = $state<RealisedDerivedMarkup[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let confidenceMode = $state<ConfidenceMode>('liquidMiddling');
@@ -184,13 +212,14 @@ export function createHuntingModel() {
 			const [activity, markets, realised] = await Promise.all([
 				getAnalyticsHuntingActivity(period),
 				getMarketHuntMarkups().catch(() => null),
-				getHuntingRealisedMarkup().catch(() => ({ species: [], definitions: [] })),
+				getHuntingRealisedMarkup().catch(() => ({ species: [], definitions: [], derived: [] })),
 			]);
 			if (epoch !== loadEpoch) return;
 			backendCompleted = performance.now();
 			data = activity;
 			market = markets;
 			realisedBySpecies = new Map(realised.species.map((row) => [row.mobSpecies, row.netMarkup]));
+			realisedDerived = realised.derived;
 			realisedByDefinition = new Map(
 				realised.definitions.map((row) => [row.definitionId, row.netMarkup]),
 			);
@@ -268,6 +297,9 @@ export function createHuntingModel() {
 			);
 			const realisedMarkup =
 				row.definitionId === null ? 0 : (realisedByDefinition.get(row.definitionId) ?? 0);
+			const derivedRows = realisedDerived.filter(
+				(entry) => entry.definitionId === row.definitionId,
+			);
 			// Top-level activities partition the definition. Family variants are
 			// explanatory children whose reward is already present in their parent.
 			const key = row.definitionId === null ? 'unassigned' : `definition:${row.definitionId}`;
@@ -290,11 +322,15 @@ export function createHuntingModel() {
 				reward,
 				...rewardRates(reward, row.cycled, projected.expectedMarketRate),
 				realisedMarkup,
+				realisedDerived: derivedRows,
 				muProjectedReturns: projection.muProjectedReturns,
 				muRate: projection.muRate,
 				...projected,
 				realisedReturns,
-				realisedRate: row.cycled > 0 ? realisedReturns / row.cycled : 0,
+				// The row's own overhead: the period's sessions shared to their
+				// hunting (on the unassigned bucket, sessions outside any
+				// definition), never the realised read's lifetime figure.
+				realisedRate: realisedRateOver(realisedReturns, row.cycled, row.overhead),
 				items: projection.items,
 				activities,
 			};
@@ -392,6 +428,8 @@ export function createHuntingModel() {
 		const realisedInPeriod = targetSections.reduce((sum, s) => sum + s.realisedMarkup, 0);
 		const reward = mergeRewardContexts(sessionSections.map((session) => session.reward));
 		const realisedReturns = data.overall.returns + reward.rewardTtPed + realisedMarkup;
+		// The period's whole overhead, the unassigned bucket's included.
+		const overhead = data.overall.overhead;
 		return {
 			realisedOutsidePeriod: realisedMarkup - realisedInPeriod,
 			cycled,
@@ -404,8 +442,10 @@ export function createHuntingModel() {
 			...projected,
 			expected: data.overall.expected,
 			realisedMarkup,
+			realisedDerived: mergeDerived(realisedDerived),
 			realisedReturns,
-			realisedRate: cycled > 0 ? realisedReturns / cycled : 0,
+			overhead,
+			realisedRate: realisedRateOver(realisedReturns, cycled, overhead),
 		};
 	});
 
@@ -454,58 +494,6 @@ export function createHuntingModel() {
 		},
 		loadData,
 	};
-}
-
-/** Universal Ammo is liquid PED in item form: its exit is face value, never a
- * market sale, so it is neither projected nor floored to the nanocube proxy.
- * (Shrapnel's own carve-out is `effectiveItemMarkup`'s 101% conversion.) */
-export function isTradeableRewardItem(itemName: string): boolean {
-	return itemName.trim().toLocaleLowerCase() !== 'universal ammo';
-}
-
-/** Value observed reward items at current direct item markup. A missing or
- * confidence-excluded market observation leaves that item's TT unchanged;
- * the generic loot projection's Nanocube substitution is deliberately not
- * used for quest rewards. */
-export function projectRewardItems(
-	items: HuntingActivityComparison['rewardItems'],
-	market: MarketHarvestData | null,
-	marketByItem: Map<string, MarketHarvestItem>,
-	confidenceMode: ConfidenceMode,
-): number | null {
-	const stockItems = items.filter((item) => isTradeableRewardItem(item.itemName));
-	if (stockItems.length === 0) return null;
-	const nanocube = market?.nanocubeMarkupPct ?? NANOCUBE_FALLBACK_MARKUP;
-	return stockItems.reduce((sum, item) => {
-		const marketItem = marketByItem.get(item.itemName);
-		if (!market || !marketItem) return sum + item.valuePed;
-		if (marketItem.unitPricePed !== null) {
-			return sum + item.quantity * marketItem.unitPricePed;
-		}
-		const opportunity = marketOpportunity(marketItem, nanocube);
-		const applied = effectiveMarkup(opportunity, nanocube, confidenceMode);
-		const markupPct = opportunity.usesNanocube || applied.floored ? 100 : applied.markupPct;
-		return sum + (item.valuePed * markupPct) / 100;
-	}, 0);
-}
-
-/** The whole reward valued at current market: its tradeable component
- * projected, plus every liquid unit at face value. `projectRewardItems`
- * answers the narrower stock question and is shared with the Quests tab,
- * which composes it the same way. Null only when nothing was recorded. */
-export function projectRewardValue(
-	items: HuntingActivityComparison['rewardItems'],
-	market: MarketHarvestData | null,
-	marketByItem: Map<string, MarketHarvestItem>,
-	confidenceMode: ConfidenceMode,
-): number | null {
-	if (items.length === 0) return null;
-	const totalTt = items.reduce((sum, item) => sum + item.valuePed, 0);
-	const stockTt = items
-		.filter((item) => isTradeableRewardItem(item.itemName))
-		.reduce((sum, item) => sum + item.valuePed, 0);
-	const projected = projectRewardItems(items, market, marketByItem, confidenceMode) ?? 0;
-	return totalTt - stockTt + projected;
 }
 
 /** Fold several scopes' rewards into one. Every distinct treatment is

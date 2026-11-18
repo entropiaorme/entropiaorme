@@ -67,6 +67,10 @@ function obs(
 		itemName: name,
 		markupPct,
 		unitPricePed: null,
+		marketObservedAt: null,
+		manual: null,
+		preferred: markupPct === null ? null : 'market',
+		nanocubeMarked: false,
 		horizon,
 		salesPed,
 		recommendedPacketTt,
@@ -79,6 +83,8 @@ function obs(
 // which the UI renders in payload order, mirrors the emitted rank order instead.
 function harvest(): AnalyticsHarvest {
 	return {
+		overhead: 0,
+		unassignedOverhead: 0,
 		tierComparisons: [
 			{
 				yieldTier: 'huge',
@@ -86,6 +92,7 @@ function harvest(): AnalyticsHarvest {
 				cycled: 91.24,
 				returns: 34.26,
 				lootRate: 0.3755,
+				overhead: 0,
 				lootItems: [loot('Long Moonleaf Board', 571, 34.26)],
 			},
 			{
@@ -94,6 +101,7 @@ function harvest(): AnalyticsHarvest {
 				cycled: 111.13,
 				returns: 87.38,
 				lootRate: 0.7863,
+				overhead: 0,
 				lootItems: [loot('Wood Shavings', 87431, 87.38)],
 			},
 		],
@@ -242,7 +250,11 @@ describe('loadData', () => {
 
 	it('scopes activity evidence to the selected analytical range', async () => {
 		const allTime = harvest();
-		const recent: AnalyticsHarvest = { tierComparisons: [allTime.tierComparisons[0]] };
+		const recent: AnalyticsHarvest = {
+			tierComparisons: [allTime.tierComparisons[0]],
+			overhead: 0,
+			unassignedOverhead: 0,
+		};
 		mocked.getAnalyticsHarvest.mockImplementation(async (period = 'all') =>
 			period === '30d' ? recent : allTime,
 		);
@@ -290,6 +302,7 @@ describe('sections', () => {
 			cycled: 0.1,
 			returns: 0,
 			lootRate: 0,
+			overhead: 0,
 			lootItems: [],
 		});
 		mocked.getAnalyticsHarvest.mockResolvedValue(data);
@@ -310,6 +323,7 @@ describe('sections', () => {
 			cycled: 400,
 			returns: 0,
 			lootRate: 0,
+			overhead: 0,
 			lootItems: [],
 		});
 		mocked.getAnalyticsHarvest.mockResolvedValue(data);
@@ -473,7 +487,9 @@ describe('realised figures', () => {
 
 	it('folds confirmed markup into the tier and the overall aggregate', async () => {
 		mocked.getAnalyticsHarvest.mockResolvedValue(harvest());
-		mocked.getHarvestRealisedMarkup.mockResolvedValue([{ yieldTier: HUGE, netMarkup: 4.5 }]);
+		mocked.getHarvestRealisedMarkup.mockResolvedValue([
+			{ yieldTier: HUGE, netMarkup: 4.5, overhead: 0 },
+		]);
 		const model = createTreeCuttingModel();
 		await model.loadData();
 
@@ -491,10 +507,39 @@ describe('realised figures', () => {
 		expect(overall.realisedReturns).toBeCloseTo(overall.returns + 4.5, 6);
 	});
 
+	it("takes a tier's overhead off its realised figures, and sets its rate against Cycled and it", async () => {
+		const period = harvest();
+		period.tierComparisons[0].overhead = 2;
+		period.overhead = 2.5;
+		period.unassignedOverhead = 0.5;
+		mocked.getAnalyticsHarvest.mockResolvedValue(period);
+		// A lifetime figure on the realised read is not the period's.
+		mocked.getHarvestRealisedMarkup.mockResolvedValue([
+			{ yieldTier: HUGE, netMarkup: 0, overhead: 99 },
+		]);
+		const model = createTreeCuttingModel();
+		await model.loadData();
+
+		const huge = sectionOf(model, HUGE);
+		// Overhead is a cost beside Cycled: the returns stay at TT.
+		expect(huge.realisedReturns).toBeCloseTo(huge.returns, 6);
+		expect(huge.overhead).toBe(2);
+		expect(huge.realisedRate).toBeCloseTo(huge.returns / (huge.cycled + 2), 6);
+		expect(sectionOf(model, LONG).overhead).toBe(0);
+
+		// Overall reads the backend's whole: the tiers' and what no tier took.
+		const overall = required(model.overall, 'overall');
+		expect(overall.overhead).toBe(2.5);
+		expect(overall.unassignedOverhead).toBe(0.5);
+		expect(overall.realisedRate).toBeCloseTo(overall.realisedReturns / (overall.cycled + 2.5), 6);
+	});
+
 	it('leaves the market projection untouched when markup is realised', async () => {
 		mocked.getAnalyticsHarvest.mockResolvedValue(harvest());
 		mocked.getMarketHarvestMarkups.mockResolvedValue(market());
-		mocked.getHarvestRealisedMarkup.mockResolvedValue([{ yieldTier: HUGE, netMarkup: 4.5 }]);
+		mocked.getHarvestRealisedMarkup.mockResolvedValue([
+			{ yieldTier: HUGE, netMarkup: 4.5, overhead: 0 },
+		]);
 		const model = createTreeCuttingModel();
 		await model.loadData();
 

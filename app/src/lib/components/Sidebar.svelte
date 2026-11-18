@@ -6,7 +6,9 @@
 		id: string;
 		label: string;
 		icon: Component; // icon component rendering the glyph's SVG
-		indicator?: 'unread';
+		/** `unread`: news or an update waiting. `attention`: something new
+		 * the app did on the player's behalf, to look at. */
+		indicator?: 'unread' | 'attention';
 	};
 
 	let {
@@ -15,6 +17,7 @@
 		onnavigate,
 		footerItems = [],
 		settingsItem,
+		disabled = false,
 		class: className = ''
 	}: {
 		items: NavItem[];
@@ -22,6 +25,8 @@
 		onnavigate: (id: string) => void;
 		footerItems?: NavItem[];
 		settingsItem?: NavItem;
+		/** Inert and dimmed: nothing behind the nav can load (a failed start). */
+		disabled?: boolean;
 		class?: string;
 	} = $props();
 
@@ -35,7 +40,9 @@
 		bg-surface/40 backdrop-blur-[2px]
 		transition-[width] duration-[var(--duration-slow)] ease-[var(--ease-out)]
 		{expanded ? 'w-[200px]' : 'w-12'}
+		{disabled ? 'opacity-40' : ''}
 		{className}"
+	inert={disabled}
 	onmouseenter={() => (expanded = true)}
 	onmouseleave={() => (expanded = false)}
 	onfocusin={() => (expanded = true)}
@@ -101,6 +108,13 @@
 						class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-accent
 							[box-shadow:0_0_6px_color-mix(in_oklab,var(--color-accent)_70%,transparent)]"
 					></span>
+				{:else if item.indicator === 'attention'}
+					<span
+						data-testid="nav-attention"
+						class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-warning
+							[box-shadow:0_0_6px_color-mix(in_oklab,var(--color-warning)_70%,transparent)]"
+						><span class="sr-only">, something new</span></span
+					>
 				{/if}
 			</span>
 			<span

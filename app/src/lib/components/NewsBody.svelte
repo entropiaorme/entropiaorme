@@ -68,7 +68,7 @@
 
 <!-- Rendered markdown is injected via {@html}, so its anchors cannot carry
      Svelte handlers directly. The action delegates clicks on external links to
-     the OS browser (mirroring the interactive guide); in-page anchors and
+     the OS browser; in-page anchors and
      internal routes navigate the webview in place. -->
 <div class="prose" use:externalLinks>
 	{@html html}

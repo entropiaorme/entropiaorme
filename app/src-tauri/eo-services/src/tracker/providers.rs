@@ -7,8 +7,13 @@ use std::sync::Arc;
 
 use serde_json::{Map, Value};
 
+use crate::clock::RealClock;
+use crate::consumables::DoseBoard;
 use crate::expected_hunting::HuntingLooterLevels;
 use crate::harvest_yield::HarvestYieldTier;
+use crate::passive_effects::PassiveEffectSource;
+
+use super::attribution::CarriedWeapon;
 
 /// An equipment profile from the library lookup, when the tool is
 /// known.
@@ -52,8 +57,16 @@ impl HarvestGuardrailTools {
     }
 }
 
-/// The equipment-library seam: profile and cost lookups plus the
-/// trifecta-preset resolution the attribution mode needs.
+/// One carried weapon resolved for the tracker: what the guardrail sees
+/// (its name and damage band) and the stored properties that price it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CarriedWeaponProfile {
+    pub weapon: CarriedWeapon,
+    pub props: Map<String, Value>,
+}
+
+/// The equipment-library seam: profile and cost lookups plus the carried
+/// weapons weapon attribution chooses among.
 pub trait EquipmentLibrary: Send + Sync {
     /// The weapon profile whose name matches the tool fragment, when
     /// the library knows it.
@@ -62,9 +75,16 @@ pub trait EquipmentLibrary: Send + Sync {
     /// The per-shot cost in PED, `0.0` when the tool is unknown.
     fn cost_per_shot(&self, tool_name: &str) -> f64;
 
-    /// Resolve the active trifecta preset's attribution map (weapons,
-    /// damage bands, heal tool), when one is configured and complete.
-    fn resolve_trifecta(&self) -> Option<Map<String, Value>>;
+    /// The weapons the player carries: every weapon bound to a hotbar slot
+    /// and every weapon carried without a hotkey, each once.
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile>;
+
+    /// Every weapon of the library the player has on, each once: the
+    /// weapons attribution chooses among while the tool in hand is read
+    /// off the screen, which can show any of them in hand.
+    fn enabled_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        Vec::new()
+    }
 
     /// Resolve the harvest guardrail's intended tools, when the
     /// guardrail is enabled and at least one board class names a tool the
@@ -102,12 +122,69 @@ pub trait TrackingConfig: Send + Sync {
     /// The declared (species, maturity), when one is configured.
     fn manual_mob(&self) -> Option<(String, String)>;
 
-    /// Whether weapon attribution runs in trifecta mode (vs hotbar).
-    fn weapon_attribution_trifecta(&self) -> bool;
-
     /// The loot-filter blacklist.
     fn loot_filter_blacklist(&self) -> Vec<String>;
+
+    /// The declared equipped sources of reload speed (rings, clothing): the
+    /// equipped input to the reload speed in effect, beside running doses.
+    fn passive_effect_sources(&self) -> Vec<PassiveEffectSource> {
+        Vec::new()
+    }
+
+    /// Whether hotbar presses are observed (the listener's capability
+    /// toggle): only then can a press declare the weapon in hand.
+    fn hotbar_hooks_enabled(&self) -> bool {
+        false
+    }
+
+    /// Whether this machine runs keyless tracking: it cannot read keys, so a
+    /// session starting now infers healing uses from the chat log against the
+    /// healer declared in the overlay.
+    fn keyless_input(&self) -> bool {
+        false
+    }
+
+    /// Whether the creature the player fights is read off the game screen
+    /// while a session runs.
+    fn mob_detection_enabled(&self) -> bool {
+        false
+    }
+
+    /// Whether the tool in hand is read off the game screen while a session
+    /// runs, in place of the hotbar's weapon and tool keys.
+    fn tool_reading_enabled(&self) -> bool {
+        false
+    }
 }
+
+/// A held tool the equipment library does not hold, known only from the
+/// game's data and built from its bundled entry alone: no amplifier, no
+/// attachments, markup as an entry added to the library starts with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundledTool {
+    pub name: String,
+    pub kind: crate::bus_events::HotbarItemKind,
+    /// The bare cost of one use, in PED.
+    pub cost_per_use_ped: f64,
+    /// A weapon's band and the props that price it; None for any other
+    /// kind.
+    pub weapon: Option<BundledWeapon>,
+}
+
+/// A weapon known only from the game's data: the band its shots are tested
+/// against and the bare props that price them. It has no library entry, so
+/// it is never one of the carried weapons.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BundledWeapon {
+    pub band: Option<super::attribution::DamageBand>,
+    pub props: Map<String, Value>,
+}
+
+/// Resolve a tool of the bundled game data, by its collection and its id
+/// there, to its bare profile; None when the data holds no such tool or
+/// its collection holds no held tool. May read the game data; called off
+/// the tracker's task.
+pub type BundledToolResolver = Arc<dyn Fn(&str, &str) -> Option<BundledTool> + Send + Sync>;
 
 /// The tracker's wired dependencies. Defaults are the inert fallbacks
 /// the original shipped (no equipment, mob mode, manual entry on).
@@ -117,6 +194,40 @@ pub struct Providers {
     /// The player's name for global/HoF correlation, fixed at
     /// construction (whitespace-trimmed there).
     pub player_name: String,
+    /// Where the tracker publishes the running doses for every other
+    /// reader of the reload speed in effect (the composition shares it
+    /// with the equipment library and the facade's pricing).
+    pub doses: DoseBoard,
+    /// Creature detection: the watcher that reads the locked plate, and
+    /// the history a session keeps of it. Inert where nothing looks at a
+    /// screen.
+    pub detector: Arc<dyn crate::mob_watch::MobDetector>,
+    /// What to show for each mob: the labels the player chose, and how
+    /// plates print the mobs graded by number.
+    pub mob_names: Arc<crate::mob_display::MobDisplayNames>,
+    /// The held-tool watcher that reads the tool in hand off the screen.
+    /// Inert where nothing looks at a screen.
+    pub tool_detector: Arc<dyn crate::tool_watch::ToolDetector>,
+    /// How contended the machine's processors are, kept beside the record
+    /// of how the watchers' looks went. Says nothing where it is not
+    /// wired.
+    pub cpu_pressure: crate::look_record::CpuPressure,
+    /// An equipment-library entry to its current snapshot, as a hotbar
+    /// press or an overlay declaration resolves it: how a library entry
+    /// read off the screen is resolved. None resolves nothing. It may read
+    /// the database synchronously, so it is called off the tracker's task.
+    pub items: Option<crate::hotbar_listener::ItemResolver>,
+    /// A tool of the bundled game data to its bare profile, for a tool read
+    /// off the screen that the library does not hold. None resolves
+    /// nothing.
+    pub bundled_tools: Option<BundledToolResolver>,
+    /// An enhancer's TT by its exact name, from the game data, for pricing
+    /// a break. None knows no enhancer, so every break is unpriced.
+    pub enhancer_tt: Option<crate::enhancer_breaks::EnhancerTtResolver>,
+    /// The markup set for an enhancer's kind and tier as it stood when it
+    /// broke, for pricing a break as it happens. None knows no markup, so
+    /// a break is priced at its TT until its session ends.
+    pub enhancer_markup: Option<crate::enhancer_breaks::EnhancerMarkupResolver>,
 }
 
 impl Default for Providers {
@@ -125,11 +236,20 @@ impl Default for Providers {
             equipment: Arc::new(InertEquipment),
             config: Arc::new(DefaultTrackingConfig),
             player_name: String::new(),
+            doses: DoseBoard::new(Arc::new(RealClock::new())),
+            detector: Arc::new(crate::mob_watch::NoDetector),
+            mob_names: Arc::default(),
+            tool_detector: Arc::new(crate::tool_watch::NoToolDetector),
+            cpu_pressure: Arc::new(|| None),
+            items: None,
+            bundled_tools: None,
+            enhancer_tt: None,
+            enhancer_markup: None,
         }
     }
 }
 
-/// The inert equipment library: no profiles, no costs, no trifecta.
+/// The inert equipment library: no profiles, no costs, no carried weapons.
 pub struct InertEquipment;
 
 impl EquipmentLibrary for InertEquipment {
@@ -141,8 +261,8 @@ impl EquipmentLibrary for InertEquipment {
         0.0
     }
 
-    fn resolve_trifecta(&self) -> Option<Map<String, Value>> {
-        None
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        Vec::new()
     }
 
     fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
@@ -159,7 +279,7 @@ impl EquipmentLibrary for InertEquipment {
 }
 
 /// The inert configuration fallbacks: no declared facets, manual mob
-/// declaration enabled, hotbar attribution, empty blacklist.
+/// declaration enabled, empty blacklist.
 pub struct DefaultTrackingConfig;
 
 impl TrackingConfig for DefaultTrackingConfig {
@@ -179,10 +299,6 @@ impl TrackingConfig for DefaultTrackingConfig {
         None
     }
 
-    fn weapon_attribution_trifecta(&self) -> bool {
-        false
-    }
-
     fn loot_filter_blacklist(&self) -> Vec<String> {
         Vec::new()
     }
@@ -197,7 +313,7 @@ mod tests {
         let equipment = InertEquipment;
         assert_eq!(equipment.weapon_profile("Opalo"), None);
         assert_eq!(equipment.cost_per_shot("Opalo"), 0.0);
-        assert_eq!(equipment.resolve_trifecta(), None);
+        assert!(equipment.carried_weapons().is_empty());
         assert_eq!(equipment.resolve_harvest_guardrail(), None);
         assert_eq!(
             equipment.hunting_looter_levels(),
@@ -215,7 +331,6 @@ mod tests {
         assert_eq!(config.session_name(), "");
         assert_eq!(config.declared_skill_boost_percent(), None);
         assert_eq!(config.manual_mob(), None);
-        assert!(!config.weapon_attribution_trifecta());
         assert!(config.loot_filter_blacklist().is_empty());
     }
 }

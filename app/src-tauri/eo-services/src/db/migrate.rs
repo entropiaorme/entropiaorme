@@ -308,6 +308,286 @@ pub(super) static MIGRATIONS: &[Migration] = &[
         description: "session armour cost policy",
         sql: include_str!("../../migrations/0054_session_armour_cost_policy.sql"),
     },
+    Migration {
+        version: 55,
+        description: "session grain protection costs",
+        sql: include_str!("../../migrations/0055_session_grain_protection_costs.sql"),
+    },
+    Migration {
+        version: 56,
+        description: "protection recording undo",
+        sql: include_str!("../../migrations/0056_protection_recording_undo.sql"),
+    },
+    Migration {
+        version: 57,
+        description: "healing corrections",
+        sql: include_str!("../../migrations/0057_healing_corrections.sql"),
+    },
+    Migration {
+        version: 58,
+        description: "weapon attribution evidence",
+        sql: include_str!("../../migrations/0058_weapon_attribution_evidence.sql"),
+    },
+    Migration {
+        version: 59,
+        description: "weapon effect windows",
+        sql: include_str!("../../migrations/0059_weapon_effect_windows.sql"),
+    },
+    Migration {
+        version: 60,
+        description: "consumable doses",
+        sql: include_str!("../../migrations/0060_consumable_doses.sql"),
+    },
+    Migration {
+        version: 61,
+        description: "consumable dose session scope",
+        sql: include_str!("../../migrations/0061_consumable_dose_session_scope.sql"),
+    },
+    Migration {
+        version: 62,
+        description: "navigation visit on key",
+        sql: include_str!("../../migrations/0062_navigation_visit_on_key.sql"),
+    },
+    Migration {
+        version: 63,
+        description: "session weapon rollups",
+        sql: include_str!("../../migrations/0063_session_weapon_rollups.sql"),
+    },
+    Migration {
+        version: 64,
+        description: "curated quests",
+        sql: include_str!("../../migrations/0064_curated_quests.sql"),
+    },
+    Migration {
+        version: 65,
+        description: "codex meta calibration",
+        sql: include_str!("../../migrations/0065_codex_meta_calibration.sql"),
+    },
+    Migration {
+        version: 66,
+        description: "session stats exclusion",
+        sql: include_str!("../../migrations/0066_session_stats_exclusion.sql"),
+    },
+    Migration {
+        version: 67,
+        description: "weapon correction batches",
+        sql: include_str!("../../migrations/0067_weapon_correction_batches.sql"),
+    },
+    Migration {
+        version: 68,
+        description: "keyless input",
+        sql: include_str!("../../migrations/0068_keyless_input.sql"),
+    },
+    Migration {
+        version: 69,
+        description: "unrecorded opening balances",
+        sql: include_str!("../../migrations/0069_unrecorded_opening_balances.sql"),
+    },
+    Migration {
+        version: 70,
+        description: "market manual markups",
+        sql: include_str!("../../migrations/0070_market_manual_markups.sql"),
+    },
+    Migration {
+        version: 71,
+        description: "item conversions",
+        sql: include_str!("../../migrations/0071_item_conversions.sql"),
+    },
+    Migration {
+        version: 72,
+        description: "weapon hit margins",
+        sql: include_str!("../../migrations/0072_weapon_hit_margins.sql"),
+    },
+    Migration {
+        version: 73,
+        description: "ledger session attribution",
+        sql: include_str!("../../migrations/0073_ledger_session_attribution.sql"),
+    },
+    Migration {
+        version: 74,
+        description: "session summary kill totals",
+        sql: include_str!("../../migrations/0074_session_summary_kill_totals.sql"),
+    },
+    Migration {
+        version: 75,
+        description: "session summary expected loot",
+        sql: include_str!("../../migrations/0075_session_summary_expected_loot.sql"),
+    },
+    Migration {
+        version: 76,
+        description: "map pin visit position read",
+        sql: include_str!("../../migrations/0076_map_pin_visit_position_read.sql"),
+    },
+    Migration {
+        version: 77,
+        description: "listing field sources",
+        sql: include_str!("../../migrations/0077_listing_field_sources.sql"),
+    },
+    Migration {
+        version: 78,
+        description: "kill mob detection",
+        sql: include_str!("../../migrations/0078_kill_mob_detection.sql"),
+    },
+    Migration {
+        version: 79,
+        description: "kill mob routes",
+        sql: include_str!("../../migrations/0079_kill_mob_routes.sql"),
+    },
+    Migration {
+        version: 80,
+        description: "equipment enabled",
+        sql: include_str!("../../migrations/0080_equipment_enabled.sql"),
+    },
+    Migration {
+        version: 81,
+        description: "tool sightings",
+        sql: include_str!("../../migrations/0081_tool_sightings.sql"),
+    },
+    Migration {
+        version: 82,
+        description: "healing intent screen",
+        sql: include_str!("../../migrations/0082_healing_intent_screen.sql"),
+    },
+    Migration {
+        version: 83,
+        description: "tool sighting entry created",
+        sql: include_str!("../../migrations/0083_tool_sighting_entry_created.sql"),
+    },
+    Migration {
+        version: 84,
+        description: "creature entries",
+        sql: include_str!("../../migrations/0084_creature_entries.sql"),
+    },
+    Migration {
+        version: 85,
+        description: "kill mob traces",
+        sql: include_str!("../../migrations/0085_kill_mob_traces.sql"),
+    },
+    Migration {
+        version: 86,
+        description: "mob labels",
+        sql: include_str!("../../migrations/0086_mob_labels.sql"),
+    },
+    Migration {
+        version: 87,
+        description: "screen look minutes",
+        sql: include_str!("../../migrations/0087_screen_look_minutes.sql"),
+    },
+    Migration {
+        version: 88,
+        description: "asset positions",
+        sql: include_str!("../../migrations/0088_asset_positions.sql"),
+    },
+    Migration {
+        version: 89,
+        description: "strongbox openings",
+        sql: include_str!("../../migrations/0089_strongbox_openings.sql"),
+    },
+    Migration {
+        version: 90,
+        description: "account readings",
+        sql: include_str!("../../migrations/0090_account_readings.sql"),
+    },
+    Migration {
+        version: 91,
+        description: "counted kills",
+        sql: include_str!("../../migrations/0091_counted_kills.sql"),
+    },
+    Migration {
+        version: 92,
+        description: "account proposals",
+        sql: include_str!("../../migrations/0092_account_proposals.sql"),
+    },
+    Migration {
+        version: 93,
+        description: "account session costs",
+        sql: include_str!("../../migrations/0093_account_session_costs.sql"),
+    },
+    Migration {
+        version: 94,
+        description: "session cost resolutions",
+        sql: include_str!("../../migrations/0094_session_cost_resolutions.sql"),
+    },
+    Migration {
+        version: 95,
+        description: "limited set pieces",
+        sql: include_str!("../../migrations/0095_limited_set_pieces.sql"),
+    },
+    Migration {
+        version: 96,
+        description: "enhancer breaks",
+        sql: include_str!("../../migrations/0096_enhancer_breaks.sql"),
+    },
+    Migration {
+        version: 97,
+        description: "session costs across a gap",
+        sql: include_str!("../../migrations/0097_session_costs_across_a_gap.sql"),
+    },
+    Migration {
+        version: 98,
+        description: "cost placements and overhead",
+        sql: include_str!("../../migrations/0098_cost_placements_and_overhead.sql"),
+    },
+    Migration {
+        version: 99,
+        description: "ammo top ups",
+        sql: include_str!("../../migrations/0099_ammo_top_ups.sql"),
+    },
+    Migration {
+        version: 100,
+        description: "live session costs",
+        sql: include_str!("../../migrations/0100_live_session_costs.sql"),
+    },
+    Migration {
+        version: 101,
+        description: "stock records from account",
+        sql: include_str!("../../migrations/0101_stock_records_from_account.sql"),
+    },
+    Migration {
+        version: 102,
+        description: "stock unknown origins",
+        sql: include_str!("../../migrations/0102_stock_unknown_origins.sql"),
+    },
+    Migration {
+        version: 103,
+        description: "stock reconciliations",
+        sql: include_str!("../../migrations/0103_stock_reconciliations.sql"),
+    },
+    Migration {
+        version: 104,
+        description: "limited piece markups",
+        sql: include_str!("../../migrations/0104_limited_piece_markups.sql"),
+    },
+    Migration {
+        version: 105,
+        description: "enhancer tier markups",
+        sql: include_str!("../../migrations/0105_enhancer_tier_markups.sql"),
+    },
+    Migration {
+        version: 106,
+        description: "listing outcomes from account",
+        sql: include_str!("../../migrations/0106_listing_outcomes_from_account.sql"),
+    },
+    Migration {
+        version: 107,
+        description: "overhead between sessions",
+        sql: include_str!("../../migrations/0107_overhead_between_sessions.sql"),
+    },
+    Migration {
+        version: 108,
+        description: "account activity seen",
+        sql: include_str!("../../migrations/0108_account_activity_seen.sql"),
+    },
+    Migration {
+        version: 109,
+        description: "overhead billed between sessions",
+        sql: include_str!("../../migrations/0109_overhead_billed_between_sessions.sql"),
+    },
+    Migration {
+        version: 110,
+        description: "card change on account records",
+        sql: include_str!("../../migrations/0110_card_change_on_account_records.sql"),
+    },
 ];
 
 // Applied migrations are immutable. These hashes are a deliberate second
@@ -370,6 +650,61 @@ const FROZEN_CHECKSUMS: &[&str] = &[
     "3D056CDB492EEC513AE2AB50F1FC3F5A5D4E1060A8E4080E8525ABB2E349EFDAA3D976F3FC3B189342D7B5369B0EBDFC",
     "44F7DCA5C01DE16671062A14175F318FB4EB7720327303E5F9438DD957130F60CF42D3C47910BCA27816B0F05422202A",
     "DE89CC822BFD6A6BB728B669B2F198DB7DD80048D60ACE1957B03F54CF58C5403F5C74C5B6B423899513AB389742C435",
+    "828E7C8B43DFA748063DFFF3AE648B9E9DEF29432B6CDA627558FE42B9DC8209B19B14392F495D16C9B014BFF53BCCFF",
+    "36A5E18AF53F84859A0F2CECAF44335F37EF5F9159649871D91DE8D65E1CCC6CC50CE5DDB5F1AD3B844AF49EAE0AA56F",
+    "5DD9ADC80F44FB2E127B00907013E69E0FB6B331A3A9419E3A5F9CB6AD155965EE7E8932695C153D6825BEC88656E7FB",
+    "F23E22D844FDEF26245B1A76CBA6427B0C6FDC9019F5971F255ED58827C680388F241587C131898CC4EBCCD2FAE2A9D9",
+    "1C97E38F06EEAF015ADD596B3CF9F4515527CD463144B877EDC5E4DACD2D2C7E2B05F2053F6BCFB018F6EED44A3CBBD9",
+    "CD863AA9ECBA07DB123390C444D1D17F991F3FE6BEE0145D9AB6A3809429E7A8AA9D547FFCC8D5971F3F1BE3F65D2CC2",
+    "67983B1055CD53D142AD2143F1D2DB12CF57B3262CE600987B25952234D0708962CDB55E4C17A3ADD30257CD714004DE",
+    "AACB75D4FD6C47510EB8AA2E6505AFBC4803D7F5591521CCD56A53045301A0EBE6F40DB3B11531C3DAC30F049B222FE9",
+    "D7D416FB7026FD9FE007DF02BB5F55E8E32D0D1C35BE5E9BC89BC6FE3AA054E2052B0B2898F0BD2B8AF0EB87E3FEF9B3",
+    "EA6118EDAADCD5FD29CC594DDFC6E4DA4235E9AEFBE812CB0088D6BEE48F65DB791B23195DC9354F3FB814ABB31DD1AC",
+    "252CDF5ADB6A037EE49CEB83411ADE4500F2AFBE5B57AC8419F1E2B3B29591E1CEEF9EFBBC02E8C079553F8FAE302D96",
+    "4D2E40992705446482AB32A9BD5DE00EAE8316978079E6F2FF38D8ABFEA332B4AFCFD76DC240BFA2F48DE041DD4EB492",
+    "790D34E91C6FF8B1C2DB749896C624FBC237BF4D10A723ABE2063E112C9598363B43D46398DC4174690401CC8390C2CB",
+    "487FAAD39B242AB6459D6184CA2AB173B17393A3225DE8505FA0352E77788810DD5B855ED10A00760710F4721D0E6844",
+    "DB8BD8BD307FDA4FCB7384EDB998244C99AC43C48C9CA7ACB216A1111F878E4079004D561D7929711AE426D4DC18770E",
+    "DF2137255B909635A0FCD0E577550C4B95091B2197EE11DC2CA0A99C161702E8DF199A30FB56915EE9E84E374CF488E3",
+    "C99E917138945DB23B9046469310649ECE0971804AF8CC4F55D6B875A5F675C7D4A628F490F5E41545093F0025455303",
+    "8A8B0CA6D32008B91B576AC9771FB38E748C352C60F8946266BDBFF873444CA484489F7A97CAD6489B12F8CC7279E478",
+    "9974AC892A37B44AF7A21761415EB2FE708D40AC31F9B8AC2D540E0680BC6E7D3A1825A2FC85E9D86C76A85E582A6778",
+    "E471B342FB13687AF089AB2BE05D9C4824F09CE7D28569E7999126EB7DFCE16A75051AB51A9A8D1728DC448CDD8CEE71",
+    "FB6D2BC7321B45C377E491EB1C4FF3F32909AF5AFB24ACC6FC000C83843EFCBA530281532C624B857E9BF9E913349147",
+    "EEA71873C59A8366EC676EE0ED68992AA63EE56B5919B9FD9048E9C8FB9F635948F2A23592244DDD35B5A4E9CD6E2200",
+    "3563B9BB772098EBC5C5B19485EE25EFA0F58CB4DEDD03C77968784CFC1B0E9A2BA74F84EB4AB6924CC06D4C3A6AD342",
+    "05FCA82F42CE9F5D4BA4BDECCC5268FEA846E3CBD03CC72EA6356A36270177F6911C0A489ECFC31F6A0AD3082DCCBA34",
+    "838DB4BF28D0A5845768FFC692148AF27430C7AA8B947FB04DD85CFB2FAE851EB8B81AC1CBEAAA89BEEAA6F9AC32F1E1",
+    "6545E8EE456350B342B77A03532267BB0604FBCF934ACE8A56D924E4CA8C7C7F8BABB5C55D768B21B91B427116A8BAB1",
+    "99EC7258E17AB5E1D67033BCF86345280355575B168DEBA9CB9678D3FC3DF4FBEE8B3D3AF35984470EAB58D344A8EB66",
+    "1D1E642AF6D220266FE2DE6A462A4417B66D2667D3115FB9B5A6EAEC9465A3A84902D4B84A58F76ADCFC4EDE2BDEB371",
+    "B35280BC61A020150DEDE28A53D5D05DA3FAEE077F1E04A499B8B8E41C5A2EE9EB7E4D77349F0821C02B2734957D89E7",
+    "42CCCDE5B527719553984F721E3D11BAC66258E449766691417364F160179C038E7F6EC463124FB1925AFCF433A568CE",
+    "4D18A05CD1C1105E14C93A170A5642DF3E8641903465474BA9EB272B56ECFAEE72E9541BE9B973F612F8C61A8A5FF659",
+    "728967B26B96DA29A26E9B7927D2A4B38683F17DC6F23D29204FCFABA7B3EAB1968EE0DE0516934B9A5A41BCB5809C75",    "3B961ADC1D523C39E4F0DC4570463EE3E70CEB0E22783FF5A782D9D7379DEB063B112506734EE21258F427BCFACA569D",
+    "39AD93B5D25DDE3FEB577AA85EC73C850ABC1791FB15F9D6819D7C6391F09C2A350D28C2C5674EC8B2755DC35A6B223C",
+    "25264B102360470EC811B7FEA6BD93BA7453AA1686E563ABA086F773AFBEB3853DDB4147D876CDEB4CF5AC462F3112FA",
+    "019C311629BE9CEBBE7A60B9F48E3679F5DFE50313C3255DFA2AEC78C818EFF27C328AA1CEBDA20F7E2AAEB05097501A",
+    "F557B841622CA46037A12CD5DCD9DDF84325EEF9FE87915BB257D4A38CAD443FF93C8D93E46B282D589D57C3BE1E8AF4",
+    "974A08EC7086DD34005227982F003EDA8D376B98539AA6255D2D175406BBE75147A0806976A20E51C74D94E3B949E631",
+    "B1675921783CF36BC429DC3E42218E81699300CD2EAF0FB42CF0C216678D24B538311DD8FE0AE3099561CEF445511670",
+    "FFE0FDF8F29837743BC94C21245FDB0FB4973B3193A8816711175DA882F276BE3A6DF0A419A3B88DABF8BE69D4AD3B88",
+    "AAB2216EECF4D44EB2DA65E9BED984F0F9E26357468E6A888EAEBBB0666115654B1CD9E0ECA0925271F33BB1DD68A6CC",
+    "78C326F2CF16BC9621278ACECD9CA0076498CD10879BFEC81291AB3CF123E26758E545096708BE6C169470551630AF92",
+    "FC0EBB674C4C090225AC5A44E9116D9D5A2C82E070F33A8C4045218E75C83052C154A48E562A8F0C0CB78F680E4314B0",
+    "09B185EC223A28B6AB4335E39D386CC64D20091A4DFCBF9BCCDA99CAB3707CE609A5B190D3A315BB5C803C00C2D2FB06",
+    "A32ED017FF4EBF6DC3C4C7982EED8737023BB7D7CFBEB808558F5A4D08C44850FD286747C3428C6EAE6441E3CD37F463",
+    "FFE780F8FAC1684FB2924765F850E64B5FD685D6D0383078692A00B2CA7F5B31B0B41024B3187FB34ACE63F5B7643AFF",
+    "44FE7C3E0419EA1B23A91B5927C6EEEA9C633A0FFBC182C18FEC71A1D5D4C4468BB9D79724E3B648469338C7A93B6986",
+    "5631C242ABD8C6CEEEAB374342813FF9AFB1EAF89F06A2965D502D2EED8FC5333B1C72E68C0D9D39C595C2860CA16AFB",
+    "2A927A38BAA8E4CA601322A89140AC6741418AB730A0D723AA94D47032377A5F3FD37C63A9259B1EBA34A5C1E73B398D",
+    "49AD4C8FCA70FB41DAA5671632295650EA01304F09034F15CB78FC1018C626D2CCF30D13698CCC87E65885980FAD6412",
+    "99C981372A9B1BEC6DA0EB90112E051C7DDFDD5F029C4457810A9D96CF46C14934E67B63B7A72D9F8BAE298FE983DBAE",
+    "95757F83D489460E964691D1EBDE2E5C8AB544F1162D477F7102793492603830591C3326A66DADEA6719B4787CDC766C",
+    "A8EC9B9C482F9114A1AD18CFF8AEB78C3F8A7DE26F4791EC06312DC37005F93C208FD99863D17F621975DADBEDEF5A17",
+    "06814279F2CED7039B2F963D0FF231CD3716BEE9EF882F8372B6C038BE449EA7108783747FB4AD15AD50311BD449B432",
+    "E76D1AC6323711B53ED1FC1D744AB21D6C4504C128EA35F66936F283FBB98C74F370DE376A9116569FEC84795D31328B",
+    "83D201EEAC96E64A829B4A7D055937E5BD3FCA35E289FF8AB04B8D3499BE90BFA2C1373FBBD7A7D0E407A77EE98BFDA7",
 ];
 
 /// The ledger table, exactly as the previous runner created it (and as
@@ -521,7 +856,7 @@ mod tests {
             "the applied ledger is not a contiguous prefix of the embedded chain",
         );
         assert_refused(
-            "UPDATE _sqlx_migrations SET version = 99 WHERE version = 4",
+            "UPDATE _sqlx_migrations SET version = 9999 WHERE version = 4",
             "the applied ledger is not a contiguous prefix of the embedded chain",
         );
         assert_refused(
@@ -552,6 +887,262 @@ mod tests {
                 migration.version
             );
         }
+    }
+
+    /// Widening the kept shots' classifications keeps every stored shot and
+    /// its correction, and the vocabulary stays closed.
+    #[test]
+    fn hit_margins_upgrade_keeps_every_shot_and_stays_closed() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        // As the app's connections run: a shot and its correction name each
+        // other, so neither could be inserted first with enforcement on.
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..71] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at) VALUES ('s', 1); \
+                 INSERT INTO weapon_shot_evidence \
+                 (id, session_id, observed_at, amount, attribution, reason, correction_id, \
+                  candidates_json, effect_candidates_json, reload_speed_percent) \
+                 VALUES ('e', 's', 2, 191.5, 'unresolved', 'r', 'c', '[1]', '[2]', 14.0); \
+                 INSERT INTO weapon_attribution_corrections \
+                 (id, session_id, evidence_id, tool_name, cost_per_shot, corrected_at) \
+                 VALUES ('c', 's', 'e', 'Chip', 0.37, 3);",
+            )
+            .expect("historic rows");
+
+        let migration = &MIGRATIONS[71];
+        assert_eq!(migration.version, 72);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let kept: (f64, String, String, String, f64, Option<f64>) = connection
+            .query_row(
+                "SELECT e.amount, e.attribution, e.candidates_json, e.effect_candidates_json, \
+                        e.reload_speed_percent, c.replaced_cost_per_shot \
+                 FROM weapon_shot_evidence e \
+                 JOIN weapon_attribution_corrections c ON c.id = e.correction_id",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("the shot and its correction survive");
+        assert_eq!(
+            kept,
+            (
+                191.5,
+                "unresolved".to_string(),
+                "[1]".to_string(),
+                "[2]".to_string(),
+                14.0,
+                None
+            )
+        );
+
+        for attribution in ["boosted", "reduced"] {
+            connection
+                .execute(
+                    "INSERT INTO weapon_shot_evidence \
+                     (id, session_id, observed_at, attribution, reason) \
+                     VALUES (?1, 's', 4, ?1, 'r')",
+                    [attribution],
+                )
+                .expect("the new classifications are allowed");
+        }
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO weapon_shot_evidence \
+                     (id, session_id, observed_at, attribution, reason) \
+                     VALUES ('x', 's', 5, 'agrees', 'r')",
+                    [],
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
+        let indexes: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' \
+                 AND name IN ('idx_weapon_shot_evidence_session', 'idx_weapon_shot_evidence_kill')",
+                [],
+                |row| row.get(0),
+            )
+            .expect("indexes");
+        assert_eq!(indexes, 2, "the rebuild restores both indexes");
+    }
+
+    /// Widening the asset states must not depend on which historical columns a
+    /// database's assets table happens to carry, and must keep every row.
+    #[test]
+    fn item_conversions_upgrade_keeps_assets_and_any_extra_columns() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..70] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "ALTER TABLE inventory_items ADD COLUMN origin_device TEXT; \
+                 INSERT INTO inventory_items \
+                 (id, name, tt_value, markup_paid, acquired_at, state, origin_device) \
+                 VALUES ('a', 'Ring', 10, 5, '2026-01-01', 'listed', 'desk');",
+            )
+            .expect("historic row");
+
+        let migration = &MIGRATIONS[70];
+        assert_eq!(migration.version, 71);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let (state, origin_device): (String, String) = connection
+            .query_row(
+                "SELECT state, origin_device FROM inventory_items WHERE id = 'a'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("the row survives");
+        assert_eq!(state, "listed");
+        assert_eq!(origin_device, "desk");
+
+        connection
+            .execute(
+                "UPDATE inventory_items SET state = 'converted' WHERE id = 'a'",
+                [],
+            )
+            .expect("the new state is allowed");
+        assert!(
+            connection
+                .execute(
+                    "UPDATE inventory_items SET state = 'lost' WHERE id = 'a'",
+                    [],
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
+        connection
+            .execute(
+                "INSERT INTO inventory_items (id, name, tt_value, markup_paid, acquired_at) \
+                 VALUES ('b', 'Blade', 1, 0, '2026-01-02')",
+                [],
+            )
+            .expect("new rows default");
+        let (state, updated_at): (String, Option<f64>) = connection
+            .query_row(
+                "SELECT state, updated_at FROM inventory_items WHERE id = 'b'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("the new row");
+        assert_eq!(state, "held");
+        assert!(updated_at.is_some(), "the table's trigger still fires");
+    }
+
+    /// Every asset becomes a position of one unit with one purchase, assets
+    /// that have already left carry the purchase they drew on, and the state
+    /// vocabulary widens by exactly the merged state.
+    #[test]
+    fn asset_positions_upgrade_gives_every_asset_its_purchase() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..87] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO inventory_items (id, name, tt_value, markup_paid, acquired_at, state) \
+                 VALUES ('held', '7x Mk. 5D Plates', 162.4, 250.6, '2026-01-01', 'held'), \
+                        ('sold', 'Pitbull Mk. 2', 46.6, 10.4, '2026-01-02', 'sold');",
+            )
+            .expect("historic rows");
+
+        let migration = &MIGRATIONS[87];
+        assert_eq!(migration.version, 88);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let rows: Vec<(String, String, f64, Option<i64>)> = connection
+            .prepare("SELECT id, state, quantity, drawn_through FROM inventory_items ORDER BY id")
+            .expect("statement")
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("rows")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "held");
+        assert_eq!(rows[0].1, "held");
+        assert_eq!(rows[0].2, 1.0);
+        assert_eq!(rows[0].3, None, "nothing has left the held asset");
+        assert_eq!(rows[1].1, "sold");
+        assert!(rows[1].3.is_some(), "the sold asset drew on its purchase");
+
+        let purchases: Vec<(String, f64, f64, f64)> = connection
+            .prepare(
+                "SELECT position_id, quantity, tt_value, markup_paid \
+                 FROM asset_purchases ORDER BY position_id",
+            )
+            .expect("statement")
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .expect("rows")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(
+            purchases,
+            vec![
+                ("held".to_string(), 1.0, 162.4, 250.6),
+                ("sold".to_string(), 1.0, 46.6, 10.4),
+            ]
+        );
+
+        connection
+            .execute(
+                "UPDATE inventory_items SET state = 'merged' WHERE id = 'held'",
+                [],
+            )
+            .expect("the merged state is allowed");
+        assert!(
+            connection
+                .execute(
+                    "UPDATE inventory_items SET state = 'lost' WHERE id = 'held'",
+                    []
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
+        assert!(
+            connection
+                .execute(
+                    "UPDATE inventory_items SET quantity = 0 WHERE id = 'held'",
+                    []
+                )
+                .is_err(),
+            "a position holds a positive quantity"
+        );
     }
 
     #[test]
@@ -638,6 +1229,88 @@ mod tests {
     }
 
     #[test]
+    fn healing_corrections_upgrade_links_each_activation_to_its_confirming_output() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..56] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, heal_cost) \
+                 VALUES ('s', 1, 100, 0, 0.07); \
+                 INSERT INTO healing_activations \
+                 (id, session_id, tool_name, intent_at, observed_at, chat_timestamp, cost_ped, \
+                  profile_json, provenance) VALUES \
+                 ('live', 's', 'Chip', 10, 10, 't', 0.04, '{}', 'direct'), \
+                 ('late', 's', 'FAP', 21, 20, 't', 0.03, '{}', 'retrospective'); \
+                 INSERT INTO healing_outputs \
+                 (id, session_id, activation_id, observed_at, chat_timestamp, amount, \
+                  classification, reason) VALUES \
+                 ('tick', 's', 'live', 12, 't', 10, 'effect', \
+                  'matched an active healing effect window'), \
+                 ('confirm', 's', 'live', 10, 't', 30, 'direct', \
+                  'confirmed a paid healing activation'), \
+                 ('reconciled', 's', 'late', 20, 't', 80, 'direct', \
+                  'reconciled with an earlier hotbar occurrence'), \
+                 ('loose', 's', NULL, 30, 't', 5, 'unattributed', \
+                  'no compatible paid-healer activation');",
+            )
+            .expect("historic healing evidence");
+
+        run(&mut connection).expect("healing corrections upgrade");
+
+        let links = connection
+            .prepare(
+                "SELECT id, confirming_output_id, superseded_at, correction_id \
+                 FROM healing_activations ORDER BY id",
+            )
+            .expect("link query")
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<f64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .expect("link rows")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect links");
+        assert_eq!(
+            links,
+            vec![
+                (
+                    "late".to_string(),
+                    Some("reconciled".to_string()),
+                    None,
+                    None
+                ),
+                ("live".to_string(), Some("confirm".to_string()), None, None),
+            ]
+        );
+        let corrections: i64 = connection
+            .query_row("SELECT COUNT(*) FROM healing_corrections", [], |row| {
+                row.get(0)
+            })
+            .expect("correction count");
+        assert_eq!(corrections, 0);
+    }
+
+    #[test]
     fn expected_hunting_phase_identity_preserves_equal_cost_loadouts() {
         let mut connection = Connection::open_in_memory().expect("memory database");
         run(&mut connection).expect("fresh chain applies");
@@ -719,6 +1392,100 @@ mod tests {
             armour_cost, 2.5,
             "the migration must not book the cost twice"
         );
+    }
+
+    /// Every recording remembers how far along the defence-event stream it
+    /// reached, so the next recording of its stream offers only the
+    /// sessions after it. History gets the position it would have had.
+    #[test]
+    fn session_grain_upgrade_gives_every_recording_its_stream_position() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..54] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) VALUES \
+                    ('ended-before', 1, 2, 0), ('still-running', 3, NULL, 1); \
+                 INSERT INTO protection_defence_events (id, session_id, damage, deflected) VALUES \
+                    (1, 'ended-before', 10, 0), (2, 'ended-before', NULL, 1), \
+                    (3, 'still-running', 10, 0), (4, 'still-running', 10, 0); \
+                 INSERT INTO protection_sets \
+                    (id, kind, name, economy_kind, markup_percent, created_at) \
+                    VALUES (1, 'armour', 'Limited', 'limited', 125, 1); \
+                 INSERT INTO protection_observations \
+                    (id, set_id, client_token, tt_value_ped, source, observed_at, \
+                     defence_event_cursor) \
+                    VALUES (1, 1, 'open', 10, 'manual', 1, 0), \
+                           (2, 1, 'close', 8, 'manual', 5, 3); \
+                 INSERT INTO protection_cost_windows \
+                    (id, kind, set_id, opening_observation_id, closing_observation_id, \
+                     consumed_tt_ped, markup_percent, cost_ped, status, created_at) \
+                    VALUES (1, 'limited_decay', 1, 1, 2, 2, 125, 2.5, 'booked', 5); \
+                 INSERT INTO protection_cost_windows (id, kind, cost_ped, status, created_at) \
+                    VALUES (2, 'repair', 1.0, 'booked', 4), (3, 'repair', 0.5, 'pending', 0.5); \
+                 INSERT INTO protection_cost_evidence (window_id, set_id, defence_event_id) \
+                    VALUES (2, NULL, 3); \
+                 INSERT INTO protection_sets (id, kind, name, economy_kind, created_at) \
+                    VALUES (2, 'armour', 'Hyperion', 'unlimited', 1);",
+            )
+            .expect("pre-session-grain history");
+
+        run(&mut connection).expect("v55 upgrade");
+
+        let cursor = |id: i64| -> i64 {
+            connection
+                .query_row(
+                    "SELECT evidence_cursor FROM protection_cost_windows WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .expect("cursor")
+        };
+        assert_eq!(cursor(1), 3, "a limited window reached its closing reading");
+        assert_eq!(
+            cursor(2),
+            3,
+            "a repair reached past its own hits and every session ended before it"
+        );
+        assert_eq!(cursor(3), 0, "a repair before any play reached nothing");
+
+        let archived = |id: i64| -> bool {
+            connection
+                .query_row(
+                    "SELECT archived_at IS NOT NULL FROM protection_sets WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .expect("set")
+        };
+        assert!(
+            archived(2),
+            "an unlimited set retires with the pooled stream"
+        );
+        assert!(!archived(1), "a limited set stays in the catalogue");
+        connection
+            .execute(
+                "INSERT INTO protection_sets \
+                 (kind, name, economy_kind, markup_percent, created_at) \
+                 VALUES ('armour', 'hyperion', 'limited', 140, 2)",
+                [],
+            )
+            .expect("the retired set's name is free for a limited set");
     }
 
     #[test]
@@ -805,6 +1572,118 @@ mod tests {
                 ("mixed".into(), "ledger".into(), "fixed_liquid".into()),
             ]
         );
+    }
+
+    /// The migration fills existing summaries in SQL; every later session
+    /// fills through the summary writer. The two have to agree, or a
+    /// family's lifetime figures would change meaning at the migration.
+    #[test]
+    fn kill_totals_backfill_agrees_with_the_summary_writer() {
+        const COLUMNS: &str = "kill_damage_total, kill_damage_max, kill_shots, kill_crits, \
+             kill_globals, kill_hofs, multiplier_sum, multiplier_count, multiplier_max, \
+             last_kill_at, last_kill_loot, last_kill_multiplier";
+        type Row = (
+            f64,
+            f64,
+            i64,
+            i64,
+            i64,
+            i64,
+            f64,
+            i64,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+            Option<f64>,
+        );
+        fn read(connection: &Connection, session: &str) -> Row {
+            connection
+                .query_row(
+                    &format!("SELECT {COLUMNS} FROM session_summaries WHERE session_id = ?"),
+                    [session],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                            row.get(10)?,
+                            row.get(11)?,
+                        ))
+                    },
+                )
+                .expect("summary row")
+        }
+
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        let apply = |connection: &mut Connection, migration: &Migration| {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        };
+        for migration in MIGRATIONS.iter().filter(|m| m.version < 74) {
+            apply(&mut connection, migration);
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active, armour_cost) \
+                 VALUES ('hunted', 1000.0, 2000.0, 0, 1.0), ('quiet', 3000.0, 4000.0, 0, 1.0);
+                 INSERT INTO kills (id, session_id, timestamp, shots_fired, damage_dealt, \
+                     critical_hits, cost_ped, loot_total_ped, is_global, is_hof) VALUES
+                   ('a', 'hunted', 1100.0, 4, 60.0, 1, 2.0, 1.0, 0, 0),
+                   ('b', 'hunted', 1300.0, 2, 120.0, 0, 1.0, 4.0, 1, 1),
+                   ('c', 'hunted', 1200.0, 3, 30.0, 2, 0.0, 9.0, 1, 0),
+                   ('d', 'hunted', 1300.0, 1, 10.0, 0, 3.0, 1.5, 0, 0);
+                 INSERT INTO session_summaries (session_id, summary_version, started_at, ended_at, \
+                     duration_hours, kills, loot_tt, weapon_cost, enhancer_cost, armour_cost, \
+                     heal_cost, dangling_cost, cycled_ped, regular_skill_ped_json, \
+                     attribute_levels_json, regular_skill_tt, attribute_levels_total) VALUES
+                   ('hunted', 6, 1000.0, 2000.0, 0.25, 4, 15.5, 0, 0, 1, 0, 0, 1, '{}', '{}', 0, 0),
+                   ('quiet', 6, 3000.0, 4000.0, 0.25, 0, 0, 0, 0, 1, 0, 0, 1, '{}', '{}', 0, 0);",
+            )
+            .expect("seed");
+
+        apply(
+            &mut connection,
+            MIGRATIONS
+                .iter()
+                .find(|m| m.version == 74)
+                .expect("kill totals migration"),
+        );
+        let hunted = read(&connection, "hunted");
+        let quiet = read(&connection, "quiet");
+        // The tie at 1300 goes to the kill recorded last.
+        assert_eq!(hunted.10, Some(1.5));
+        assert_eq!(quiet.2, 0);
+        assert_eq!(quiet.9, None);
+
+        // The writer targets the current schema.
+        for migration in MIGRATIONS.iter().filter(|m| m.version > 74) {
+            apply(&mut connection, migration);
+        }
+        for session in ["hunted", "quiet"] {
+            crate::session_summary::write_session_summary(&connection, session).expect("write");
+        }
+        assert_eq!(read(&connection, "hunted"), hunted);
+        assert_eq!(read(&connection, "quiet"), quiet);
     }
 
     #[test]
@@ -1058,5 +1937,2021 @@ mod tests {
             ledger_tail,
             MIGRATIONS.last().expect("chain is non-empty").version
         );
+    }
+
+    /// A carried dose row: id, cost, superseded at, supersedes, ended at.
+    type CarriedDose = (String, f64, Option<f64>, Option<String>, Option<f64>);
+
+    #[test]
+    fn dose_session_scope_upgrade_carries_every_dose_and_admits_untimed_ones() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..60] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES ('s', 1, 900, 0); \
+                 INSERT INTO consumable_doses \
+                 (id, equipment_id, item_name, source, session_id, started_at, expires_at, \
+                  cost_ped, cost_tracked, effects_json, superseded_at) VALUES \
+                 ('a', 4, 'Pill', 'hotbar', 's', 10, 3610, 4.5, 1, '[]', 600), \
+                 ('b', 4, 'Pill', 'manual', 's', 600, 4200, 4.5, 1, '[]', NULL); \
+                 UPDATE consumable_doses SET supersedes_dose_id = 'a' WHERE id = 'b';",
+            )
+            .expect("v60 doses");
+
+        run(&mut connection).expect("v61 upgrade");
+
+        let carried: Vec<CarriedDose> = {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT id, cost_ped, superseded_at, supersedes_dose_id, ended_at \
+                     FROM consumable_doses ORDER BY id",
+                )
+                .expect("dose read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .expect("dose rows")
+            .collect::<Result<_, _>>()
+            .expect("dose rows")
+        };
+        assert_eq!(
+            carried,
+            vec![
+                ("a".to_owned(), 4.5, Some(600.0), None, None),
+                ("b".to_owned(), 4.5, None, Some("a".to_owned()), None),
+            ]
+        );
+        // An untimed dose books nothing and has no expiry.
+        connection
+            .execute(
+                "INSERT INTO consumable_doses \
+                 (id, item_name, source, session_id, started_at, expires_at) \
+                 VALUES ('c', 'Pill', 'manual', 's', 700, NULL)",
+                [],
+            )
+            .expect("an untimed dose");
+        assert!(connection
+            .execute(
+                "INSERT INTO consumable_doses \
+                 (id, item_name, source, session_id, started_at, expires_at, cost_ped) \
+                 VALUES ('d', 'Pill', 'manual', 's', 700, NULL, 1)",
+                [],
+            )
+            .is_err());
+        assert!(connection
+            .execute(
+                "UPDATE consumable_doses SET ended_at = 5 WHERE id = 'c'",
+                [],
+            )
+            .is_err());
+    }
+
+    /// An item whose recorded outflows exceed every unit the app tracked gets
+    /// the opening balance its last outflow should have revealed, priced at the
+    /// loot's own unit TT and owned by that outflow so its undo takes it along.
+    /// Items still at or above zero are left exactly as they were.
+    #[test]
+    fn unrecorded_opening_balance_upgrade_lifts_negative_positions_to_zero() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..68] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES ('s', 1, 900, 0); \
+                 INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+                  timestamp, cost_ped, enhancer_cost, loot_total_ped) \
+                 VALUES ('k', 's', 'Robot', '', '', 10, 1.0, 0.0, 2.0); \
+                 INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped, \
+                  is_enhancer_shrapnel) VALUES \
+                 ('k', 'Shrapnel', 10000, 1.0, 0), ('k', 'Robot Filter', 10, 1.0, 0); \
+                 INSERT INTO stock_movements (item_name, movement_kind, ref_id, source_kind, \
+                  quantity, tt_value, occurred_at, created_at) VALUES \
+                 ('Shrapnel', 'removal', 'early', 'hunt', -8000, -0.8, '2026-01-01', 100), \
+                 ('Shrapnel', 'conversion_out', 'late', 'hunt', -5000, -0.5, '2026-01-02', 200), \
+                 ('Robot Filter', 'conversion_out', 'cube', 'hunt', -10, -1.0, '2026-01-02', 300);",
+            )
+            .expect("v68 stock");
+
+        run(&mut connection).expect("v69 upgrade");
+
+        let balances: Vec<(String, String, f64, f64, String, f64)> = {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT item_name, ref_id, quantity, tt_value, occurred_at, created_at \
+                     FROM stock_movements WHERE movement_kind = 'opening_balance' \
+                       AND source_kind = 'unattributed'",
+                )
+                .expect("balance read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })
+            .expect("balance rows")
+            .collect::<Result<_, _>>()
+            .expect("balance rows")
+        };
+        assert_eq!(balances.len(), 1, "{balances:?}");
+        let (item, ref_id, quantity, tt_value, occurred_at, created_at) = &balances[0];
+        assert_eq!(item, "Shrapnel");
+        assert_eq!(ref_id, "late");
+        assert!((quantity - 3000.0).abs() < 1e-9, "{quantity}");
+        assert!((tt_value - 0.3).abs() < 1e-9, "{tt_value}");
+        assert_eq!(occurred_at, "2026-01-02");
+        assert_eq!(*created_at, 200.0);
+        let net: f64 = connection
+            .query_row(
+                "SELECT 10000 + SUM(quantity) FROM stock_movements WHERE item_name = 'Shrapnel'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("net read");
+        assert!(net.abs() < 1e-9, "{net}");
+    }
+
+    /// Routes join the kills additively: every kill a version-78 database
+    /// holds stays as it was (declared, detected at a grade, or named by
+    /// nothing) with no route, each route round-trips, the vocabulary is
+    /// closed, and the continuity kills keep their own checks.
+    #[test]
+    fn kill_routes_upgrade_keeps_every_kill_and_stays_closed() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..78] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                 VALUES ('s', 1, 900, 0); \
+                 INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+                  mob_stamp_source, mob_detection_grade, mob_read_text, timestamp, cost_ped, \
+                  enhancer_cost, loot_total_ped) VALUES \
+                 ('declared', 's', 'Young Atrox', 'Atrox', 'Young', 'declared', NULL, NULL, \
+                  10, 1.0, 0.0, 2.0), \
+                 ('detected', 's', 'Old Atrox', 'Atrox', 'Old', 'detected', 'named', \
+                  'Atrox Old', 11, 1.0, 0.0, 2.0), \
+                 ('unknown', 's', 'Unknown', '', '', NULL, NULL, NULL, 12, 1.0, 0.0, 2.0); \
+                 INSERT INTO kill_mob_detections (kill_id, session_id, grade, mob_name, \
+                  mob_species, mob_maturity, read_text, read_at, declared_name, \
+                  declared_species, declared_maturity, declared_source) VALUES \
+                 ('detected', 's', 'named', 'Old Atrox', 'Atrox', 'Old', 'Atrox Old', 11, \
+                  'Young Atrox', 'Atrox', 'Young', 'declared');",
+            )
+            .expect("v78 kills");
+
+        run(&mut connection).expect("v79 upgrade");
+
+        // Each kill: id, name, stamp source, grade, route.
+        type Kept = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        );
+        let kept: Vec<Kept> = {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT id, mob_name, mob_stamp_source, mob_detection_grade, mob_route \
+                     FROM kills ORDER BY timestamp",
+                )
+                .expect("kill read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .expect("kill rows")
+            .collect::<Result<_, _>>()
+            .expect("kill rows")
+        };
+        // The names read as the game prints them: a later migration puts
+        // the name before the maturity in every stored name made the old way.
+        let some = |text: &str| Some(text.to_string());
+        assert_eq!(
+            kept,
+            [
+                (
+                    "declared".into(),
+                    "Atrox Young".into(),
+                    some("declared"),
+                    None,
+                    None
+                ),
+                (
+                    "detected".into(),
+                    "Atrox Old".into(),
+                    some("detected"),
+                    some("named"),
+                    None
+                ),
+                ("unknown".into(), "Unknown".into(), None, None, None),
+            ]
+        );
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .expect("integrity");
+        assert_eq!(integrity, "ok");
+        // An old row can take a route as any new one does.
+        connection
+            .execute(
+                "UPDATE kills SET mob_route = 'named' WHERE id = 'detected'",
+                [],
+            )
+            .expect("an old kill takes a route");
+
+        // Every route round-trips; anything else is refused.
+        for (i, route) in crate::tracker::MobRoute::ALL.into_iter().enumerate() {
+            let id = format!("r{i}");
+            connection
+                .execute(
+                    "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, \
+                     mob_route, timestamp, cost_ped, enhancer_cost, loot_total_ped) \
+                     VALUES (?1, 's', 'Young Atrox', 'Atrox', 'Young', ?2, 20, 1.0, 0.0, 2.0)",
+                    rusqlite::params![id, route.as_str()],
+                )
+                .expect("a route is kept");
+            let read: String = connection
+                .query_row(
+                    "SELECT mob_route FROM kills WHERE id = ?",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .expect("route read");
+            assert_eq!(crate::tracker::MobRoute::parse(&read), Some(route));
+        }
+        for refused in ["latest_read", "Backstop", "pinned", ""] {
+            assert!(
+                connection
+                    .execute(
+                        "INSERT INTO kills (id, session_id, mob_name, mob_species, \
+                         mob_maturity, mob_route, timestamp, cost_ped, enhancer_cost, \
+                         loot_total_ped) VALUES ('bad', 's', 'Atrox', 'Atrox', '', ?, 20, \
+                         1.0, 0.0, 2.0)",
+                        rusqlite::params![refused],
+                    )
+                    .is_err(),
+                "{refused:?} is no route"
+            );
+        }
+
+        // A carried kill: a grade, a creature, a recorded stamp to put back,
+        // a key exactly when the creature is on no list, and a settlement
+        // that is whole or absent.
+        for kept in [
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity, declared_source) VALUES \
+             ('r4', 's', 'continuity', 'Old Atrox', 'Atrox', 'Old', NULL, 'Young Atrox', \
+              'Atrox', 'Young', 'declared')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity) VALUES ('r6', 's', 'provisional_pinned', 'Gloomrat', \
+             'Gloomrat', '', 'GLOOMRAT|4|0', 'Unknown', '', '')",
+        ] {
+            connection
+                .execute(kept, [])
+                .expect("a carried kill is kept");
+        }
+        for refused in [
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity) \
+             VALUES ('r5', 's', 'continuity', ' ', '', '', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity) VALUES ('r5', 's', 'provisional_continuity', 'Gloomrat', \
+             'Gloomrat', '', '', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity) \
+             VALUES ('r5', 's', 'provisional_pinned', 'Gloomrat', 'Gloomrat', '', \
+             'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, provisional_key, declared_name, declared_species, \
+             declared_maturity) VALUES ('r5', 's', 'continuity', 'Atrox', 'Atrox', '', \
+             'ATROX|5|0', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity) \
+             VALUES ('r5', 's', 'named', 'Atrox', 'Atrox', '', 'Unknown', '', '')",
+            "INSERT INTO kill_mob_carried (kill_id, session_id, grade, mob_name, mob_species, \
+             mob_maturity, declared_name, declared_species, declared_maturity, \
+             declared_source) VALUES ('r5', 's', 'continuity', 'Atrox', 'Atrox', '', \
+             'Unknown', '', '', 'detected')",
+            "UPDATE kill_mob_carried SET reviewed_at = 5 WHERE kill_id = 'r4'",
+            "UPDATE kill_mob_carried SET reviewed_at = 5, settled_kind = 'listed', \
+             settled_name = 'Atrox' WHERE kill_id = 'r4'",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+        connection
+            .execute(
+                "UPDATE kill_mob_carried SET reviewed_at = 5, settled_kind = 'declared', \
+                 settled_name = 'Young Atrox', settled_species = 'Atrox', \
+                 settled_maturity = 'Young' WHERE kill_id = 'r4'",
+                [],
+            )
+            .expect("a whole settlement is kept");
+    }
+
+    /// The enabled flag joins the equipment library additively: every entry
+    /// a version-79 database holds stays as it was and reads enabled, a new
+    /// entry starts enabled, an entry can be turned off and on, and the flag
+    /// holds nothing but on and off.
+    #[test]
+    fn equipment_enabled_upgrade_keeps_every_entry_and_reads_them_enabled() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..79] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO equipment_library (id, name, item_type, catalog_id, \
+                  properties_json, created_at, updated_at) VALUES \
+                 (1, 'Opalo', 'weapon', 'w1', '{\"weapon_entity\": {}}', 10, 11), \
+                 (2, 'Opalo', 'weapon', 'w1', '{\"weapon_entity\": {\"v\": 2}}', 12, 13), \
+                 (3, 'Vita Bar', 'consumable', NULL, '{}', 14, 15);",
+            )
+            .expect("v79 entries");
+
+        run(&mut connection).expect("v80 upgrade");
+
+        type Kept = (
+            i64,
+            String,
+            String,
+            Option<String>,
+            String,
+            f64,
+            Option<f64>,
+            i64,
+        );
+        let read = |connection: &Connection| -> Vec<Kept> {
+            let mut stmt = connection
+                .prepare(
+                    "SELECT id, name, item_type, catalog_id, properties_json, created_at, \
+                     updated_at, enabled FROM equipment_library ORDER BY id",
+                )
+                .expect("library read");
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                ))
+            })
+            .expect("library rows")
+            .collect::<Result<_, _>>()
+            .expect("library rows")
+        };
+        assert_eq!(
+            read(&connection),
+            [
+                (
+                    1,
+                    "Opalo".into(),
+                    "weapon".into(),
+                    Some("w1".into()),
+                    r#"{"weapon_entity": {}}"#.into(),
+                    10.0,
+                    Some(11.0),
+                    1
+                ),
+                (
+                    2,
+                    "Opalo".into(),
+                    "weapon".into(),
+                    Some("w1".into()),
+                    r#"{"weapon_entity": {"v": 2}}"#.into(),
+                    12.0,
+                    Some(13.0),
+                    1
+                ),
+                (
+                    3,
+                    "Vita Bar".into(),
+                    "consumable".into(),
+                    None,
+                    "{}".into(),
+                    14.0,
+                    Some(15.0),
+                    1
+                ),
+            ]
+        );
+        let integrity: String = connection
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .expect("integrity");
+        assert_eq!(integrity, "ok");
+
+        // A new entry starts enabled; an old one turns off and on again.
+        connection
+            .execute(
+                "INSERT INTO equipment_library (name, item_type, properties_json) \
+                 VALUES ('Healer', 'healing', '{}')",
+                [],
+            )
+            .expect("a new entry is kept");
+        let enabled = |connection: &Connection, id: i64| -> i64 {
+            connection
+                .query_row(
+                    "SELECT enabled FROM equipment_library WHERE id = ?",
+                    rusqlite::params![id],
+                    |row| row.get(0),
+                )
+                .expect("enabled read")
+        };
+        assert_eq!(enabled(&connection, 4), 1);
+        for value in [0, 1] {
+            connection
+                .execute(
+                    "UPDATE equipment_library SET enabled = ? WHERE id = 1",
+                    rusqlite::params![value],
+                )
+                .expect("the flag turns");
+            assert_eq!(enabled(&connection, 1), value);
+        }
+
+        // Nothing but on and off is kept.
+        for refused in [
+            "UPDATE equipment_library SET enabled = 2 WHERE id = 1",
+            "UPDATE equipment_library SET enabled = -1 WHERE id = 1",
+            "UPDATE equipment_library SET enabled = NULL WHERE id = 1",
+            "UPDATE equipment_library SET enabled = 'yes' WHERE id = 1",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+        assert_eq!(enabled(&connection, 1), 1);
+    }
+
+    /// The sightings of tools read off the screen join additively: a
+    /// version-80 database keeps its sessions and library as they were,
+    /// gains two empty tables, and each holds only whole rows: a bundled
+    /// tool by its collection, id and name, a name read by its key and
+    /// text, once per session each, a settlement whole or absent, and
+    /// dismissed names unique without regard to case.
+    #[test]
+    fn tool_sightings_upgrade_adds_empty_tables_that_hold_only_whole_rows() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..80] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO equipment_library (id, name, item_type, catalog_id, \
+                  properties_json, created_at, updated_at) VALUES \
+                 (1, 'Opalo', 'weapon', 'w1', '{}', 10, 11);",
+            )
+            .expect("v80 rows");
+
+        run(&mut connection).expect("v81 upgrade");
+
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count(&connection, "tool_sightings"), 0);
+        assert_eq!(count(&connection, "dismissed_tool_names"), 0);
+        assert_eq!(count(&connection, "tracking_sessions"), 1);
+        assert_eq!(count(&connection, "equipment_library"), 1);
+
+        for kept in [
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+              first_seen, last_seen) VALUES ('b1', 's', 'bundled', 'weapons', '42', \
+              'Sollomate Opalo', 5, 9)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('u1', 's', 'unknown', 'teleport chip', \
+              'Teleport  Chip', 6, 6)",
+            "UPDATE tool_sightings SET shots = 12, cost_per_shot = 0.05 WHERE id = 'b1'",
+            "UPDATE tool_sightings SET settled_kind = 'added', settled_at = 20, \
+              equipment_id = 1 WHERE id = 'b1'",
+            "UPDATE tool_sightings SET settled_kind = 'dismissed', settled_at = 21 \
+              WHERE id = 'u1'",
+            "INSERT INTO dismissed_tool_names (name, dismissed_at) VALUES ('Teleport Chip', 21)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // A kind outside the two.
+            "INSERT INTO tool_sightings (id, session_id, kind, first_seen, last_seen) \
+              VALUES ('x', 's', 'library', 1, 1)",
+            // A bundled tool without its id, or carrying text.
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_name, \
+              first_seen, last_seen) VALUES ('x', 's', 'bundled', 'weapons', 'A', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+              text_key, text_read, first_seen, last_seen) VALUES ('x', 's', 'bundled', \
+              'weapons', '7', 'A', 'a', 'A', 1, 1)",
+            // A name read without its text, with a blank key, or with shots.
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, first_seen, \
+              last_seen) VALUES ('x', 's', 'unknown', 'a', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('x', 's', 'unknown', ' ', ' ', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen, shots) VALUES ('x', 's', 'unknown', 'b', 'B', 1, 1, 3)",
+            // Seen last before first.
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('x', 's', 'unknown', 'c', 'C', 5, 4)",
+            // The same thing twice in one session.
+            "INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+              first_seen, last_seen) VALUES ('x', 's', 'bundled', 'weapons', '42', 'B', 1, 1)",
+            "INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+              first_seen, last_seen) VALUES ('x', 's', 'unknown', 'teleport chip', 'T', 1, 1)",
+            // A settlement without its time, of another kind, or an entry
+            // for anything but an addition.
+            "UPDATE tool_sightings SET settled_at = NULL WHERE id = 'b1'",
+            "UPDATE tool_sightings SET settled_kind = 'kept' WHERE id = 'b1'",
+            "UPDATE tool_sightings SET equipment_id = 1 WHERE id = 'u1'",
+            // A negative count.
+            "UPDATE tool_sightings SET shots = -1 WHERE id = 'b1'",
+            // A dismissed name twice, told apart only by case, or blank.
+            "INSERT INTO dismissed_tool_names (name, dismissed_at) VALUES ('teleport chip', 22)",
+            "INSERT INTO dismissed_tool_names (name, dismissed_at) VALUES (' ', 22)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    /// A heal paid on the screen's word joins the closed vocabulary by a
+    /// rebuild that keeps every row with every column in its place, every
+    /// index, and every reference other tables make to the table.
+    #[test]
+    fn healing_intent_screen_upgrade_keeps_every_row_column_and_index() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..81] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        type Shape = (Vec<String>, Vec<String>, Vec<String>, Vec<String>, String);
+        let shape = |connection: &Connection| -> Shape {
+            let columns = connection
+                .prepare(
+                    "SELECT name || ':' || type || ':' || \"notnull\" || ':' || pk || ':' || \
+                     COALESCE(dflt_value, 'no default') FROM pragma_table_info('healing_activations')",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            let indexes = connection
+                .prepare(
+                    "SELECT name || ':' || COALESCE(sql, '') FROM sqlite_master \
+                     WHERE tbl_name = 'healing_activations' AND type IN ('index', 'trigger') \
+                     ORDER BY name",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            let referencing = connection
+                .prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' \
+                     AND name <> 'healing_activations' AND sql LIKE '%healing_activations(id)%' \
+                     ORDER BY name",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            let foreign_keys = connection
+                .prepare(
+                    "SELECT \"table\" || ':' || \"from\" || ':' || \"to\" || ':' || on_update || \
+                     ':' || on_delete || ':' || \"match\" \
+                     FROM pragma_foreign_key_list('healing_activations') ORDER BY \"from\"",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap();
+            // The table's statement with layout and quoting set aside and the
+            // one widened check taken out: every other column, constraint,
+            // reference and action must read the same.
+            let sql: String = connection
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'table' \
+                     AND name = 'healing_activations'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let mut sql: String = sql
+                .chars()
+                .filter(|c| !c.is_whitespace() && *c != '"')
+                .collect();
+            let widened = "CHECK(intent_sourceISNULLORintent_sourceIN(";
+            let start = sql.find(widened).expect("the widened check");
+            let end = start + sql[start..].find("))").expect("its end") + 2;
+            sql.replace_range(start..end, "");
+            (columns, indexes, referencing, foreign_keys, sql)
+        };
+        // A row in every table that names an activation, to prove the
+        // rebuild keeps them and what they point at.
+        let children = |connection: &Connection| -> Vec<String> {
+            connection
+                .prepare(
+                    "SELECT 'window:' || id || ':' || activation_id FROM healing_effect_windows \
+                     UNION ALL SELECT 'output:' || id || ':' || COALESCE(activation_id, '') || ':' \
+                       || COALESCE(prior_activation_id, '') FROM healing_outputs \
+                     UNION ALL SELECT 'correction:' || id || ':' || activation_id \
+                       FROM healing_corrections \
+                     ORDER BY 1",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap()
+        };
+        let row_sql = "SELECT id, session_id, equipment_id, tool_name, intent_at, observed_at, \
+                       chat_timestamp, context_id, cost_ped, profile_json, provenance, \
+                       superseded_at, confirming_output_id, correction_id, \
+                       reload_speed_percent, intent_source FROM healing_activations ORDER BY id";
+        let rows = |connection: &Connection| -> Vec<String> {
+            connection
+                .prepare(row_sql)
+                .unwrap()
+                .query_map([], |row| {
+                    let mut cells = Vec::new();
+                    for index in 0..16 {
+                        let value: rusqlite::types::Value = row.get(index)?;
+                        cells.push(format!("{value:?}"));
+                    }
+                    Ok(cells.join("|"))
+                })
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap()
+        };
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at) VALUES ('s', 1); \
+                 INSERT INTO healing_activations (id, session_id, equipment_id, tool_name, \
+                  intent_at, observed_at, chat_timestamp, context_id, cost_ped, profile_json, \
+                  provenance, superseded_at, confirming_output_id, correction_id, \
+                  reload_speed_percent, intent_source) VALUES \
+                 ('a', 's', 4, 'Vivo T1', 10.5, 11.25, '2026-01-01 00:00:11', 3, 0.0125, \
+                  '{\"mode\":\"direct\"}', 'direct', NULL, 'o1', NULL, 12.5, 'key'), \
+                 ('b', 's', NULL, 'Vivo T1', 20, 21, '2026-01-01 00:00:21', NULL, 0, '{}', \
+                  'retrospective', 30, NULL, 'c1', NULL, 'inferred'), \
+                 ('c', 's', 5, 'Chip', 40, 41, '2026-01-01 00:00:41', 2, 0.5, '{}', \
+                  'health_capped', NULL, NULL, NULL, 0, NULL); \
+                 INSERT INTO healing_effect_windows (id, activation_id, session_id, tool_name, \
+                  started_at, expires_at) VALUES ('w1', 'a', 's', 'Vivo T1', 11.25, 30); \
+                 INSERT INTO healing_outputs (id, session_id, activation_id, effect_window_id, \
+                  observed_at, chat_timestamp, amount, classification, reason, \
+                  prior_activation_id) VALUES ('o1', 's', 'a', 'w1', 11.25, 't', 30, 'direct', \
+                  'r', 'b'); \
+                 INSERT INTO healing_corrections (id, session_id, kind, activation_id, output_id, \
+                  cost_delta_ped, corrected_at) VALUES ('c1', 's', 'not_paid_use', 'b', 'o1', \
+                  -0.01, 40);",
+            )
+            .expect("v81 rows");
+        let before = (shape(&connection), rows(&connection), children(&connection));
+        assert_eq!(before.2.len(), 3, "a child row in every referencing table");
+
+        let migration = &MIGRATIONS[81];
+        assert_eq!(migration.version, 82);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        assert_eq!(
+            (shape(&connection), rows(&connection), children(&connection)),
+            before
+        );
+        assert_eq!(before.0 .1.len(), 4, "the autoindex and the three indexes");
+        assert_eq!(before.0 .3.len(), 5, "every reference and its actions");
+        assert!(
+            before
+                .0
+                 .4
+                .contains("REFERENCEStracking_sessions(id)ONDELETECASCADE"),
+            "the session reference keeps its cascade"
+        );
+        // The cascade still reaches the rows: a session removed takes its
+        // activations, as before.
+        let cascaded: i64 = {
+            connection
+                .pragma_update(None, "foreign_keys", true)
+                .expect("foreign keys on");
+            connection
+                .execute("DELETE FROM healing_corrections", [])
+                .unwrap();
+            connection
+                .execute("DELETE FROM healing_outputs", [])
+                .unwrap();
+            connection
+                .execute("DELETE FROM healing_effect_windows", [])
+                .unwrap();
+            connection
+                .execute("DELETE FROM tracking_sessions WHERE id = 's'", [])
+                .unwrap();
+            let left = connection
+                .query_row("SELECT COUNT(*) FROM healing_activations", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            connection
+                .pragma_update(None, "foreign_keys", false)
+                .expect("foreign keys off");
+            connection
+                .execute(
+                    "INSERT INTO tracking_sessions (id, started_at) VALUES ('s', 1)",
+                    [],
+                )
+                .unwrap();
+            left
+        };
+        assert_eq!(cascaded, 0, "the session's activations leave with it");
+        assert_eq!(
+            before.0 .2,
+            [
+                "healing_corrections",
+                "healing_effect_windows",
+                "healing_outputs"
+            ]
+        );
+        connection
+            .execute(
+                "INSERT INTO healing_activations (id, session_id, tool_name, intent_at, \
+                  observed_at, chat_timestamp, cost_ped, profile_json, provenance, intent_source) \
+                 VALUES ('d', 's', 'Vivo T1', 50, 51, 't', 0.01, '{}', 'direct', 'screen')",
+                [],
+            )
+            .expect("the screen's word is allowed");
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO healing_activations (id, session_id, tool_name, intent_at, \
+                      observed_at, chat_timestamp, cost_ped, profile_json, provenance, \
+                      intent_source) VALUES ('e', 's', 'Vivo T1', 50, 51, 't', 0.01, '{}', \
+                      'direct', 'hotbar')",
+                    [],
+                )
+                .is_err(),
+            "the vocabulary stays closed"
+        );
+    }
+
+    /// Whether an addition created its entry joins additively: a
+    /// version-82 database keeps every sighting as it was, each reading as
+    /// having created nothing, and the flag can be set only on a sighting
+    /// settled as added, to nothing but 0 or 1.
+    #[test]
+    fn tool_sighting_entry_created_upgrade_keeps_every_sighting_and_stays_closed() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..82] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO equipment_library (id, name, item_type, catalog_id, \
+                  properties_json) VALUES (1, 'Sollomate Opalo', 'weapon', '42', '{}'); \
+                 INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name, \
+                  first_seen, last_seen, shots, cost_per_shot, settled_kind, settled_at, \
+                  equipment_id) VALUES ('b1', 's', 'bundled', 'weapons', '42', \
+                  'Sollomate Opalo', 5, 9, 12, 0.05, 'added', 20, 1); \
+                 INSERT INTO tool_sightings (id, session_id, kind, text_key, text_read, \
+                  first_seen, last_seen) VALUES ('u1', 's', 'unknown', 'teleport chip', \
+                  'Teleport Chip', 6, 6);",
+            )
+            .expect("v82 rows");
+        let rows = |connection: &Connection| -> Vec<String> {
+            connection
+                .prepare(
+                    "SELECT id || '|' || kind || '|' || COALESCE(item_name, text_read) || '|' || \
+                     COALESCE(shots, '') || '|' || COALESCE(settled_kind, '') || '|' || \
+                     COALESCE(equipment_id, '') FROM tool_sightings ORDER BY id",
+                )
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<Vec<String>, _>>()
+                .unwrap()
+        };
+        let before = rows(&connection);
+
+        let migration = &MIGRATIONS[82];
+        assert_eq!(migration.version, 83);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        assert_eq!(rows(&connection), before, "every sighting as it was");
+        let created = |id: &str| -> i64 {
+            connection
+                .query_row(
+                    "SELECT entry_created FROM tool_sightings WHERE id = ?",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!((created("b1"), created("u1")), (0, 0));
+
+        connection
+            .execute(
+                "UPDATE tool_sightings SET entry_created = 1 WHERE id = 'b1'",
+                [],
+            )
+            .expect("an addition may have created its entry");
+        assert_eq!(created("b1"), 1);
+        for refused in [
+            // Only an addition creates an entry.
+            "UPDATE tool_sightings SET entry_created = 1 WHERE id = 'u1'",
+            // Nothing but 0 or 1.
+            "UPDATE tool_sightings SET entry_created = 2 WHERE id = 'b1'",
+            "UPDATE tool_sightings SET entry_created = NULL WHERE id = 'b1'",
+            // An addition undone keeps no flag.
+            "UPDATE tool_sightings SET settled_kind = NULL, settled_at = NULL, \
+              equipment_id = NULL WHERE id = 'b1'",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+        // The entry deleted keeps the settlement and the flag.
+        connection
+            .execute(
+                "UPDATE tool_sightings SET equipment_id = NULL WHERE id = 'b1'",
+                [],
+            )
+            .expect("an entry deleted from the library");
+        assert_eq!(created("b1"), 1);
+    }
+
+    /// Account readings join additively: a version-89 database keeps its
+    /// sessions, gains three empty tables, and the tables hold only whole
+    /// readings, holdings, and measures. The purpose and the container kind
+    /// are left to the app to refuse when read, so an unknown kind of place
+    /// can be stored.
+    #[test]
+    fn account_readings_upgrade_adds_empty_tables_that_hold_only_whole_rows() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..89] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0);",
+            )
+            .expect("v89 rows");
+
+        run(&mut connection).expect("v90 upgrade");
+
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count(&connection, "tracking_sessions"), 1);
+        for table in [
+            "account_readings",
+            "account_reading_holdings",
+            "account_session_measures",
+        ] {
+            assert_eq!(count(&connection, table), 0, "{table} starts empty");
+        }
+
+        for kept in [
+            "INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+              row_count) VALUES (10.5, 'connect', 25000, 1, 2)",
+            "INSERT INTO account_readings (taken_at, purpose, session_id, balance_pec, \
+              is_keyframe, prev_reading_id, row_count) VALUES (70.5, 'session', 's', 24952, \
+              0, 1, 1)",
+            "INSERT INTO account_reading_holdings VALUES (1, 'Universal Ammo', 'carried', '', \
+              965587, 9655, 1, '[[965587,9655]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'Common Dung', 'storage', \
+              'The Hub', 29, 0, 1, '[[29,0]]')",
+            "INSERT INTO account_reading_holdings VALUES (2, 'Common Dung', 'storage', \
+              'The Hub', 0, 0, 0, '[]')",
+            "INSERT INTO account_session_measures VALUES ('s', 1, 2, NULL, 'complete', 2, 0, \
+              1, '{}', 80)",
+            "INSERT INTO account_reading_holdings VALUES (2, 'Odd', 'estate', 'Calypso', 1, \
+              0, 1, '[[1,0]]')",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // A negative balance.
+            "INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+              row_count) VALUES (1, 'run', -1, 1, 0)",
+            // A reading that stores only changes, with nothing to change from.
+            "INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+              row_count) VALUES (1, 'run', 0, 0, 0)",
+            // A place that needs no name given one, or a named kind of
+            // place without its name.
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'other', ' ', 1, 1, 1, \
+              '[[1,1]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', 'x', 1, 1, 1, \
+              '[[1,1]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'storage', ' ', 1, 1, 1, \
+              '[[1,1]]')",
+            // Rows that are not the count given, an empty state that holds
+            // something, rows that are not a list, or a blank name.
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', '', 1, 1, 2, \
+              '[[1,1]]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', '', 1, 1, 0, '[]')",
+            "INSERT INTO account_reading_holdings VALUES (1, 'X', 'carried', '', 1, 1, 1, \
+              '{}')",
+            "INSERT INTO account_reading_holdings VALUES (1, ' ', 'carried', '', 1, 1, 1, \
+              '[[1,1]]')",
+            // The same holding twice in one reading.
+            "INSERT INTO account_reading_holdings VALUES (1, 'Universal Ammo', 'carried', '', \
+              1, 0, 1, '[[1,0]]')",
+            // A measure with one end of its readings, readings it does not
+            // name, a complete one with a gap or one reading, a coverage
+            // outside the two, a measure that is not an object, or no
+            // version.
+            "INSERT INTO account_session_measures VALUES ('t', 1, NULL, NULL, 'partial', 1, 0, \
+              1, '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', NULL, NULL, NULL, 'partial', 1, \
+              0, 1, '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'complete', 2, 1, 1, \
+              '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 1, NULL, 'complete', 1, 0, 1, \
+              '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'full', 2, 0, 1, \
+              '{}', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'partial', 2, 0, 1, \
+              '[]', 1)",
+            "INSERT INTO account_session_measures VALUES ('t', 1, 2, NULL, 'partial', 2, 0, 0, \
+              '{}', 1)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    /// Proposals join additively: a version-91 database keeps its readings,
+    /// every one of them marked examined so its history is never offered,
+    /// with no proposals, and holds one proposal per kind, reading and
+    /// subject. The kind and the status are left to the app to refuse when
+    /// read; only the structure is refused here.
+    #[test]
+    fn account_proposals_upgrade_adds_empty_tables_that_hold_one_proposal_per_subject() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..91] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+                   row_count) VALUES (10, 'run', 100, 1, 0); \
+                 INSERT INTO account_readings (taken_at, purpose, balance_pec, is_keyframe, \
+                   prev_reading_id, row_count) VALUES (70, 'run', 100, 0, 1, 0);",
+            )
+            .expect("v91 rows");
+
+        run(&mut connection).expect("v92 upgrade");
+
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count(&connection, "account_readings"), 2);
+        assert_eq!(count(&connection, "account_proposals"), 0);
+        assert_eq!(count(&connection, "account_readings_examined"), 2);
+        let unexamined: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM account_readings r WHERE NOT EXISTS \
+                 (SELECT 1 FROM account_readings_examined e WHERE e.reading_id = r.id)",
+                [],
+                |row| row.get(0),
+            )
+            .expect("unexamined");
+        assert_eq!(unexamined, 0);
+
+        for kept in [
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, session_id, subject, payload_version, payload_json, status, \
+              detected_at) VALUES ('opening', 2, 1, 10, 70, 's', 'Halloween Strongbox', 1, \
+              '{}', 'pending', 71)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              claimed_at) VALUES ('opening', 1, 2, 10, 70, 'Halloween Strongbox', 1, '{}', \
+              'pending', 71, 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              decided_at, record_id) VALUES ('listing_sold', 2, 1, 10, 70, 'listing-1', 1, \
+              '{}', 'recorded', 71, 80, 'listing-1')",
+            // An unknown kind or status is the app's to refuse when read.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('later', 2, 1, 10, 70, 'x', 1, '{}', 'later', 71)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // The same kind, reading and subject twice.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, 'Halloween Strongbox', 1, '{}', 'pending', 72)",
+            // A step from a reading to itself, a blank subject, a payload that
+            // is not an object, or no version.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 2, 10, 70, 'y', 1, '{}', 'pending', 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, ' ', 1, '{}', 'pending', 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, 'y', 1, '[]', 'pending', 72)",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at) \
+              VALUES ('opening', 2, 1, 10, 70, 'y', 0, '{}', 'pending', 72)",
+            // A record named with no decision, or a blank record.
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              record_id) VALUES ('opening', 2, 1, 10, 70, 'y', 1, '{}', 'recorded', 72, 'r')",
+            "INSERT INTO account_proposals (kind, reading_id, prev_reading_id, seen_from, \
+              seen_to, subject, payload_version, payload_json, status, detected_at, \
+              decided_at, record_id) VALUES ('opening', 2, 1, 10, 70, 'y', 1, '{}', \
+              'recorded', 72, 73, ' ')",
+            // A reading examined twice.
+            "INSERT INTO account_readings_examined VALUES (2, 72)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    /// Limited set pieces join additively: a version-94 database keeps its
+    /// sets and measured costs and gains empty tables, which hold one row
+    /// per piece of a set and one row per armour part, and refuse a blank
+    /// or padded piece name, an item open in two confirmations at once, a
+    /// confirmation ended before it began, a set part
+    /// without its set or markup, an unpriced part with a price, a priced
+    /// one without, a second row for one part, or mixed armour below zero.
+    #[test]
+    fn limited_set_pieces_upgrade_adds_empty_tables_that_refuse_a_part_out_of_shape() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..94] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO protection_sets (kind, name, economy_kind, markup_percent, \
+                   created_at) VALUES ('armour', 'Pegasus', 'limited', 140, 1); \
+                 INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                   VALUES ('s', 1, 200, 0), ('t', 1, 200, 0); \
+                 INSERT INTO account_session_costs (session_id, costs_version, \
+                   measure_version, measure_computed_at, status, reason, computed_at) \
+                   VALUES ('s', 1, 5, 80, 'measured', NULL, 81), \
+                          ('t', 1, 5, 80, 'measured', NULL, 81); \
+                 INSERT INTO session_cost_resolutions VALUES ('s', 1, 81), ('t', 1, 81);",
+            )
+            .expect("v94 rows");
+
+        run(&mut connection).expect("v95 upgrade");
+
+        for table in [
+            "protection_set_pieces",
+            "account_session_cost_armour_parts",
+            "session_cost_resolution_armour",
+            "protection_observation_readings",
+        ] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count");
+            assert_eq!(count, 0, "{table} starts empty");
+        }
+        for kept in [
+            "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at, removed_at) \
+              VALUES (1, 'Pegasus Helmet (M,L)', 2, 5)",
+            // Confirmed again once the first confirmation ended.
+            "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at) \
+              VALUES (1, 'Pegasus Helmet (M,L)', 6)",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('s', 'unlimited', NULL, \
+              1130000, 'wholePec', NULL, 1130000, 'wholePec')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('s', 'limitedSet', 1, \
+              330000, 'wholePec', 14000, 462000, 'wholePec')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('s', 'unconfirmed', NULL, \
+              100000, 'wholePec', NULL, NULL, NULL)",
+            "INSERT INTO session_cost_resolution_armour VALUES ('s', 1.592, 0.3)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at) \
+              VALUES (1, ' ', 2)",
+            "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at) \
+              VALUES (1, ' Pegasus Gloves (M,L)', 2)",
+            "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at) \
+              VALUES (1, 'Pegasus Helmet (M,L)', 7)",
+            "INSERT INTO protection_set_pieces (set_id, item_name, confirmed_at, removed_at) \
+              VALUES (1, 'Pegasus Gloves (M,L)', 7, 6)",
+            // A second row for a part 's' already holds.
+            "INSERT INTO account_session_cost_armour_parts VALUES ('s', 'unlimited', NULL, \
+              1, 'exact', NULL, 1, 'exact')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('t', 'limitedSet', NULL, \
+              1, 'exact', 14000, 1, 'exact')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('t', 'limitedSet', 1, \
+              1, 'exact', NULL, 1, 'exact')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('t', 'unconfirmed', NULL, \
+              1, 'exact', NULL, 1, 'exact')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('t', 'unlimited', NULL, \
+              1, 'exact', NULL, NULL, NULL)",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('t', 'limitedSet', 1, \
+              1, 'exact', 9000, 1, 'exact')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('t', 'repair', NULL, \
+              1, 'exact', NULL, 1, 'exact')",
+            "INSERT INTO account_session_cost_armour_parts VALUES ('t', 'unlimited', NULL, \
+              -1, 'exact', NULL, -1, 'exact')",
+            "INSERT INTO session_cost_resolution_armour VALUES ('t', -1, 0)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    /// Session costs join additively: a version-92 database keeps its
+    /// sealed measures and gains empty cost tables, which hold one header,
+    /// one row per bucket and lines in order per session, and refuse a
+    /// figure without its precision, a bucket both measured and given a
+    /// reason, an unmeasured bucket with an amount, a reason only a running
+    /// session or one with no readings has, a line whose units do not
+    /// match its kind, and a line both charged and given a reason.
+    #[test]
+    fn account_session_costs_upgrade_adds_empty_tables_that_refuse_a_mixed_basis() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..92] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                   VALUES ('s', 1, 200, 0), ('t', 1, 200, 0), ('u', 1, 200, 0), \
+                          ('v', 1, 200, 0); \
+                 INSERT INTO account_readings (taken_at, purpose, session_id, balance_pec, \
+                   is_keyframe, row_count) VALUES (10, 'session', 's', 100, 1, 0); \
+                 INSERT INTO account_readings (taken_at, purpose, session_id, balance_pec, \
+                   is_keyframe, prev_reading_id, row_count) VALUES (70, 'session', 's', 100, \
+                   0, 1, 0); \
+                 INSERT INTO account_session_measures VALUES ('s', 1, 2, 80, 'complete', 2, 0, \
+                   4, '{}', 80);",
+            )
+            .expect("v92 rows");
+
+        run(&mut connection).expect("v93 upgrade");
+
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count")
+        };
+        assert_eq!(count(&connection, "account_session_measures"), 1);
+        for table in [
+            "account_session_costs",
+            "account_session_cost_buckets",
+            "account_session_cost_lines",
+        ] {
+            assert_eq!(count(&connection, table), 0, "{table} starts empty");
+        }
+
+        for kept in [
+            "INSERT INTO account_session_costs VALUES ('s', 1, 4, 80, 'measured', NULL, 1, 2, 81, 'f')",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'weapon', 'measured', NULL, \
+              1234500, 'exact')",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'armour', 'unmeasured', \
+              'limitedSetUnconfirmed', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 0, 'weapon', 'ammo', \
+              'ammoBurned', 'Universal Ammo', 12345, 1234500, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 1, 'armour', 'limitedPlate', \
+              'limitedDecay', 'Armor Plating Mk. 5B (L)', NULL, 330000, 'wholePec', NULL, NULL)",
+            // A consumable charged at its recorded markup, and one the
+            // ledger accounts for, with its reason and no amount.
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'consumables', 'consumable', \
+              'consumed', 'Odd Pill', 2, 150000, 'exact', 15000, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 3, 'consumables', 'consumable', \
+              'consumed', 'Odd Stim', 2, NULL, NULL, NULL, 'boughtThroughLedger')",
+            // A header with no digest of the roles is allowed: the app
+            // reads it as derived from other roles, and rebuilds it.
+            "INSERT INTO account_session_costs VALUES ('u', 1, 4, 80, 'measured', NULL, 1, 2, 81, \
+              NULL)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // A second header, or a measured session with a reason.
+            "INSERT INTO account_session_costs VALUES ('s', 1, 4, 80, 'measured', NULL, 1, 2, 82, 'f')",
+            "INSERT INTO account_session_costs VALUES ('t', 1, 4, 80, 'measured', 'gap', 1, 2, \
+              81, 'f')",
+            // Only a sealed session is stored: never still running, never
+            // without readings.
+            "INSERT INTO account_session_costs VALUES ('t', 1, 4, 80, 'unmeasured', \
+              'stillRunning', 1, 2, 81, 'f')",
+            "INSERT INTO account_session_costs VALUES ('t', 1, 4, 80, 'unmeasured', \
+              'noReadings', NULL, NULL, 81, 'f')",
+            "INSERT INTO account_session_costs VALUES ('t', 1, 4, 80, 'measured', NULL, 1, NULL, \
+              81, 'f')",
+            // The same bucket twice, an unknown bucket, a measured bucket
+            // with a reason or without an amount, an unmeasured one with an
+            // amount, or an amount without its precision.
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'weapon', 'measured', NULL, \
+              1, 'exact')",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'fuel', 'measured', NULL, 1, \
+              'exact')",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'healing', 'measured', 'gap', \
+              1, 'exact')",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'healing', 'measured', NULL, \
+              NULL, NULL)",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'healing', 'unmeasured', \
+              'gap', 1, 'exact')",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'healing', 'measured', NULL, \
+              1, NULL)",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'healing', 'unmeasured', \
+              'stillRunning', NULL, NULL)",
+            // A line with no amount and no reason, an amount beside a
+            // reason, an unknown reason, a markup with no amount or on
+            // anything but a consumable used up, or a blank digest.
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 4, 'consumables', 'consumable', \
+              'consumed', 'Odd Pill', 2, NULL, NULL, NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 4, 'consumables', 'consumable', \
+              'consumed', 'Odd Pill', 2, 1, 'exact', NULL, 'boughtThroughLedger')",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 4, 'consumables', 'consumable', \
+              'consumed', 'Odd Pill', 2, NULL, NULL, NULL, 'gift')",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 4, 'consumables', 'consumable', \
+              'consumed', 'Odd Pill', 2, NULL, NULL, 15000, 'boughtThroughLedger')",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 4, 'weapon', 'weapon', 'decay', \
+              'Opalo', NULL, 1, 'exact', 15000, NULL)",
+            "INSERT INTO account_session_costs VALUES ('v', 1, 4, 80, 'measured', NULL, 1, 2, 81, \
+              '')",
+            // The same place in the order twice, units on a decay line or
+            // none on a burned one, no units at all, an unknown category or
+            // kind, a blank item, or no precision.
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 0, 'weapon', 'weapon', 'decay', \
+              'Opalo', NULL, 1, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'weapon', 'weapon', 'decay', \
+              'Opalo', 3, 1, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'weapon', 'ammo', \
+              'ammoBurned', 'Universal Ammo', NULL, 1, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'healing', 'consumable', \
+              'consumed', 'Odd Pill', 0, 1, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'weapon', 'sword', 'decay', \
+              'Opalo', NULL, 1, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'weapon', 'weapon', 'wear', \
+              'Opalo', NULL, 1, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'weapon', 'weapon', 'decay', \
+              ' ', NULL, 1, 'exact', NULL, NULL)",
+            "INSERT INTO account_session_cost_lines (session_id, position, bucket, category, \
+              kind, item_name, units, amount_micro_ped, precision, markup_hundredths, reason) \
+              VALUES ('s', 2, 'weapon', 'weapon', 'decay', \
+              'Opalo', NULL, 1, NULL, NULL, NULL)",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+
+    /// A reward a hand-in claimed before the view existed is marked at the
+    /// claim's instant and leaves `counted_kills`; every other row, an
+    /// unclaimed clump's and an undone reward's included, still counts, and
+    /// the view keeps the table's rowid and columns.
+    #[test]
+    fn counted_kills_upgrade_marks_claimed_rewards_only() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..90] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0); \
+                 INSERT INTO kills (id, session_id, mob_name, timestamp) VALUES \
+                   ('hunted', 's', 'Atrox', 10), ('claimed', 's', 'Unknown', 20), \
+                   ('unclaimed', 's', 'Unknown', 30); \
+                 INSERT INTO kills (id, session_id, mob_name, timestamp) VALUES \
+                   ('undone', 's', 'Unknown', 40); \
+                 INSERT INTO session_quest_completions (id, session_id, quest_id, completed_at) \
+                   VALUES (7, 's', 1, 25), (8, 's', 2, 45); \
+                 INSERT INTO quest_reward_reversals (completion_id, reversed_at) VALUES (8, 50); \
+                 INSERT INTO quest_reward_clumps \
+                   (source_id, session_id, source_kind, source_record_id, context_id, \
+                    observed_at, claimed_completion_id) VALUES \
+                   ('clump-a', 's', 'kill', 'claimed', 1, 20, 7), \
+                   ('clump-b', 's', 'kill', 'unclaimed', 1, 30, NULL), \
+                   ('clump-c', 's', 'kill', 'undone', 1, 40, 8);",
+            )
+            .expect("v90 rows");
+
+        let migration = &MIGRATIONS[90];
+        assert_eq!(migration.version, 91);
+        let tx = connection.transaction().expect("migration transaction");
+        tx.execute_batch(migration.sql).expect("migration SQL");
+        tx.commit().expect("migration commit");
+
+        let marked: Vec<(String, Option<f64>)> = connection
+            .prepare("SELECT id, reward_claimed_at FROM kills ORDER BY timestamp")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            marked,
+            vec![
+                ("hunted".to_string(), None),
+                ("claimed".to_string(), Some(25.0)),
+                ("unclaimed".to_string(), None),
+                ("undone".to_string(), None),
+            ]
+        );
+        let counted: Vec<(i64, String)> = connection
+            .prepare("SELECT rowid, id FROM counted_kills ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            counted,
+            vec![
+                (1, "hunted".to_string()),
+                (3, "unclaimed".to_string()),
+                (4, "undone".to_string())
+            ]
+        );
+    }
+
+    /// Costs measured across a gap join additively: a version-96 database
+    /// keeps every stored cost header, bucket and resolution as it was, and
+    /// gains the kind and reasons a gap brings, a table of the ends read
+    /// across a gap, a table of the chat log's verdicts on gaps, the
+    /// remembered chat-log time base, and the gap's length on a
+    /// resolution. The tables
+    /// refuse a reason on a session measured across a gap, such a session
+    /// with no readings named, a reason only overhead may carry on a Cycled
+    /// bucket, an end named in part, a gap row naming no end, a negative
+    /// length, and a verdict out of shape.
+    #[test]
+    fn session_costs_across_a_gap_upgrade_keeps_every_row_and_widens_the_closed_sets() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        // As the app's connections run: the stored costs name readings and
+        // sessions these rows leave out.
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..96] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                   VALUES ('s', 1, 200, 0), ('t', 1, 200, 0), ('u', 1, 200, 0), \
+                          ('v', 1, 200, 0); \
+                 INSERT INTO account_session_costs VALUES \
+                   ('s', 2, 5, 80, 'measured', NULL, 1, 2, 81, 'f'), \
+                   ('t', 2, 5, 80, 'unmeasured', 'partialCoverage', 1, 2, 81, 'f'); \
+                 INSERT INTO account_session_cost_buckets VALUES \
+                   ('s', 'weapon', 'measured', NULL, 1234500, 'exact'), \
+                   ('t', 'weapon', 'unmeasured', 'partialCoverage', NULL, NULL); \
+                 INSERT INTO session_cost_resolutions VALUES ('s', 2, 81); \
+                 INSERT INTO session_cost_resolution_buckets VALUES \
+                   ('s', 'weapon', 'measured', NULL, 1.2345, NULL);",
+            )
+            .expect("v96 rows");
+
+        run(&mut connection).expect("v97 upgrade");
+
+        let kept = |sql: &str| -> Vec<String> {
+            let mut stmt = connection.prepare(sql).expect("query");
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .expect("rows")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("decoded")
+        };
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || status || ':' || COALESCE(reason, '') || ':' \
+                   || first_reading_id || ':' || last_reading_id || ':' || roles_fingerprint \
+                 FROM account_session_costs ORDER BY session_id"
+            ),
+            ["s:measured::1:2:f", "t:unmeasured:partialCoverage:1:2:f"]
+        );
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || bucket || ':' || basis || ':' \
+                   || COALESCE(reason, '') || ':' || COALESCE(amount_micro_ped, '') \
+                 FROM account_session_cost_buckets ORDER BY session_id"
+            ),
+            [
+                "s:weapon:measured::1234500",
+                "t:weapon:unmeasured:partialCoverage:"
+            ]
+        );
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || COALESCE(across_gap_seconds, 'none') \
+                 FROM session_cost_resolutions"
+            ),
+            ["s:none"]
+        );
+        assert_eq!(
+            kept("SELECT session_id || ':' || measured_ped FROM session_cost_resolution_buckets"),
+            ["s:1.2345"]
+        );
+
+        for kept in [
+            "INSERT INTO account_session_costs VALUES ('u', 3, 5, 80, 'acrossGap', NULL, 1, 4, \
+              81, 'f')",
+            "INSERT INTO account_session_cost_gaps VALUES ('u', NULL, NULL, NULL, 4, 1800, 2620)",
+            "INSERT INTO account_session_cost_buckets VALUES ('u', 'travel', 'unmeasured', \
+              'overheadInGap', NULL, NULL)",
+            "INSERT INTO account_session_costs VALUES ('v', 3, 5, 80, 'unmeasured', \
+              'playInGap', 1, 2, 81, 'f')",
+            "INSERT INTO account_session_cost_buckets VALUES ('v', 'weapon', 'unmeasured', \
+              'chatLogMissesGap', NULL, NULL)",
+            "INSERT INTO account_session_cost_buckets VALUES ('v', 'healing', 'unmeasured', \
+              'chatLogUnchecked', NULL, NULL)",
+            "INSERT INTO account_session_cost_buckets VALUES ('v', 'armour', 'unmeasured', \
+              'gapUnaccounted', NULL, NULL)",
+            "INSERT INTO session_cost_resolutions (session_id, resolution_version, \
+              projection_computed_at, across_gap_seconds) VALUES ('u', 3, 81, 2620)",
+            "INSERT INTO session_cost_resolution_buckets VALUES ('u', 'weapon', 'tracked', \
+              'playInGap', NULL, NULL)",
+            "INSERT INTO account_session_gap_verdicts VALUES ('u', NULL, 4, 1000, 2000, 'clean', \
+              81)",
+            "INSERT INTO account_session_gap_verdicts VALUES ('v', 3, 4, 1000, 2000, \
+              'playInGap', 81)",
+            "INSERT INTO chat_log_time_base VALUES (1, 3600, 1000, 2000)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // Across a gap with a reason, or with no readings named; an
+            // unmeasured session with no reason.
+            "INSERT INTO account_session_costs VALUES ('w', 3, 5, 80, 'acrossGap', 'gap', 1, 4, \
+              81, 'f')",
+            "INSERT INTO account_session_costs VALUES ('w', 3, 5, 80, 'acrossGap', NULL, NULL, \
+              NULL, 81, 'f')",
+            "INSERT INTO account_session_costs VALUES ('w', 3, 5, 80, 'unmeasured', NULL, 1, 2, \
+              81, 'f')",
+            "INSERT INTO account_session_costs VALUES ('w', 3, 5, 80, 'unmeasured', \
+              'gapCheckPending', 1, 2, 81, 'f')",
+            // Overhead's own reason on a Cycled bucket.
+            "INSERT INTO account_session_cost_buckets VALUES ('u', 'weapon', 'unmeasured', \
+              'overheadInGap', NULL, NULL)",
+            // An end named in part, no end at all, a second row, or a
+            // negative length.
+            "INSERT INTO account_session_cost_gaps VALUES ('v', 3, NULL, 10, NULL, NULL, NULL)",
+            "INSERT INTO account_session_cost_gaps VALUES ('v', NULL, NULL, NULL, NULL, NULL, \
+              NULL)",
+            "INSERT INTO account_session_cost_gaps VALUES ('u', 3, 10, 10, NULL, NULL, NULL)",
+            "INSERT INTO account_session_cost_gaps VALUES ('v', NULL, NULL, NULL, 4, -1, 10)",
+            "INSERT INTO session_cost_resolutions (session_id, resolution_version, \
+              projection_computed_at, across_gap_seconds) VALUES ('v', 3, 81, -1)",
+            "INSERT INTO session_cost_resolution_buckets VALUES ('u', 'travel', 'tracked', \
+              'playInGap', NULL, NULL)",
+            // A verdict of no known kind, over no reading, over a span
+            // ending before it starts, or a second one for a session.
+            "INSERT INTO account_session_gap_verdicts VALUES ('w', NULL, 4, 1000, 2000, 'maybe', \
+              81)",
+            "INSERT INTO account_session_gap_verdicts VALUES ('w', NULL, NULL, 1000, 2000, \
+              'clean', 81)",
+            "INSERT INTO account_session_gap_verdicts VALUES ('w', NULL, 4, 2000, 1000, \
+              'clean', 81)",
+            "INSERT INTO account_session_gap_verdicts VALUES ('u', NULL, 5, 1000, 2000, \
+              'clean', 81)",
+            // A second remembered offset, one no zone has, or one confirmed
+            // before it began to hold.
+            "INSERT INTO chat_log_time_base VALUES (2, 0, 1000, 2000)",
+            "UPDATE chat_log_time_base SET offset_seconds = 86400",
+            "UPDATE chat_log_time_base SET confirmed_at = 500",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+    /// Placements and overhead join additively: a version-97 database keeps
+    /// every stored cost line (its set unknown) and resolution as it was,
+    /// and gains the placements, the travel category on a line, a line's
+    /// set, the overhead on a resolution, a summary and a day. The tables
+    /// refuse a placement in a category no item may be placed in, a name
+    /// with surrounding blanks, a set on a line that is not a limited
+    /// piece's, and a negative overhead.
+    #[test]
+    fn cost_placements_and_overhead_upgrade_keeps_every_row() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        // As the app's connections run: the stored costs name readings and
+        // sessions these rows leave out.
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..97] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO protection_sets (id, kind, name, economy_kind, markup_percent, \
+                   created_at) VALUES (1, 'armour', 'Pegasus', 'limited', 140, 1); \
+                 INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                   VALUES ('s', 1, 200, 0); \
+                 INSERT INTO account_session_costs VALUES \
+                   ('s', 3, 5, 80, 'measured', NULL, 1, 2, 81, 'f'); \
+                 INSERT INTO account_session_cost_lines VALUES \
+                   ('s', 0, 'weapon', 'ammo', 'ammoBurned', 'Universal Ammo', 12345, 1234500, \
+                    'exact', NULL, NULL), \
+                   ('s', 1, 'armour', 'limitedPlate', 'limitedDecay', \
+                    'Armor Plating Mk. 5B (L)', NULL, 330000, 'wholePec', NULL, NULL); \
+                 INSERT INTO session_cost_resolutions VALUES ('s', 3, 81, NULL);",
+            )
+            .expect("v97 rows");
+
+        run(&mut connection).expect("v98 upgrade");
+
+        let kept = |sql: &str| -> Vec<String> {
+            let mut stmt = connection.prepare(sql).expect("query");
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .expect("rows")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("decoded")
+        };
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || position || ':' || category || ':' || item_name \
+                   || ':' || COALESCE(units, '') || ':' || amount_micro_ped || ':' \
+                   || COALESCE(set_id, 'none') \
+                 FROM account_session_cost_lines ORDER BY position"
+            ),
+            [
+                "s:0:ammo:Universal Ammo:12345:1234500:none",
+                "s:1:limitedPlate:Armor Plating Mk. 5B (L)::330000:none"
+            ]
+        );
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || COALESCE(overhead_travel_ped, 'none') || ':' \
+                   || COALESCE(overhead_field_logistics_ped, 'none') || ':' \
+                   || COALESCE(overhead_unclassified_ped, 'none') \
+                 FROM session_cost_resolutions"
+            ),
+            ["s:none:none:none"]
+        );
+        // A summary written before holds no overhead until it is rewritten.
+        assert_eq!(
+            kept(
+                "SELECT dflt_value || ':' || \"notnull\" FROM pragma_table_info('session_summaries') \
+                 WHERE name = 'overhead_cost'"
+            ),
+            ["0:1"]
+        );
+
+        for kept in [
+            "INSERT INTO cost_item_placements VALUES ('Exploration Hoverpod MkI (L)', \
+              'travel', 90)",
+            "INSERT INTO cost_item_placements VALUES ('Odd Gadget', 'notACost', 90)",
+            "INSERT INTO account_session_cost_lines VALUES ('s', 2, 'travel', 'travel', 'decay', \
+              'Exploration Hoverpod MkI (L)', NULL, 50000, 'wholePec', NULL, NULL, NULL)",
+            "INSERT INTO account_session_cost_lines VALUES ('s', 3, 'armour', 'limitedArmour', \
+              'limitedDecay', 'Pegasus Helmet (M,L)', NULL, 330000, 'wholePec', NULL, NULL, 1)",
+            "UPDATE session_cost_resolutions SET overhead_travel_ped = 0.05",
+            "INSERT INTO daily_rollups (day, rollup_version, dirty, has_rows, overhead_travel) \
+              VALUES ('2026-01-10', 9, 0, 1, 0.05)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // A category no item is placed in, a blank or untrimmed name,
+            // and a second placement of one item.
+            "INSERT INTO cost_item_placements VALUES ('Odd', 'ammo', 90)",
+            "INSERT INTO cost_item_placements VALUES ('Odd', 'unclassified', 90)",
+            "INSERT INTO cost_item_placements VALUES ('', 'travel', 90)",
+            "INSERT INTO cost_item_placements VALUES (' Odd', 'travel', 90)",
+            "INSERT INTO cost_item_placements VALUES ('Odd Gadget', 'travel', 90)",
+            // A line in no category, and a set on a line not a limited
+            // piece's.
+            "INSERT INTO account_session_cost_lines VALUES ('s', 4, 'travel', 'notACost', \
+              'decay', 'Odd', NULL, 1, 'exact', NULL, NULL, NULL)",
+            "INSERT INTO account_session_cost_lines VALUES ('s', 4, 'weapon', 'weapon', 'decay', \
+              'Opalo', NULL, 1, 'exact', NULL, NULL, 1)",
+            // A negative overhead.
+            "UPDATE session_cost_resolutions SET overhead_unclassified_ped = -0.01",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
+    }
+    /// Top-ups join additively: a version-98 database keeps every stored
+    /// cost header, bucket and resolution bucket but those carrying the
+    /// reason the PED Card once gave (derived rows the app rebuilds), and
+    /// gains a mixed weapon bucket, its top-up steps, the resolution's
+    /// reason for them and its weapon parts. The tables refuse the retired
+    /// reason, a mixed bucket other than the weapon or without an amount,
+    /// a top-up ending before it starts or named twice, the top-up reason
+    /// on another bucket, and negative weapon parts.
+    #[test]
+    fn ammo_top_ups_upgrade_retires_the_card_s_reason_and_keeps_every_other_row() {
+        let mut connection = Connection::open_in_memory().expect("memory database");
+        // As the app's connections run: the stored costs name readings and
+        // sessions these rows leave out.
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .expect("foreign keys off");
+        connection.execute_batch(LEDGER_DDL).expect("ledger");
+        for migration in &MIGRATIONS[..98] {
+            let tx = connection.transaction().expect("migration transaction");
+            tx.execute_batch(migration.sql).expect("migration SQL");
+            tx.execute(
+                "INSERT INTO _sqlx_migrations \
+                 (version, description, success, checksum, execution_time) \
+                 VALUES (?1, ?2, TRUE, ?3, 0)",
+                rusqlite::params![
+                    migration.version,
+                    migration.description,
+                    migration.checksum()
+                ],
+            )
+            .expect("ledger row");
+            tx.commit().expect("migration commit");
+        }
+        connection
+            .execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+                   VALUES ('s', 1, 200, 0), ('t', 1, 200, 0); \
+                 INSERT INTO account_session_costs VALUES \
+                   ('s', 4, 5, 80, 'measured', NULL, 1, 2, 81, 'f'), \
+                   ('t', 4, 5, 80, 'unmeasured', 'gap', 1, 2, 81, 'f'); \
+                 INSERT INTO account_session_cost_buckets VALUES \
+                   ('s', 'weapon', 'measured', NULL, 1234500, 'exact'), \
+                   ('s', 'consumables', 'unmeasured', 'departureUnexplained', NULL, NULL), \
+                   ('t', 'weapon', 'unmeasured', 'gap', NULL, NULL); \
+                 INSERT INTO session_cost_resolutions VALUES ('s', 4, 81, NULL, NULL, NULL, NULL); \
+                 INSERT INTO session_cost_resolution_buckets VALUES \
+                   ('s', 'weapon', 'measured', NULL, 1.2345, 1.1), \
+                   ('s', 'consumables', 'tracked', 'departureUnexplained', NULL, NULL);",
+            )
+            .expect("v98 rows");
+
+        run(&mut connection).expect("v99 upgrade");
+
+        let kept = |sql: &str| -> Vec<String> {
+            let mut stmt = connection.prepare(sql).expect("query");
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .expect("rows")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("decoded")
+        };
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || status || ':' || COALESCE(reason, '') || ':' \
+                   || first_reading_id || ':' || last_reading_id || ':' || roles_fingerprint \
+                 FROM account_session_costs ORDER BY session_id"
+            ),
+            ["s:measured::1:2:f", "t:unmeasured:gap:1:2:f"]
+        );
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || bucket || ':' || basis || ':' \
+                   || COALESCE(reason, '') || ':' || COALESCE(amount_micro_ped, '') \
+                 FROM account_session_cost_buckets ORDER BY session_id, bucket"
+            ),
+            ["s:weapon:measured::1234500", "t:weapon:unmeasured:gap:"]
+        );
+        assert_eq!(
+            kept(
+                "SELECT session_id || ':' || bucket || ':' || basis || ':' || measured_ped \
+                   || ':' || scale FROM session_cost_resolution_buckets"
+            ),
+            ["s:weapon:measured:1.2345:1.1"]
+        );
+        for table in [
+            "account_session_cost_top_ups",
+            "session_cost_resolution_weapon",
+        ] {
+            let count: i64 = connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("count");
+            assert_eq!(count, 0, "{table} starts empty");
+        }
+
+        for kept in [
+            "UPDATE account_session_cost_buckets SET basis = 'mixed' \
+              WHERE session_id = 's' AND bucket = 'weapon'",
+            "INSERT INTO account_session_cost_top_ups VALUES ('s', 60000, 120000)",
+            "INSERT INTO account_session_cost_top_ups VALUES ('s', 300000, 360000)",
+            "UPDATE session_cost_resolution_buckets SET basis = 'tracked', \
+              reason = 'ammoToppedUp', measured_ped = NULL, scale = NULL \
+              WHERE session_id = 's' AND bucket = 'weapon'",
+            "INSERT INTO session_cost_resolution_weapon VALUES ('s', 1.2345, 0.4, 1.3)",
+        ] {
+            connection
+                .execute(kept, [])
+                .unwrap_or_else(|error| panic!("kept: {kept}: {error}"));
+        }
+        for refused in [
+            // The retired reason, anywhere.
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'healing', 'unmeasured', \
+              'departureUnexplained', NULL, NULL)",
+            "INSERT INTO account_session_costs VALUES ('u', 5, 6, 80, 'unmeasured', \
+              'departureUnexplained', 1, 2, 81, 'f')",
+            "INSERT INTO session_cost_resolution_buckets VALUES ('s', 'healing', 'tracked', \
+              'departureUnexplained', NULL, NULL)",
+            // A mixed bucket that is not the weapon, or with no amount, or
+            // with a reason.
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'healing', 'mixed', NULL, \
+              1, 'exact')",
+            "INSERT INTO account_session_cost_buckets VALUES ('t', 'enhancer', 'mixed', NULL, \
+              NULL, NULL)",
+            "INSERT INTO account_session_cost_buckets VALUES ('s', 'armour', 'mixed', 'gap', \
+              1, 'exact')",
+            // A top-up ending before it starts, or a step named twice.
+            "INSERT INTO account_session_cost_top_ups VALUES ('s', 500000, 400000)",
+            "INSERT INTO account_session_cost_top_ups VALUES ('s', 60000, 90000)",
+            // The top-up reason on another bucket, or a measured amount
+            // beside it.
+            "INSERT INTO session_cost_resolution_buckets VALUES ('s', 'healing', 'tracked', \
+              'ammoToppedUp', NULL, NULL)",
+            "INSERT INTO session_cost_resolution_buckets VALUES ('s', 'armour', 'measured', \
+              'ammoToppedUp', 1.0, NULL)",
+            // A second weapon row, or a negative part.
+            "INSERT INTO session_cost_resolution_weapon VALUES ('s', 1.0, 0.0, NULL)",
+            "UPDATE session_cost_resolution_weapon SET tracked_ped = -0.01",
+            "UPDATE session_cost_resolution_weapon SET scale = -1",
+        ] {
+            assert!(
+                connection.execute(refused, []).is_err(),
+                "refused: {refused}"
+            );
+        }
     }
 }

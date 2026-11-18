@@ -1,36 +1,60 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import DashboardWidgets from '$lib/components/dashboard/DashboardWidgets.svelte';
-	import { createGuideDemoModel } from '$lib/features/dashboard/guideDemoModel.svelte';
-	import GuideOverlayDemo from '$lib/features/dashboard/GuideOverlayDemo.svelte';
 	import SessionIsland from '$lib/features/dashboard/SessionIsland.svelte';
+	import { attachLifetimeLootValuation } from '$lib/features/dashboard/lifetimeLootValuation.svelte';
+	import { dashboardStats } from '$lib/statsCustomisation.svelte';
+	import { drawsLifetimeValuation } from '$lib/statsRegistry';
+	import { statsScope } from '$lib/statsScope.svelte';
+	import { attachLiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
+	import { liveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
 	import { createStatsGridModel } from '$lib/features/dashboard/statsGridModel.svelte';
 	import SessionStage from '$lib/features/sessions/SessionStage.svelte';
+	import AccountSignIn from '$lib/features/account/AccountSignIn.svelte';
+	import { inDevelopment } from '$lib/inDevelopment';
 	import { createLiveDefinitionsModel } from '$lib/features/sessions/definitionsModel.svelte';
 	import { createLiveReviewModel } from '$lib/features/sessions/reviewModel.svelte';
 	import { createQuestsModel } from '$lib/features/quests/questsModel.svelte';
-	import { getCooldownRemaining } from '$lib/features/quests/cooldown';
-	import { getActivityOptions, type ActivityOptionsResult } from '$lib/api';
-	import { closeGuide, openGuide } from '$lib/guide/engine';
-	import { guideState, registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
-	import { dashboardSurface } from '$lib/guide/surfaces/dashboard';
-	import { getPreference } from '$lib/preferences';
+	import QuestFormModal from '$lib/features/quests/QuestFormModal.svelte';
+	import { createQuestBoardModel } from '$lib/features/quests/board/questBoardModel.svelte';
+	import type { BoardRow } from '$lib/features/quests/board/questBoard';
+	import {
+		abandonQuest,
+		cancelQuest,
+		completeQuest,
+		getActivityOptions,
+		getQuestCatalogue,
+		getUnresolvedQuestRewards,
+		reviewQuestReward,
+		startQuest,
+		updateSessionDefinition,
+		type ActivityOptionsResult,
+	} from '$lib/api';
+	import { getPreference, setPreference } from '$lib/preferences';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import { hydrate, subscribeTracking, trackingSnapshot } from '$lib/stores/trackingStore.svelte';
 
 	// The consolidated tracking readout, sourced from the store: the dashboard's
 	// single source of live-session render shape. Every tracking read on this
-	// route flows through this one derived (the island, widgets, and events list
-	// take it as input), so the store has a single consumption point here.
+	// route flows through this one derived (the island and widgets take it as
+	// input), so the store has a single consumption point here.
 	let status = $derived(trackingSnapshot.current);
-	let recentEvents = $derived(trackingSnapshot.current?.recentEvents ?? []);
 
 	// Quest data + lifecycle handlers come from the shared quests feature model;
 	// the dashboard reads the selected or running session's integrated roster. The stats
-	// grid and the guide-demo plumbing are dashboard feature models.
+	// grid is a dashboard feature model.
 	const questsModel = createQuestsModel();
 	const statsGrid = createStatsGridModel(() => status?.lifetime != null);
-	const guideDemo = createGuideDemoModel(statsGrid);
+	// The session's loot at market markup, shared by the stat tiles and the
+	// Loot Composition widget so the two never disagree.
+	const liveValuation = attachLiveLootValuation(() => status, () => liveMarkupSettings.confidence);
+	const lifetimeValuation = attachLifetimeLootValuation(
+		() => status,
+		() => liveMarkupSettings.confidence,
+		() => statsScope.current === 'lifetime' && drawsLifetimeValuation(dashboardStats.current),
+		() => liveValuation.loot,
+		() => liveValuation.rewardItems,
+	);
 
 	// The sessions surface: the island renders the picker and the review
 	// entry; the stage hosts the two full-screen surfaces (authoring and
@@ -44,40 +68,68 @@
 		activityOptions = options;
 	}
 
-	function openSessionAuthoring(definitionId: number | null) {
-		const editing = definitions.definitions.find(
-			(definition) => definition.id === String(definitionId),
-		);
-		if (editing) definitions.openEdit(editing);
-		else definitions.openCreate();
+	// The Quests widget's board: the curated catalogue laid out per planet, over
+	// the same quest rows and Activities picture this route already polls.
+	const board = createQuestBoardModel({
+		quests: () => questsModel.quests,
+		families: () => questsModel.families,
+		activityOptions: () => activityOptions,
+		definition: () =>
+			definitions.definitions.find(
+				(definition) => definition.id === String(activityOptions?.definitionId),
+			) ?? null,
+		getCatalogue: getQuestCatalogue,
+		getUnresolved: getUnresolvedQuestRewards,
+		startQuest,
+		completeQuest,
+		abandonQuest,
+		cancelQuest,
+		reviewReward: reviewQuestReward,
+		updateDefinition: updateSessionDefinition,
+		refresh: refreshQuestState,
+		refreshDefinitions: definitions.loadDefinitions,
+		getPreference,
+		setPreference,
+	});
+
+	// A completion (from the chat log or the board) may leave a reward to
+	// settle, so the list follows the recorded completions.
+	$effect(() => {
+		void board.completionSignature;
+		void board.loadUnresolved();
+	});
+
+	function createCustomQuest(planet: string | null) {
+		questsModel.openNewQuest();
+		if (planet) questsModel.questForm.planet = planet;
+	}
+
+	function editCustomQuest(row: BoardRow) {
+		if (row.quest) questsModel.openEditQuest(row.quest);
+	}
+
+	async function deleteCustomQuest(row: BoardRow) {
+		if (row.quest) await questsModel.handleDeleteQuest(row.quest.id);
 	}
 
 	// Poll quest state so chat.log auto-start/complete is reflected without
-	// route changes. Paused during a guide tour: the fixture load below owns
-	// the data then, and the live refresh would overwrite it.
+	// route changes.
 	$effect(() => {
-		if (guideState.isActive) return;
 		const pollMs = status?.status === 'active' ? 3000 : 5000;
 		return useVisiblePoll(refreshQuestState, { intervalMs: pollMs });
 	});
 
-
-	// Guide
-	let guideSeen = $state(true);
-	function toggleSurfaceGuide(): void {
-		if (guideState.isActive) {
-			closeGuide();
-		} else {
-			guideSeen = true;
-			void openGuide(dashboardSurface);
-		}
-	}
-
 	onMount(() => {
+		// The dashboard's initial load: the consolidated snapshot, then the
+		// quest rows, the board's catalogue, and the activity options.
+		void hydrate();
+		void board.init();
+		const stopTick = useVisiblePoll(() => { board.now = Date.now(); }, { intervalMs: 1000 });
 		void (async () => {
-			guideSeen = await getPreference<boolean>('guide_seen_dashboard', false);
+			const [, options] = await Promise.all([questsModel.loadData(), getActivityOptions()]);
+			activityOptions = options;
 		})();
-		// Keep the consolidated snapshot current by subscribing to the relayed
+		// Keep the consolidated snapshot current by subscribing to the bridged
 		// backend tracking events: each one re-reads the snapshot, so the session
 		// island and stats grid update by subscription rather than by polling.
 		let unsubscribeTracking: (() => void) | undefined;
@@ -88,36 +140,11 @@
 			if (unmounted) unlisten();
 			else unsubscribeTracking = unlisten;
 		});
-		registerDemoApi('dashboard', guideDemo.demoApi());
 		return () => {
 			unmounted = true;
-			unregisterDemoApi('dashboard');
+			stopTick();
 			unsubscribeTracking?.();
 		};
-	});
-
-	// Re-fetch tracking + quest data when guide-mode flips so the dashboard
-	// switches between real and demo endpoints immediately instead of waiting
-	// on the next 3-5s poll tick. Each dependency on guideState.isActive is a
-	// void-read for reactivity tracking; the fetches inherit the demo routing
-	// from $lib/api and the quests model's guide-mode load.
-	$effect(() => {
-		const active = guideState.isActive;
-		// Stats: snapshot the live config on guide-open + apply the preselected
-		// demo configuration; restore on close. Owned by the stats-grid model.
-		statsGrid.syncGuideStats(active);
-		// Widgets tab: snapshot on open + force 'pulse'; restore on close.
-		guideDemo.syncWidgetsTab(active);
-		// Re-read the consolidated snapshot through the guide-aware client so the
-		// switch between real and demo data is immediate. This is also the
-		// dashboard's initial load on mount.
-		void hydrate();
-		void guideDemo.refreshDemoTracking(active);
-		void (async () => {
-			const [, options] = await Promise.all([questsModel.loadData(active), getActivityOptions()]);
-			activityOptions = options;
-			if (questsModel.error) return;
-		})();
 	});
 </script>
 
@@ -125,7 +152,7 @@
 	model={definitions}
 	{review}
 	class="px-6 pb-6 flex flex-col gap-4 h-full"
-	data-guide-anchor="dashboard-area"
+	data-testid="dashboard-area"
 >
 
 	<!-- Page header -->
@@ -133,94 +160,34 @@
 		<header class="flex flex-col gap-1.5">
 			<h1 class="text-xl font-semibold text-text tracking-tight">Dashboard</h1>
 			<span class="block h-px w-12 bg-gradient-to-r from-accent/60 to-transparent"></span>
-			<p class="text-sm text-text-secondary mt-0.5">Track sessions, monitor events, follow session quests</p>
+			<p class="text-sm text-text-secondary mt-0.5">Track sessions, monitor events, play your quests</p>
 		</header>
-		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				onclick={toggleSurfaceGuide}
-				title={guideState.isActive ? 'Exit guide' : 'Open guide'}
-				aria-label={guideState.isActive ? 'Exit guide' : 'Open guide for this page'}
-				class="relative h-8 w-8 rounded-full border border-border bg-surface hover:bg-surface-hover text-text-secondary hover:text-text transition-colors flex items-center justify-center text-sm font-semibold {guideState.isActive ? 'z-[9100]' : ''}"
-			>
-				{#if guideState.isActive}
-					<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3.5 h-3.5" aria-hidden="true">
-						<path d="M5.28 4.22a.75.75 0 00-1.06 1.06L6.94 8l-2.72 2.72a.75.75 0 101.06 1.06L8 9.06l2.72 2.72a.75.75 0 101.06-1.06L9.06 8l2.72-2.72a.75.75 0 00-1.06-1.06L8 6.94 5.28 4.22z" />
-					</svg>
-				{:else}
-					?
-				{/if}
-				{#if !guideSeen}
-					<span class="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-accent"></span>
-				{/if}
-			</button>
-		</div>
+		{#if inDevelopment.visible}<AccountSignIn />{/if}
 	</div>
 
 	<SessionIsland
 		{status}
 		{statsGrid}
+		valuation={liveValuation}
+		{lifetimeValuation}
 		{definitions}
 		onReview={(definitionId) => void review.openReview(definitionId)}
 	/>
 
-	{#if !(guideState.isActive && guideDemo.demoOverlayVisible)}
-		<!-- ═══ Island: Recent Events ═══ -->
-		<section class="panel p-4 flex-shrink-0" data-guide-anchor="dashboard-recent-events">
-			<h3 class="eyebrow mb-3">Recent events</h3>
-
-			{#if recentEvents.length > 0}
-				<ul class="relative space-y-2">
-					{#each recentEvents.slice(0, 3) as event}
-						<li class="flex items-center gap-2.5 text-sm">
-							<span class="w-1.5 h-1.5 rounded-full shrink-0
-								{event.type === 'hof'
-									? 'bg-warning [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-warning)_60%,transparent)]'
-									: event.type === 'quest'
-										? 'bg-positive [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-positive)_60%,transparent)]'
-										: event.type === 'warning'
-											? 'bg-negative [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-negative)_60%,transparent)]'
-											: 'bg-accent [box-shadow:0_0_8px_color-mix(in_oklab,var(--color-accent)_60%,transparent)]'}"></span>
-							<span class="text-text-secondary truncate">{event.description}</span>
-							{#if event.value}
-								<span class="ml-auto text-xs text-text-tertiary font-medium tabular-nums tracking-wider">{event.value}</span>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			{:else}
-				<div class="relative py-4 text-center">
-					<p class="text-text-tertiary text-sm">No recent events.</p>
-				</div>
-			{/if}
-		</section>
-
-			<DashboardWidgets
-				sessionId={status?.session_id ?? null}
-				multiplierHistory={status?.multiplierHistory ?? null}
-				cumulativeNetHistory={status?.cumulativeNetHistory ?? null}
-				{activityOptions}
-				quests={questsModel.quests}
-				pendingCancelChoiceQuestId={questsModel.pendingCancelChoiceQuestId}
-				copiedWp={questsModel.copiedWp}
-				onQuestStart={questsModel.handleStart}
-				onQuestComplete={questsModel.handleComplete}
-				onQuestCancel={questsModel.handleCancel}
-				onToggleCancelChoice={questsModel.toggleCancelChoice}
-				onCopyWaypoint={questsModel.copyWaypoint}
-				onEditSession={openSessionAuthoring}
-				getCooldownRemaining={(quest) => getCooldownRemaining(quest, Date.now())}
-			/>
-	{/if}
-
-	<GuideOverlayDemo
-		demoTrackingLive={guideDemo.demoTrackingLive}
-		{status}
-		overlayStripPhase={guideDemo.overlayStripPhase}
-		demoOverlayVisible={guideDemo.demoOverlayVisible}
-		demoArmourPopupVisible={guideDemo.demoArmourPopupVisible}
-		demoArmourPopupRecorded={guideDemo.demoArmourPopupRecorded}
-		armourPopupTop={guideDemo.armourPopupTop}
-		armourPopupLeft={guideDemo.armourPopupLeft}
+	<DashboardWidgets
+		trackingPending={status === null}
+		recentEvents={status === null ? null : (status.recentEvents ?? [])}
+		sessionId={status?.session_id ?? null}
+		valuation={liveValuation}
+		multiplierHistory={status?.multiplierHistory ?? null}
+		cumulativeNetHistory={status?.cumulativeNetHistory ?? null}
+		{board}
+		copiedWp={questsModel.copiedWp}
+		onCopyWaypoint={questsModel.copyWaypoint}
+		onCreateCustomQuest={createCustomQuest}
+		onEditCustomQuest={editCustomQuest}
+		onDeleteCustomQuest={deleteCustomQuest}
 	/>
 </SessionStage>
+
+<QuestFormModal model={questsModel} compact />

@@ -1,12 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "radar-guidance",
-  "description": "Read-only access for the click-through radar bearing renderer.",
+  "description": "Read-only access for the click-through radar bearing renderer; the shell places and hides it.",
   "windows": ["radar-guidance"],
   "permissions": [
     "radar-guidance-commands",
     "core:event:allow-listen",
-    "core:event:allow-unlisten",
-    "core:window:allow-hide"
+    "core:event:allow-unlisten"
   ]
 }

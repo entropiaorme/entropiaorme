@@ -11,9 +11,11 @@ export type {
 	CostBreakdownLine,
 	EquipmentDetail,
 	EquipmentKind,
+	EquipmentLibrary,
 	EquipmentSummary as Equipment,
 	HealingMode,
 	HealingProfileDto as HealingProfile,
+	WeaponAttackRate,
 } from '$lib/api/commands.gen';
 
 /** The healing-tool view row the equipment page derives from the
@@ -21,6 +23,8 @@ export type {
 export interface HealingTool {
 	id: string;
 	name: string;
+	/** Whether the player has the entry in use (see `Equipment.enabled`). */
+	enabled: boolean;
 	costPerHeal: Pec;
 	isLimited: boolean;
 	reloadSeconds: number | null;

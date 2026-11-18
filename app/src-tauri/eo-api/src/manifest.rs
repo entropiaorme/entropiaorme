@@ -13,64 +13,105 @@
 use schemars::schema_for;
 use serde_json::Value;
 
+use crate::account::{
+    AccountActivityMarks, AccountActivitySeenInput, AccountMeasuredSummary, AccountSessionMeasure,
+    AccountSignal, AccountStatus, CostPlacementInput, CostPlacementResult, CostPlacements,
+    MeasuredSessionPage,
+};
+use crate::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
+use crate::account_minutes::{
+    AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
+};
+use crate::account_proposals::{
+    AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
+    AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading, AccountRunWhole,
+    AccountRunWholeInput,
+};
+use crate::account_reconciliation::{
+    StockReconciliationApplied, StockReconciliationApplyInput, StockReconciliationDraft,
+    StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
+};
 use crate::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use crate::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
-    AnalyticsHuntingActivity, AnalyticsOverview, AuctionConfirmInput, AuctionExpireInput,
-    AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput,
-    HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput,
-    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult, LedgerEntryInput,
-    LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput,
-    Profession, RealisedTierMarkup, SaleWindowCapture, ShrapnelConversionInput,
-    StockConversionInput, StockPosition, StockRemovalInput,
+    AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput,
+    AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput,
+    EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
+    InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
+    InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
+    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
+    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
+    StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
+    StockSaleFromAccount, StockSaleFromAccountInput,
 };
 use crate::character::{
-    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus,
-    CharacterProspectOptions, ComputedCharacterStats, HpOptimizerResult, PathOptimizerResult,
-    ProfessionLevel, ProfessionOptimizerResult, ProspectQuery, ProspectResult, SkillLevel,
+    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
+    HpOptimizerResult, PathOptimizerResult, ProfessionLevel, SkillLevel,
 };
 use crate::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
-    CodexMetaClaimResult, CodexRecommendTarget, CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
+    CodexMetaClaimResult, CodexMetaProgress, CodexMetaTargets, CodexRecommendTarget,
+    CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
 };
+use crate::consumables::{ConsumableDose, ConsumableDoses};
 use crate::dev::{
     AuctionFeeOverlayStatus, AuctionFeeResearchStatus, CompactResult, CrashReportingStatus,
     MetricsSnapshot, RebuildReport,
 };
+use crate::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
 use crate::equipment::{
-    EquipmentDetail, EquipmentRequest, EquipmentSearchHit, EquipmentSummary, SearchKind,
+    EquipmentDetail, EquipmentLibrary, EquipmentRequest, EquipmentSearchHit, EquipmentSummary,
+    SearchKind,
 };
+use crate::healing::{
+    HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
+};
+use crate::loadout_comparison::{LoadoutComparison, SetupPick};
 use crate::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
-    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry,
+    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry, RadarGuidance,
 };
 use crate::market::{
-    MarketAuctionPacketThreshold, MarketBreakEven, MarketCommitResult, MarketContributionBatch,
-    MarketHarvestData, MarketHistoryPoint, MarketHorizon, MarketMobRankingRow, MarketOverviewRow,
+    MarketAuctionPacketThreshold, MarketCommitResult, MarketHarvestData, MarketHistoryPoint,
+    MarketHorizon, MarketManualMarkup, MarketManualMarkupInput, MarketOverviewRow,
     MarketPastePreview, MarketUnitPriceResult,
 };
+use crate::mob_detection::{
+    CreatureEntry, CreatureEntryCheck, MobDetectionReview, MobDetectionSettleResult,
+    MobDetectionTarget, MobLabel, MobPin, MobPinTarget, MobReviewRef,
+};
 use crate::protection::{
-    PendingProtectionSession, ProtectionLoadoutInput, ProtectionLoadoutUpdateInput,
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
-    ProtectionRepairInput, ProtectionRepairOutcome, ProtectionScanResult, ProtectionSetInput,
-    ProtectionSetUpdateInput,
+    ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
+    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetPieces, ProtectionSetUpdateInput,
+    ProtectionStream, ProtectionUndoTarget, TerminalReadResult,
 };
 use crate::quests::{
-    Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
-    QuestRewardReviewInput, UnresolvedQuestReward,
+    Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
+    QuestInput, QuestRewardReviewInput, UnresolvedQuestReward,
 };
-use crate::scan::{
-    AcceptResult, CaptureResult, RejectResult, ScanStatus, SkillScanPending, SpacebarResult,
-    UndoResult,
-};
+use crate::sale_capture::SaleQueueCapture;
+use crate::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, SkillScanStatus};
 use crate::session_definitions::{SessionDefinition, SessionDefinitionInput};
-use crate::settings::{AppSettings, OverlayPosition, SettingsPatch};
+use crate::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
+use crate::skilling::{SkillingForecastQuery, SkillingForecastResult};
+use crate::strongbox::{
+    StrongboxExportInput, StrongboxExportRead, StrongboxOpeningEntry, StrongboxOpeningInput,
+    StrongboxOpeningRecorded,
+};
+use crate::tool_sighting::{
+    DismissedToolName, ToolSightingAction, ToolSightingReview, ToolSightingSettleResult,
+};
 use crate::tracking::{
-    ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
-    ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
-    SessionDetail, SessionIntervals, SessionPage, SessionReassignResult, StartResult, StopResult,
-    TrackingSnapshot,
+    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
+    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionQuestRewardItem,
+    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
+};
+use crate::weapons::{
+    WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
+    WeaponShotGroup, WeaponShotPage, WeaponUnpricedExposure,
 };
 use crate::ApiError;
 use crate::Nullable;
@@ -94,23 +135,17 @@ pub struct CommandSpec {
 pub fn manifest() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
-            name: "equipment_search",
-            args: vec![
-                ArgSpec {
-                    name: "q",
-                    schema: schema(schema_for!(String)),
-                },
-                ArgSpec {
-                    name: "kind",
-                    schema: schema(schema_for!(SearchKind)),
-                },
-            ],
+            name: "equipment_catalogue",
+            args: vec![ArgSpec {
+                name: "kind",
+                schema: schema(schema_for!(SearchKind)),
+            }],
             returns: Some(schema(schema_for!(Vec<EquipmentSearchHit>))),
         },
         CommandSpec {
             name: "equipment_library",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(Vec<EquipmentSummary>))),
+            returns: Some(schema(schema_for!(EquipmentLibrary))),
         },
         CommandSpec {
             name: "equipment_add",
@@ -135,6 +170,20 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(EquipmentSummary))),
         },
         CommandSpec {
+            name: "equipment_set_enabled",
+            args: vec![
+                ArgSpec {
+                    name: "item_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "enabled",
+                    schema: schema(schema_for!(bool)),
+                },
+            ],
+            returns: Some(schema(schema_for!(EquipmentSummary))),
+        },
+        CommandSpec {
             name: "equipment_delete",
             args: vec![ArgSpec {
                 name: "item_id",
@@ -143,12 +192,56 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: None,
         },
         CommandSpec {
+            name: "enhancer_markups",
+            args: vec![],
+            returns: Some(schema(schema_for!(EnhancerMarkups))),
+        },
+        CommandSpec {
+            name: "enhancer_markup_set",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(EnhancerTierMarkupInput)),
+            }],
+            returns: Some(schema(schema_for!(EnhancerMarkups))),
+        },
+        CommandSpec {
+            name: "equipment_dismissed_tools",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<DismissedToolName>))),
+        },
+        CommandSpec {
+            name: "equipment_track_again",
+            args: vec![ArgSpec {
+                name: "name",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<DismissedToolName>))),
+        },
+        CommandSpec {
             name: "equipment_detail",
             args: vec![ArgSpec {
                 name: "item_id",
                 schema: schema(schema_for!(i64)),
             }],
             returns: Some(schema(schema_for!(EquipmentDetail))),
+        },
+        CommandSpec {
+            name: "loadout_compare",
+            args: vec![
+                ArgSpec {
+                    name: "setups",
+                    schema: schema(schema_for!(Vec<SetupPick>)),
+                },
+                ArgSpec {
+                    name: "hp_max",
+                    schema: schema(schema_for!(f64)),
+                },
+                ArgSpec {
+                    name: "looter_level",
+                    schema: schema(schema_for!(Option<f64>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(LoadoutComparison))),
         },
         CommandSpec {
             name: "protection_overview",
@@ -178,28 +271,6 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(ProtectionOverview))),
         },
         CommandSpec {
-            name: "protection_loadout_create",
-            args: vec![ArgSpec {
-                name: "input",
-                schema: schema(schema_for!(ProtectionLoadoutInput)),
-            }],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
-        },
-        CommandSpec {
-            name: "protection_loadout_update",
-            args: vec![
-                ArgSpec {
-                    name: "loadout_id",
-                    schema: schema(schema_for!(i64)),
-                },
-                ArgSpec {
-                    name: "input",
-                    schema: schema(schema_for!(ProtectionLoadoutUpdateInput)),
-                },
-            ],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
-        },
-        CommandSpec {
             name: "protection_set_archive",
             args: vec![ArgSpec {
                 name: "set_id",
@@ -208,39 +279,44 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(ProtectionOverview))),
         },
         CommandSpec {
-            name: "protection_loadout_archive",
+            name: "protection_set_restore",
             args: vec![ArgSpec {
-                name: "loadout_id",
+                name: "set_id",
                 schema: schema(schema_for!(i64)),
             }],
             returns: Some(schema(schema_for!(ProtectionOverview))),
         },
         CommandSpec {
-            name: "protection_select",
+            name: "protection_undo",
             args: vec![ArgSpec {
-                name: "loadout_id",
-                schema: schema(schema_for!(i64)),
+                name: "target",
+                schema: schema(schema_for!(ProtectionUndoTarget)),
             }],
             returns: Some(schema(schema_for!(ProtectionOverview))),
         },
         CommandSpec {
-            name: "protection_pending_attribution",
-            args: vec![],
-            returns: Some(schema(schema_for!(Vec<PendingProtectionSession>))),
+            name: "protection_unrecorded_sessions",
+            args: vec![ArgSpec {
+                name: "session_ids",
+                schema: schema(schema_for!(Vec<String>)),
+            }],
+            returns: Some(schema(schema_for!(Vec<String>))),
         },
         CommandSpec {
-            name: "protection_assign_session_loadout",
-            args: vec![
-                ArgSpec {
-                    name: "session_id",
-                    schema: schema(schema_for!(String)),
-                },
-                ArgSpec {
-                    name: "loadout_id",
-                    schema: schema(schema_for!(i64)),
-                },
-            ],
-            returns: Some(schema(schema_for!(ProtectionOverview))),
+            name: "protection_session_status",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ProtectionSessionStatus))),
+        },
+        CommandSpec {
+            name: "protection_recording_candidates",
+            args: vec![ArgSpec {
+                name: "stream",
+                schema: schema(schema_for!(ProtectionStream)),
+            }],
+            returns: Some(schema(schema_for!(ProtectionRecordingCandidates))),
         },
         CommandSpec {
             name: "protection_observation_confirm",
@@ -259,9 +335,232 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(ProtectionRepairOutcome))),
         },
         CommandSpec {
+            name: "protection_set_pieces",
+            args: vec![ArgSpec {
+                name: "set_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(ProtectionSetPieces))),
+        },
+        CommandSpec {
+            name: "protection_set_pieces_confirm",
+            args: vec![
+                ArgSpec {
+                    name: "set_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "names",
+                    schema: schema(schema_for!(Vec<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ProtectionSetPieces))),
+        },
+        CommandSpec {
             name: "protection_trade_terminal_scan",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(ProtectionScanResult))),
+            returns: Some(schema(schema_for!(TerminalReadResult))),
+        },
+        CommandSpec {
+            name: "healing_outputs",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "classification",
+                    schema: schema(schema_for!(HealingOutputClassification)),
+                },
+                ArgSpec {
+                    name: "offset",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "limit",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(HealingOutputPage))),
+        },
+        CommandSpec {
+            name: "healing_correction_tools",
+            args: vec![ArgSpec {
+                name: "output_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<HealingCorrectionTool>))),
+        },
+        CommandSpec {
+            name: "healing_correct",
+            args: vec![ArgSpec {
+                name: "target",
+                schema: schema(schema_for!(HealingCorrectionTarget)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "healing_correction_undo",
+            args: vec![ArgSpec {
+                name: "correction_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "consumable_doses",
+            args: vec![],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_start",
+            args: vec![
+                ArgSpec {
+                    name: "equipment_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "untimed",
+                    schema: schema(schema_for!(bool)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_end",
+            args: vec![ArgSpec {
+                name: "dose_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_remove",
+            args: vec![ArgSpec {
+                name: "dose_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_dose_restore",
+            args: vec![ArgSpec {
+                name: "dose_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ConsumableDoses))),
+        },
+        CommandSpec {
+            name: "consumable_session_doses",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<ConsumableDose>))),
+        },
+        CommandSpec {
+            name: "weapon_shots",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "group",
+                    schema: schema(schema_for!(WeaponShotGroup)),
+                },
+                ArgSpec {
+                    name: "offset",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "limit",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(WeaponShotPage))),
+        },
+        CommandSpec {
+            name: "weapon_unpriced_exposure",
+            args: vec![ArgSpec {
+                name: "session_ids",
+                schema: schema(schema_for!(Vec<String>)),
+            }],
+            returns: Some(schema(schema_for!(Vec<WeaponUnpricedExposure>))),
+        },
+        CommandSpec {
+            name: "weapon_bulk_options",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<WeaponBulkOption>))),
+        },
+        CommandSpec {
+            name: "weapon_assign_fitting",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "equipment_id",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(WeaponBulkAssignment))),
+        },
+        CommandSpec {
+            name: "weapon_batch_undo",
+            args: vec![ArgSpec {
+                name: "batch_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "weapon_correction_weapons",
+            args: vec![ArgSpec {
+                name: "evidence_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<WeaponCorrectionWeapon>))),
+        },
+        CommandSpec {
+            name: "weapon_assign",
+            args: vec![
+                ArgSpec {
+                    name: "evidence_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "equipment_id",
+                    schema: schema(schema_for!(i64)),
+                },
+            ],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "weapon_mark_effect_tick",
+            args: vec![
+                ArgSpec {
+                    name: "evidence_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "window_id",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(SessionDetail))),
+        },
+        CommandSpec {
+            name: "weapon_assignment_undo",
+            args: vec![ArgSpec {
+                name: "correction_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(SessionDetail))),
         },
         CommandSpec {
             name: "character_calibration",
@@ -284,32 +583,11 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(Vec<ProfessionLevel>))),
         },
         CommandSpec {
-            name: "character_prospect_options",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(CharacterProspectOptions))),
-        },
-        CommandSpec {
-            name: "character_prospect",
-            args: vec![ArgSpec {
-                name: "query",
-                schema: schema(schema_for!(ProspectQuery)),
-            }],
-            returns: Some(schema(schema_for!(ProspectResult))),
-        },
-        CommandSpec {
-            name: "character_profession_optimizer",
-            args: vec![ArgSpec {
-                name: "profession",
-                schema: schema(schema_for!(String)),
-            }],
-            returns: Some(schema(schema_for!(ProfessionOptimizerResult))),
-        },
-        CommandSpec {
             name: "character_path_optimizer",
             args: vec![
                 ArgSpec {
-                    name: "profession",
-                    schema: schema(schema_for!(String)),
+                    name: "professions",
+                    schema: schema(schema_for!(Vec<String>)),
                 },
                 ArgSpec {
                     name: "target_level",
@@ -324,7 +602,10 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "character_hp_optimizer",
-            args: Vec::new(),
+            args: vec![ArgSpec {
+                name: "target_hp",
+                schema: schema(schema_for!(f64)),
+            }],
             returns: Some(schema(schema_for!(HpOptimizerResult))),
         },
         CommandSpec {
@@ -336,9 +617,22 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(ActivityRecommenderResult))),
         },
         CommandSpec {
+            name: "character_skilling_forecast",
+            args: vec![ArgSpec {
+                name: "query",
+                schema: schema(schema_for!(SkillingForecastQuery)),
+            }],
+            returns: Some(schema(schema_for!(SkillingForecastResult))),
+        },
+        CommandSpec {
             name: "settings_get",
             args: Vec::new(),
             returns: Some(schema(schema_for!(AppSettings))),
+        },
+        CommandSpec {
+            name: "input_status",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(KeyboardAccess))),
         },
         CommandSpec {
             name: "settings_overlay_position",
@@ -406,6 +700,24 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "codex_meta_attributes",
             args: Vec::new(),
             returns: Some(schema(schema_for!(Vec<CodexMetaAttribute>))),
+        },
+        CommandSpec {
+            name: "codex_meta_targets",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(CodexMetaTargets))),
+        },
+        CommandSpec {
+            name: "codex_meta_progress",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(CodexMetaProgress))),
+        },
+        CommandSpec {
+            name: "codex_meta_calibrate",
+            args: vec![ArgSpec {
+                name: "earned",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(CodexMetaProgress))),
         },
         CommandSpec {
             name: "codex_calibrate",
@@ -630,6 +942,19 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(Quest))),
         },
         CommandSpec {
+            name: "quest_abandon",
+            args: vec![ArgSpec {
+                name: "quest_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(Quest))),
+        },
+        CommandSpec {
+            name: "quest_catalogue",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(QuestCatalogue))),
+        },
+        CommandSpec {
             name: "quests_mobs",
             args: Vec::new(),
             returns: Some(schema(schema_for!(Vec<String>))),
@@ -816,6 +1141,14 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: None,
         },
         CommandSpec {
+            name: "stock_convert_items",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ItemConversionInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
             name: "stock_private_sale",
             args: vec![ArgSpec {
                 name: "input",
@@ -840,6 +1173,22 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: None,
         },
         CommandSpec {
+            name: "stock_conversion_from_account",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockConversionFromAccountInput)),
+            }],
+            returns: Some(schema(schema_for!(Nullable<StockConversionFromAccount>))),
+        },
+        CommandSpec {
+            name: "stock_sale_from_account",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockSaleFromAccountInput)),
+            }],
+            returns: Some(schema(schema_for!(Nullable<StockSaleFromAccount>))),
+        },
+        CommandSpec {
             name: "activity_history",
             args: vec![ArgSpec {
                 name: "profession",
@@ -849,6 +1198,14 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         CommandSpec {
             name: "auction_sale_revert",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
+            }],
+            returns: Some(schema(schema_for!(AuctionListing))),
+        },
+        CommandSpec {
+            name: "auction_listing_reopen",
             args: vec![ArgSpec {
                 name: "input",
                 schema: schema(schema_for!(ActivityUndoInput)),
@@ -885,6 +1242,261 @@ pub fn manifest() -> Vec<CommandSpec> {
                 name: "input",
                 schema: schema(schema_for!(ActivityUndoInput)),
             }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "strongbox_export_read",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StrongboxExportInput)),
+            }],
+            returns: Some(schema(schema_for!(StrongboxExportRead))),
+        },
+        CommandSpec {
+            name: "strongbox_open",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StrongboxOpeningInput)),
+            }],
+            returns: Some(schema(schema_for!(StrongboxOpeningRecorded))),
+        },
+        CommandSpec {
+            name: "strongbox_openings",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<StrongboxOpeningEntry>))),
+        },
+        CommandSpec {
+            name: "strongbox_opening_undo",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_status",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountStatus))),
+        },
+        CommandSpec {
+            name: "account_signal",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountSignal))),
+        },
+        CommandSpec {
+            name: "account_disconnect",
+            args: vec![],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_activity_marks",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountActivityMarks))),
+        },
+        CommandSpec {
+            name: "account_activity_seen",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountActivitySeenInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_session_measure",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Nullable<AccountSessionMeasure>))),
+        },
+        CommandSpec {
+            name: "account_measured_sessions",
+            args: vec![
+                ArgSpec {
+                    name: "cursor",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+                ArgSpec {
+                    name: "limit",
+                    schema: schema(schema_for!(Option<i64>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(MeasuredSessionPage))),
+        },
+        CommandSpec {
+            name: "account_measured_summary",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountMeasuredSummary))),
+        },
+        CommandSpec {
+            name: "account_cost_placements",
+            args: vec![],
+            returns: Some(schema(schema_for!(CostPlacements))),
+        },
+        CommandSpec {
+            name: "account_cost_place",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(CostPlacementInput)),
+            }],
+            returns: Some(schema(schema_for!(CostPlacementResult))),
+        },
+        CommandSpec {
+            name: "account_cost_placement_clear",
+            args: vec![ArgSpec {
+                name: "item",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(CostPlacementResult))),
+        },
+        CommandSpec {
+            name: "account_armour_pieces",
+            args: vec![],
+            returns: Some(schema(schema_for!(ArmourPiecesView))),
+        },
+        CommandSpec {
+            name: "account_armour_piece_markup",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ArmourPieceMarkupInput)),
+            }],
+            returns: Some(schema(schema_for!(ArmourPiecesView))),
+        },
+        CommandSpec {
+            name: "account_proposals",
+            args: vec![ArgSpec {
+                name: "kind",
+                schema: schema(schema_for!(Option<AccountProposalKind>)),
+            }],
+            returns: Some(schema(schema_for!(Vec<AccountProposal>))),
+        },
+        CommandSpec {
+            name: "account_proposals_claim",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalsClaimInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_proposals_release",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalsInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_proposals_link",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalsLinkInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_proposal_dismiss",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountProposalDismissInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_session_minutes",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(AccountSessionMinutes))),
+        },
+        CommandSpec {
+            name: "account_arrival_unknown_origin",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountArrivalInput)),
+            }],
+            returns: Some(schema(schema_for!(AccountArrivalRecorded))),
+        },
+        CommandSpec {
+            name: "account_arrival_unignore",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountArrivalId)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_arrival_unknown_origin_undo",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_reconciliation_plan",
+            args: vec![],
+            returns: Some(schema(schema_for!(StockReconciliationDraft))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_paste",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockReconciliationPasteInput)),
+            }],
+            returns: Some(schema(schema_for!(StockReconciliationDraft))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_draft",
+            args: vec![],
+            returns: Some(schema(schema_for!(Nullable<StockReconciliationDraft>))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_revise",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockReconciliationReviseInput)),
+            }],
+            returns: Some(schema(schema_for!(StockReconciliationRevised))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_apply",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(StockReconciliationApplyInput)),
+            }],
+            returns: Some(schema(schema_for!(StockReconciliationApplied))),
+        },
+        CommandSpec {
+            name: "account_reconciliation_undo",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(ActivityUndoInput)),
+            }],
+            returns: None,
+        },
+        CommandSpec {
+            name: "account_run_begin",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountRunReading))),
+        },
+        CommandSpec {
+            name: "account_run_done",
+            args: vec![],
+            returns: Some(schema(schema_for!(AccountRunReading))),
+        },
+        CommandSpec {
+            name: "account_run_whole",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(AccountRunWholeInput)),
+            }],
+            returns: Some(schema(schema_for!(AccountRunWhole))),
+        },
+        CommandSpec {
+            name: "account_run_cancel",
+            args: vec![],
             returns: None,
         },
         CommandSpec {
@@ -998,12 +1610,12 @@ pub fn manifest() -> Vec<CommandSpec> {
         CommandSpec {
             name: "inventory_sale_window_capture",
             args: vec![],
-            returns: Some(schema(schema_for!(SaleWindowCapture))),
+            returns: Some(schema(schema_for!(SaleQueueCapture))),
         },
         CommandSpec {
             name: "inventory_sale_window_take_capture",
             args: vec![],
-            returns: Some(schema(schema_for!(Nullable<SaleWindowCapture>))),
+            returns: Some(schema(schema_for!(Nullable<SaleQueueCapture>))),
         },
         CommandSpec {
             name: "inventory_draft_resolve",
@@ -1028,6 +1640,42 @@ pub fn manifest() -> Vec<CommandSpec> {
                 schema: schema(schema_for!(EquipmentTradeInput)),
             }],
             returns: Some(schema(schema_for!(AuctionListing))),
+        },
+        CommandSpec {
+            name: "inventory_purchase_add",
+            args: vec![
+                ArgSpec {
+                    name: "item_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "purchase",
+                    schema: schema(schema_for!(AssetPurchaseInput)),
+                },
+            ],
+            returns: Some(schema(schema_for!(InventoryItem))),
+        },
+        CommandSpec {
+            name: "inventory_purchase_update",
+            args: vec![
+                ArgSpec {
+                    name: "purchase_id",
+                    schema: schema(schema_for!(i64)),
+                },
+                ArgSpec {
+                    name: "purchase",
+                    schema: schema(schema_for!(AssetPurchaseInput)),
+                },
+            ],
+            returns: Some(schema(schema_for!(InventoryItem))),
+        },
+        CommandSpec {
+            name: "inventory_purchase_delete",
+            args: vec![ArgSpec {
+                name: "purchase_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(InventoryItem))),
         },
         CommandSpec {
             name: "market_paste_preview",
@@ -1065,30 +1713,12 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(Vec<MarketOverviewRow>))),
         },
         CommandSpec {
-            name: "market_contribution_batch",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(Nullable<MarketContributionBatch>))),
-        },
-        CommandSpec {
             name: "market_auction_packet_threshold",
             args: vec![ArgSpec {
                 name: "max_fee_share_pct",
                 schema: schema(schema_for!(f64)),
             }],
             returns: Some(schema(schema_for!(MarketAuctionPacketThreshold))),
-        },
-        CommandSpec {
-            name: "market_break_even",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(MarketBreakEven))),
-        },
-        CommandSpec {
-            name: "market_mob_ranking",
-            args: vec![ArgSpec {
-                name: "horizon",
-                schema: schema(schema_for!(MarketHorizon)),
-            }],
-            returns: Some(schema(schema_for!(Vec<MarketMobRankingRow>))),
         },
         CommandSpec {
             name: "market_harvest_markups",
@@ -1099,6 +1729,44 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "market_hunt_markups",
             args: vec![],
             returns: Some(schema(schema_for!(MarketHarvestData))),
+        },
+        CommandSpec {
+            name: "market_item_markups",
+            args: vec![ArgSpec {
+                name: "names",
+                schema: schema(schema_for!(Vec<String>)),
+            }],
+            returns: Some(schema(schema_for!(MarketHarvestData))),
+        },
+        CommandSpec {
+            name: "market_manual_markup_set",
+            args: vec![ArgSpec {
+                name: "input",
+                schema: schema(schema_for!(MarketManualMarkupInput)),
+            }],
+            returns: Some(schema(schema_for!(MarketManualMarkup))),
+        },
+        CommandSpec {
+            name: "market_manual_markup_clear",
+            args: vec![ArgSpec {
+                name: "item_name",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(bool))),
+        },
+        CommandSpec {
+            name: "market_nanocube_mark_set",
+            args: vec![
+                ArgSpec {
+                    name: "item_name",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "marked",
+                    schema: schema(schema_for!(bool)),
+                },
+            ],
+            returns: Some(schema(schema_for!(bool))),
         },
         CommandSpec {
             name: "market_item_history",
@@ -1117,58 +1785,44 @@ pub fn manifest() -> Vec<CommandSpec> {
         CommandSpec {
             name: "scan_status",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(ScanStatus))),
+            returns: Some(schema(schema_for!(SkillScanStatus))),
         },
         CommandSpec {
             name: "scan_start",
-            args: vec![ArgSpec {
-                name: "page_count",
-                schema: schema(schema_for!(Option<i64>)),
-            }],
-            returns: Some(schema(schema_for!(ScanStatus))),
-        },
-        CommandSpec {
-            name: "scan_capture",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(CaptureResult))),
+            returns: Some(schema(schema_for!(SkillScanReply))),
         },
         CommandSpec {
             name: "scan_cancel",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(ScanStatus))),
-        },
-        CommandSpec {
-            name: "scan_undo",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(UndoResult))),
-        },
-        CommandSpec {
-            name: "scan_process",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(ScanStatus))),
+            returns: Some(schema(schema_for!(SkillScanReply))),
         },
         CommandSpec {
             name: "scan_accept",
-            args: Vec::new(),
+            args: vec![
+                ArgSpec {
+                    name: "scan",
+                    schema: schema(schema_for!(u64)),
+                },
+                ArgSpec {
+                    name: "save_anyway",
+                    schema: schema(schema_for!(bool)),
+                },
+            ],
             returns: Some(schema(schema_for!(AcceptResult))),
         },
         CommandSpec {
             name: "scan_reject",
-            args: Vec::new(),
+            args: vec![ArgSpec {
+                name: "scan",
+                schema: schema(schema_for!(u64)),
+            }],
             returns: Some(schema(schema_for!(RejectResult))),
         },
         CommandSpec {
             name: "scan_pending",
             args: Vec::new(),
-            returns: Some(schema(schema_for!(Option<SkillScanPending>))),
-        },
-        CommandSpec {
-            name: "scan_spacebar_capture",
-            args: vec![ArgSpec {
-                name: "enabled",
-                schema: schema(schema_for!(bool)),
-            }],
-            returns: Some(schema(schema_for!(SpacebarResult))),
+            returns: Some(schema(schema_for!(Option<SkillScanReview>))),
         },
         CommandSpec {
             name: "tracking_sessions",
@@ -1197,6 +1851,22 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(SessionDetail))),
         },
         CommandSpec {
+            name: "tracking_definition_loot",
+            args: vec![ArgSpec {
+                name: "definition_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(Vec<LootEntry>))),
+        },
+        CommandSpec {
+            name: "tracking_definition_rewards",
+            args: vec![ArgSpec {
+                name: "definition_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(Vec<SessionQuestRewardItem>))),
+        },
+        CommandSpec {
             name: "tracking_session_intervals",
             args: vec![ArgSpec {
                 name: "session_id",
@@ -1205,17 +1875,8 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(SessionIntervals))),
         },
         CommandSpec {
-            name: "tracking_manual_mob_suggestions",
-            args: vec![
-                ArgSpec {
-                    name: "q",
-                    schema: schema(schema_for!(String)),
-                },
-                ArgSpec {
-                    name: "limit",
-                    schema: schema(schema_for!(Option<i64>)),
-                },
-            ],
+            name: "tracking_mob_catalogue",
+            args: vec![],
             returns: Some(schema(schema_for!(Vec<ManualMobSuggestion>))),
         },
         CommandSpec {
@@ -1232,6 +1893,22 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "tracking_stop",
             args: Vec::new(),
             returns: Some(schema(schema_for!(StopResult))),
+        },
+        CommandSpec {
+            name: "tracking_weapon_decide",
+            args: vec![ArgSpec {
+                name: "decision",
+                schema: schema(schema_for!(WeaponMismatchDecision)),
+            }],
+            returns: Some(schema(schema_for!(bool))),
+        },
+        CommandSpec {
+            name: "tracking_declare_equipment",
+            args: vec![ArgSpec {
+                name: "equipment_id",
+                schema: schema(schema_for!(i64)),
+            }],
+            returns: Some(schema(schema_for!(DeclaredEquipment))),
         },
         CommandSpec {
             name: "tracking_release_mob",
@@ -1251,6 +1928,19 @@ pub fn manifest() -> Vec<CommandSpec> {
                 },
             ],
             returns: Some(schema(schema_for!(ManualMobLockResult))),
+        },
+        CommandSpec {
+            name: "tracking_mob_pin",
+            args: vec![ArgSpec {
+                name: "target",
+                schema: schema(schema_for!(MobPinTarget)),
+            }],
+            returns: Some(schema(schema_for!(MobPin))),
+        },
+        CommandSpec {
+            name: "tracking_mob_unpin",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(bool))),
         },
         CommandSpec {
             name: "tracking_session_config",
@@ -1358,6 +2048,150 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(MobEditResult))),
         },
         CommandSpec {
+            name: "tracking_mob_detections",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(MobDetectionReview))),
+        },
+        CommandSpec {
+            name: "tracking_mob_detection_settle",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "mob",
+                    schema: schema(schema_for!(MobReviewRef)),
+                },
+                ArgSpec {
+                    name: "target",
+                    schema: schema(schema_for!(MobDetectionTarget)),
+                },
+            ],
+            returns: Some(schema(schema_for!(MobDetectionSettleResult))),
+        },
+        CommandSpec {
+            name: "creature_entries",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<CreatureEntry>))),
+        },
+        CommandSpec {
+            name: "creature_entry_check",
+            args: vec![
+                ArgSpec {
+                    name: "text",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "replacing",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(CreatureEntryCheck))),
+        },
+        CommandSpec {
+            name: "creature_entry_save",
+            args: vec![
+                ArgSpec {
+                    name: "text",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "species",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+                ArgSpec {
+                    name: "replacing",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(Vec<CreatureEntry>))),
+        },
+        CommandSpec {
+            name: "creature_entry_remove",
+            args: vec![ArgSpec {
+                name: "name",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(Vec<CreatureEntry>))),
+        },
+        CommandSpec {
+            name: "mob_labels",
+            args: vec![],
+            returns: Some(schema(schema_for!(Vec<MobLabel>))),
+        },
+        CommandSpec {
+            name: "mob_label_set",
+            args: vec![
+                ArgSpec {
+                    name: "mob",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "label",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(Vec<MobLabel>))),
+        },
+        CommandSpec {
+            name: "mob_label_clear",
+            args: vec![
+                ArgSpec {
+                    name: "species",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "maturity",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(Vec<MobLabel>))),
+        },
+        CommandSpec {
+            name: "tracking_tool_sightings",
+            args: vec![ArgSpec {
+                name: "session_id",
+                schema: schema(schema_for!(String)),
+            }],
+            returns: Some(schema(schema_for!(ToolSightingReview))),
+        },
+        CommandSpec {
+            name: "tracking_tool_sighting_settle",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "sighting_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "action",
+                    schema: schema(schema_for!(ToolSightingAction)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ToolSightingSettleResult))),
+        },
+        CommandSpec {
+            name: "tracking_tool_sighting_undo",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "sighting_id",
+                    schema: schema(schema_for!(String)),
+                },
+            ],
+            returns: Some(schema(schema_for!(ToolSightingSettleResult))),
+        },
+        CommandSpec {
             name: "tracking_loot_item_activate",
             args: vec![
                 ArgSpec {
@@ -1405,7 +2239,29 @@ pub fn manifest() -> Vec<CommandSpec> {
                 name: "session_id",
                 schema: schema(schema_for!(String)),
             }],
-            returns: Some(schema(schema_for!(RepairScanResult))),
+            returns: Some(schema(schema_for!(TerminalReadResult))),
+        },
+        CommandSpec {
+            name: "tracking_session_exclusion",
+            args: vec![
+                ArgSpec {
+                    name: "session_id",
+                    schema: schema(schema_for!(String)),
+                },
+                ArgSpec {
+                    name: "economy",
+                    schema: schema(schema_for!(bool)),
+                },
+                ArgSpec {
+                    name: "progression",
+                    schema: schema(schema_for!(bool)),
+                },
+                ArgSpec {
+                    name: "note",
+                    schema: schema(schema_for!(Option<String>)),
+                },
+            ],
+            returns: Some(schema(schema_for!(SessionExclusionResult))),
         },
         CommandSpec {
             name: "tracking_session_delete",
@@ -1415,103 +2271,8 @@ pub fn manifest() -> Vec<CommandSpec> {
             }],
             returns: None,
         },
-        // The guide-mode demo reads: typed commands sharing the live
-        // analytics and tracking DTOs, served over the parallel demo state.
-        CommandSpec {
-            name: "demo_analytics_overview",
-            args: vec![ArgSpec {
-                name: "period",
-                schema: schema(schema_for!(String)),
-            }],
-            returns: Some(schema(schema_for!(AnalyticsOverview))),
-        },
-        CommandSpec {
-            name: "demo_analytics_hunting",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(AnalyticsHunting))),
-        },
-        CommandSpec {
-            name: "demo_analytics_hunting_activity",
-            args: vec![ArgSpec {
-                name: "period",
-                schema: schema(schema_for!(String)),
-            }],
-            returns: Some(schema(schema_for!(AnalyticsHuntingActivity))),
-        },
-        CommandSpec {
-            name: "demo_analytics_harvest",
-            args: vec![ArgSpec {
-                name: "period",
-                schema: schema(schema_for!(String)),
-            }],
-            returns: Some(schema(schema_for!(AnalyticsHarvest))),
-        },
-        CommandSpec {
-            name: "demo_ledger_list",
-            args: vec![
-                ArgSpec {
-                    name: "cursor",
-                    schema: schema(schema_for!(Option<String>)),
-                },
-                ArgSpec {
-                    name: "limit",
-                    schema: schema(schema_for!(Option<i64>)),
-                },
-            ],
-            returns: Some(schema(schema_for!(LedgerPage))),
-        },
-        CommandSpec {
-            name: "demo_ledger_summary",
-            args: vec![ArgSpec {
-                name: "period",
-                schema: schema(schema_for!(String)),
-            }],
-            returns: Some(schema(schema_for!(LedgerSummary))),
-        },
-        CommandSpec {
-            name: "demo_ledger_presets_list",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(Vec<LedgerPreset>))),
-        },
-        CommandSpec {
-            name: "demo_inventory_list",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(Vec<InventoryItem>))),
-        },
-        CommandSpec {
-            name: "demo_tracking_sessions",
-            args: vec![
-                ArgSpec {
-                    name: "cursor",
-                    schema: schema(schema_for!(Option<String>)),
-                },
-                ArgSpec {
-                    name: "limit",
-                    schema: schema(schema_for!(Option<i64>)),
-                },
-                ArgSpec {
-                    name: "definition_id",
-                    schema: schema(schema_for!(Option<i64>)),
-                },
-            ],
-            returns: Some(schema(schema_for!(SessionPage))),
-        },
-        CommandSpec {
-            name: "demo_tracking_session_detail",
-            args: vec![ArgSpec {
-                name: "session_id",
-                schema: schema(schema_for!(String)),
-            }],
-            returns: Some(schema(schema_for!(SessionDetail))),
-        },
-        CommandSpec {
-            name: "demo_tracking_snapshot",
-            args: Vec::new(),
-            returns: Some(schema(schema_for!(TrackingSnapshot))),
-        },
-        // The hidden developer-tools family: native-only, each gated on
-        // developer mode (a gate-off command answers the not-found the HTTP
-        // route's 404 stood for).
+        // The developer-tools family (metrics, crash reporting, database
+        // maintenance, the auction-fee research session): native-only.
         CommandSpec {
             name: "dev_metrics",
             args: Vec::new(),
@@ -1567,7 +2328,7 @@ pub fn manifest() -> Vec<CommandSpec> {
         },
         // The planet-maps family: the catalogue read only. The raster
         // fetch answers raw bytes and rides a bespoke shell command
-        // outside the manifest, like the manual-scan capture preview.
+        // outside the manifest.
         CommandSpec {
             name: "planet_maps_list",
             args: Vec::new(),
@@ -1779,6 +2540,11 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(CoordCalibrationStatus))),
         },
         CommandSpec {
+            name: "maps_calibration_confirm",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(CoordCalibrationStatus))),
+        },
+        CommandSpec {
             name: "maps_calibration_cancel",
             args: Vec::new(),
             returns: Some(schema(schema_for!(CoordCalibrationStatus))),
@@ -1792,7 +2558,7 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "maps_scan_coordinates",
             args: vec![ArgSpec {
                 name: "planet",
-                schema: schema(schema_for!(Option<String>)),
+                schema: schema(schema_for!(String)),
             }],
             returns: Some(schema(schema_for!(CoordScanResult))),
         },
@@ -1825,8 +2591,8 @@ pub fn manifest() -> Vec<CommandSpec> {
                     schema: schema(schema_for!(Option<Vec<i64>>)),
                 },
                 ArgSpec {
-                    name: "hotkey",
-                    schema: schema(schema_for!(String)),
+                    name: "visit_on_key",
+                    schema: schema(schema_for!(bool)),
                 },
             ],
             returns: Some(schema(schema_for!(NavigationRun))),
@@ -1873,6 +2639,11 @@ pub fn manifest() -> Vec<CommandSpec> {
             returns: Some(schema(schema_for!(RadarCalibrationStatus))),
         },
         CommandSpec {
+            name: "radar_calibration_confirm",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(RadarCalibrationStatus))),
+        },
+        CommandSpec {
             name: "radar_calibration_cancel",
             args: Vec::new(),
             returns: None,
@@ -1886,6 +2657,16 @@ pub fn manifest() -> Vec<CommandSpec> {
             name: "radar_geometry",
             args: Vec::new(),
             returns: Some(schema(schema_for!(Nullable<RadarGeometry>))),
+        },
+        CommandSpec {
+            name: "navigation_resume_position",
+            args: Vec::new(),
+            returns: None,
+        },
+        CommandSpec {
+            name: "radar_guidance",
+            args: Vec::new(),
+            returns: Some(schema(schema_for!(RadarGuidance))),
         },
     ]
 }

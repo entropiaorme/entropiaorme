@@ -131,9 +131,11 @@ async fn creates_apply_defaults_normalisation_and_mob_rules() {
             "is_active": 1, "created_at": 1000.0, "category": null,
             "reward_description": null, "updated_at": 1000.0, "signal_loot_item": null,
             "completion_trigger": "mission_log", "reward_policy": "none",
-            "family_id": null, "cooldown_anchor": "completion", "last_started_at": null,
+            "family_id": null, "curated": false, "catalogue_key": null,
+            "cooldown_anchor": "completion", "last_started_at": null,
             "family_name": null, "family_cooldown_hours": null,
             "family_cooldown_anchor": null, "last_completed_at": null,
+            "last_abandoned_at": null,
             "cooldown_expires_at": null, "family_cooldown_expires_at": null,
             "reward_undo_available": false, "mobs": [], "reward_item_names": [],
         })
@@ -996,6 +998,95 @@ async fn manual_hand_in_confirms_one_exact_raw_clump() {
     assert!((evidence.2 - 31.64).abs() < 1e-9);
     assert!((evidence.3 - 1.0).abs() < 1e-9);
     assert!(svc.get_quest(quest).await.unwrap().unwrap()["started_at"].is_null());
+
+    // The claimed arrival is the reward's evidence, no longer a kill; the
+    // earlier clump nobody claimed still counts.
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM kills WHERE id = 'k-new' AND reward_claimed_at IS NOT NULL"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM counted_kills WHERE session_id = 's-manual'"
+        )
+        .await,
+        1
+    );
+    // The session's detail names the reward with its lines as recorded.
+    let detail = crate::tracking_reads::get_session_impl(&db, "s-manual", 1_772_370_000.0)
+        .await
+        .unwrap()
+        .expect("the session reads");
+    assert_eq!(
+        detail["questRewards"],
+        json!([{
+            "completionId": detail["questRewards"][0]["completionId"],
+            "questName": "Daily terminal",
+            "completedAt": detail["questRewards"][0]["completedAt"],
+            "items": [
+                {"itemName": "Universal Ammo", "quantity": 316_468, "valuePed": 31.64,
+                 "accounting": "liquid"},
+                {"itemName": "Blazar Fragment", "quantity": 238, "valuePed": 0.0023,
+                 "accounting": "stock"},
+            ],
+        }])
+    );
+    assert_eq!(detail["summary"]["kills"], 1, "the arrival is no kill");
+    assert!(
+        detail["deactivatedLootBreakdown"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the reward's lines are the reward's, not loot taken off"
+    );
+    // End the session with its summary written: the summary counts one kill.
+    db.with_writer(|conn| {
+        conn.execute(
+            "UPDATE tracking_sessions SET is_active = 0, ended_at = 1772370000.0, \
+             armour_cost = 1.0 WHERE id = 's-manual'",
+            [],
+        )?;
+        crate::session_summary::write_session_summary(conn, "s-manual")
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT kills FROM session_summaries WHERE session_id = 's-manual'"
+        )
+        .await,
+        1
+    );
+    // Undoing the reward makes the arrival a kill again, loot and all, and
+    // drops the summary that said otherwise.
+    svc.cancel_quest(quest, true).await.unwrap();
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM session_summaries WHERE session_id = 's-manual'"
+        )
+        .await,
+        0
+    );
+    let undone = crate::tracking_reads::get_session_impl(&db, "s-manual", 1_772_370_000.0)
+        .await
+        .unwrap()
+        .expect("the session reads");
+    assert_eq!(undone["questRewards"], json!([]));
+    assert_eq!(
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM counted_kills WHERE session_id = 's-manual'"
+        )
+        .await,
+        2
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

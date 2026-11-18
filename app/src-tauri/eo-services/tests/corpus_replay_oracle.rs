@@ -1,27 +1,47 @@
-//! The corpus replay oracle: every scenario replayed through the
-//! complete native pipeline (chat-log tail -> bus -> tracker ->
-//! database) must match the committed goldens byte-for-byte, on both
+//! The corpus replay tests: every scenario replayed through the
+//! complete pipeline (chat-log tail -> bus -> tracker -> database) must
+//! match the scenario's committed goldens byte-for-byte, on both
 //! surfaces at once:
 //!
 //! - the normalised event fingerprint (`expected/fingerprint.jsonl`),
 //!   now including the tracker's own session lifecycle and domain
 //!   events alongside the watcher's stream;
 //! - the catalogue database snapshot (`expected/db_state.json`),
-//!   produced by the tracker's real persistence writes.
+//!   produced by the tracker's real persistence writes;
+//! - for a script that asks for them, the live readouts it took
+//!   (`expected/readouts.jsonl`): what the running session's snapshot said
+//!   of its weapon attribution at that point, which the database does not
+//!   hold.
 //!
-//! The goldens are the frozen end-to-end equivalence evidence: banked
-//! when the native pipeline was proven byte-identical to the reference
-//! implementation, they pin that behaviour permanently, so a
-//! byte-identical native replay proves equivalence on every CI run with
-//! no second implementation present. The two serialisations share one
-//! normaliser, in fingerprint-then-snapshot order, exactly as the
-//! golden harness assigns its encounter-order symbols.
+//! The goldens pin the pipeline's end-to-end behaviour: a deliberate
+//! change regenerates them (`UPDATE_CORPUS_GOLDENS=1`) and the diff is
+//! reviewed in the commit that moves them. The two serialisations share
+//! one normaliser, in fingerprint-then-snapshot order, so encounter-order
+//! symbols are assigned consistently across both.
 //!
 //! The replay protocol mirrors the harness: a frozen, driver-advanced
 //! clock from the scenario's committed plan; lines streamed one flush
 //! per timestamp tick so the tail never observes end-of-file inside a
 //! tick; a drain barrier on the appended line count; one plan step
 //! before the session stops.
+//!
+//! A scenario may also carry a `steps.jsonl` script, for behaviour the
+//! chat log alone cannot drive: it interleaves the log's tick groups with
+//! clock steps, resolved hotbar presses (stamped at the clock's current
+//! instant, as the listener stamps the OS key occurrence), segment
+//! declarations, readouts, a new session in the same process (whatever the
+//! process remembers, such as the weapon in hand, carries into it), changes
+//! of the tool in hand read off the screen (each told as first seen some
+//! seconds before the clock's current instant, so a change can reach the
+//! tracker after shots it predates), and process restarts. A scenario
+//! carrying a `screen.json` reads the tool in hand off the screen: the
+//! tracker takes those changes as the source of it, and the file names the
+//! tools of the bundled game data the library does not hold. A restart is a crash: the old
+//! process's bus and tail go quiet, and a fresh bus, tail, and tracker
+//! open the same database, whose construction recovers the orphaned
+//! session before the next one starts. Every producer publish completes
+//! its tracker dispatch before returning, so a drained tick group is a
+//! processed one and the next step observes its effects.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -29,13 +49,24 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::NaiveDateTime;
+use eo_services::bus_events::{BusEvent, HotbarIntentPayload, HotbarItemKind};
 use eo_services::chatlog_time::ChatLogClock;
 use eo_services::chatlog_watcher::ChatlogWatcher;
-use eo_services::clock::MockClock;
+use eo_services::clock::{Clock, MockClock};
 use eo_services::db::Db;
 use eo_services::event_bus::EventBus;
 use eo_services::fingerprint_recorder::FingerprintRecorder;
-use eo_services::tracker::{HuntTracker, Providers};
+use eo_services::healing_profile::HealingProfile;
+use eo_services::hotbar_listener::ResolvedHotbarItem;
+use eo_services::screen_watch::WatchEnded;
+use eo_services::time::naive_to_epoch;
+use eo_services::tool_watch::{HeldTool, ToolDetector, ToolPulse, ToolPulseSink, ToolSeen, Why};
+use eo_services::tracker::{
+    ActivityKey, ActivityRef, BundledTool, BundledWeapon, CarriedWeapon, CarriedWeaponProfile,
+    EquipmentLibrary, EquipmentProfile, HarvestGuardrailTools, HuntTracker, MismatchDecision,
+    Providers, ToolSource, TrackingConfig,
+};
+use eo_services::weapon_effect::EFFECT_PROFILE_KEY;
 use eo_wire::db_snapshot::{capture, serialize};
 use eo_wire::normalizer::Normalizer;
 
@@ -149,6 +180,513 @@ async fn catalogue_snapshot(db: &Db, normalizer: &mut Normalizer) -> String {
     serialize(&capture(&tables, normalizer))
 }
 
+/// One step of a scenario's optional `steps.jsonl` script.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum Step {
+    /// Stream the next N tick groups of the chat log and drain them.
+    Chat(usize),
+    /// Advance the injected clock by this many seconds.
+    Advance(f64),
+    /// A resolved hotbar press at the clock's current instant.
+    Hotbar(Box<ScriptedPress>),
+    /// Declare a segment, or end the standing one with null.
+    Segment(Option<String>),
+    /// The process dies; a new one starts over the same database.
+    Restart,
+    /// The session stops and the next starts in the same process.
+    NewSession,
+    /// Record what the running session's snapshot says of its weapon
+    /// attribution.
+    Readout,
+    /// The player's call on the standing weapon mismatch.
+    Decide(ScriptedDecision),
+    /// A change of the tool in hand read off the screen.
+    Pulse(ScriptedPulse),
+}
+
+/// A change of the tool in hand a script tells, first seen `ago` seconds
+/// before the clock's current instant.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptedPulse {
+    seen: ScriptedSeen,
+    #[serde(default)]
+    ago: f64,
+}
+
+/// What the bar shows.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum ScriptedSeen {
+    /// A library entry, by its id.
+    Holding(i64),
+    /// A tool of the bundled game data, by its collection and id there.
+    Bundled {
+        endpoint: String,
+        item_id: String,
+    },
+    Nothing,
+    NotTracked(String),
+    /// Unclear: the text read that matched no tool, or none for a bar that
+    /// could not be read.
+    Uncertain(Option<String>),
+    NotVisible,
+}
+
+/// A scenario's `screen.json`: the tools of the bundled game data the
+/// library does not hold, each with a single impact damage figure and a
+/// per-shot decay in PEC.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScreenSetup {
+    #[serde(default)]
+    bundled: Vec<ScriptedBundled>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptedBundled {
+    endpoint: String,
+    item_id: String,
+    name: String,
+    damage: f64,
+    decay: f64,
+}
+
+impl ScreenSetup {
+    fn seen(&self, seen: &ScriptedSeen) -> ToolSeen {
+        match seen {
+            ScriptedSeen::Holding(id) => ToolSeen::Holding(HeldTool::Library { id: *id }),
+            ScriptedSeen::Bundled { endpoint, item_id } => {
+                let tool = self
+                    .bundled
+                    .iter()
+                    .find(|tool| &tool.endpoint == endpoint && &tool.item_id == item_id)
+                    .expect("a bundled tool the scenario names");
+                ToolSeen::Holding(HeldTool::Bundled {
+                    endpoint: endpoint.clone(),
+                    item_id: item_id.clone(),
+                    name: tool.name.clone(),
+                })
+            }
+            ScriptedSeen::Nothing => ToolSeen::Nothing,
+            ScriptedSeen::NotTracked(name) => ToolSeen::NotTracked { name: name.clone() },
+            ScriptedSeen::Uncertain(Some(text)) => {
+                ToolSeen::Uncertain(Why::Unknown { text: text.clone() })
+            }
+            ScriptedSeen::Uncertain(None) => ToolSeen::Uncertain(Why::Unreadable),
+            ScriptedSeen::NotVisible => ToolSeen::NotVisible,
+        }
+    }
+}
+
+fn load_screen(scenario: &Path) -> Option<ScreenSetup> {
+    let raw = std::fs::read_to_string(scenario.join("screen.json")).ok()?;
+    Some(serde_json::from_str(&raw).expect("a well-formed screen.json"))
+}
+
+/// The configuration of a scenario reading the tool off the screen.
+struct ScreenConfig;
+
+impl TrackingConfig for ScreenConfig {
+    fn session_name(&self) -> String {
+        String::new()
+    }
+
+    fn session_definition_id(&self) -> Option<i64> {
+        None
+    }
+
+    fn declared_skill_boost_percent(&self) -> Option<i64> {
+        None
+    }
+
+    fn manual_mob(&self) -> Option<(String, String)> {
+        None
+    }
+
+    fn loot_filter_blacklist(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn tool_reading_enabled(&self) -> bool {
+        true
+    }
+}
+
+/// A watcher that looks at no screen: the script hands the tracker each
+/// change through the sink the tracker gave it.
+#[derive(Default)]
+struct ScriptedWatcher {
+    sink: std::sync::Mutex<Option<(String, ToolPulseSink)>>,
+}
+
+impl ToolDetector for ScriptedWatcher {
+    fn start(&self, session_id: &str, sink: ToolPulseSink, _ended: WatchEnded) {
+        *self.sink.lock().unwrap() = Some((session_id.to_string(), sink));
+    }
+
+    fn stop(&self) {
+        *self.sink.lock().unwrap() = None;
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        self.sink
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(watched, _)| watched == session_id)
+    }
+
+    fn permit_capture(&self) {}
+
+    fn hint(&self) {}
+}
+
+/// What a readout says of the tool in hand read off the screen.
+fn screen_readout(source: &ToolSource) -> serde_json::Value {
+    let screen = match source {
+        ToolSource::Screen(screen) => screen,
+        ToolSource::Keys => return serde_json::Value::String("keys".into()),
+        ToolSource::ScreenStopped { .. } => {
+            return serde_json::Value::String("keys, the screen stopped".into())
+        }
+        ToolSource::ScreenNotStarted => {
+            return serde_json::Value::String("keys, the screen not read".into())
+        }
+    };
+    let seen = screen.last.as_ref().map(|last| match &last.seen {
+        ToolSeen::Holding(HeldTool::Library { id }) => format!("holding {id}"),
+        ToolSeen::Holding(HeldTool::Bundled { name, .. }) => format!("holding {name} (bundled)"),
+        ToolSeen::NotTracked { name } => format!("not tracked {name}"),
+        ToolSeen::Nothing => "nothing".to_string(),
+        ToolSeen::Uncertain(Why::Unknown { text }) => format!("uncertain {text}"),
+        ToolSeen::Uncertain(_) => "uncertain".to_string(),
+        ToolSeen::NotVisible => "not visible".to_string(),
+    });
+    serde_json::json!({
+        "seen": seen,
+        "unseen": screen.unseen.map(|_| "covered"),
+        "manual": screen.manual.as_ref().map(|manual| manual.name.clone()),
+    })
+}
+
+/// A weapon-mismatch decision a script makes.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ScriptedDecision {
+    Confirm,
+    Keep,
+}
+
+/// One weapon a scenario carries (its optional `carried.json`): a stored
+/// weapon with a single impact damage figure, a per-shot decay in PEC, and
+/// optionally the damage-over-time effect it declares (stored as Equipment
+/// stores it).
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptedWeapon {
+    equipment_id: i64,
+    name: String,
+    damage: f64,
+    decay: f64,
+    #[serde(default)]
+    effect_profile: Option<serde_json::Value>,
+}
+
+/// The equipment library a scenario's carried weapons make up.
+struct ScenarioEquipment(Vec<CarriedWeaponProfile>);
+
+impl EquipmentLibrary for ScenarioEquipment {
+    fn weapon_profile(&self, tool_name: &str) -> EquipmentProfile {
+        self.0
+            .iter()
+            .find(|profile| profile.weapon.name == tool_name)
+            .map(|profile| profile.props.clone())
+    }
+
+    fn cost_per_shot(&self, _tool_name: &str) -> f64 {
+        0.0
+    }
+
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        self.0
+            .iter()
+            .map(|profile| CarriedWeaponProfile {
+                weapon: profile.weapon.clone(),
+                props: profile.props.clone(),
+            })
+            .collect()
+    }
+
+    fn enabled_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        self.carried_weapons()
+    }
+
+    fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
+        None
+    }
+}
+
+/// A stored weapon's props from its single impact figure and decay.
+fn weapon_props(name: &str, damage: f64, decay: f64) -> serde_json::Value {
+    serde_json::json!({
+        "weapon_entity": {
+            "name": name,
+            "damage": {"impact": damage},
+            "economy": {"decay": decay, "ammo_burn": 0}
+        }
+    })
+}
+
+fn load_carried(scenario: &Path) -> Vec<CarriedWeaponProfile> {
+    let Ok(raw) = std::fs::read_to_string(scenario.join("carried.json")) else {
+        return Vec::new();
+    };
+    let weapons: Vec<ScriptedWeapon> =
+        serde_json::from_str(&raw).expect("a well-formed carried.json");
+    weapons
+        .into_iter()
+        .map(|weapon| {
+            let mut props = weapon_props(&weapon.name, weapon.damage, weapon.decay);
+            if let Some(effect) = weapon.effect_profile {
+                props[EFFECT_PROFILE_KEY] = effect;
+            }
+            CarriedWeaponProfile {
+                weapon: CarriedWeapon::from_props(weapon.equipment_id, weapon.name, &props),
+                props: props.as_object().cloned().expect("an object"),
+            }
+        })
+        .collect()
+}
+
+/// What the hotbar listener publishes for a resolved slot, minus the
+/// session and the occurrence instant the replay supplies.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptedPress {
+    slot: String,
+    equipment_id: i64,
+    item_name: String,
+    item_kind: String,
+    cost_per_use_ped: f64,
+    reload_seconds: f64,
+    #[serde(default)]
+    healing_profile: Option<HealingProfile>,
+    #[serde(default)]
+    lifesteal_percent: Option<f64>,
+    #[serde(default)]
+    consumable_profile: Option<eo_services::consumables::ConsumableProfile>,
+}
+
+fn load_steps(scenario: &Path) -> Option<Vec<Step>> {
+    let script = std::fs::read_to_string(scenario.join("steps.jsonl")).ok()?;
+    Some(
+        script
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("a well-formed replay step"))
+            .collect(),
+    )
+}
+
+/// What every process of a scenario starts with: the weapons it carries,
+/// and the screen setup when it reads the tool in hand off the screen.
+struct Setup {
+    carried: Vec<CarriedWeaponProfile>,
+    screen: Option<ScreenSetup>,
+}
+
+/// One process lifetime: its bus, chat-log tail, and tracker, plus the
+/// lines this tail has been handed.
+struct Process {
+    bus: Arc<EventBus>,
+    watcher: ChatlogWatcher,
+    tracker: Arc<HuntTracker>,
+    appended: u64,
+    /// The held-tool watcher, for a scenario reading the screen.
+    screen: Option<Arc<ScriptedWatcher>>,
+}
+
+/// The providers a scenario reading the screen adds: its configuration,
+/// the watcher, a library entry resolved from the carried weapons, and the
+/// bundled tools priced bare from their stored props.
+fn screen_providers(
+    carried: &[CarriedWeaponProfile],
+    setup: &ScreenSetup,
+    watcher: Arc<ScriptedWatcher>,
+) -> Providers {
+    let library: Vec<(i64, String)> = carried
+        .iter()
+        .map(|profile| (profile.weapon.equipment_id, profile.weapon.name.clone()))
+        .collect();
+    let bundled = setup.bundled.clone();
+    Providers {
+        config: Arc::new(ScreenConfig),
+        tool_detector: watcher,
+        items: Some(Arc::new(move |id| {
+            library
+                .iter()
+                .find(|(equipment_id, _)| *equipment_id == id)
+                .map(|(equipment_id, name)| ResolvedHotbarItem {
+                    equipment_id: *equipment_id,
+                    name: name.clone(),
+                    kind: HotbarItemKind::Weapon,
+                    cost_per_use_ped: 0.0,
+                    reload_seconds: 0.0,
+                    healing_profile: None,
+                    lifesteal_percent: None,
+                    consumable_profile: None,
+                    setup: Default::default(),
+                })
+        })),
+        bundled_tools: Some(Arc::new(move |endpoint, item_id| {
+            let tool = bundled
+                .iter()
+                .find(|tool| tool.endpoint == endpoint && tool.item_id == item_id)?;
+            let props = weapon_props(&tool.name, tool.damage, tool.decay);
+            Some(BundledTool {
+                name: tool.name.clone(),
+                kind: HotbarItemKind::Weapon,
+                cost_per_use_ped: eo_services::equipment_pricing::cost_per_shot_ped(&props),
+                weapon: Some(BundledWeapon {
+                    band: eo_services::tracker::damage_band_from_props(&props),
+                    props: props.as_object().cloned().expect("an object"),
+                }),
+            })
+        })),
+        ..Providers::default()
+    }
+}
+
+/// Start a process and its session, in the order the fingerprint's
+/// opening lines assume: the tail, the recorder, the tracker, the start.
+fn boot(
+    runtime: &tokio::runtime::Runtime,
+    db: &Db,
+    clock: &Arc<MockClock>,
+    chatlog: &Path,
+    recorder: &FingerprintRecorder,
+    player_name: &str,
+    setup: &Setup,
+) -> Process {
+    let carried = &setup.carried;
+    let screen = setup.screen.as_ref();
+    let bus = Arc::new(EventBus::new());
+    let tool_watcher = screen.map(|_| Arc::new(ScriptedWatcher::default()));
+    let base = match (screen, &tool_watcher) {
+        (Some(setup), Some(tool_watcher)) => screen_providers(carried, setup, tool_watcher.clone()),
+        _ => Providers::default(),
+    };
+    let watcher = ChatlogWatcher::new(bus.clone(), chatlog, None, ChatLogClock::host_local());
+    watcher.start();
+    recorder.install(&bus);
+    let tracker = runtime
+        .block_on(HuntTracker::new(
+            bus.clone(),
+            db.clone(),
+            clock.clone(),
+            ChatLogClock::host_local(),
+            Providers {
+                player_name: player_name.to_string(),
+                equipment: Arc::new(ScenarioEquipment(
+                    carried
+                        .iter()
+                        .map(|profile| CarriedWeaponProfile {
+                            weapon: profile.weapon.clone(),
+                            props: profile.props.clone(),
+                        })
+                        .collect(),
+                )),
+                ..base
+            },
+        ))
+        .expect("tracker");
+    runtime
+        .block_on(tracker.start_session())
+        .expect("session start");
+    Process {
+        bus,
+        watcher,
+        tracker,
+        appended: 0,
+        screen: tool_watcher,
+    }
+}
+
+/// Append tick groups one flush each, then wait until the tail has read
+/// (and so dispatched) every line.
+fn stream(chatlog: &Path, process: &mut Process, groups: &[String]) {
+    let mut sink = std::fs::OpenOptions::new()
+        .append(true)
+        .open(chatlog)
+        .expect("chatlog append");
+    for group in groups {
+        sink.write_all(group.as_bytes()).expect("tick write");
+        sink.flush().expect("tick flush");
+        process.appended += group.split_inclusive('\n').count() as u64;
+    }
+    process
+        .watcher
+        .wait_until_drained(process.appended, Duration::from_secs(10))
+        .expect("watcher drains the scenario");
+}
+
+fn press(process: &Process, clock: &MockClock, press: &ScriptedPress) {
+    let item_kind = match press.item_kind.as_str() {
+        "healing" => HotbarItemKind::Healing,
+        "weapon" => HotbarItemKind::Weapon,
+        "consumable" => HotbarItemKind::Consumable,
+        other => panic!("unsupported scripted hotbar item kind {other}"),
+    };
+    process
+        .bus
+        .publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
+            session_id: None,
+            slot: press.slot.clone(),
+            source: eo_services::bus_events::IntentSource::Key,
+            occurred_at: naive_to_epoch(clock.now()),
+            equipment_id: press.equipment_id,
+            item_name: press.item_name.clone(),
+            item_kind,
+            cost_per_use_ped: press.cost_per_use_ped,
+            reload_seconds: press.reload_seconds,
+            healing_profile: press.healing_profile.clone(),
+            lifesteal_percent: press.lifesteal_percent,
+            consumable_profile: press.consumable_profile.clone(),
+        })));
+}
+
+/// Tell the tracker a change read off the screen, then wait until it is
+/// applied (the actor answers calls in order).
+fn tell(
+    runtime: &tokio::runtime::Runtime,
+    process: &Process,
+    clock: &MockClock,
+    setup: &ScreenSetup,
+    pulse: &ScriptedPulse,
+) {
+    let watcher = process
+        .screen
+        .as_ref()
+        .expect("a pulse needs a scenario reading the screen");
+    let (session_id, sink) = watcher
+        .sink
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("the watch runs");
+    let at_ms =
+        (naive_to_epoch(clock.now()) * 1000.0).round() as i64 - (pulse.ago * 1000.0).round() as i64;
+    assert!(sink(ToolPulse {
+        session_id,
+        at_ms,
+        seen: setup.seen(&pulse.seen),
+    }));
+    runtime.block_on(process.tracker.tool_source());
+}
+
 /// Replay one scenario through the full native pipeline and assert
 /// both committed goldens byte-for-byte.
 fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
@@ -168,54 +706,143 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
     let chatlog = dir.path().join("chat_testing.log");
     std::fs::File::create(&chatlog).expect("empty chatlog");
 
-    let bus = Arc::new(EventBus::new());
     let clock = Arc::new(MockClock::new(Some(plan.start), 0.0));
-    let watcher = ChatlogWatcher::new(bus.clone(), &chatlog, None, ChatLogClock::host_local());
-    watcher.start();
-
     // The recorder installs before the session starts, so the start
     // events are the fingerprint's opening lines.
     let recorder = FingerprintRecorder::new();
-    recorder.install(&bus);
-
-    let tracker = runtime
-        .block_on(HuntTracker::new(
-            bus.clone(),
-            db.clone(),
-            clock.clone(),
-            ChatLogClock::host_local(),
-            Providers {
-                player_name: player_name.to_string(),
-                ..Providers::default()
-            },
-        ))
-        .expect("tracker");
-    runtime
-        .block_on(tracker.start_session())
-        .expect("session start");
+    let setup = Setup {
+        carried: load_carried(&scenario),
+        screen: load_screen(&scenario),
+    };
+    let screen = setup.screen.as_ref();
+    let mut process = boot(
+        &runtime,
+        &db,
+        &clock,
+        &chatlog,
+        &recorder,
+        player_name,
+        &setup,
+    );
 
     // Stream the replay one tick per flush, then drain on the line
-    // count (the watcher counts every line it has read whole).
+    // count (the watcher counts every line it has read whole); a
+    // scripted scenario interleaves its steps between tick groups.
     let content = std::fs::read_to_string(scenario.join("chat_replay.log")).expect("chat replay");
-    let appended = content.split_inclusive('\n').count() as u64;
-    {
-        let mut sink = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&chatlog)
-            .expect("chatlog append");
-        for group in tick_groups(&content) {
-            sink.write_all(group.as_bytes()).expect("tick write");
-            sink.flush().expect("tick flush");
+    let groups = tick_groups(&content);
+    let mut readouts: Vec<String> = Vec::new();
+    match load_steps(&scenario) {
+        None => stream(&chatlog, &mut process, &groups),
+        Some(steps) => {
+            let mut next = 0;
+            let mut segment: Option<String> = None;
+            for step in steps {
+                match step {
+                    Step::Chat(count) => {
+                        let until = next + count;
+                        assert!(
+                            until <= groups.len(),
+                            "{name}: the script outruns the chat log"
+                        );
+                        stream(&chatlog, &mut process, &groups[next..until]);
+                        next = until;
+                    }
+                    Step::Advance(seconds) => clock.advance(seconds).expect("script step"),
+                    Step::Hotbar(scripted) => press(&process, &clock, &scripted),
+                    Step::Segment(declared) => {
+                        if let Some(standing) = segment.take() {
+                            runtime
+                                .block_on(
+                                    process
+                                        .tracker
+                                        .deactivate_activity(ActivityKey::Segment(standing)),
+                                )
+                                .expect("segment ends");
+                        }
+                        if let Some(name) = declared.clone() {
+                            runtime
+                                .block_on(
+                                    process
+                                        .tracker
+                                        .activate_activity(ActivityRef::Segment { name }, false),
+                                )
+                                .expect("segment starts");
+                        }
+                        segment = declared;
+                    }
+                    Step::Restart => {
+                        recorder.uninstall(&process.bus);
+                        process.watcher.stop();
+                        process = boot(
+                            &runtime,
+                            &db,
+                            &clock,
+                            &chatlog,
+                            &recorder,
+                            player_name,
+                            &setup,
+                        );
+                        segment = None;
+                    }
+                    Step::NewSession => {
+                        clock.advance(plan.step_seconds).expect("plan step");
+                        runtime
+                            .block_on(process.tracker.stop_session())
+                            .expect("session stop");
+                        runtime
+                            .block_on(process.tracker.start_session())
+                            .expect("session start");
+                        segment = None;
+                    }
+                    Step::Readout => {
+                        let readout = runtime
+                            .block_on(process.tracker.snapshot())
+                            .expect("readout");
+                        let active = readout.active.expect("a readout needs a running session");
+                        let mut line = serde_json::json!({
+                            "currentTool": readout.current_tool,
+                            "weaponDeclared": active.weapon_declared,
+                            "unpricedShots": active.unpriced_shots,
+                            // Summed shot by shot: pinned to the PEC
+                            // fraction, not the float residue.
+                            "unpricedCostBound": (active.unpriced_cost_bound * 1e9).round() / 1e9,
+                            "unpricedNoFitShots": active.unpriced_no_fit,
+                            "warnings": active.warnings,
+                        });
+                        if screen.is_some() {
+                            let source = runtime.block_on(process.tracker.tool_source());
+                            line["screen"] = screen_readout(&source);
+                        }
+                        readouts.push(line.to_string());
+                    }
+                    Step::Decide(decision) => {
+                        let decision = match decision {
+                            ScriptedDecision::Confirm => MismatchDecision::Confirm,
+                            ScriptedDecision::Keep => MismatchDecision::Keep,
+                        };
+                        let decided = runtime
+                            .block_on(process.tracker.decide_weapon_mismatch(decision))
+                            .expect("the decision saves");
+                        assert!(decided, "{name}: the script decides a standing mismatch");
+                    }
+                    Step::Pulse(pulse) => {
+                        let screen = screen.expect("a pulse needs a scenario reading the screen");
+                        tell(&runtime, &process, &clock, screen, &pulse);
+                    }
+                }
+            }
+            assert_eq!(
+                next,
+                groups.len(),
+                "{name}: the script leaves chat unreplayed"
+            );
         }
     }
-    watcher
-        .wait_until_drained(appended, Duration::from_secs(10))
-        .expect("watcher drains the scenario");
     clock.advance(plan.step_seconds).expect("plan step");
     runtime
-        .block_on(tracker.stop_session())
+        .block_on(process.tracker.stop_session())
         .expect("session stop");
-    watcher.stop();
+    process.watcher.stop();
 
     // Fingerprint first, snapshot second, one normaliser: the symbol
     // tables assign in exactly the golden harness's encounter order.
@@ -223,10 +850,10 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
     let actual_fingerprint = recorder.serialize(&mut normalizer);
     let actual_snapshot = runtime.block_on(catalogue_snapshot(&db, &mut normalizer));
 
-    // Deliberate re-ratification hook (see TESTING.md "Goldens
-    // regeneration", and the demo-goldens UPDATE hook it mirrors): write
-    // what the pipeline currently produces instead of asserting. Every
-    // write is still gated behind the ratification guard at push time.
+    // Deliberate regeneration hook (see TESTING.md "Goldens regeneration"):
+    // write what the pipeline currently produces instead of asserting. The
+    // moved goldens are reviewed as a behaviour change in the commit that
+    // moves them.
     if std::env::var_os("UPDATE_CORPUS_GOLDENS").is_some() {
         std::fs::create_dir_all(scenario.join("expected")).expect("expected dir");
         std::fs::write(
@@ -236,6 +863,13 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
         .expect("fingerprint golden writes");
         std::fs::write(scenario.join("expected/db_state.json"), &actual_snapshot)
             .expect("db_state golden writes");
+        if !readouts.is_empty() {
+            std::fs::write(
+                scenario.join("expected/readouts.jsonl"),
+                readouts.join("\n") + "\n",
+            )
+            .expect("readouts golden writes");
+        }
         return;
     }
 
@@ -256,6 +890,33 @@ fn replay_against_goldens(family: &str, name: &str, player_name: &str) {
         "{name}: the native database snapshot diverged from its golden\n{}",
         first_divergence(&expected_snapshot, &actual_snapshot)
     );
+
+    let readouts_golden = scenario.join("expected/readouts.jsonl");
+    if readouts.is_empty() {
+        assert!(
+            !readouts_golden.exists(),
+            "{name}: a readouts golden with no readout step to produce it"
+        );
+    } else {
+        let actual_readouts = readouts.join("\n") + "\n";
+        let expected_readouts = std::fs::read_to_string(&readouts_golden).expect("readouts golden");
+        assert_eq!(
+            actual_readouts,
+            expected_readouts,
+            "{name}: the live readouts diverged from their golden\n{}",
+            first_divergence(&expected_readouts, &actual_readouts)
+        );
+    }
+}
+
+#[test]
+fn weapon_held_across_sessions_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_held_across_sessions", "");
+}
+
+#[test]
+fn weapon_undeclared_fresh_launch_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_undeclared_fresh_launch", "");
 }
 
 #[test]
@@ -331,29 +992,76 @@ fn tree_harvesting_session_matches_the_goldens() {
 }
 
 #[test]
-fn placeholder_recorded_hunt_matches_the_goldens() {
-    replay_against_goldens("recorded", "placeholder_recorded_hunt", "");
+fn healing_effect_rotation_matches_the_goldens() {
+    replay_against_goldens("scripted", "healing_effect_rotation", "");
 }
 
 #[test]
-fn deferred_scenarios_are_named_not_silently_dropped() {
-    // The remaining golden-carrying scenario needs the skill-scan
-    // capture pipeline, which joins the oracle when that service
-    // lands; naming it here keeps the coverage gap loud. Real
-    // recorded bundles are local-by-default and stay out of the
-    // public tree, so the scenario is simply absent on most hosts;
-    // where it is present, it must still carry the goldens this
-    // manifest defers.
-    let deferred = ["hunt_with_skill_scan"];
-    for name in deferred {
-        let dir = scenario_dir("recorded", name);
-        if !dir.is_dir() {
-            eprintln!("{name}: local-only bundle absent on this host; the deferral stands");
-            continue;
-        }
-        assert!(
-            dir.join("expected/db_state.json").exists(),
-            "{name} is present without goldens; update the deferred manifest"
-        );
-    }
+fn weapon_attribution_mismatch_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_attribution_mismatch", "");
+}
+
+#[test]
+fn weapon_hit_margins_matches_the_goldens() {
+    replay_against_goldens("scripted", "weapon_hit_margins", "");
+}
+
+#[test]
+fn dot_weapon_rotation_matches_the_goldens() {
+    replay_against_goldens("scripted", "dot_weapon_rotation", "");
+}
+
+#[test]
+fn dot_effect_windows_matches_the_goldens() {
+    replay_against_goldens("scripted", "dot_effect_windows", "");
+}
+
+#[test]
+fn screen_tool_change_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_tool_change", "");
+}
+
+#[test]
+fn screen_nothing_then_tool_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_nothing_then_tool", "");
+}
+
+#[test]
+fn screen_uncertain_spell_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_uncertain_spell", "");
+}
+
+#[test]
+fn screen_covered_same_tool_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_covered_same_tool", "");
+}
+
+#[test]
+fn screen_covered_other_tool_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_covered_other_tool", "");
+}
+
+#[test]
+fn screen_bundled_tool_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_bundled_tool", "");
+}
+
+#[test]
+fn screen_consumable_key_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_consumable_key", "");
+}
+
+#[test]
+fn screen_covered_long_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_covered_long", "");
+}
+
+#[test]
+fn screen_uncertain_no_tail_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_uncertain_no_tail", "");
+}
+
+#[test]
+fn screen_ignored_weapon_key_matches_the_goldens() {
+    replay_against_goldens("scripted", "screen_ignored_weapon_key", "");
 }

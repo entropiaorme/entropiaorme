@@ -1,5 +1,7 @@
 //! The market family: the manual markup-observation feed (paste
-//! preview and commit) and its reads (overview, per-item history).
+//! preview and commit), the player's own markup entries and live Nanocube
+//! marks, and their reads (overview, per-item history, activity and
+//! by-name markups).
 //!
 //! Everything on this surface is the INFORMATIONAL market layer:
 //! estimated markup is a distinct data class that never joins the
@@ -7,8 +9,6 @@
 //! DTOs stay in this module so the accounting surfaces cannot consume
 //! them by accident.
 
-use crate::equipment::EquipmentKind;
-use eo_services::expected_hunting::HuntingLooterLevels;
 use eo_services::market_paste::{self, MarketPasteRow};
 use eo_services::market_service::{self, MarketError};
 use schemars::JsonSchema;
@@ -179,46 +179,6 @@ pub struct MarketHistoryPoint {
     pub sales_ped: f64,
 }
 
-/// One item of a contributable batch: the pasted readings verbatim,
-/// by horizon name.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketContributionItem {
-    pub item_name: String,
-    pub tier: i64,
-    pub day: MarketReading,
-    pub week: MarketReading,
-    pub month: MarketReading,
-    pub year: MarketReading,
-    pub decade: MarketReading,
-}
-
-/// The most recent accepted paste as a contributable batch: exactly
-/// what an opted-in contributor shares, nothing more. The frontend
-/// owns the send, strictly behind the contribution opt-in.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketContributionBatch {
-    /// Epoch seconds of the submission.
-    pub observed_at: f64,
-    pub items: Vec<MarketContributionItem>,
-}
-
-/// One species' estimated-markup row: recorded loot composition
-/// TT-weighted by the latest markup observations on one horizon.
-/// Coverage keeps a thin sample honest: the estimate weights only the
-/// covered TT, and the row says how much that is.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketMobRankingRow {
-    pub mob_species: String,
-    pub loot_tt: f64,
-    pub covered_tt: f64,
-    pub item_count: i64,
-    pub covered_item_count: i64,
-    pub est_markup_pct: Nullable<f64>,
-}
-
 /// One horizon's reading for a harvest item: its markup (null where the
 /// game reported N/A) and TT turnover (PED).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -230,6 +190,83 @@ pub struct MarketHarvestHorizon {
     pub sales_ped: f64,
 }
 
+/// How a manual markup was entered: a percentage of TT, or PED above TT per
+/// unit (how the auction quotes items that do not stack).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketManualMarkupKind {
+    Percent,
+    PedPerUnit,
+}
+
+impl From<market_service::ManualMarkupKind> for MarketManualMarkupKind {
+    fn from(kind: market_service::ManualMarkupKind) -> Self {
+        match kind {
+            market_service::ManualMarkupKind::Percent => Self::Percent,
+            market_service::ManualMarkupKind::PedPerUnit => Self::PedPerUnit,
+        }
+    }
+}
+
+/// A markup the player entered for one item. Trusted as given, but a
+/// stand-in: a newer market import replaces it.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketManualMarkup {
+    pub kind: MarketManualMarkupKind,
+    pub value: f64,
+    /// The item's TT per unit where the entry was made: what a PED-per-unit
+    /// entry is a markup over.
+    pub unit_tt_ped: Nullable<f64>,
+    /// The entry as a percentage of TT; null for a PED amount on an item
+    /// with no TT.
+    pub markup_pct: Nullable<f64>,
+    /// Epoch seconds.
+    pub recorded_at: f64,
+}
+
+impl From<market_service::ManualMarkup> for MarketManualMarkup {
+    fn from(entry: market_service::ManualMarkup) -> Self {
+        Self {
+            kind: entry.kind.into(),
+            value: entry.value,
+            unit_tt_ped: entry.unit_tt_ped.into(),
+            markup_pct: entry.markup_pct().into(),
+            recorded_at: entry.recorded_at,
+        }
+    }
+}
+
+/// Which reading an item's valuation uses: whichever was recorded more
+/// recently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketMarkupSource {
+    Market,
+    Manual,
+}
+
+impl From<market_service::MarkupSource> for MarketMarkupSource {
+    fn from(source: market_service::MarkupSource) -> Self {
+        match source {
+            market_service::MarkupSource::Market => Self::Market,
+            market_service::MarkupSource::Manual => Self::Manual,
+        }
+    }
+}
+
+/// A manual markup as the player enters it.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MarketManualMarkupInput {
+    pub item_name: String,
+    pub kind: MarketManualMarkupKind,
+    pub value: f64,
+    /// The item's TT per unit, for a PED-per-unit entry.
+    #[serde(default)]
+    pub unit_tt_ped: Option<f64>,
+}
+
 /// One harvest-looted item's resolved market signals plus the per-horizon
 /// breakdown. The resolved markup/horizon/sales are the display default
 /// and market-opportunity input (week preferred, then month, then year;
@@ -239,7 +276,18 @@ pub struct MarketHarvestHorizon {
 #[serde(rename_all = "camelCase")]
 pub struct MarketHarvestItem {
     pub item_name: String,
+    /// The market's resolved markup, whichever source `preferred` names.
     pub markup_pct: Nullable<f64>,
+    /// Epoch seconds of the import the market markup came from.
+    pub market_observed_at: Nullable<f64>,
+    /// The player's standing manual entry.
+    pub manual: Nullable<MarketManualMarkup>,
+    /// Which of the market reading and the manual entry the item's
+    /// valuation uses: the more recent. Null when neither exists.
+    pub preferred: Nullable<MarketMarkupSource>,
+    /// Marked to be valued at the Nanocube markup in the live session
+    /// figures; every other valuation ignores the mark.
+    pub nanocube_marked: bool,
     /// Absolute informational quote per item unit. This is intended for
     /// zero-TT and unit-priced items, and remains estimated market value.
     pub unit_price_ped: Nullable<f64>,
@@ -275,40 +323,6 @@ pub struct MarketHarvestData {
 pub struct MarketAuctionPacketThreshold {
     pub max_fee_share_pct: f64,
     pub gross_markup_ped: f64,
-}
-
-/// One looter profession and its believed-current level.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketLooterLevel {
-    pub name: String,
-    pub level: f64,
-}
-
-/// One configured loadout's offensive-only expected return and break-even
-/// loot markup under Community Model v1.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketWeaponBreakEven {
-    pub name: String,
-    pub amplifier_name: Nullable<String>,
-    pub weighted_efficiency_pct: Nullable<f64>,
-    pub offensive_tt_recovery_pct: Nullable<f64>,
-    pub expected_tt_return_pct: Nullable<f64>,
-    pub break_even_loot_markup_pct: Nullable<f64>,
-    pub looter_level: Nullable<f64>,
-    pub coverage: Nullable<f64>,
-    pub incomplete: bool,
-    pub model_version: Nullable<String>,
-}
-
-/// The break-even readout: the player's exact three hunting-looter
-/// professions and every library weapon's modelled offensive economics.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MarketBreakEven {
-    pub looters: Vec<MarketLooterLevel>,
-    pub weapons: Vec<MarketWeaponBreakEven>,
 }
 
 // ── Operations ──────────────────────────────────────────────────────
@@ -449,136 +463,6 @@ impl Api {
             .collect())
     }
 
-    /// The most recent accepted paste as a contributable batch, or null
-    /// before the first commit.
-    pub async fn market_contribution_batch(
-        &self,
-    ) -> Result<Nullable<MarketContributionBatch>, ApiError> {
-        let batch = self
-            .market
-            .latest_submission()
-            .await
-            .map_err(ApiError::internal("market contribution batch"))?;
-        Ok(batch
-            .map(|batch| MarketContributionBatch {
-                observed_at: batch.observed_at,
-                items: batch
-                    .items
-                    .into_iter()
-                    .map(|item| {
-                        let (day, week, month, year, decade) = horizon_fields(item.readings);
-                        MarketContributionItem {
-                            item_name: item.item_name,
-                            tier: item.tier,
-                            day,
-                            week,
-                            month,
-                            year,
-                            decade,
-                        }
-                    })
-                    .collect(),
-            })
-            .into())
-    }
-
-    /// Configured loadout economics under the shared component-weighted
-    /// expected-hunting core. The three exact hunting looters are returned as
-    /// provenance; each row uses their visible arithmetic mean until target
-    /// classification is grounded.
-    pub async fn market_break_even(&self) -> Result<MarketBreakEven, ApiError> {
-        let professions = self.character_professions().await?;
-        let profession_level = |name: &str| {
-            professions
-                .iter()
-                .find(|profession| profession.name == name)
-                .map(|profession| profession.level)
-                .unwrap_or(0.0)
-        };
-        let looter_basis = HuntingLooterLevels {
-            animal: profession_level("Animal Looter"),
-            mutant: profession_level("Mutant Looter"),
-            robot: profession_level("Robot Looter"),
-        };
-        let looters = ["Animal Looter", "Mutant Looter", "Robot Looter"]
-            .into_iter()
-            .map(|name| MarketLooterLevel {
-                name: name.to_string(),
-                level: profession_level(name),
-            })
-            .collect();
-
-        let mut weapons = Vec::new();
-        for item in self
-            .equipment_library()
-            .await?
-            .into_iter()
-            .filter(|item| matches!(item.kind, EquipmentKind::Weapon))
-        {
-            let item_id = item
-                .id
-                .parse::<i64>()
-                .map_err(ApiError::internal("equipment id parse for break-even"))?;
-            let detail = self
-                .equipment_detail_with_looters(item_id, Some(looter_basis))
-                .await?;
-            let expected = detail.expected_return.0;
-            weapons.push(MarketWeaponBreakEven {
-                name: item.name,
-                amplifier_name: item.amplifier_name,
-                weighted_efficiency_pct: expected
-                    .as_ref()
-                    .and_then(|value| value.weighted_efficiency_pct.0)
-                    .into(),
-                offensive_tt_recovery_pct: expected
-                    .as_ref()
-                    .and_then(|value| value.offensive_tt_recovery.0)
-                    .map(|value| value * 100.0)
-                    .into(),
-                expected_tt_return_pct: expected
-                    .as_ref()
-                    .and_then(|value| value.expected_tt_rate.0)
-                    .map(|value| value * 100.0)
-                    .into(),
-                break_even_loot_markup_pct: expected
-                    .as_ref()
-                    .and_then(|value| value.break_even_loot_markup.0)
-                    .map(|value| value * 100.0)
-                    .into(),
-                looter_level: expected.as_ref().map(|value| value.looter_level).into(),
-                coverage: expected.as_ref().map(|value| value.coverage).into(),
-                incomplete: expected.as_ref().is_none_or(|value| value.incomplete),
-                model_version: expected.map(|value| value.model_version).into(),
-            });
-        }
-
-        Ok(MarketBreakEven { looters, weapons })
-    }
-
-    /// Every hunted species' estimated loot markup on one horizon,
-    /// best estimate first (species with no observed items last).
-    pub async fn market_mob_ranking(
-        &self,
-        horizon: MarketHorizon,
-    ) -> Result<Vec<MarketMobRankingRow>, ApiError> {
-        let rows = self
-            .market
-            .mob_ranking(horizon.into())
-            .await
-            .map_err(ApiError::internal("market mob ranking"))?;
-        Ok(rows
-            .into_iter()
-            .map(|row| MarketMobRankingRow {
-                mob_species: row.mob_species,
-                loot_tt: row.loot_tt,
-                covered_tt: row.covered_tt,
-                item_count: row.item_count,
-                covered_item_count: row.covered_item_count,
-                est_markup_pct: row.est_markup_pct.into(),
-            })
-            .collect())
-    }
-
     /// The estimated market signals for every active harvest-looted item
     /// plus the nanocube recycling floor. Each item's markup and sales
     /// volume resolve via the week -> month -> year horizon fallback.
@@ -589,6 +473,65 @@ impl Api {
             .await
             .map_err(ApiError::internal("market harvest markups"))?;
         Ok(market_items_dto(data))
+    }
+
+    /// The estimated market signals for exactly the named items (the live
+    /// session's loot, an inventory's holdings) plus the nanocube floor.
+    pub async fn market_item_markups(
+        &self,
+        names: Vec<String>,
+    ) -> Result<MarketHarvestData, ApiError> {
+        let data = self
+            .market
+            .item_markups(names)
+            .await
+            .map_err(market_write_error("market item markups"))?;
+        Ok(market_items_dto(data))
+    }
+
+    /// Record a markup the player entered for one item. It stands wherever
+    /// it is more recent than the item's market import, and lifts a live
+    /// Nanocube mark on the item.
+    pub async fn market_manual_markup_set(
+        &self,
+        input: MarketManualMarkupInput,
+    ) -> Result<MarketManualMarkup, ApiError> {
+        let entry = match input.kind {
+            MarketManualMarkupKind::Percent => {
+                market_service::ManualMarkupInput::Percent(input.value)
+            }
+            MarketManualMarkupKind::PedPerUnit => market_service::ManualMarkupInput::PedPerUnit {
+                ped: input.value,
+                unit_tt_ped: input.unit_tt_ped,
+            },
+        };
+        self.market
+            .set_manual_markup(&input.item_name, entry)
+            .await
+            .map(MarketManualMarkup::from)
+            .map_err(market_write_error("market manual markup set"))
+    }
+
+    /// Withdraw the player's manual markup for one item; it falls back to
+    /// its market import. False when none was standing.
+    pub async fn market_manual_markup_clear(&self, item_name: String) -> Result<bool, ApiError> {
+        self.market
+            .clear_manual_markup(&item_name)
+            .await
+            .map_err(market_write_error("market manual markup clear"))
+    }
+
+    /// Mark one item to be valued at the Nanocube markup in the live session
+    /// figures, or lift the mark. Returns whether it is marked.
+    pub async fn market_nanocube_mark_set(
+        &self,
+        item_name: String,
+        marked: bool,
+    ) -> Result<bool, ApiError> {
+        self.market
+            .set_live_nanocube_mark(&item_name, marked)
+            .await
+            .map_err(market_write_error("market nanocube mark set"))
     }
 
     /// The estimated market signals for every active hunting-looted item
@@ -605,6 +548,15 @@ impl Api {
     }
 }
 
+fn market_write_error(context: &'static str) -> impl Fn(MarketError) -> ApiError {
+    move |err| match err {
+        MarketError::EmptyPaste | MarketError::InvalidInput(_) => {
+            ApiError::bad_request(err.to_string())
+        }
+        MarketError::Db(source) => ApiError::internal(context)(source),
+    }
+}
+
 /// Shape one activity's per-item market signals onto the wire DTO.
 fn market_items_dto(data: eo_services::market_service::HarvestMarketData) -> MarketHarvestData {
     MarketHarvestData {
@@ -615,6 +567,10 @@ fn market_items_dto(data: eo_services::market_service::HarvestMarketData) -> Mar
             .map(|item| MarketHarvestItem {
                 item_name: item.item_name,
                 markup_pct: item.markup_pct.into(),
+                market_observed_at: item.market_observed_at.into(),
+                manual: item.manual.map(MarketManualMarkup::from).into(),
+                preferred: item.preferred.map(MarketMarkupSource::from).into(),
+                nanocube_marked: item.nanocube_marked,
                 unit_price_ped: item.unit_price_ped.into(),
                 horizon: item.horizon.into(),
                 sales_ped: item.sales_ped.into(),

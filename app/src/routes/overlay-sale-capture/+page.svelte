@@ -1,17 +1,16 @@
 <!--
-	The sale-window capture button, reachable while the game holds the screen.
+	The sell-queue capture button, reachable while the game holds the screen.
 
 	It is the main window's button in another place, and deliberately nothing
-	more: no fields, no editing, no result to read. What it says is only
-	whether to try again before tabbing away, because a read that failed
-	because the window drifted off the corner is fixed in a second while the
-	game is still in front, and discovering it later costs exactly the trip
-	this window exists to save. The figures themselves are reviewed in the
-	form, which is where they can be corrected and where they are committed.
+	more: no fields, no editing, no figures to read. What it says is only how
+	many queued items read, or why none did, so the player can fix the cause
+	before tabbing away: a covered or closed sell window is fixed in a second
+	while the game is still in front, and discovering it later costs exactly
+	the trip this window exists to save. The drafts themselves are reviewed in
+	the form, which is where they can be corrected and where they are listed.
 -->
 <script lang="ts">
 	import {
-		ApiError,
 		captureAuctionFeeResearchSample,
 		captureSaleFromOverlay,
 		getAuctionFeeResearchOverlayStatus,
@@ -19,6 +18,7 @@
 		type AuctionFeeOverlayStatus,
 	} from '$lib/api';
 	import Button from '$lib/components/Button.svelte';
+	import { overlayReplyLine } from '$lib/features/inventory/saleQueueCapture';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import { createWindowSizeSync } from '$lib/windows/windowSize';
 	import { onMount } from 'svelte';
@@ -28,15 +28,7 @@
 
 	// The window is sized to whatever the panel measures, so the result line
 	// appearing does not leave it clipped.
-	onMount(() => {
-		windowSizeSync.schedule();
-		const observer = new ResizeObserver(() => windowSizeSync.schedule());
-		if (overlayRoot) observer.observe(overlayRoot);
-		return () => {
-			observer.disconnect();
-			windowSizeSync.cancel();
-		};
-	});
+	onMount(() => windowSizeSync.connect());
 
 	let busy = $state(false);
 	let message = $state('');
@@ -50,11 +42,9 @@
 				failed = research.failed;
 				message = research.message ?? 'Ready. Change the values, then press Space.';
 			}
-		} catch (cause) {
-			// Developer mode being off means this is the normal Inventory
-			// capture surface. Transient IPC failures retain the last-good
-			// authority so a research capture cannot be misrouted as a sale.
-			if (cause instanceof ApiError && cause.kind === 'notFound') research = null;
+		} catch {
+			// Transient IPC failures retain the last-good authority so a
+			// research capture cannot be misrouted as a sale.
 		}
 	}
 
@@ -70,13 +60,11 @@
 				failed = research.failed;
 				message = research.message ?? 'Sample saved.';
 			} else {
-				const reply = await captureSaleFromOverlay();
-				failed = reply.failed;
-				message = reply.message;
+				({ message, failed } = overlayReplyLine(await captureSaleFromOverlay()));
 			}
 		} catch (cause) {
 			failed = true;
-			message = cause instanceof Error ? cause.message : 'Could not read the sale window';
+			message = cause instanceof Error ? cause.message : 'Could not read the sell queue';
 		} finally {
 			busy = false;
 		}
@@ -85,7 +73,8 @@
 
 <div
 	bind:this={overlayRoot}
-	class="bg-surface-raised/95 text-text-primary flex w-[240px] flex-col gap-2 rounded-md p-3 shadow-lg backdrop-blur"
+	class="bg-surface-raised/95 text-text-primary border-border-bright flex w-[240px] flex-col gap-2 rounded-md border p-3 backdrop-blur"
+	data-overlay-surface
 >
 	<div class="flex items-center gap-2">
 		<div data-tauri-drag-region class="text-text-tertiary flex-1 cursor-move text-xs">

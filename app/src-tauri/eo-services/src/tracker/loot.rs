@@ -17,14 +17,27 @@ use super::{GLOBAL_CORRELATION_WINDOW_SECONDS, LOOT_DEDUP_WINDOW_SECONDS};
 
 /// Where one loot group lands: a mob kill, or a harvesting swing.
 enum RoutedLoot {
-    Kill(Kill),
+    /// A kill, its shot evidence, the enhancer breaks whose cost it carries,
+    /// and the answer kept for the review when it was pinned to a creature
+    /// on no list.
+    Kill(
+        Kill,
+        Vec<super::weapon_evidence::ShotEvidence>,
+        Vec<crate::enhancer_breaks::EnhancerBreak>,
+        Option<Box<super::detection::KillDetection>>,
+    ),
     Harvest(HarvestEvent),
+    /// Nothing to record: Shrapnel returned for enhancer breaks, held for
+    /// the next kill.
+    Returned,
 }
 
 enum ReconciledLootSource {
     Kill {
         total: Ped,
         items: Vec<crate::tracking_models::LootItem>,
+        /// A hand-in has claimed the clump: the row is no longer a kill.
+        reward_claimed: bool,
     },
     Harvest {
         total: Ped,
@@ -44,14 +57,16 @@ impl TrackerActor {
         let reconciled = self
             .db
             .with_reader(move |conn| {
-                let kill: Option<(String, f64)> = conn
+                let kill: Option<(String, f64, bool)> = conn
                     .query_row(
-                        "SELECT id, loot_total_ped FROM kills WHERE loot_source_id = ?",
+                        // every-kill: by-id (the one row a loot source names).
+                        "SELECT id, loot_total_ped, reward_claimed_at IS NOT NULL \
+                         FROM kills WHERE loot_source_id = ?",
                         rusqlite::params![source_key],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )
                     .optional()?;
-                if let Some((kill_id, total)) = kill {
+                if let Some((kill_id, total, reward_claimed)) = kill {
                     let mut stmt = conn.prepare(
                         "SELECT item_name, quantity, value_ped, is_enhancer_shrapnel \
                          FROM kill_loot_items \
@@ -70,6 +85,7 @@ impl TrackerActor {
                     return Ok(Some(ReconciledLootSource::Kill {
                         total: Ped(total),
                         items,
+                        reward_claimed,
                     }));
                 }
                 let harvest: Option<(String, f64)> = conn
@@ -110,7 +126,11 @@ impl TrackerActor {
             return Ok(false);
         };
         let changed = match reconciled {
-            ReconciledLootSource::Kill { total, items } => {
+            ReconciledLootSource::Kill {
+                total,
+                items,
+                reward_claimed,
+            } => {
                 let Some(kill) = active
                     .session
                     .kills
@@ -119,11 +139,15 @@ impl TrackerActor {
                 else {
                     return Ok(false);
                 };
-                if kill.loot_items == items && kill.loot_total_ped == total {
+                if kill.loot_items == items
+                    && kill.loot_total_ped == total
+                    && kill.reward_claimed == reward_claimed
+                {
                     false
                 } else {
                     kill.loot_items = items;
                     kill.loot_total_ped = total;
+                    kill.reward_claimed = reward_claimed;
                     true
                 }
             }
@@ -160,6 +184,12 @@ impl TrackerActor {
         let BusEvent::LootGroup(group) = event else {
             return;
         };
+        // A kill can be told by creature detection only when its line's
+        // logged second and its arrival are both known.
+        let mut detection_report: Option<i64> = None;
+        // Read before the session's borrow: whether the screen is being read
+        // decides what a kill's typed creature stands for.
+        let reading_screen = self.reading_screen();
         let (routed, restamps, yield_restamps) = {
             let Self {
                 session,
@@ -175,11 +205,11 @@ impl TrackerActor {
             };
 
             let total_ped = group.total_ped;
-            let now = group
+            let logged = group
                 .timestamp
                 .as_deref()
-                .and_then(|raw| parse_timestamp_instant(chatlog_clock, raw))
-                .unwrap_or_else(|| resolve_local(clock.now()));
+                .and_then(|raw| parse_timestamp_instant(chatlog_clock, raw));
+            let now = logged.unwrap_or_else(|| resolve_local(clock.now()));
             let now_epoch = instant_to_epoch(now);
 
             // Loot deduplication (same fingerprint within 2s window).
@@ -222,7 +252,15 @@ impl TrackerActor {
             // Classification reads the RAW group, not the blacklist-
             // filtered items: a user filter must trim what gets
             // recorded, never flip what kind of event happened.
-            if is_harvest_loot_group(&group.items) {
+            // A tick holding nothing but Shrapnel returned for enhancer
+            // breaks is no kill: the return waits, beside the breaks it came
+            // back for, for the kill their shots go towards.
+            let only_returns =
+                !group.items.is_empty() && group.items.iter().all(|item| item.is_enhancer_shrapnel);
+            if only_returns {
+                active.accumulator.returns.extend(items);
+                (RoutedLoot::Returned, Vec::new(), Vec::new())
+            } else if is_harvest_loot_group(&group.items) {
                 let (tool_name, cost) = Self::guarded_harvest_swing_cost(
                     active,
                     harvest_guardrail.as_ref(),
@@ -291,20 +329,25 @@ impl TrackerActor {
                 active.session.harvests.push(harvest.clone());
                 (RoutedLoot::Harvest(harvest), restamps, yield_restamps)
             } else {
-                // Snapshot the mob stamp from the declaration in force.
-                // No declaration stamps "Unknown" with no source; the
-                // stamp-source discriminant records the provenance so a
-                // future detected stamp reads apart from a declared one.
-                let stamped = active.stamped_mob_name();
-                let mob_stamp_source = stamped
-                    .is_some()
-                    .then_some(crate::tracker::MobStampSource::Declared);
-                let mob_name = stamped.unwrap_or("Unknown").to_string();
-                let (mob_species, mob_maturity) = match &active.declared_mob {
-                    Some(declared) if !declared.name.is_empty() => {
-                        (declared.species.clone(), declared.maturity.clone())
-                    }
-                    _ => (String::new(), String::new()),
+                // Snapshot the mob stamp from the session's mob source: the
+                // pin, else the typed creature (a backstop while the screen
+                // is read, whose answer may re-stamp the kill later). No
+                // creature stamps "Unknown" with no source; the stamp-source
+                // discriminant records the provenance so a detected stamp
+                // reads apart from a declared one, and the route says how
+                // the creature was named.
+                let recorded = active.mob.record(reading_screen);
+                let mob_route = recorded.route;
+                let unlisted_pin = recorded.unlisted_pin;
+                let pinned_mob = recorded.mob.clone();
+                let (mob_name, mob_species, mob_maturity, mob_stamp_source) = match recorded.mob {
+                    Some(mob) => (
+                        mob.name,
+                        mob.species,
+                        mob.maturity,
+                        Some(crate::tracker::MobStampSource::Declared),
+                    ),
+                    None => ("Unknown".to_string(), String::new(), String::new(), None),
                 };
 
                 let session_id = active.session.id.clone();
@@ -312,6 +355,10 @@ impl TrackerActor {
                 // was in force at the moment the kill settled.
                 let context_id = active.intervals.context_id();
                 let accumulator = &mut active.accumulator;
+                // Returns that arrived alone are kept among this kill's
+                // lines; tagged, they are never its loot.
+                let mut items = items;
+                items.append(&mut accumulator.returns);
                 let kill = Kill {
                     id: uuid::Uuid::new_v4().to_string(),
                     loot_source_id: group.source_id.clone(),
@@ -320,37 +367,77 @@ impl TrackerActor {
                     mob_species,
                     mob_maturity,
                     mob_stamp_source,
+                    mob_route,
                     timestamp: now_epoch,
                     shots_fired: accumulator.shots_fired,
                     damage_dealt: accumulator.damage_dealt,
                     damage_taken: accumulator.damage_taken,
                     critical_hits: accumulator.critical_hits,
                     cost_ped: accumulator.weapon_cost(),
-                    enhancer_cost: accumulator.enhancer_cost,
+                    enhancer_cost: accumulator.enhancer_cost(),
                     loot_total_ped: filtered_total_ped,
                     loot_items: items,
                     tool_stats: std::mem::take(&mut accumulator.tool_stats),
                     is_global: false,
                     is_hof: false,
                     context_id,
+                    reward_claimed: false,
                 };
 
+                // The kill's stored weapon evidence is written with it.
+                let evidence = std::mem::take(&mut accumulator.evidence);
+                // Its shots' times stay in memory, beside it.
+                let shot_times = std::mem::take(&mut accumulator.shot_times);
+                // The breaks among its shots are kept with it, as its
+                // enhancer cost is.
+                let breaks = std::mem::take(&mut accumulator.breaks);
                 // Reset accumulator for next kill (tool_stats moved into
                 // the kill above, exactly the original's shallow copy
                 // followed by a fresh dict).
                 accumulator.reset();
+                // The regime's shots now sit in this kill.
+                active.weapons.attribution.settle_kill(&kill.id);
+
+                if logged.is_some() {
+                    detection_report = group.arrived_ms;
+                }
 
                 // Append the finalised kill to the session; the list tail
                 // doubles as the original's `_last_kill` alias.
                 active.session.kills.push(kill.clone());
-                (RoutedLoot::Kill(kill), Vec::new(), Vec::new())
+                active.kill_shot_times.insert(kill.id.clone(), shot_times);
+                let carried = unlisted_pin.zip(pinned_mob).map(|((key, without), mob)| {
+                    Box::new(super::detection::KillDetection::pinned_unlisted(
+                        &kill.id,
+                        &kill.session_id,
+                        &mob,
+                        key,
+                        without,
+                    ))
+                });
+                (
+                    RoutedLoot::Kill(kill, evidence, breaks, carried),
+                    Vec::new(),
+                    Vec::new(),
+                )
             }
         };
 
         // The routed record is a detached value by here; the borrow of
         // the live session ended with the block above.
         match routed {
-            RoutedLoot::Kill(kill) => self.persist_kill(&kill).await,
+            RoutedLoot::Kill(kill, evidence, breaks, carried) => {
+                self.persist_kill(&kill, evidence, breaks, carried).await;
+                // Only a kill recorded while the screen was read waits for
+                // its answer: one recorded otherwise took the typed creature
+                // as the player's word.
+                if reading_screen {
+                    let logged_ms = (kill.timestamp * 1000.0).round() as i64;
+                    self.await_detection(&kill.id, logged_ms, detection_report)
+                        .await;
+                }
+            }
+            RoutedLoot::Returned => {}
             RoutedLoot::Harvest(harvest) => {
                 self.persist_harvest(&harvest).await;
                 if !restamps.is_empty() {

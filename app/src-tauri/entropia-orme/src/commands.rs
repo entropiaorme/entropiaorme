@@ -11,68 +11,108 @@
 
 use std::sync::Arc;
 
+use eo_api::account::{
+    AccountActivityMarks, AccountActivitySeenInput, AccountMeasuredSummary, AccountSessionMeasure,
+    AccountSignal, AccountStatus, CostPlacementInput, CostPlacementResult, CostPlacements,
+    MeasuredSessionPage,
+};
+use eo_api::account_armour::{ArmourPieceMarkupInput, ArmourPiecesView};
+use eo_api::account_minutes::{
+    AccountArrivalId, AccountArrivalInput, AccountArrivalRecorded, AccountSessionMinutes,
+};
+use eo_api::account_proposals::{
+    AccountProposal, AccountProposalDismissInput, AccountProposalKind, AccountProposalsClaimInput,
+    AccountProposalsInput, AccountProposalsLinkInput, AccountRunReading, AccountRunWhole,
+    AccountRunWholeInput,
+};
+use eo_api::account_reconciliation::{
+    StockReconciliationApplied, StockReconciliationApplyInput, StockReconciliationDraft,
+    StockReconciliationPasteInput, StockReconciliationReviseInput, StockReconciliationRevised,
+};
 use eo_api::activities::{ActivityOptionsResult, ActivityStateResult, ActivityTargetKind};
 use eo_api::analytics::{
     ActivityHistoryEntry, ActivityUndoInput, AnalyticsHarvest, AnalyticsHunting,
-    AnalyticsHuntingActivity, AnalyticsOverview, AuctionConfirmInput, AuctionExpireInput,
-    AuctionListing, AuctionListingInput, EquipmentListingInput, EquipmentTradeInput,
-    HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem, InventoryItemInput,
-    InventoryPatch, InventorySaleDraft, InventorySellInput, InventorySellResult, LedgerEntryInput,
-    LedgerItem, LedgerPage, LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput,
-    Profession, RealisedTierMarkup, SaleWindowCapture, ShrapnelConversionInput,
-    StockConversionInput, StockPosition, StockRemovalInput,
+    AnalyticsHuntingActivity, AnalyticsOverview, AssetPurchaseInput, AuctionConfirmInput,
+    AuctionExpireInput, AuctionListing, AuctionListingInput, EquipmentListingInput,
+    EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
+    InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
+    InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
+    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
+    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
+    StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
+    StockSaleFromAccount, StockSaleFromAccountInput,
 };
 use eo_api::character::{
-    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus,
-    CharacterProspectOptions, ComputedCharacterStats, HpOptimizerResult, PathOptimizerResult,
-    ProfessionLevel, ProfessionOptimizerResult, ProspectQuery, ProspectResult, SkillLevel,
+    ActivityRecommenderQuery, ActivityRecommenderResult, CalibrationStatus, ComputedCharacterStats,
+    HpOptimizerResult, PathOptimizerResult, ProfessionLevel, SkillLevel,
 };
 use eo_api::codex::{
     CodexCalibrateResult, CodexClaimResult, CodexMasteryClaimResult, CodexMetaAttribute,
-    CodexMetaClaimResult, CodexRecommendTarget, CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
+    CodexMetaClaimResult, CodexMetaProgress, CodexMetaTargets, CodexRecommendTarget,
+    CodexSkillOption, CodexSpecies, CodexSpeciesRanks,
 };
+use eo_api::consumables::{ConsumableDose, ConsumableDoses};
 use eo_api::dev::{
     AuctionFeeOverlayStatus, AuctionFeeResearchStatus, CompactResult, CrashReportingStatus,
     MetricsSnapshot, RebuildReport,
 };
+use eo_api::enhancer_markups::{EnhancerMarkups, EnhancerTierMarkupInput};
 use eo_api::equipment::{
-    EquipmentDetail, EquipmentRequest, EquipmentSearchHit, EquipmentSummary, SearchKind,
+    EquipmentDetail, EquipmentLibrary, EquipmentRequest, EquipmentSearchHit, EquipmentSummary,
+    SearchKind,
 };
+use eo_api::healing::{
+    HealingCorrectionTarget, HealingCorrectionTool, HealingOutputClassification, HealingOutputPage,
+};
+use eo_api::loadout_comparison::{LoadoutComparison, SetupPick};
 use eo_api::maps::{
     CoordCalibrationStatus, CoordScanResult, MapPin, MapPinInput, MapPinPatch, MapView,
     NavigationPositionResult, NavigationRun, NearbyMapPin, PinConfig, PinConfigEditInput,
-    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry,
+    PinConfigInput, PlanetMap, RadarCalibrationStatus, RadarGeometry, RadarGuidance,
 };
 use eo_api::market::{
-    MarketAuctionPacketThreshold, MarketBreakEven, MarketCommitResult, MarketContributionBatch,
-    MarketHarvestData, MarketHistoryPoint, MarketHorizon, MarketMobRankingRow, MarketOverviewRow,
+    MarketAuctionPacketThreshold, MarketCommitResult, MarketHarvestData, MarketHistoryPoint,
+    MarketHorizon, MarketManualMarkup, MarketManualMarkupInput, MarketOverviewRow,
     MarketPastePreview, MarketUnitPriceResult,
 };
+use eo_api::mob_detection::{
+    CreatureEntry, CreatureEntryCheck, MobDetectionReview, MobDetectionSettleResult,
+    MobDetectionTarget, MobLabel, MobPin, MobPinTarget, MobReviewRef,
+};
 use eo_api::protection::{
-    PendingProtectionSession, ProtectionLoadoutInput, ProtectionLoadoutUpdateInput,
     ProtectionObservationInput, ProtectionObservationOutcome, ProtectionOverview,
-    ProtectionRepairInput, ProtectionRepairOutcome, ProtectionScanResult, ProtectionSetInput,
-    ProtectionSetUpdateInput,
+    ProtectionRecordingCandidates, ProtectionRepairInput, ProtectionRepairOutcome,
+    ProtectionSessionStatus, ProtectionSetInput, ProtectionSetPieces, ProtectionSetUpdateInput,
+    ProtectionStream, ProtectionUndoTarget, TerminalReadResult,
 };
 use eo_api::quests::{
-    Quest, QuestAnalyticsRow, QuestFamily, QuestFamilyInput, QuestHandInState, QuestInput,
-    QuestRewardReviewInput, UnresolvedQuestReward,
+    Quest, QuestAnalyticsRow, QuestCatalogue, QuestFamily, QuestFamilyInput, QuestHandInState,
+    QuestInput, QuestRewardReviewInput, UnresolvedQuestReward,
 };
-use eo_api::scan::{
-    AcceptResult, CaptureResult, RejectResult, ScanStatus, SkillScanPending, SpacebarResult,
-    UndoResult,
-};
+use eo_api::sale_capture::SaleQueueCapture;
+use eo_api::scan::{AcceptResult, RejectResult, SkillScanReply, SkillScanReview, SkillScanStatus};
 use eo_api::session_definitions::{SessionDefinition, SessionDefinitionInput};
-use eo_api::settings::{AppSettings, OverlayPosition, SettingsPatch};
+use eo_api::settings::{AppSettings, KeyboardAccess, OverlayPosition, SettingsPatch};
+use eo_api::skilling::{SkillingForecastQuery, SkillingForecastResult};
+use eo_api::strongbox::{
+    StrongboxExportInput, StrongboxExportRead, StrongboxOpeningEntry, StrongboxOpeningInput,
+    StrongboxOpeningRecorded,
+};
+use eo_api::tool_sighting::{
+    DismissedToolName, ToolSightingAction, ToolSightingReview, ToolSightingSettleResult,
+};
 use eo_api::tracking::{
-    ArmourCostResult, DefinitionSelectResult, LootItemEditResult, ManualMobLockResult,
-    ManualMobSuggestion, MobEditResult, ReleaseResult, RepairScanResult, SessionConfigResult,
-    SessionDetail, SessionIntervals, SessionPage, SessionReassignResult, StartResult, StopResult,
-    TrackingSnapshot,
+    ArmourCostResult, DeclaredEquipment, DefinitionSelectResult, LootEntry, LootItemEditResult,
+    ManualMobLockResult, ManualMobSuggestion, MobEditResult, ReleaseResult, SessionConfigResult,
+    SessionDetail, SessionExclusionResult, SessionIntervals, SessionPage, SessionQuestRewardItem,
+    SessionReassignResult, StartResult, StopResult, TrackingSnapshot,
+};
+use eo_api::weapons::{
+    WeaponBulkAssignment, WeaponBulkOption, WeaponCorrectionWeapon, WeaponMismatchDecision,
+    WeaponShotGroup, WeaponShotPage, WeaponUnpricedExposure,
 };
 use eo_api::ApiError;
 use eo_api::Nullable;
-use tauri::Emitter;
 
 /// Holds the composed facade for the typed commands, published by
 /// `install_native_services` once every service is present.
@@ -87,38 +127,16 @@ pub(crate) fn facade(app: &tauri::AppHandle) -> Result<Arc<eo_api::Api>, ApiErro
         .ok_or(ApiError::Unavailable)
 }
 
-/// The analytics fixture-backed read for the native-shell e2e build: the
-/// live analytics surface is served by typed commands, so the e2e build
-/// serves the same committed analytics fixture through these commands
-/// (deserialised into their DTO), keeping the visual baselines stable.
-#[cfg(feature = "e2e-stub")]
-fn e2e_analytics<T: serde::de::DeserializeOwned>(key: &str) -> Result<T, ApiError> {
-    serde_json::from_value(crate::e2e_stub::analytics_fixture(key))
-        .map_err(ApiError::internal("e2e analytics fixture"))
-}
-
-/// The dashboard fixture value under `key`, deserialised into the typed
-/// tracking read command's DTO: the live tracking snapshot and
-/// session-detail reads migrated to typed commands, so the e2e build
-/// serves the same committed dashboard fixture through them (the sessions
-/// list rides the analytics fixture; see [`e2e_analytics`]).
-#[cfg(feature = "e2e-stub")]
-fn e2e_dashboard<T: serde::de::DeserializeOwned>(key: &str) -> Result<T, ApiError> {
-    serde_json::from_value(crate::e2e_stub::dashboard_fixture(key))
-        .map_err(ApiError::internal("e2e dashboard fixture"))
-}
-
 #[tauri::command(rename_all = "snake_case")]
-pub async fn equipment_search(
+pub async fn equipment_catalogue(
     app: tauri::AppHandle,
-    q: String,
     kind: SearchKind,
 ) -> Result<Vec<EquipmentSearchHit>, ApiError> {
-    facade(&app)?.equipment_search(&q, kind).await
+    facade(&app)?.equipment_catalogue(kind).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn equipment_library(app: tauri::AppHandle) -> Result<Vec<EquipmentSummary>, ApiError> {
+pub async fn equipment_library(app: tauri::AppHandle) -> Result<EquipmentLibrary, ApiError> {
     facade(&app)?.equipment_library().await
 }
 
@@ -140,8 +158,45 @@ pub async fn equipment_update(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn equipment_set_enabled(
+    app: tauri::AppHandle,
+    item_id: i64,
+    enabled: bool,
+) -> Result<EquipmentSummary, ApiError> {
+    facade(&app)?.equipment_set_enabled(item_id, enabled).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn equipment_delete(app: tauri::AppHandle, item_id: i64) -> Result<(), ApiError> {
     facade(&app)?.equipment_delete(item_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn enhancer_markups(app: tauri::AppHandle) -> Result<EnhancerMarkups, ApiError> {
+    facade(&app)?.enhancer_markups().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn enhancer_markup_set(
+    app: tauri::AppHandle,
+    input: EnhancerTierMarkupInput,
+) -> Result<EnhancerMarkups, ApiError> {
+    facade(&app)?.enhancer_markup_set(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn equipment_dismissed_tools(
+    app: tauri::AppHandle,
+) -> Result<Vec<DismissedToolName>, ApiError> {
+    facade(&app)?.equipment_dismissed_tools().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn equipment_track_again(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<DismissedToolName>, ApiError> {
+    facade(&app)?.equipment_track_again(name).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -150,6 +205,18 @@ pub async fn equipment_detail(
     item_id: i64,
 ) -> Result<EquipmentDetail, ApiError> {
     facade(&app)?.equipment_detail(item_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn loadout_compare(
+    app: tauri::AppHandle,
+    setups: Vec<SetupPick>,
+    hp_max: f64,
+    looter_level: Option<f64>,
+) -> Result<LoadoutComparison, ApiError> {
+    facade(&app)?
+        .loadout_compare(setups, hp_max, looter_level)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -175,25 +242,6 @@ pub async fn protection_set_update(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_loadout_create(
-    app: tauri::AppHandle,
-    input: ProtectionLoadoutInput,
-) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?.protection_loadout_create(&input).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn protection_loadout_update(
-    app: tauri::AppHandle,
-    loadout_id: i64,
-    input: ProtectionLoadoutUpdateInput,
-) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?
-        .protection_loadout_update(loadout_id, &input)
-        .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
 pub async fn protection_set_archive(
     app: tauri::AppHandle,
     set_id: i64,
@@ -202,37 +250,45 @@ pub async fn protection_set_archive(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_loadout_archive(
+pub async fn protection_set_restore(
     app: tauri::AppHandle,
-    loadout_id: i64,
+    set_id: i64,
 ) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?.protection_loadout_archive(loadout_id).await
+    facade(&app)?.protection_set_restore(set_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_select(
+pub async fn protection_undo(
     app: tauri::AppHandle,
-    loadout_id: i64,
+    target: ProtectionUndoTarget,
 ) -> Result<ProtectionOverview, ApiError> {
-    facade(&app)?.protection_select(loadout_id).await
+    facade(&app)?.protection_undo(target).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_assign_session_loadout(
+pub async fn protection_unrecorded_sessions(
     app: tauri::AppHandle,
-    session_id: String,
-    loadout_id: i64,
-) -> Result<ProtectionOverview, ApiError> {
+    session_ids: Vec<String>,
+) -> Result<Vec<String>, ApiError> {
     facade(&app)?
-        .protection_assign_session_loadout(&session_id, loadout_id)
+        .protection_unrecorded_sessions(session_ids)
         .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn protection_pending_attribution(
+pub async fn protection_session_status(
     app: tauri::AppHandle,
-) -> Result<Vec<PendingProtectionSession>, ApiError> {
-    facade(&app)?.protection_pending_attribution().await
+    session_id: String,
+) -> Result<ProtectionSessionStatus, ApiError> {
+    facade(&app)?.protection_session_status(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn protection_recording_candidates(
+    app: tauri::AppHandle,
+    stream: ProtectionStream,
+) -> Result<ProtectionRecordingCandidates, ApiError> {
+    facade(&app)?.protection_recording_candidates(stream).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -252,10 +308,204 @@ pub async fn protection_repair_confirm(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn protection_set_pieces(
+    app: tauri::AppHandle,
+    set_id: i64,
+) -> Result<ProtectionSetPieces, ApiError> {
+    facade(&app)?.protection_set_pieces(set_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn protection_set_pieces_confirm(
+    app: tauri::AppHandle,
+    set_id: i64,
+    names: Vec<String>,
+) -> Result<ProtectionSetPieces, ApiError> {
+    facade(&app)?
+        .protection_set_pieces_confirm(set_id, names)
+        .await
+}
+
+// The Trade Terminal read captures the game window and recognises what it
+// needs to find the terminal; offload it so it never ties up an async
+// runtime worker.
+#[tauri::command(rename_all = "snake_case")]
 pub async fn protection_trade_terminal_scan(
     app: tauri::AppHandle,
-) -> Result<ProtectionScanResult, ApiError> {
-    facade(&app)?.protection_trade_terminal_scan()
+) -> Result<TerminalReadResult, ApiError> {
+    let api = facade(&app)?;
+    tokio::task::spawn_blocking(move || api.protection_trade_terminal_scan())
+        .await
+        .map_err(|_| ApiError::invalid_state("trade terminal scan task failed"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_outputs(
+    app: tauri::AppHandle,
+    session_id: String,
+    classification: HealingOutputClassification,
+    offset: i64,
+    limit: i64,
+) -> Result<HealingOutputPage, ApiError> {
+    facade(&app)?
+        .healing_outputs(session_id, classification, offset, limit)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_correction_tools(
+    app: tauri::AppHandle,
+    output_id: String,
+) -> Result<Vec<HealingCorrectionTool>, ApiError> {
+    facade(&app)?.healing_correction_tools(output_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_correct(
+    app: tauri::AppHandle,
+    target: HealingCorrectionTarget,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.healing_correct(target).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn healing_correction_undo(
+    app: tauri::AppHandle,
+    correction_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.healing_correction_undo(correction_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_shots(
+    app: tauri::AppHandle,
+    session_id: String,
+    group: WeaponShotGroup,
+    offset: i64,
+    limit: i64,
+) -> Result<WeaponShotPage, ApiError> {
+    facade(&app)?
+        .weapon_shots(session_id, group, offset, limit)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_unpriced_exposure(
+    app: tauri::AppHandle,
+    session_ids: Vec<String>,
+) -> Result<Vec<WeaponUnpricedExposure>, ApiError> {
+    facade(&app)?.weapon_unpriced_exposure(session_ids).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_bulk_options(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Vec<WeaponBulkOption>, ApiError> {
+    facade(&app)?.weapon_bulk_options(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_assign_fitting(
+    app: tauri::AppHandle,
+    session_id: String,
+    equipment_id: i64,
+) -> Result<WeaponBulkAssignment, ApiError> {
+    facade(&app)?
+        .weapon_assign_fitting(session_id, equipment_id)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_batch_undo(
+    app: tauri::AppHandle,
+    batch_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.weapon_batch_undo(batch_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_correction_weapons(
+    app: tauri::AppHandle,
+    evidence_id: String,
+) -> Result<Vec<WeaponCorrectionWeapon>, ApiError> {
+    facade(&app)?.weapon_correction_weapons(evidence_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_assign(
+    app: tauri::AppHandle,
+    evidence_id: String,
+    equipment_id: i64,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.weapon_assign(evidence_id, equipment_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_doses(app: tauri::AppHandle) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_doses().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_start(
+    app: tauri::AppHandle,
+    equipment_id: i64,
+    untimed: bool,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?
+        .consumable_dose_start(equipment_id, untimed)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_end(
+    app: tauri::AppHandle,
+    dose_id: String,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_dose_end(dose_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_remove(
+    app: tauri::AppHandle,
+    dose_id: String,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_dose_remove(dose_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_dose_restore(
+    app: tauri::AppHandle,
+    dose_id: String,
+) -> Result<ConsumableDoses, ApiError> {
+    facade(&app)?.consumable_dose_restore(dose_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn consumable_session_doses(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Vec<ConsumableDose>, ApiError> {
+    facade(&app)?.consumable_session_doses(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_mark_effect_tick(
+    app: tauri::AppHandle,
+    evidence_id: String,
+    window_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?
+        .weapon_mark_effect_tick(evidence_id, window_id)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn weapon_assignment_undo(
+    app: tauri::AppHandle,
+    correction_id: String,
+) -> Result<SessionDetail, ApiError> {
+    facade(&app)?.weapon_assignment_undo(correction_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -281,45 +531,23 @@ pub async fn character_professions(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn character_prospect_options(
-    app: tauri::AppHandle,
-) -> Result<CharacterProspectOptions, ApiError> {
-    facade(&app)?.character_prospect_options().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn character_prospect(
-    app: tauri::AppHandle,
-    query: ProspectQuery,
-) -> Result<ProspectResult, ApiError> {
-    facade(&app)?.character_prospect(&query).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn character_profession_optimizer(
-    app: tauri::AppHandle,
-    profession: String,
-) -> Result<ProfessionOptimizerResult, ApiError> {
-    facade(&app)?
-        .character_profession_optimizer(&profession)
-        .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
 pub async fn character_path_optimizer(
     app: tauri::AppHandle,
-    profession: String,
+    professions: Vec<String>,
     target_level: Option<f64>,
     ped_budget: Option<f64>,
 ) -> Result<PathOptimizerResult, ApiError> {
     facade(&app)?
-        .character_path_optimizer(&profession, target_level, ped_budget)
+        .character_path_optimizer(&professions, target_level, ped_budget)
         .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn character_hp_optimizer(app: tauri::AppHandle) -> Result<HpOptimizerResult, ApiError> {
-    facade(&app)?.character_hp_optimizer().await
+pub async fn character_hp_optimizer(
+    app: tauri::AppHandle,
+    target_hp: f64,
+) -> Result<HpOptimizerResult, ApiError> {
+    facade(&app)?.character_hp_optimizer(target_hp).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -331,8 +559,21 @@ pub async fn character_activity_recommender(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn character_skilling_forecast(
+    app: tauri::AppHandle,
+    query: SkillingForecastQuery,
+) -> Result<SkillingForecastResult, ApiError> {
+    facade(&app)?.character_skilling_forecast(&query).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn settings_get(app: tauri::AppHandle) -> Result<AppSettings, ApiError> {
     facade(&app)?.settings().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn input_status(app: tauri::AppHandle) -> Result<KeyboardAccess, ApiError> {
+    facade(&app)?.input_status()
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -388,6 +629,24 @@ pub async fn codex_meta_attributes(
     app: tauri::AppHandle,
 ) -> Result<Vec<CodexMetaAttribute>, ApiError> {
     facade(&app)?.codex_meta_attributes().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn codex_meta_targets(app: tauri::AppHandle) -> Result<CodexMetaTargets, ApiError> {
+    facade(&app)?.codex_meta_targets().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn codex_meta_progress(app: tauri::AppHandle) -> Result<CodexMetaProgress, ApiError> {
+    facade(&app)?.codex_meta_progress().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn codex_meta_calibrate(
+    app: tauri::AppHandle,
+    earned: i64,
+) -> Result<CodexMetaProgress, ApiError> {
+    facade(&app)?.codex_meta_calibrate(earned).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -549,6 +808,16 @@ pub async fn quest_cancel(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn quest_abandon(app: tauri::AppHandle, quest_id: i64) -> Result<Quest, ApiError> {
+    facade(&app)?.quest_abandon(quest_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn quest_catalogue(app: tauri::AppHandle) -> Result<QuestCatalogue, ApiError> {
+    Ok(facade(&app)?.quest_catalogue())
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn quests_mobs(app: tauri::AppHandle) -> Result<Vec<String>, ApiError> {
     facade(&app)?.quests_mobs().await
 }
@@ -664,28 +933,12 @@ pub async fn analytics_overview(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<AnalyticsOverview, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        e2e_analytics("overview")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_overview(&period).await
-    }
+    facade(&app)?.analytics_overview(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn analytics_hunting(app: tauri::AppHandle) -> Result<AnalyticsHunting, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_analytics("hunting")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_hunting().await
-    }
+    facade(&app)?.analytics_hunting().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -693,15 +946,7 @@ pub async fn analytics_harvest(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<AnalyticsHarvest, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        e2e_analytics("harvest")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_harvest(&period).await
-    }
+    facade(&app)?.analytics_harvest(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -709,15 +954,7 @@ pub async fn analytics_hunting_activity(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<AnalyticsHuntingActivity, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        e2e_analytics("huntingActivity")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.analytics_hunting_activity(&period).await
-    }
+    facade(&app)?.analytics_hunting_activity(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -783,6 +1020,283 @@ pub async fn stock_convert(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn stock_convert_items(
+    app: tauri::AppHandle,
+    input: ItemConversionInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.stock_convert_items(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_export_read(
+    app: tauri::AppHandle,
+    input: StrongboxExportInput,
+) -> Result<StrongboxExportRead, ApiError> {
+    facade(&app)?.strongbox_export_read(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_open(
+    app: tauri::AppHandle,
+    input: StrongboxOpeningInput,
+) -> Result<StrongboxOpeningRecorded, ApiError> {
+    facade(&app)?.strongbox_open(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_openings(
+    app: tauri::AppHandle,
+) -> Result<Vec<StrongboxOpeningEntry>, ApiError> {
+    facade(&app)?.strongbox_openings().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn strongbox_opening_undo(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.strongbox_opening_undo(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_status(app: tauri::AppHandle) -> Result<AccountStatus, ApiError> {
+    facade(&app)?.account_status().await
+}
+
+/// The connection at a glance: unlike the rest of the account commands,
+/// every trusted window may ask it, so the overlay shows whether the
+/// account is being read.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_signal(app: tauri::AppHandle) -> Result<AccountSignal, ApiError> {
+    facade(&app)?.account_signal().await
+}
+
+/// Disconnect, completed in the shell so it always completes: the sign-in
+/// window closes and its watcher stops, the stored session is forgotten,
+/// then the connection drops the session and stops reading.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_disconnect(app: tauri::AppHandle) -> Result<(), ApiError> {
+    crate::account_window::disconnect(&app).await;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_activity_marks(
+    app: tauri::AppHandle,
+) -> Result<AccountActivityMarks, ApiError> {
+    facade(&app)?.account_activity_marks().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_activity_seen(
+    app: tauri::AppHandle,
+    input: AccountActivitySeenInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_activity_seen(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_session_measure(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<Nullable<AccountSessionMeasure>, ApiError> {
+    facade(&app)?.account_session_measure(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_measured_sessions(
+    app: tauri::AppHandle,
+    cursor: Option<String>,
+    limit: Option<i64>,
+) -> Result<MeasuredSessionPage, ApiError> {
+    facade(&app)?.account_measured_sessions(cursor, limit).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_measured_summary(
+    app: tauri::AppHandle,
+) -> Result<AccountMeasuredSummary, ApiError> {
+    facade(&app)?.account_measured_summary().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_cost_placements(app: tauri::AppHandle) -> Result<CostPlacements, ApiError> {
+    facade(&app)?.account_cost_placements().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_cost_place(
+    app: tauri::AppHandle,
+    input: CostPlacementInput,
+) -> Result<CostPlacementResult, ApiError> {
+    facade(&app)?.account_cost_place(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_cost_placement_clear(
+    app: tauri::AppHandle,
+    item: String,
+) -> Result<CostPlacementResult, ApiError> {
+    facade(&app)?.account_cost_placement_clear(item).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_armour_pieces(app: tauri::AppHandle) -> Result<ArmourPiecesView, ApiError> {
+    facade(&app)?.account_armour_pieces().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_armour_piece_markup(
+    app: tauri::AppHandle,
+    input: ArmourPieceMarkupInput,
+) -> Result<ArmourPiecesView, ApiError> {
+    facade(&app)?.account_armour_piece_markup(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals(
+    app: tauri::AppHandle,
+    kind: Option<AccountProposalKind>,
+) -> Result<Vec<AccountProposal>, ApiError> {
+    facade(&app)?.account_proposals(kind).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals_claim(
+    app: tauri::AppHandle,
+    input: AccountProposalsClaimInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposals_claim(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals_release(
+    app: tauri::AppHandle,
+    input: AccountProposalsInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposals_release(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposals_link(
+    app: tauri::AppHandle,
+    input: AccountProposalsLinkInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposals_link(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_proposal_dismiss(
+    app: tauri::AppHandle,
+    input: AccountProposalDismissInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_proposal_dismiss(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_session_minutes(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<AccountSessionMinutes, ApiError> {
+    facade(&app)?.account_session_minutes(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_arrival_unknown_origin(
+    app: tauri::AppHandle,
+    input: AccountArrivalInput,
+) -> Result<AccountArrivalRecorded, ApiError> {
+    facade(&app)?.account_arrival_unknown_origin(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_arrival_unignore(
+    app: tauri::AppHandle,
+    input: AccountArrivalId,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_arrival_unignore(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_arrival_unknown_origin_undo(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<(), ApiError> {
+    facade(&app)?
+        .account_arrival_unknown_origin_undo(input)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_plan(
+    app: tauri::AppHandle,
+) -> Result<StockReconciliationDraft, ApiError> {
+    facade(&app)?.account_reconciliation_plan().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_paste(
+    app: tauri::AppHandle,
+    input: StockReconciliationPasteInput,
+) -> Result<StockReconciliationDraft, ApiError> {
+    facade(&app)?.account_reconciliation_paste(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_draft(
+    app: tauri::AppHandle,
+) -> Result<Nullable<StockReconciliationDraft>, ApiError> {
+    facade(&app)?.account_reconciliation_draft().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_revise(
+    app: tauri::AppHandle,
+    input: StockReconciliationReviseInput,
+) -> Result<StockReconciliationRevised, ApiError> {
+    facade(&app)?.account_reconciliation_revise(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_apply(
+    app: tauri::AppHandle,
+    input: StockReconciliationApplyInput,
+) -> Result<StockReconciliationApplied, ApiError> {
+    facade(&app)?.account_reconciliation_apply(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_reconciliation_undo(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<(), ApiError> {
+    facade(&app)?.account_reconciliation_undo(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_begin(app: tauri::AppHandle) -> Result<AccountRunReading, ApiError> {
+    facade(&app)?.account_run_begin().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_done(app: tauri::AppHandle) -> Result<AccountRunReading, ApiError> {
+    facade(&app)?.account_run_done().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_whole(
+    app: tauri::AppHandle,
+    input: AccountRunWholeInput,
+) -> Result<AccountRunWhole, ApiError> {
+    facade(&app)?.account_run_whole(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn account_run_cancel(app: tauri::AppHandle) -> Result<(), ApiError> {
+    facade(&app)?.account_run_cancel().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn stock_private_sale(
     app: tauri::AppHandle,
     input: PrivateSaleInput,
@@ -804,6 +1318,22 @@ pub async fn stock_shrapnel_convert(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn stock_conversion_from_account(
+    app: tauri::AppHandle,
+    input: StockConversionFromAccountInput,
+) -> Result<Nullable<StockConversionFromAccount>, ApiError> {
+    facade(&app)?.stock_conversion_from_account(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn stock_sale_from_account(
+    app: tauri::AppHandle,
+    input: StockSaleFromAccountInput,
+) -> Result<Nullable<StockSaleFromAccount>, ApiError> {
+    facade(&app)?.stock_sale_from_account(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn activity_history(
     app: tauri::AppHandle,
     profession: Profession,
@@ -817,6 +1347,14 @@ pub async fn auction_sale_revert(
     input: ActivityUndoInput,
 ) -> Result<AuctionListing, ApiError> {
     facade(&app)?.auction_sale_revert(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn auction_listing_reopen(
+    app: tauri::AppHandle,
+    input: ActivityUndoInput,
+) -> Result<AuctionListing, ApiError> {
+    facade(&app)?.auction_listing_reopen(input).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -857,20 +1395,7 @@ pub async fn ledger_list(
     cursor: Option<String>,
     limit: Option<i64>,
 ) -> Result<LedgerPage, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &cursor, &limit);
-        let entries: Vec<LedgerItem> = e2e_analytics("ledger")?;
-        Ok(LedgerPage {
-            total: entries.len() as i64,
-            entries,
-            next_cursor: None.into(),
-        })
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.ledger_list(cursor, limit).await
-    }
+    facade(&app)?.ledger_list(cursor, limit).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -878,30 +1403,7 @@ pub async fn ledger_summary(
     app: tauri::AppHandle,
     period: String,
 ) -> Result<LedgerSummary, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &period);
-        // Derive the per-tag summary from the same committed ledger fixture
-        // the entry list serves, keeping the net-impact card's baseline
-        // consistent with the visible entries.
-        let entries: Vec<LedgerItem> = e2e_analytics("ledger")?;
-        let mut summary = LedgerSummary {
-            gains: Default::default(),
-            losses: Default::default(),
-        };
-        for entry in entries {
-            let side = match serde_json::to_value(entry.kind) {
-                Ok(value) if value == "markup" => &mut summary.gains,
-                _ => &mut summary.losses,
-            };
-            *side.entry(entry.tag).or_insert(0.0) += entry.amount;
-        }
-        Ok(summary)
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.ledger_summary(&period).await
-    }
+    facade(&app)?.ledger_summary(&period).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -919,15 +1421,7 @@ pub async fn ledger_delete(app: tauri::AppHandle, entry_id: String) -> Result<()
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn ledger_presets_list(app: tauri::AppHandle) -> Result<Vec<LedgerPreset>, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_analytics("presets")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.ledger_presets_list().await
-    }
+    facade(&app)?.ledger_presets_list().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -948,15 +1442,7 @@ pub async fn ledger_preset_delete(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn inventory_list(app: tauri::AppHandle) -> Result<Vec<InventoryItem>, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_analytics("inventory")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.inventory_list().await
-    }
+    facade(&app)?.inventory_list().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -997,27 +1483,17 @@ pub async fn inventory_sell(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn inventory_sale_window_capture(
     app: tauri::AppHandle,
-    window: tauri::Window,
-) -> Result<SaleWindowCapture, ApiError> {
+) -> Result<SaleQueueCapture, ApiError> {
     let api = facade(&app)?;
-    let capture = tokio::task::spawn_blocking(move || api.inventory_sale_window_capture())
+    tokio::task::spawn_blocking(move || api.inventory_sale_window_capture())
         .await
-        .map_err(|_| ApiError::invalid_state("sale window capture task failed"))??;
-    // A read taken from the overlay was taken for a form the player is not
-    // looking at. Waiting for the main window to be focused would leave a
-    // form sitting in plain sight on a second screen, unchanged, looking
-    // exactly like a capture that failed. So it is told, and fills where it
-    // stands. Window orchestration, not a domain event.
-    if window.label() == crate::SALE_CAPTURE_OVERLAY && capture.error.0.is_none() {
-        let _ = app.emit_to("main", "sale-capture-ready", ());
-    }
-    Ok(capture)
+        .map_err(|_| ApiError::invalid_state("sale queue capture task failed"))?
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn inventory_sale_window_take_capture(
     app: tauri::AppHandle,
-) -> Result<Nullable<SaleWindowCapture>, ApiError> {
+) -> Result<Nullable<SaleQueueCapture>, ApiError> {
     Ok(facade(&app)?.inventory_sale_window_take_capture())
 }
 
@@ -1045,6 +1521,36 @@ pub async fn inventory_equipment_trade(
     input: EquipmentTradeInput,
 ) -> Result<AuctionListing, ApiError> {
     facade(&app)?.inventory_equipment_trade(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inventory_purchase_add(
+    app: tauri::AppHandle,
+    item_id: String,
+    purchase: AssetPurchaseInput,
+) -> Result<InventoryItem, ApiError> {
+    facade(&app)?
+        .inventory_purchase_add(item_id, purchase)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inventory_purchase_update(
+    app: tauri::AppHandle,
+    purchase_id: i64,
+    purchase: AssetPurchaseInput,
+) -> Result<InventoryItem, ApiError> {
+    facade(&app)?
+        .inventory_purchase_update(purchase_id, purchase)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn inventory_purchase_delete(
+    app: tauri::AppHandle,
+    purchase_id: i64,
+) -> Result<InventoryItem, ApiError> {
+    facade(&app)?.inventory_purchase_delete(purchase_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1080,31 +1586,11 @@ pub async fn market_overview(app: tauri::AppHandle) -> Result<Vec<MarketOverview
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn market_contribution_batch(
-    app: tauri::AppHandle,
-) -> Result<eo_api::Nullable<MarketContributionBatch>, ApiError> {
-    facade(&app)?.market_contribution_batch().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
 pub fn market_auction_packet_threshold(
     app: tauri::AppHandle,
     max_fee_share_pct: f64,
 ) -> Result<MarketAuctionPacketThreshold, ApiError> {
     facade(&app)?.market_auction_packet_threshold(max_fee_share_pct)
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn market_break_even(app: tauri::AppHandle) -> Result<MarketBreakEven, ApiError> {
-    facade(&app)?.market_break_even().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn market_mob_ranking(
-    app: tauri::AppHandle,
-    horizon: MarketHorizon,
-) -> Result<Vec<MarketMobRankingRow>, ApiError> {
-    facade(&app)?.market_mob_ranking(horizon).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1118,6 +1604,41 @@ pub async fn market_hunt_markups(app: tauri::AppHandle) -> Result<MarketHarvestD
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn market_item_markups(
+    app: tauri::AppHandle,
+    names: Vec<String>,
+) -> Result<MarketHarvestData, ApiError> {
+    facade(&app)?.market_item_markups(names).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn market_manual_markup_set(
+    app: tauri::AppHandle,
+    input: MarketManualMarkupInput,
+) -> Result<MarketManualMarkup, ApiError> {
+    facade(&app)?.market_manual_markup_set(input).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn market_manual_markup_clear(
+    app: tauri::AppHandle,
+    item_name: String,
+) -> Result<bool, ApiError> {
+    facade(&app)?.market_manual_markup_clear(item_name).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn market_nanocube_mark_set(
+    app: tauri::AppHandle,
+    item_name: String,
+    marked: bool,
+) -> Result<bool, ApiError> {
+    facade(&app)?
+        .market_nanocube_mark_set(item_name, marked)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn market_item_history(
     app: tauri::AppHandle,
     item_name: String,
@@ -1127,64 +1648,42 @@ pub async fn market_item_history(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn scan_status(app: tauri::AppHandle) -> Result<ScanStatus, ApiError> {
+pub async fn scan_status(app: tauri::AppHandle) -> Result<SkillScanStatus, ApiError> {
     facade(&app)?.scan_status()
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn scan_start(
-    app: tauri::AppHandle,
-    page_count: Option<i64>,
-) -> Result<ScanStatus, ApiError> {
-    facade(&app)?.scan_start(page_count)
-}
-
-// The capture runs a synchronous screen grab + OCR read; offload it so a
-// slow grab never ties up an async runtime worker.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn scan_capture(app: tauri::AppHandle) -> Result<CaptureResult, ApiError> {
-    let api = facade(&app)?;
-    tokio::task::spawn_blocking(move || api.scan_capture())
-        .await
-        .map_err(|_| ApiError::invalid_state("scan capture task failed"))?
+pub async fn scan_start(app: tauri::AppHandle) -> Result<SkillScanReply, ApiError> {
+    facade(&app)?.scan_start()
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn scan_cancel(app: tauri::AppHandle) -> Result<ScanStatus, ApiError> {
+pub async fn scan_cancel(app: tauri::AppHandle) -> Result<SkillScanReply, ApiError> {
     facade(&app)?.scan_cancel()
 }
 
+// Accepting writes through the database's synchronous core while every
+// other scan verb answers at once; the save runs off the async runtime.
 #[tauri::command(rename_all = "snake_case")]
-pub async fn scan_undo(app: tauri::AppHandle) -> Result<UndoResult, ApiError> {
-    facade(&app)?.scan_undo()
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn scan_process(app: tauri::AppHandle) -> Result<ScanStatus, ApiError> {
-    facade(&app)?.scan_process()
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn scan_accept(app: tauri::AppHandle) -> Result<AcceptResult, ApiError> {
-    facade(&app)?.scan_accept()
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn scan_reject(app: tauri::AppHandle) -> Result<RejectResult, ApiError> {
-    facade(&app)?.scan_reject()
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn scan_pending(app: tauri::AppHandle) -> Result<Option<SkillScanPending>, ApiError> {
-    facade(&app)?.scan_pending()
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn scan_spacebar_capture(
+pub async fn scan_accept(
     app: tauri::AppHandle,
-    enabled: bool,
-) -> Result<SpacebarResult, ApiError> {
-    facade(&app)?.scan_set_spacebar_capture(enabled)
+    scan: u64,
+    save_anyway: bool,
+) -> Result<AcceptResult, ApiError> {
+    let api = facade(&app)?;
+    tokio::task::spawn_blocking(move || api.scan_accept(scan, save_anyway))
+        .await
+        .map_err(|_| ApiError::invalid_state("scan accept task failed"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn scan_reject(app: tauri::AppHandle, scan: u64) -> Result<RejectResult, ApiError> {
+    facade(&app)?.scan_reject(scan)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn scan_pending(app: tauri::AppHandle) -> Result<Option<SkillScanReview>, ApiError> {
+    facade(&app)?.scan_pending()
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1194,24 +1693,9 @@ pub async fn tracking_sessions(
     limit: Option<i64>,
     definition_id: Option<i64>,
 ) -> Result<SessionPage, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &cursor, &limit);
-        let sessions: Vec<eo_api::tracking::TrackingSession> =
-            serde_json::from_value(crate::e2e_stub::analytics_sessions_fixture(definition_id))
-                .map_err(ApiError::internal("e2e analytics fixture"))?;
-        Ok(SessionPage {
-            total: sessions.len() as i64,
-            sessions,
-            next_cursor: None.into(),
-        })
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?
-            .tracking_sessions(cursor, limit, definition_id)
-            .await
-    }
+    facade(&app)?
+        .tracking_sessions(cursor, limit, definition_id)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1219,15 +1703,25 @@ pub async fn tracking_session_detail(
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<SessionDetail, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = (&app, &session_id);
-        e2e_dashboard("sessionDetail")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.tracking_session_detail(session_id).await
-    }
+    facade(&app)?.tracking_session_detail(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_definition_loot(
+    app: tauri::AppHandle,
+    definition_id: i64,
+) -> Result<Vec<LootEntry>, ApiError> {
+    facade(&app)?.tracking_definition_loot(definition_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_definition_rewards(
+    app: tauri::AppHandle,
+    definition_id: i64,
+) -> Result<Vec<SessionQuestRewardItem>, ApiError> {
+    facade(&app)?
+        .tracking_definition_rewards(definition_id)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1239,27 +1733,15 @@ pub async fn tracking_session_intervals(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub async fn tracking_manual_mob_suggestions(
+pub async fn tracking_mob_catalogue(
     app: tauri::AppHandle,
-    q: String,
-    limit: Option<i64>,
 ) -> Result<Vec<ManualMobSuggestion>, ApiError> {
-    facade(&app)?
-        .tracking_manual_mob_suggestions(q, limit)
-        .await
+    facade(&app)?.tracking_mob_catalogue().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn tracking_snapshot(app: tauri::AppHandle) -> Result<TrackingSnapshot, ApiError> {
-    #[cfg(feature = "e2e-stub")]
-    {
-        let _ = &app;
-        e2e_dashboard("snapshot")
-    }
-    #[cfg(not(feature = "e2e-stub"))]
-    {
-        facade(&app)?.tracking_snapshot().await
-    }
+    facade(&app)?.tracking_snapshot().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1270,6 +1752,22 @@ pub async fn tracking_start(app: tauri::AppHandle) -> Result<StartResult, ApiErr
 #[tauri::command(rename_all = "snake_case")]
 pub async fn tracking_stop(app: tauri::AppHandle) -> Result<StopResult, ApiError> {
     facade(&app)?.tracking_stop().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_weapon_decide(
+    app: tauri::AppHandle,
+    decision: WeaponMismatchDecision,
+) -> Result<bool, ApiError> {
+    facade(&app)?.tracking_weapon_decide(decision).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_declare_equipment(
+    app: tauri::AppHandle,
+    equipment_id: i64,
+) -> Result<DeclaredEquipment, ApiError> {
+    facade(&app)?.tracking_declare_equipment(equipment_id).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1286,6 +1784,19 @@ pub async fn tracking_manual_mob_lock(
     facade(&app)?
         .tracking_manual_mob_lock(species, maturity)
         .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_pin(
+    app: tauri::AppHandle,
+    target: MobPinTarget,
+) -> Result<MobPin, ApiError> {
+    facade(&app)?.tracking_mob_pin(target).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_unpin(app: tauri::AppHandle) -> Result<bool, ApiError> {
+    facade(&app)?.tracking_mob_unpin().await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1366,6 +1877,114 @@ pub async fn tracking_restore_mob(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_detections(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<MobDetectionReview, ApiError> {
+    facade(&app)?.tracking_mob_detections(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_mob_detection_settle(
+    app: tauri::AppHandle,
+    session_id: String,
+    mob: MobReviewRef,
+    target: MobDetectionTarget,
+) -> Result<MobDetectionSettleResult, ApiError> {
+    facade(&app)?
+        .tracking_mob_detection_settle(session_id, mob, target)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn creature_entries(app: tauri::AppHandle) -> Result<Vec<CreatureEntry>, ApiError> {
+    facade(&app)?.creature_entries().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn creature_entry_check(
+    app: tauri::AppHandle,
+    text: String,
+    replacing: Option<String>,
+) -> Result<CreatureEntryCheck, ApiError> {
+    facade(&app)?.creature_entry_check(text, replacing).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn creature_entry_save(
+    app: tauri::AppHandle,
+    text: String,
+    species: Option<String>,
+    replacing: Option<String>,
+) -> Result<Vec<CreatureEntry>, ApiError> {
+    facade(&app)?
+        .creature_entry_save(text, species, replacing)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn creature_entry_remove(
+    app: tauri::AppHandle,
+    name: String,
+) -> Result<Vec<CreatureEntry>, ApiError> {
+    facade(&app)?.creature_entry_remove(name).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mob_labels(app: tauri::AppHandle) -> Result<Vec<MobLabel>, ApiError> {
+    facade(&app)?.mob_labels().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mob_label_set(
+    app: tauri::AppHandle,
+    mob: String,
+    label: String,
+) -> Result<Vec<MobLabel>, ApiError> {
+    facade(&app)?.mob_label_set(mob, label).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn mob_label_clear(
+    app: tauri::AppHandle,
+    species: String,
+    maturity: String,
+) -> Result<Vec<MobLabel>, ApiError> {
+    facade(&app)?.mob_label_clear(species, maturity).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_tool_sightings(
+    app: tauri::AppHandle,
+    session_id: String,
+) -> Result<ToolSightingReview, ApiError> {
+    facade(&app)?.tracking_tool_sightings(session_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_tool_sighting_settle(
+    app: tauri::AppHandle,
+    session_id: String,
+    sighting_id: String,
+    action: ToolSightingAction,
+) -> Result<ToolSightingSettleResult, ApiError> {
+    facade(&app)?
+        .tracking_tool_sighting_settle(session_id, sighting_id, action)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_tool_sighting_undo(
+    app: tauri::AppHandle,
+    session_id: String,
+    sighting_id: String,
+) -> Result<ToolSightingSettleResult, ApiError> {
+    facade(&app)?
+        .tracking_tool_sighting_undo(session_id, sighting_id)
+        .await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn tracking_loot_item_activate(
     app: tauri::AppHandle,
     session_id: String,
@@ -1396,17 +2015,30 @@ pub async fn tracking_armour_cost(
     facade(&app)?.tracking_armour_cost(session_id, cost).await
 }
 
-// The repair scan runs a synchronous screen grab + one-shot OCR read;
-// offload it so a slow grab never ties up an async runtime worker.
+// The repair scan captures the game window and reads the terminal off it
+// synchronously; offload it so a slow grab never ties up an async runtime worker.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn tracking_repair_scan(
     app: tauri::AppHandle,
     session_id: String,
-) -> Result<RepairScanResult, ApiError> {
+) -> Result<TerminalReadResult, ApiError> {
     let api = facade(&app)?;
     tokio::task::spawn_blocking(move || api.tracking_repair_scan(session_id))
         .await
         .map_err(|_| ApiError::invalid_state("repair scan task failed"))?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn tracking_session_exclusion(
+    app: tauri::AppHandle,
+    session_id: String,
+    economy: bool,
+    progression: bool,
+    note: Option<String>,
+) -> Result<SessionExclusionResult, ApiError> {
+    facade(&app)?
+        .tracking_session_exclusion(session_id, economy, progression, note)
+        .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -1415,95 +2047,6 @@ pub async fn tracking_session_delete(
     session_id: String,
 ) -> Result<(), ApiError> {
     facade(&app)?.tracking_session_delete(session_id).await
-}
-
-// The guide-mode demo reads: the frontend's guide-mode wrappers dispatch
-// these instead of the live commands, sharing the same DTOs. They serve the
-// parallel demo state (built lazily on first access); guide mode is never
-// exercised in the native-shell e2e build, so they carry no `e2e-stub` branch.
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_overview(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<AnalyticsOverview, ApiError> {
-    facade(&app)?.demo_analytics_overview(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_hunting(app: tauri::AppHandle) -> Result<AnalyticsHunting, ApiError> {
-    facade(&app)?.demo_analytics_hunting().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_harvest(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<AnalyticsHarvest, ApiError> {
-    facade(&app)?.demo_analytics_harvest(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_analytics_hunting_activity(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<AnalyticsHuntingActivity, ApiError> {
-    facade(&app)?.demo_analytics_hunting_activity(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_ledger_list(
-    app: tauri::AppHandle,
-    cursor: Option<String>,
-    limit: Option<i64>,
-) -> Result<LedgerPage, ApiError> {
-    facade(&app)?.demo_ledger_list(cursor, limit).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_ledger_summary(
-    app: tauri::AppHandle,
-    period: String,
-) -> Result<LedgerSummary, ApiError> {
-    facade(&app)?.demo_ledger_summary(&period).await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_ledger_presets_list(
-    app: tauri::AppHandle,
-) -> Result<Vec<LedgerPreset>, ApiError> {
-    facade(&app)?.demo_ledger_presets_list().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_inventory_list(app: tauri::AppHandle) -> Result<Vec<InventoryItem>, ApiError> {
-    facade(&app)?.demo_inventory_list().await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_tracking_sessions(
-    app: tauri::AppHandle,
-    cursor: Option<String>,
-    limit: Option<i64>,
-    definition_id: Option<i64>,
-) -> Result<SessionPage, ApiError> {
-    facade(&app)?
-        .demo_tracking_sessions(cursor, limit, definition_id)
-        .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_tracking_session_detail(
-    app: tauri::AppHandle,
-    session_id: String,
-) -> Result<SessionDetail, ApiError> {
-    facade(&app)?
-        .demo_tracking_session_detail(&session_id)
-        .await
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn demo_tracking_snapshot(app: tauri::AppHandle) -> Result<TrackingSnapshot, ApiError> {
-    facade(&app)?.demo_tracking_snapshot().await
 }
 
 // The hidden developer-tools family: native-only, each gated on developer
@@ -1719,6 +2262,13 @@ pub async fn maps_calibration_start(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn maps_calibration_confirm(
+    app: tauri::AppHandle,
+) -> Result<CoordCalibrationStatus, ApiError> {
+    facade(&app)?.maps_calibration_confirm()
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn maps_calibration_cancel(
     app: tauri::AppHandle,
 ) -> Result<CoordCalibrationStatus, ApiError> {
@@ -1737,7 +2287,7 @@ pub async fn maps_calibration_status(
 #[tauri::command(rename_all = "snake_case")]
 pub async fn maps_scan_coordinates(
     app: tauri::AppHandle,
-    planet: Option<String>,
+    planet: String,
 ) -> Result<CoordScanResult, ApiError> {
     let api = facade(&app)?;
     tokio::task::spawn_blocking(move || api.maps_scan_coordinates(planet))
@@ -1760,7 +2310,7 @@ pub async fn navigation_start(
     start_lon: f64,
     start_lat: f64,
     selected_pin_ids: Option<Vec<i64>>,
-    hotkey: String,
+    visit_on_key: bool,
 ) -> Result<NavigationRun, ApiError> {
     facade(&app)?
         .navigation_start(
@@ -1769,7 +2319,7 @@ pub async fn navigation_start(
             start_lon,
             start_lat,
             selected_pin_ids,
-            hotkey,
+            visit_on_key,
         )
         .await
 }
@@ -1820,6 +2370,13 @@ pub async fn radar_calibration_start(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn radar_calibration_confirm(
+    app: tauri::AppHandle,
+) -> Result<RadarCalibrationStatus, ApiError> {
+    facade(&app)?.radar_calibration_confirm().await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn radar_calibration_cancel(app: tauri::AppHandle) -> Result<(), ApiError> {
     facade(&app)?.radar_calibration_cancel()
 }
@@ -1836,254 +2393,24 @@ pub async fn radar_geometry(app: tauri::AppHandle) -> Result<Nullable<RadarGeome
     facade(&app)?.radar_geometry().await
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn navigation_resume_position(app: tauri::AppHandle) -> Result<(), ApiError> {
+    facade(&app)?.navigation_resume_position()
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn radar_guidance(app: tauri::AppHandle) -> Result<RadarGuidance, ApiError> {
+    facade(&app)?.radar_guidance()
+}
+
 #[cfg(test)]
 mod tests {
-    /// The commands this module defines and the `generate_handler!`
-    /// registration site hold in lock-step with the manifest (the
-    /// single source the TypeScript bindings emit from); a command
-    /// present on one side and absent on the other is a wiring bug
-    /// this catches at test time.
-    const TYPED_COMMANDS: &[&str] = &[
-        "equipment_search",
-        "equipment_library",
-        "equipment_add",
-        "equipment_update",
-        "equipment_delete",
-        "equipment_detail",
-        "protection_overview",
-        "protection_set_create",
-        "protection_set_update",
-        "protection_loadout_create",
-        "protection_loadout_update",
-        "protection_set_archive",
-        "protection_loadout_archive",
-        "protection_select",
-        "protection_pending_attribution",
-        "protection_assign_session_loadout",
-        "protection_observation_confirm",
-        "protection_repair_confirm",
-        "protection_trade_terminal_scan",
-        "character_calibration",
-        "character_stats",
-        "character_skills",
-        "character_professions",
-        "character_prospect_options",
-        "character_prospect",
-        "character_profession_optimizer",
-        "character_path_optimizer",
-        "character_hp_optimizer",
-        "character_activity_recommender",
-        "settings_get",
-        "settings_overlay_position",
-        "settings_set_overlay_position",
-        "settings_update",
-        "codex_species",
-        "codex_species_ranks",
-        "codex_recommend",
-        "codex_meta_attributes",
-        "codex_calibrate",
-        "codex_claim",
-        "codex_unclaim",
-        "codex_meta_claim",
-        "codex_mastery_options",
-        "codex_mastery_claim",
-        "codex_mastery_unclaim",
-        "quests_list",
-        "quest_get",
-        "quest_create",
-        "quest_update",
-        "quest_delete",
-        "quest_start",
-        "quest_complete",
-        "quest_hand_in_begin",
-        "quest_hand_in_state",
-        "quest_hand_in_wait",
-        "quest_hand_in_cancel",
-        "quest_hand_in_confirm",
-        "quest_rewards_unresolved",
-        "quest_reward_review",
-        "quest_cancel",
-        "quests_mobs",
-        "quests_analytics",
-        "quest_families_list",
-        "quest_family_create",
-        "quest_family_update",
-        "quest_family_delete",
-        "session_definitions_list",
-        "session_definition_create",
-        "session_definition_update",
-        "session_definition_archive",
-        "session_definition_restore",
-        "tracking_definition_select",
-        "analytics_overview",
-        "analytics_hunting",
-        "analytics_harvest",
-        "analytics_hunting_activity",
-        "activity_stock",
-        "harvest_realised_markup",
-        "hunting_realised_markup",
-        "auction_listings",
-        "auction_listing_create",
-        "auction_listing_confirm",
-        "auction_listing_expire",
-        "stock_convert",
-        "stock_private_sale",
-        "stock_remove",
-        "stock_shrapnel_convert",
-        "activity_history",
-        "auction_sale_revert",
-        "auction_listing_undo",
-        "stock_conversion_undo",
-        "private_sale_undo",
-        "stock_removal_undo",
-        "ledger_list",
-        "ledger_summary",
-        "ledger_create",
-        "ledger_delete",
-        "ledger_presets_list",
-        "ledger_preset_create",
-        "ledger_preset_delete",
-        "inventory_list",
-        "inventory_create",
-        "inventory_update",
-        "inventory_delete",
-        "inventory_sell",
-        "inventory_sale_window_capture",
-        "inventory_sale_window_take_capture",
-        "inventory_draft_resolve",
-        "inventory_equipment_listing_create",
-        "inventory_equipment_trade",
-        "market_paste_preview",
-        "market_paste_commit",
-        "market_unit_price_set",
-        "market_overview",
-        "market_contribution_batch",
-        "market_auction_packet_threshold",
-        "market_break_even",
-        "market_mob_ranking",
-        "market_harvest_markups",
-        "market_hunt_markups",
-        "market_item_history",
-        "scan_status",
-        "scan_start",
-        "scan_capture",
-        "scan_cancel",
-        "scan_undo",
-        "scan_process",
-        "scan_accept",
-        "scan_reject",
-        "scan_pending",
-        "scan_spacebar_capture",
-        "tracking_sessions",
-        "tracking_session_detail",
-        "tracking_session_intervals",
-        "tracking_manual_mob_suggestions",
-        "tracking_snapshot",
-        "tracking_start",
-        "tracking_stop",
-        "tracking_release_mob",
-        "tracking_manual_mob_lock",
-        "tracking_session_config",
-        "tracking_activity_options",
-        "tracking_activity_activate",
-        "tracking_activity_deactivate",
-        "tracking_reassign_session",
-        "tracking_rename_mob",
-        "tracking_restore_mob",
-        "tracking_loot_item_activate",
-        "tracking_loot_item_deactivate",
-        "tracking_armour_cost",
-        "tracking_repair_scan",
-        "tracking_session_delete",
-        "demo_analytics_overview",
-        "demo_analytics_hunting",
-        "demo_analytics_hunting_activity",
-        "demo_analytics_harvest",
-        "demo_ledger_list",
-        "demo_ledger_summary",
-        "demo_ledger_presets_list",
-        "demo_inventory_list",
-        "demo_tracking_sessions",
-        "demo_tracking_session_detail",
-        "demo_tracking_snapshot",
-        "dev_metrics",
-        "dev_crash_reporting",
-        "dev_set_crash_reporting",
-        "dev_compact_database",
-        "dev_rebuild_projections",
-        "dev_auction_fee_research_start",
-        "dev_auction_fee_research_stop",
-        "dev_auction_fee_research_status",
-        "dev_auction_fee_research_capture",
-        "dev_auction_fee_research_overlay_status",
-        "planet_maps_list",
-        "map_pins_list",
-        "map_pins_viewport",
-        "map_pin_nearby",
-        "map_views_list",
-        "map_view_create",
-        "map_view_rename",
-        "map_view_delete",
-        "map_pin_create",
-        "map_pin_update",
-        "map_pin_delete",
-        "map_pin_cooldown",
-        "pin_configs_list",
-        "pin_config_create",
-        "pin_config_update",
-        "pin_config_delete",
-        "pin_config_reorder",
-        "maps_calibration_start",
-        "maps_calibration_cancel",
-        "maps_calibration_status",
-        "maps_scan_coordinates",
-        "navigation_snapshot",
-        "navigation_start",
-        "navigation_update_position",
-        "navigation_mark_visited",
-        "navigation_skip",
-        "navigation_resolve_harvest",
-        "navigation_undo",
-        "navigation_end",
-        "radar_calibration_start",
-        "radar_calibration_cancel",
-        "radar_calibration_status",
-        "radar_geometry",
-    ];
-
     #[test]
     fn the_registered_commands_match_the_manifest() {
         let manifest: Vec<&str> = eo_api::manifest::manifest()
             .iter()
             .map(|spec| spec.name)
             .collect();
-        assert_eq!(TYPED_COMMANDS, manifest.as_slice());
-    }
-
-    #[test]
-    fn the_application_acl_covers_exactly_the_registered_command_surface() {
-        let mut expected = TYPED_COMMANDS.to_vec();
-        expected.extend([
-            "toggle_overlay",
-            "toggle_cartography_overlay",
-            "show_scan_overlay",
-            "show_sale_capture_overlay",
-            "capture_sale_from_overlay",
-            "hide_sale_capture_overlay",
-            "hide_scan_overlay",
-            "show_navigation_overlays",
-            "hide_navigation_overlays",
-            "begin_navigation_area_selection",
-            "capture_png",
-            "planet_map_image",
-            "check_for_update",
-            "download_update",
-            "install_update",
-            "get_update_channel",
-            "set_update_channel",
-        ]);
-        expected.sort_unstable();
-        expected.dedup();
-        assert_eq!(crate::command_acl::APP_COMMANDS, expected.as_slice());
+        assert_eq!(crate::command_acl::TYPED_COMMANDS, manifest.as_slice());
     }
 }

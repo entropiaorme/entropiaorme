@@ -1,0 +1,18 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 7.0, "timestamp": "<TS_2>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_2>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_3>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"consumable_profile": {"duration_seconds": 60.0, "effects": [], "markup_percent": 100.0, "track_cost": true, "tt_value_ped": 1.0}, "cost_per_use_ped": 1.0, "equipment_id": 5, "healing_profile": null, "item_kind": "consumable", "item_name": "Vita Bar", "lifesteal_percent": null, "occurred_at": "<TS_4>", "reload_seconds": 0.0, "slot": "5"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {}, "type": "consumables.updated"}, "topic": "consumables.updated"}
+{"payload": {"amount": 9.0, "timestamp": "<TS_5>", "type": "damage_dealt"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_5>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_6>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"items": [{"is_enhancer_shrapnel": false, "item_name": "Shrapnel", "quantity": 300, "value_ped": 3.0}], "timestamp": "<TS_7>", "total_ped": 3.0, "type": "loot"}, "topic": "loot_group"}
+{"payload": {"timestamp": "<TS_7>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_8>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {"reason": "stopped", "sessionId": "<UUID_1>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {}, "type": "consumables.updated"}, "topic": "consumables.updated"}

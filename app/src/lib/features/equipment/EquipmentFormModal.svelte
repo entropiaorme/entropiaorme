@@ -1,19 +1,24 @@
 <script lang="ts">
-	import { Button, Input, Modal, PickerInput, SegmentedControl } from '$lib/components';
+	import SearchHighlight from '$lib/components/SearchHighlight.svelte';
+	import { Button, Input, Modal, PickerInput, SegmentedControl, Toggle } from '$lib/components';
+	import { describeEffects, formatDuration } from '$lib/features/consumables/doses';
+	import { doseFieldsError } from '$lib/features/consumables/doseForm';
 	import type { EquipmentSearchResult } from '$lib/api';
-	import { formatPec } from './display';
+	import { formatFactor } from './attackRate';
+	import { formatPec } from '$lib/utils/format';
 	import type { EquipmentFormType, LibraryModel } from './libraryModel.svelte';
+	import { WEAPON_EFFECT_OPTIONS, type WeaponEffectForm } from './weaponEffect';
 
 	let { model }: { model: LibraryModel } = $props();
 
 	const saveDisabled = $derived(
 		(model.addType === 'weapon'
-			? !model.weaponPicker.selected
+			? !model.weaponPicker.selected || model.weaponEffectProblem !== null
 			: model.addType === 'healing'
 				? !model.healerPicker.selected
 				: model.addType === 'tool'
 					? !model.toolPicker.selected
-					: !model.consumablePicker.selected) ||
+					: !model.consumablePicker.selected || doseFieldsError(model.dose) !== null) ||
 			(model.addType === 'healing' &&
 				((model.healingMode !== 'over_time' &&
 					(model.healMin === null || model.healMax === null)) ||
@@ -45,8 +50,8 @@
 	}
 </script>
 
-{#snippet resultLine({ item }: { item: EquipmentSearchResult })}
-	<span class="text-text truncate">{item.name}</span>
+{#snippet resultLine({ item, query }: { item: EquipmentSearchResult; query: string })}
+	<span class="text-text truncate"><SearchHighlight text={item.name} {query} /></span>
 	<span class="text-xs text-text-tertiary tabular-nums shrink-0">{economyLine(item)}</span>
 {/snippet}
 
@@ -99,7 +104,7 @@
 								Weapon
 							</label>
 							<PickerInput id="equipment-weapon-search" model={model.weaponPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.weaponPicker.selected?.isLimited}
@@ -115,7 +120,7 @@
 								Amplifier
 							</label>
 							<PickerInput id="equipment-amp-search" model={model.ampPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.ampPicker.selected?.isLimited}
@@ -133,6 +138,11 @@
 								</label>
 								<Input id="equipment-damage-enhancers" type="number" bind:value={model.damageEnhancers} min={0} class="w-full" />
 							</div>
+							{#if model.damageEnhancers > 0}
+								<p class="self-end pb-2 text-xs text-text-tertiary">
+									What you paid for enhancers is set per tier, on the Enhancers tab.
+								</p>
+							{/if}
 						</div>
 						{#if model.weaponPicker.selected?.isLimited || model.ampPicker.selected?.isLimited || model.scopePicker.selected?.isLimited || model.absorberPicker.selected?.isLimited || model.implantPicker.selected?.isLimited}
 							<p class="text-xs text-text-tertiary">
@@ -148,7 +158,7 @@
 								Scope
 							</label>
 							<PickerInput id="equipment-scope-search" model={model.scopePicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.scopePicker.selected?.isLimited}
@@ -164,7 +174,7 @@
 								Extender / Absorber
 							</label>
 							<PickerInput id="equipment-absorber-search" model={model.absorberPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.absorberPicker.selected?.isLimited}
@@ -180,7 +190,7 @@
 								Mindforce implant
 							</label>
 							<PickerInput id="equipment-implant-search" model={model.implantPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.implantPicker.selected?.isLimited}
@@ -192,6 +202,60 @@
 						</div>
 					</div>
 				</div>
+
+				<!-- Damage over time: what one paid cast prints, and for how long its
+				     ticks follow. Ticks are outcomes of the cast, never shots. -->
+				<div class="space-y-3 border-t border-border/50 pt-4">
+					<div class="flex flex-wrap items-start justify-between gap-3">
+						<div class="min-w-0">
+							<span class="block eyebrow">Damage pattern</span>
+							<p class="mt-1 max-w-md text-xs text-text-tertiary">
+								For a weapon whose cast keeps dealing damage after it lands. Its ticks cost
+								nothing and never count as shots.
+							</p>
+						</div>
+						<SegmentedControl
+							size="sm"
+							options={WEAPON_EFFECT_OPTIONS}
+							active={model.weaponEffectMode}
+							onchange={(id) => (model.weaponEffectMode = id as WeaponEffectForm)}
+						/>
+					</div>
+					{#if model.weaponEffectMode !== 'direct'}
+						<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+							{#if model.weaponEffectMode === 'compound'}
+								<label class="text-xs text-text-tertiary">
+									Initial hit minimum
+									<Input type="number" bind:value={model.hitMin} min={0} step="any" class="mt-1 w-full" />
+								</label>
+								<label class="text-xs text-text-tertiary">
+									Initial hit maximum
+									<Input type="number" bind:value={model.hitMax} min={0} step="any" class="mt-1 w-full" />
+								</label>
+							{/if}
+							<label class="text-xs text-text-tertiary">
+								Tick minimum
+								<Input type="number" bind:value={model.tickMin} min={0} step="any" class="mt-1 w-full" />
+							</label>
+							<label class="text-xs text-text-tertiary">
+								Tick maximum
+								<Input type="number" bind:value={model.tickMax} min={0} step="any" class="mt-1 w-full" />
+							</label>
+							<label class="text-xs text-text-tertiary">
+								Duration (seconds)
+								<Input type="number" bind:value={model.effectDurationSeconds} min={0.1} max={600} step="any" class="mt-1 w-full" />
+							</label>
+							<label class="text-xs text-text-tertiary">
+								Tick cadence (optional)
+								<Input type="number" bind:value={model.tickSeconds} min={0.1} step="any" class="mt-1 w-full" />
+							</label>
+						</div>
+						<p class="text-xs text-text-tertiary" data-testid="weapon-effect-hint">
+							{model.weaponEffectProblem ??
+								'Use the damage the game prints. The catalogue carries no figures for effects over time.'}
+						</p>
+					{/if}
+				</div>
 			{:else if model.addType === 'healing'}
 				<div class="grid md:grid-cols-2 gap-x-8 gap-y-5 items-start">
 					<div class="space-y-4">
@@ -200,7 +264,7 @@
 								Healing Tool
 							</label>
 							<PickerInput id="equipment-healer-search" model={model.healerPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.healerPicker.selected?.isLimited}
@@ -251,7 +315,7 @@
 								Mindforce implant
 							</label>
 							<PickerInput id="equipment-heal-implant-search" model={model.implantPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.implantPicker.selected?.isLimited}
@@ -295,7 +359,7 @@
 								Harvesting Tool
 							</label>
 							<PickerInput id="equipment-tool-search" model={model.toolPicker} placeholder="">
-								{#snippet result({ item })}{@render resultLine({ item })}{/snippet}
+								{#snippet result({ item, query })}{@render resultLine({ item, query })}{/snippet}
 								{#snippet selection({ item })}{@render selectionLine(item)}{/snippet}
 							</PickerInput>
 							{#if model.toolPicker.selected?.isLimited}
@@ -319,8 +383,8 @@
 							placeholder="Search or type a custom name…"
 							extraRow={showConsumableCustomRow ? consumableCustomRow : undefined}
 						>
-							{#snippet result({ item })}
-								<span class="text-text truncate">{item.name}</span>
+							{#snippet result({ item, query })}
+								<span class="text-text truncate"><SearchHighlight text={item.name} {query} /></span>
 							{/snippet}
 							{#snippet selection({ item })}
 								<span class="text-text font-medium truncate flex-1">{item.name}</span>
@@ -329,7 +393,77 @@
 								{/if}
 							{/snippet}
 						</PickerInput>
+						{#if model.consumablePicker.selected}
+							{@const preview = model.dosePreview}
+							<!-- What one dose grants: the catalogue's figures where it
+								 has them, the player's declaration for the rest. -->
+							<dl class="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs" data-testid="dose-preview">
+								<dt class="text-text-tertiary">Effect</dt>
+								<dd class="text-text">
+									{preview.effects.length > 0 ? describeEffects(preview.effects) : 'None the app evaluates'}
+								</dd>
+								<dt class="text-text-tertiary">Lasts</dt>
+								<dd class="text-text">{formatDuration(preview.durationSeconds)}</dd>
+								<dt class="text-text-tertiary">TT value</dt>
+								<dd class="text-text tabular-nums">{preview.ttValuePed.toFixed(2)} PED</dd>
+							</dl>
+							{#if !preview.catalogueEffects || !preview.catalogueDuration || !preview.catalogueValue}
+								<div class="mt-4">
+									<span class="block eyebrow mb-1.5">
+										{model.consumablePicker.selected.catalogId ? 'Missing from the catalogue' : 'Declared'}
+									</span>
+									<div class="grid grid-cols-3 gap-3">
+										{#if !preview.catalogueEffects}
+											<label class="text-xs text-text-tertiary">
+												Reload speed %
+												<Input type="number" bind:value={model.dose.reloadPercent} min={-99} max={100} step="any" class="mt-1 w-full" />
+											</label>
+										{/if}
+										{#if !preview.catalogueDuration}
+											<label class="text-xs text-text-tertiary">
+												Minutes
+												<Input type="number" bind:value={model.dose.durationMinutes} min={0} step="any" class="mt-1 w-full" />
+											</label>
+										{/if}
+										{#if !preview.catalogueValue}
+											<label class="text-xs text-text-tertiary">
+												TT value (PED)
+												<Input type="number" bind:value={model.dose.ttValuePed} min={0} step="any" class="mt-1 w-full" />
+											</label>
+										{/if}
+									</div>
+									<p class="mt-1.5 text-xs text-text-tertiary">
+										Reload speed is the effect the app counts; a dose with no duration is immediate.
+									</p>
+								</div>
+							{/if}
+						{/if}
 					</div>
+					{#if model.consumablePicker.selected}
+						<div class="space-y-4">
+							<div>
+								<label for="equipment-dose-markup" class="block eyebrow mb-1.5">Markup %</label>
+								<Input id="equipment-dose-markup" type="number" bind:value={model.dose.markupPercent} min={1} max={100000} step="any" class="w-28" />
+								<p class="mt-1.5 text-xs text-text-tertiary">What you paid over TT, so each dose costs what it cost you.</p>
+							</div>
+							<div class="flex items-start gap-3">
+								<Toggle
+									checked={model.dose.trackCost}
+									label="Book each dose's cost to the session"
+									onchange={(checked) => (model.dose.trackCost = checked)}
+								/>
+								<div class="text-xs">
+									<div class="text-text">Book each dose's cost to the session</div>
+									<div class="mt-0.5 text-text-tertiary">
+										Off for a bulk buy you account for separately: doses still count their effect.
+									</div>
+								</div>
+							</div>
+							{#if doseFieldsError(model.dose)}
+								<p class="text-xs text-error">{doseFieldsError(model.dose)}</p>
+							{/if}
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -337,9 +471,20 @@
 		<!-- Summary bar: live cost and actions, always on screen -->
 		<div class="shrink-0 mt-5 pt-4 border-t border-border/50 flex items-center justify-between gap-4">
 			<div class="min-w-0">
-				{#if model.liveCostPreview !== null}
+				{#if model.addType === 'consumable' && model.consumablePicker.selected}
+					<span class="eyebrow">Cost per dose</span>
+					<span class="ml-2 text-lg font-semibold tabular-nums text-accent">{model.dosePreview.doseCostPed.toFixed(2)} PED</span>
+					<span class="ml-2 text-xs text-text-tertiary" data-testid="dose-booking">
+						{model.dose.trackCost ? 'booked to the session' : 'not booked'}
+					</span>
+				{:else if model.liveCostPreview !== null}
 					<span class="eyebrow">Estimated cost per use</span>
 					<span class="ml-2 text-lg font-semibold tabular-nums text-accent">{formatPec(model.liveCostPreview)} PEC</span>
+					{#if model.liveAttackRateFactor > 1}
+						<span class="ml-2 text-xs text-text-tertiary" data-testid="preview-attack-rate">
+							{formatFactor(model.liveAttackRateFactor)} at the server's attack-rate limit
+						</span>
+					{/if}
 				{/if}
 			</div>
 			<div class="flex items-center gap-2 shrink-0">

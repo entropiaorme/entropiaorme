@@ -1,17 +1,21 @@
-#[cfg(test)]
+// The command surface and its ACL lists; some lists are read only by the
+// build script, so dead code is expected here outside tests.
+#[allow(dead_code)]
+#[macro_use]
 mod command_acl;
+mod account_window;
 mod commands;
 mod composition;
 mod crash;
+mod hit_region;
 mod resources;
+mod substrate;
 mod telemetry;
 mod updater;
 
-#[cfg(feature = "e2e-stub")]
-mod e2e_stub;
-
 use std::sync::Mutex;
 
+use eo_api::maps::RadarGuidance;
 use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 /// Whether `(x, y)` lies on a live monitor with enough margin that the
@@ -101,48 +105,103 @@ fn toggle_cartography_overlay(app: tauri::AppHandle) {
     }
 }
 
+/// The radar guidance overlay's window label.
+const RADAR_GUIDANCE: &str = "radar-guidance";
+/// The route HUD's window label.
+const NAVIGATION_HUD: &str = "navigation-hud";
+/// Told to the guidance overlays whenever radar guidance's status moves, so
+/// they re-read it. Window orchestration stays in the shell; the event
+/// carries nothing and does not enter the domain-event spine.
+const RADAR_GUIDANCE_CHANGED: &str = "radar-guidance-changed";
+
+/// Show the route HUD and start radar guidance: the radar overlay is placed
+/// over the radar when guidance finds it, and the HUD beside the radar,
+/// clear of the coordinates printed under it, or at its anchor when the
+/// radar is not placed.
 #[tauri::command]
 async fn show_navigation_overlays(app: tauri::AppHandle) {
-    let geometry = match commands::facade(&app) {
-        Ok(facade) => facade.radar_geometry().await.ok().and_then(|value| value.0),
-        Err(_) => None,
+    let Ok(facade) = commands::facade(&app) else {
+        return;
     };
-    if let Some(radar) = app.get_webview_window("radar-guidance") {
-        if let Some(geometry) = geometry {
-            let diameter = (geometry.radius_px * 2.0).round().max(16.0) as u32;
-            let x = (geometry.centre_x as f64 - geometry.radius_px).round() as i32;
-            let y = (geometry.centre_y as f64 - geometry.radius_px).round() as i32;
-            let _ = radar.set_size(tauri::PhysicalSize::new(diameter, diameter));
-            let _ = radar.set_position(tauri::PhysicalPosition::new(x, y));
-            let _ = radar.show();
-            // GTK does not allocate the hidden pre-spawned window's native
-            // surface until its first map. Tao's Linux hit-test path expects
-            // that surface to exist, so click-through must be enabled only
-            // after show maps it; doing this while hidden panics inside Tao.
-            let _ = radar.set_ignore_cursor_events(true);
+    let _ = facade.navigation_set_overlays_shown(true);
+    let _ = facade.radar_guidance_start().await;
+    // Shown on the main thread against the state as it is then: the
+    // overlays may have been taken away while the first look was out, and
+    // then they stay away.
+    let shell = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if !facade.navigation_overlays_shown() {
+            return;
         }
-    }
-    if let Some(hud) = app.get_webview_window("navigation-hud") {
-        let position = geometry
-            .map(|geometry| {
-                tauri::PhysicalPosition::new(
-                    (geometry.centre_x as f64 + geometry.radius_px + 12.0).round() as i32,
-                    (geometry.centre_y as f64 - geometry.radius_px).round() as i32,
-                )
-            })
+        let guidance = facade.radar_guidance().ok();
+        place_radar_overlay(&shell, guidance);
+        if let Some(hud) = shell.get_webview_window(NAVIGATION_HUD) {
+            let position = match guidance {
+                Some(RadarGuidance::Placed {
+                    centre_y,
+                    radius_px,
+                    clear_right_x,
+                    ..
+                }) => Some(tauri::PhysicalPosition::new(
+                    (clear_right_x + 12.0).round() as i32,
+                    (centre_y - radius_px).round() as i32,
+                )),
+                _ => None,
+            }
             .filter(|position| position_on_a_monitor(&hud, position.x, position.y))
             .unwrap_or_else(|| monitor_anchor(&hud, (60, 250)));
-        let _ = hud.set_position(position);
-        let _ = hud.show();
-    }
+            let _ = hud.set_position(position);
+            let _ = hud.show();
+        }
+    });
 }
 
+/// Place the radar overlay over the radar as guidance last placed it, or
+/// take it off the screen when guidance has no placement.
+fn place_radar_overlay(app: &tauri::AppHandle, guidance: Option<RadarGuidance>) {
+    let Some(radar) = app.get_webview_window(RADAR_GUIDANCE) else {
+        return;
+    };
+    let Some(RadarGuidance::Placed {
+        centre_x,
+        centre_y,
+        radius_px,
+        ..
+    }) = guidance
+    else {
+        let _ = radar.hide();
+        return;
+    };
+    let diameter = (radius_px * 2.0).round().max(16.0) as u32;
+    let x = (centre_x - radius_px).round() as i32;
+    let y = (centre_y - radius_px).round() as i32;
+    let _ = radar.set_size(tauri::PhysicalSize::new(diameter, diameter));
+    let _ = radar.set_position(tauri::PhysicalPosition::new(x, y));
+    let _ = radar.show();
+    // GTK does not allocate the hidden pre-spawned window's native
+    // surface until its first map. Tao's Linux hit-test path expects
+    // that surface to exist, so click-through must be enabled only
+    // after show maps it; doing this while hidden panics inside Tao.
+    let _ = radar.set_ignore_cursor_events(true);
+}
+
+/// Take both route overlays off the screen and stop radar guidance with
+/// them, so nothing captures the screen for overlays no one can see.
 #[tauri::command]
 fn hide_navigation_overlays(app: tauri::AppHandle) {
-    for label in ["navigation-hud", "radar-guidance"] {
+    for label in [NAVIGATION_HUD, RADAR_GUIDANCE] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.hide();
         }
+    }
+    navigation_overlays_gone(&app);
+}
+
+/// The route overlays have gone, by whatever route: radar guidance stops,
+/// and the position poll reads nothing until they show again.
+fn navigation_overlays_gone(app: &tauri::AppHandle) {
+    if let Ok(facade) = commands::facade(app) {
+        let _ = facade.navigation_set_overlays_shown(false);
     }
 }
 
@@ -179,20 +238,22 @@ fn begin_navigation_area_selection(
 
 #[tauri::command]
 fn show_scan_overlay(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("scan-overlay") {
-        // Position near a monitor's top-left so the overlay never collides
-        // with a bottom-right docked in-game skills/professions panel. The
-        // anchor is monitor-relative, not the raw screen origin, which on a
+    if let Some(window) = app.get_webview_window(SCAN_OVERLAY) {
+        // Position near a monitor's top-left, out of the way of the game's
+        // windows the player is paging through. The anchor is
+        // monitor-relative, not the raw screen origin, which on a
         // multi-monitor layout can lie outside every panel.
         let _ = window.set_position(monitor_anchor(&window, (40, 40)));
         let _ = window.show();
         let _ = window.set_focus();
+        if let Ok(facade) = commands::facade(&app) {
+            facade.skill_scan_window_shown_for_shell();
+        }
     }
 }
 
-/// The capture overlay's window label, shared with the command that decides
-/// whether a read came from it.
-pub const SALE_CAPTURE_OVERLAY: &str = "overlay-sale-capture";
+/// The capture overlay's window label.
+const SALE_CAPTURE_OVERLAY: &str = "overlay-sale-capture";
 
 /// One-shot authority granted only by the main window opening the capture
 /// overlay. The floating renderer can request a normal listing read once; it
@@ -200,16 +261,41 @@ pub const SALE_CAPTURE_OVERLAY: &str = "overlay-sale-capture";
 #[derive(Default)]
 struct SaleCaptureAuthority(Mutex<bool>);
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OverlayCaptureReply {
-    message: String,
-    failed: bool,
+/// What the capture button is told of its capture: how many queued items
+/// read, or why none did. Never a figure: the drafts are reviewed back in
+/// the main window's form.
+#[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum OverlayCaptureReply {
+    #[serde(rename_all = "camelCase")]
+    Read {
+        /// Queued items read whole.
+        drafts: usize,
+        /// Queued items in view that did not read whole.
+        unread: usize,
+    },
+    #[serde(rename_all = "camelCase")]
+    Refused {
+        reason: eo_api::sale_capture::SaleQueueRefusal,
+    },
 }
 
-/// The sale-window capture button, put where a fullscreen game leaves it
+impl From<&eo_api::sale_capture::SaleQueueCapture> for OverlayCaptureReply {
+    fn from(capture: &eo_api::sale_capture::SaleQueueCapture) -> Self {
+        use eo_api::sale_capture::SaleQueueCapture;
+        match capture {
+            SaleQueueCapture::Read { drafts, unread, .. } => Self::Read {
+                drafts: drafts.len(),
+                unread: unread.len(),
+            },
+            SaleQueueCapture::Refused { reason, .. } => Self::Refused { reason: *reason },
+        }
+    }
+}
+
+/// The sell-queue capture button, put where a fullscreen game leaves it
 /// reachable. It is the main window's button in another place and nothing
-/// more: the values it reads are reviewed back in the form, not here.
+/// more: the drafts it reads are reviewed back in the form, not here.
 #[tauri::command]
 fn show_sale_capture_overlay(
     app: tauri::AppHandle,
@@ -224,8 +310,9 @@ fn show_sale_capture_overlay(
         .unwrap_or(false);
     *authority.0.lock().expect("sale capture authority") = !research_active;
     if let Some(window) = app.get_webview_window(SALE_CAPTURE_OVERLAY) {
-        // Top-left of the monitor, clear of a bottom-right docked sale
-        // window, which is the one part of the screen it must never cover.
+        // Near a monitor's top-left: the player drags it clear of the sell
+        // window wherever that is, and the reader refuses a queue covered by
+        // it rather than misreading one.
         let _ = window.set_position(monitor_anchor(&window, (40, 40)));
         let _ = window.show();
         let _ = window.set_focus();
@@ -250,7 +337,9 @@ fn hide_sale_capture_overlay(
 }
 
 /// Consume the normal listing-read authority and return status only. The
-/// complete typed read waits in the facade for the main Inventory form.
+/// complete capture waits in the facade for the main Inventory form, which
+/// is told it is there: a form showing on a second screen would otherwise
+/// sit unchanged, looking exactly like a capture that failed.
 #[tauri::command]
 async fn capture_sale_from_overlay(
     app: tauri::AppHandle,
@@ -271,36 +360,41 @@ async fn capture_sale_from_overlay(
         return Err("sale capture is not armed; reopen it from Inventory".into());
     }
     let api = commands::facade(&app).map_err(|error| error.to_string())?;
-    let read = tokio::task::spawn_blocking(move || api.inventory_sale_window_capture())
-        .await
-        .map_err(|_| "sale capture task failed".to_string())?
-        .map_err(|error| error.to_string())?;
-    let error = read.error.0;
-    Ok(OverlayCaptureReply {
-        failed: error.is_some(),
-        message: error.unwrap_or_else(|| "Captured. Check the main window.".into()),
-    })
+    let capture =
+        tokio::task::spawn_blocking(move || api.inventory_sale_window_capture_for_shell())
+            .await
+            .map_err(|_| "sale capture task failed".to_string())?;
+    // Window orchestration, not a domain event: a refusal is held too, so
+    // the form drops drafts from an older capture rather than keep them
+    // standing as if they were this one's.
+    let _ = app.emit_to("main", SALE_CAPTURE_READY, ());
+    Ok(OverlayCaptureReply::from(&capture))
 }
 
+/// Told to the main window when a capture from the overlay is waiting.
+const SALE_CAPTURE_READY: &str = "sale-capture-ready";
+
+/// Hide the scan overlay. The skill scan watches the game window only for
+/// the overlay the player pages alongside, so the watching stops with it;
+/// a finished scan awaiting review keeps its result for the main window.
 #[tauri::command]
 fn hide_scan_overlay(app: tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("scan-overlay") {
+    scan_overlay_gone(&app);
+    if let Some(window) = app.get_webview_window(SCAN_OVERLAY) {
         let _ = window.hide();
     }
 }
 
-/// The manual-scan capture preview PNG for `page`, base64-encoded for an
-/// `<img>` `data:` URL. The facade returns raw image bytes, which cannot ride
-/// the typed-DTO command surface (the bindings are JSON), so this stays a
-/// bespoke command outside the manifest, base64-encoding the bytes here.
-#[tauri::command]
-async fn capture_png(app: tauri::AppHandle, page: u32) -> Result<String, String> {
-    use base64::Engine as _;
-    let facade = commands::facade(&app).map_err(|error| error.to_string())?;
-    let bytes = facade
-        .scan_capture_png(i64::from(page))
-        .map_err(|error| error.to_string())?;
-    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+/// The scan overlay's window label.
+const SCAN_OVERLAY: &str = "scan-overlay";
+
+/// The scan overlay is no longer showing, however it went: the skill scan
+/// stops collecting with it. Told to the scan before the window goes, so
+/// no start from the overlay can land after it.
+fn scan_overlay_gone(app: &tauri::AppHandle) {
+    if let Ok(facade) = commands::facade(app) {
+        facade.skill_scan_window_closed_for_shell();
+    }
 }
 
 /// A bundled planet map's raster, base64-encoded for an `<img>` `data:` URL
@@ -327,14 +421,15 @@ async fn planet_map_image(app: tauri::AppHandle, planet: String) -> Result<Strin
 // seam is the producer teardown path.
 struct Producers(Mutex<Option<composition::ProducerState>>);
 
-// Holds the manual-scan input listener and the scan state machine so the exit
-// seam tears them down: the spacebar listener detaches its share of the shared
-// OS keyboard hook (the hotbar listener detaches the other share via
-// `ProducerState::stop`), and the scan resets any in-flight capture state.
-// Both are the same `Arc`s the facade's scan family serves over.
+// Holds the input listeners and the skill scan so the exit seam tears them
+// down: the spacebar listener detaches its share of the shared OS keyboard
+// hook (the hotbar listener detaches the other share via
+// `ProducerState::stop`), and the skill scan stops and waits for its worker,
+// so nothing captures the screen behind the closing app. All are the same
+// `Arc`s the facade serves over.
 struct ScanInput {
     spacebar: std::sync::Arc<composition::SpacebarCaptureListener>,
-    skill_scan: std::sync::Arc<composition::SkillScanManual>,
+    skill_scan: std::sync::Arc<composition::SkillScanService>,
     coord_confirm: std::sync::Arc<eo_services::coord_capture::CoordConfirmListener>,
     radar_confirm: std::sync::Arc<eo_services::coord_capture::CoordConfirmListener>,
 }
@@ -347,6 +442,14 @@ struct ShutdownDb(eo_services::db::Db);
 
 #[cfg(windows)]
 struct RuntimeWindowIcons(Mutex<Vec<isize>>);
+
+/// Shapes the command surface (`command_acl::app_command_surface`) into the
+/// invoke handler.
+macro_rules! invoke_handler {
+    (typed: [$($typed:ident),* $(,)?], shell: [$($($shell:ident)::+),* $(,)?] $(,)?) => {
+        tauri::generate_handler![$(commands::$typed,)* $($($shell)::+),*]
+    };
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -390,6 +493,9 @@ pub fn run() {
     resources::spawn_resource_sampler();
 
     let app = tauri::Builder::default()
+        // The startup readiness record, managed on the builder so it exists
+        // before any window can ask for it.
+        .manage(substrate::SubstrateReadiness::default())
         .manage(SaleCaptureAuthority::default())
         // The shell plugin stays for its `open` API (external links route to
         // the OS browser via `$lib/utils/openExternal`); the sidecar/execute
@@ -398,232 +504,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![
-            toggle_overlay,
-            toggle_cartography_overlay,
-            show_scan_overlay,
-            show_sale_capture_overlay,
-            hide_sale_capture_overlay,
-            capture_sale_from_overlay,
-            hide_scan_overlay,
-            capture_png,
-            planet_map_image,
-            // The typed IPC commands (held in lock-step with the eo-api
-            // manifest by the parity test in `commands`).
-            commands::equipment_search,
-            commands::equipment_library,
-            commands::equipment_add,
-            commands::equipment_update,
-            commands::equipment_delete,
-            commands::equipment_detail,
-            commands::protection_overview,
-            commands::protection_set_create,
-            commands::protection_set_update,
-            commands::protection_loadout_create,
-            commands::protection_loadout_update,
-            commands::protection_set_archive,
-            commands::protection_loadout_archive,
-            commands::protection_select,
-            commands::protection_assign_session_loadout,
-            commands::protection_pending_attribution,
-            commands::protection_observation_confirm,
-            commands::protection_repair_confirm,
-            commands::protection_trade_terminal_scan,
-            commands::character_calibration,
-            commands::character_stats,
-            commands::character_skills,
-            commands::character_professions,
-            commands::character_prospect_options,
-            commands::character_prospect,
-            commands::character_profession_optimizer,
-            commands::character_path_optimizer,
-            commands::character_hp_optimizer,
-            commands::character_activity_recommender,
-            commands::settings_get,
-            commands::settings_overlay_position,
-            commands::settings_set_overlay_position,
-            commands::settings_update,
-            commands::codex_species,
-            commands::codex_species_ranks,
-            commands::codex_recommend,
-            commands::codex_meta_attributes,
-            commands::codex_calibrate,
-            commands::codex_claim,
-            commands::codex_unclaim,
-            commands::codex_meta_claim,
-            commands::codex_mastery_options,
-            commands::codex_mastery_claim,
-            commands::codex_mastery_unclaim,
-            commands::quests_list,
-            commands::quest_get,
-            commands::quest_create,
-            commands::quest_update,
-            commands::quest_delete,
-            commands::quest_start,
-            commands::quest_complete,
-            commands::quest_hand_in_begin,
-            commands::quest_hand_in_state,
-            commands::quest_hand_in_wait,
-            commands::quest_hand_in_cancel,
-            commands::quest_hand_in_confirm,
-            commands::quest_rewards_unresolved,
-            commands::quest_reward_review,
-            commands::quest_cancel,
-            commands::quests_mobs,
-            commands::quests_analytics,
-            commands::quest_families_list,
-            commands::quest_family_create,
-            commands::quest_family_update,
-            commands::quest_family_delete,
-            commands::session_definitions_list,
-            commands::session_definition_create,
-            commands::session_definition_update,
-            commands::session_definition_archive,
-            commands::session_definition_restore,
-            commands::tracking_definition_select,
-            commands::analytics_overview,
-            commands::analytics_hunting,
-            commands::analytics_harvest,
-            commands::analytics_hunting_activity,
-            commands::activity_stock,
-            commands::hunting_realised_markup,
-            commands::harvest_realised_markup,
-            commands::auction_listings,
-            commands::auction_listing_create,
-            commands::auction_listing_confirm,
-            commands::auction_listing_expire,
-            commands::stock_convert,
-            commands::stock_private_sale,
-            commands::stock_remove,
-            commands::stock_shrapnel_convert,
-            commands::activity_history,
-            commands::auction_sale_revert,
-            commands::auction_listing_undo,
-            commands::stock_conversion_undo,
-            commands::private_sale_undo,
-            commands::stock_removal_undo,
-            commands::ledger_list,
-            commands::ledger_summary,
-            commands::ledger_create,
-            commands::ledger_delete,
-            commands::ledger_presets_list,
-            commands::ledger_preset_create,
-            commands::ledger_preset_delete,
-            commands::inventory_list,
-            commands::inventory_create,
-            commands::inventory_update,
-            commands::inventory_delete,
-            commands::inventory_sell,
-            commands::inventory_sale_window_capture,
-            commands::inventory_sale_window_take_capture,
-            commands::inventory_draft_resolve,
-            commands::inventory_equipment_listing_create,
-            commands::inventory_equipment_trade,
-            commands::market_paste_preview,
-            commands::market_paste_commit,
-            commands::market_unit_price_set,
-            commands::market_overview,
-            commands::market_contribution_batch,
-            commands::market_auction_packet_threshold,
-            commands::market_break_even,
-            commands::market_mob_ranking,
-            commands::market_harvest_markups,
-            commands::market_hunt_markups,
-            commands::market_item_history,
-            commands::scan_status,
-            commands::scan_start,
-            commands::scan_capture,
-            commands::scan_cancel,
-            commands::scan_undo,
-            commands::scan_process,
-            commands::scan_accept,
-            commands::scan_reject,
-            commands::scan_pending,
-            commands::scan_spacebar_capture,
-            commands::dev_auction_fee_research_start,
-            commands::dev_auction_fee_research_stop,
-            commands::dev_auction_fee_research_status,
-            commands::dev_auction_fee_research_capture,
-            commands::dev_auction_fee_research_overlay_status,
-            commands::tracking_sessions,
-            commands::tracking_session_detail,
-            commands::tracking_session_intervals,
-            commands::tracking_manual_mob_suggestions,
-            commands::tracking_snapshot,
-            commands::tracking_start,
-            commands::tracking_stop,
-            commands::tracking_release_mob,
-            commands::tracking_manual_mob_lock,
-            commands::tracking_session_config,
-            commands::tracking_activity_options,
-            commands::tracking_activity_activate,
-            commands::tracking_activity_deactivate,
-            commands::tracking_rename_mob,
-            commands::tracking_reassign_session,
-            commands::tracking_restore_mob,
-            commands::tracking_loot_item_activate,
-            commands::tracking_loot_item_deactivate,
-            commands::tracking_armour_cost,
-            commands::tracking_repair_scan,
-            commands::tracking_session_delete,
-            commands::demo_analytics_overview,
-            commands::demo_analytics_hunting,
-            commands::demo_analytics_hunting_activity,
-            commands::demo_analytics_harvest,
-            commands::demo_ledger_list,
-            commands::demo_ledger_summary,
-            commands::demo_ledger_presets_list,
-            commands::demo_inventory_list,
-            commands::demo_tracking_sessions,
-            commands::demo_tracking_session_detail,
-            commands::demo_tracking_snapshot,
-            commands::dev_metrics,
-            commands::dev_crash_reporting,
-            commands::dev_set_crash_reporting,
-            commands::dev_compact_database,
-            commands::dev_rebuild_projections,
-            commands::planet_maps_list,
-            commands::map_pins_list,
-            commands::map_pins_viewport,
-            commands::map_pin_nearby,
-            commands::map_views_list,
-            commands::map_view_create,
-            commands::map_view_rename,
-            commands::map_view_delete,
-            commands::map_pin_create,
-            commands::map_pin_update,
-            commands::map_pin_delete,
-            commands::map_pin_cooldown,
-            commands::pin_configs_list,
-            commands::pin_config_create,
-            commands::pin_config_update,
-            commands::pin_config_delete,
-            commands::pin_config_reorder,
-            commands::maps_calibration_start,
-            commands::maps_calibration_cancel,
-            commands::maps_calibration_status,
-            commands::maps_scan_coordinates,
-            commands::navigation_snapshot,
-            commands::navigation_start,
-            commands::navigation_update_position,
-            commands::navigation_mark_visited,
-            commands::navigation_skip,
-            commands::navigation_resolve_harvest,
-            commands::navigation_undo,
-            commands::navigation_end,
-            commands::radar_calibration_start,
-            commands::radar_calibration_cancel,
-            commands::radar_calibration_status,
-            commands::radar_geometry,
-            show_navigation_overlays,
-            hide_navigation_overlays,
-            begin_navigation_area_selection,
-            updater::check_for_update,
-            updater::download_update,
-            updater::install_update,
-            updater::get_update_channel,
-            updater::set_update_channel
-        ])
+        .invoke_handler(app_command_surface!(invoke_handler))
         .setup(|app| {
             // `app` is unused on a non-Windows debug build (the runtime icon
             // install is Windows-only); keep the binding alive there.
@@ -647,9 +528,10 @@ pub fn run() {
             // through the in-process IPC command (no inbound socket) and every
             // route is served natively (the Python sidecar has been
             // decommissioned). Startup composes the native spine off
-            // the setup path and publishes it to the IPC command when ready.
+            // the setup path, publishes it to the IPC command when ready,
+            // and settles the readiness record every window awaits.
             // Dev and release compose identically; the resource dir (the
-            // bundled snapshot / model / demo assets) resolves only in the
+            // bundled snapshot / model assets) resolves only in the
             // installed build, dev falling back to the repository copies.
             compose_substrate(app.handle().clone(), app.path().resource_dir().ok());
             Ok(())
@@ -660,9 +542,36 @@ pub fn run() {
             // tally — closing main alone leaves them open and the app
             // keeps running headless. Treat main-window close as a
             // request to exit the whole app.
-            if let WindowEvent::CloseRequested { .. } = event {
+            if let WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
                     window.app_handle().exit(0);
+                }
+                // The scan overlay is spawned once and shown again on the
+                // next scan, so the system's close hides it instead, and
+                // stops the skill scan collecting just as its own close
+                // button does.
+                if window.label() == SCAN_OVERLAY {
+                    api.prevent_close();
+                    scan_overlay_gone(window.app_handle());
+                    let _ = window.hide();
+                }
+                // The route overlays are spawned once too: the system's
+                // close takes both off the screen and stops radar guidance,
+                // just as the HUD's own close does.
+                if [NAVIGATION_HUD, RADAR_GUIDANCE].contains(&window.label()) {
+                    api.prevent_close();
+                    hide_navigation_overlays(window.app_handle().clone());
+                }
+            }
+            if let WindowEvent::Destroyed = event {
+                if window.label() == account_window::SIGN_IN_WINDOW {
+                    account_window::window_destroyed(window.app_handle());
+                }
+                if window.label() == SCAN_OVERLAY {
+                    scan_overlay_gone(window.app_handle());
+                }
+                if [NAVIGATION_HUD, RADAR_GUIDANCE].contains(&window.label()) {
+                    navigation_overlays_gone(window.app_handle());
                 }
             }
         })
@@ -689,21 +598,36 @@ pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
     // Stop the producer spine: end any open session so its stop events
     // publish, then stop the chat-log tail thread. The substrate's compose
     // task has no shutdown signal, so this is where the producers wind down.
+    let mut runtime = None;
     if let Some(state) = app.try_state::<Producers>() {
         if let Ok(mut guard) = state.0.lock() {
             if let Some(producers) = guard.take() {
+                runtime = Some(producers.runtime_handle());
                 producers.stop();
             }
         }
     }
 
-    // Tear down the scan input listener and reset the scan: the spacebar
+    // Tear down the input listeners and stop the skill scan: the spacebar
     // listener detaches its share of the shared OS hook.
     if let Some(state) = app.try_state::<ScanInput>() {
         state.spacebar.stop();
         state.coord_confirm.stop();
         state.radar_confirm.stop();
         state.skill_scan.shutdown();
+    }
+    // Radar guidance stops and its worker is waited for, briefly, so the
+    // closing app is not capturing the screen behind it.
+    if let Ok(facade) = commands::facade(app) {
+        facade.radar_guidance_shutdown();
+    }
+
+    // The account connection ends, abandoning any request in flight
+    // (waited for a second or two at most). Through the composition's
+    // pool bridge, since this also runs on a runtime worker (the updater's
+    // exit hook), where starting a runtime would panic.
+    if let (Ok(facade), Some(runtime)) = (commands::facade(app), runtime.as_ref()) {
+        composition::block_on_pool(runtime, facade.account_shutdown());
     }
 
     // With the producers stopped (no writes in flight), refresh the database's
@@ -792,43 +716,115 @@ fn destroy_runtime_window_icons(app: &tauri::AppHandle) {
 /// The single pure-Rust binary serves every backend call over a typed Tauri
 /// command dispatched into the composed facade: there is no socket, no
 /// sidecar, and no proxy. This composes the native service spine off the setup
-/// path, and on success installs the services, publishes the facade to the
-/// typed commands, and signals the frontend (see [`install_native_services`]).
-/// Until composition lands the typed commands answer their not-ready contract;
-/// the frontend's initial reads are re-driven by the
-/// `substrate:native-installed` event the install emits (there is no
-/// transport-level retry). A declined composition is logged and the backend
-/// does not come up for the session (an unopenable database, or one below the
-/// supported baseline the retired sidecar used to migrate forward).
+/// path, and on success installs the services and publishes the facade to the
+/// typed commands (see [`install_native_services`]).
+///
+/// Either way it then settles the startup readiness record exactly once
+/// ([`substrate::SubstrateReadiness`]): the webview's typed transport holds
+/// every facade command until that answer, so no command dispatches while the
+/// facade is still composing. A declined composition settles as a failure
+/// carrying its reason (an unopenable database, one below the supported
+/// baseline, missing game data) and the backend does not come up for the
+/// session. Composition and installation run in their own task so that even a
+/// panic inside either settles the record rather than leaving every window
+/// waiting (the facade is published last, so a panic before it leaves the
+/// typed commands answering their not-ready contract, and `failed` is true).
 fn compose_substrate(app: tauri::AppHandle, resource_dir: Option<std::path::PathBuf>) {
     tauri::async_runtime::spawn(async move {
-        match composition::compose_native(resource_dir).await {
-            composition::Composition::Ready(composed) => {
-                install_native_services(&app, composed);
-            }
-            composition::Composition::Declined => {
+        #[cfg(debug_assertions)]
+        simulate_slow_start().await;
+        let installing = {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match composition::compose_native(resource_dir).await {
+                    composition::Composition::Ready(composed) => {
+                        install_native_services(&app, *composed);
+                        // A player who connected before has any session
+                        // kept through the session store taken up,
+                        // quietly. The app keeps sessions in memory only,
+                        // so today there is none and the connection waits
+                        // for a sign-in.
+                        account_window::adopt_stored_session(&app);
+                        substrate::SubstrateOutcome::Ready
+                    }
+                    composition::Composition::Declined(decline) => {
+                        tracing::error!(
+                            target: "eo::substrate",
+                            "native services did not compose; the backend is unavailable for this session"
+                        );
+                        decline.into()
+                    }
+                }
+            })
+        };
+        let outcome = match installing.await {
+            Ok(outcome) => outcome,
+            Err(error) => {
                 tracing::error!(
                     target: "eo::substrate",
-                    "native services did not compose; the backend is unavailable for this session"
+                    %error,
+                    "native composition stopped unexpectedly; the backend is unavailable for this session"
                 );
+                substrate::Decline::new(substrate::DeclineReason::Unexpected, error.to_string())
+                    .into()
             }
-        }
+        };
+        app.state::<substrate::SubstrateReadiness>().settle(outcome);
     });
+}
+
+/// Debug builds only: hold startup back by `ENTROPIAORME_STARTUP_DELAY_MS`
+/// milliseconds, so the slow-start path (the startup indicator and the pages'
+/// loading placeholders) can be exercised on a machine that composes quickly.
+/// Release builds compile this out and ignore the variable.
+#[cfg(debug_assertions)]
+async fn simulate_slow_start() {
+    let delay = std::env::var("ENTROPIAORME_STARTUP_DELAY_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok());
+    if let Some(ms) = delay {
+        tracing::info!(target: "eo::substrate", ms, "simulating a slow start");
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
 }
 
 /// Install the composed services into the Tauri-managed exit seam, then publish
 /// the facade to the typed commands (so they answer only once every service is
-/// present) and signal the frontend that the backend is live.
+/// present). The caller settles the readiness record after this returns.
 fn install_native_services(app: &tauri::AppHandle, composed: composition::Composed) {
     // Clones for the exit seam, taken before the originals move into the
     // installed bundle below: the spacebar listener detaches its share of
-    // the shared OS hook and the scan resets in-flight state on close.
+    // the shared OS hook and the skill scan stops its worker on close.
     let exit_spacebar = composed.spacebar_listener.clone();
     let exit_skill_scan = composed.skill_scan.clone();
     let exit_coord_confirm = composed.coord_confirm.clone();
     let exit_radar_confirm = composed.radar_confirm.clone();
     // The typed-command facade, published to its managed slot below.
     let composed_api = composed.api.clone();
+    // Radar guidance places its overlay as its status moves. The sink holds
+    // the facade weakly: the facade holds the sink.
+    let guidance_app = app.clone();
+    let guidance_api = std::sync::Arc::downgrade(&composed.api);
+    composed
+        .api
+        .set_radar_guidance_changed(std::sync::Arc::new(move || {
+            // Applied on the main thread against the status as it is then,
+            // so a hide that lands between the change and the placement is
+            // never undone by a placement read before it.
+            let app = guidance_app.clone();
+            let api = guidance_api.clone();
+            let _ = guidance_app.run_on_main_thread(move || {
+                let Some(api) = api.upgrade() else {
+                    return;
+                };
+                let guidance = api
+                    .navigation_overlays_shown()
+                    .then(|| api.radar_guidance().ok())
+                    .flatten();
+                place_radar_overlay(&app, guidance);
+                let _ = app.emit(RADAR_GUIDANCE_CHANGED, ());
+            });
+        }));
     // The composed database handle, held so the exit seam can run the
     // once-per-lifecycle `PRAGMA optimize` on close.
     let shutdown_db = composed.db.clone();
@@ -845,8 +841,8 @@ fn install_native_services(app: &tauri::AppHandle, composed: composition::Compos
     // for the app's lifetime, so the warmed engine (and its ONNX session)
     // lives exactly as long as its consumers; the ORT environment
     // self-releases at process exit.
-    // Hand the scan input listener and the scan state machine to the exit
-    // seam for deterministic teardown.
+    // Hand the input listeners and the skill scan to the exit seam for
+    // deterministic teardown.
     app.manage(ScanInput {
         spacebar: exit_spacebar,
         skill_scan: exit_skill_scan,
@@ -858,10 +854,8 @@ fn install_native_services(app: &tauri::AppHandle, composed: composition::Compos
     // Publish the composed facade to the typed commands LAST: until now the
     // typed commands answer their not-ready contract, so by the time any
     // request dispatches every native service is present (there is no
-    // absent-service window to fall back from). Then signal the frontend that
-    // the backend is live so it (re-)hydrates its initial reads.
+    // absent-service window to fall back from).
     app.manage(commands::ApiFacade(composed_api));
-    let _ = app.emit("substrate:native-installed", ());
 }
 
 /// Map a dotted domain wire topic to its colon-form Tauri event name (Tauri
@@ -878,10 +872,10 @@ fn domain_topic_to_tauri_event(topic: &str) -> String {
 /// identical envelope JSON the wire contract pins (`eo-wire`'s serde shape),
 /// so the topic-aware consumers are unchanged. A lagging receiver skips
 /// ahead to live events (drop-oldest, the same shedding the frame queues
-/// applied); the channel closing ends the task with the spine. The hydrate
-/// nudge (a payload-less frame on start) stays frontend-owned: it must fire
-/// after the webview is listening, which an emit at install time cannot
-/// guarantee on a cold load.
+/// applied); the channel closing ends the task with the spine. Initial state
+/// is not this bridge's concern: every consumer attaches its listener and then
+/// reads its snapshot itself, a read the typed transport holds until the
+/// facade is ready.
 fn spawn_domain_event_bridge(
     app: &tauri::AppHandle,
     domain_bus: &std::sync::Arc<eo_wire::bus::DomainBus>,
@@ -1110,16 +1104,15 @@ mod tests {
             .split(';')
             .find(|directive| directive.trim_start().starts_with("connect-src "))
             .expect("connect-src is configured");
-        assert!(
-            connect_src
-                .split_whitespace()
-                .any(|source| source == "https://market-data.entropiaorme.com"),
-            "the market-data origin must stay pinned in connect-src: {csp}"
+        assert_eq!(
+            connect_src.split_whitespace().collect::<Vec<_>>(),
+            ["connect-src", "'self'", "https://entropiaorme.com"],
+            "the news feed is the only external origin the webview may reach: {csp}"
         );
         assert!(csp.contains("ipc:"), "the IPC scheme must remain: {csp}");
         assert!(
             csp.contains("img-src 'self' data:"),
-            "img-src keeps data: for the base64 capture preview: {csp}"
+            "img-src keeps data: for the base64 planet map rasters: {csp}"
         );
     }
 
@@ -1172,15 +1165,20 @@ mod tests {
             );
         }
         // A button that reads the screen and dismisses itself needs those two
-        // commands. Anything else here would be a window on the whole ledger
-        // reachable from a surface that floats over the game.
+        // commands, plus the startup readiness answer its typed transport
+        // awaits (whether the backend is up and, if not, the closed reason;
+        // the logged detail goes to the main window alone). Anything else
+        // here would be a window on the whole ledger reachable from a surface
+        // that floats over the game.
         assert_eq!(
             crate::command_acl::SALE_CAPTURE_COMMANDS,
             [
                 "capture_sale_from_overlay",
                 "dev_auction_fee_research_capture",
                 "dev_auction_fee_research_overlay_status",
-                "hide_sale_capture_overlay"
+                "hide_sale_capture_overlay",
+                "set_window_hit_region",
+                "substrate_ready"
             ]
         );
         // Notably not the collect verb: the form takes the waiting read, the
@@ -1191,6 +1189,42 @@ mod tests {
             !crate::command_acl::SALE_CAPTURE_COMMANDS.contains(&"inventory_sale_window_capture")
         );
         assert!(!crate::command_acl::SALE_CAPTURE_COMMANDS.contains(&"auction_listing_create"));
+    }
+
+    #[test]
+    fn the_capture_button_is_told_counts_or_a_reason_and_never_a_figure() {
+        let figure = serde_json::json!({"value": 162.0, "text": "162", "check": false});
+        let capture: eo_api::sale_capture::SaleQueueCapture =
+            serde_json::from_value(serde_json::json!({
+                "kind": "read",
+                "captureId": 3,
+                "readAt": "2026-11-03T19:42:07",
+                "drafts": [{
+                    "draftId": "3-0",
+                    "itemName": {"text": "Electric Attack Nanochip 3", "found": "itemData"},
+                    "ttValue": figure,
+                    "quantity": figure,
+                    "startingBid": figure,
+                    "buyout": {"kind": "off"},
+                    "auctionDays": figure,
+                    "listingFee": figure,
+                }],
+                "unread": [{"problems": [{"field": "listingFee", "why": "notRead"}]}],
+                "queued": {"kind": "some", "of": 3},
+            }))
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(super::OverlayCaptureReply::from(&capture)).unwrap(),
+            serde_json::json!({"kind": "read", "drafts": 1, "unread": 1})
+        );
+        let refused: eo_api::sale_capture::SaleQueueCapture = serde_json::from_value(
+            serde_json::json!({"kind": "refused", "captureId": 4, "reason": "sellWindowNotOpen"}),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(super::OverlayCaptureReply::from(&refused)).unwrap(),
+            serde_json::json!({"kind": "refused", "reason": "sellWindowNotOpen"})
+        );
     }
 
     #[test]
@@ -1222,8 +1256,9 @@ mod tests {
                 "the cartography capability must not grant {forbidden}: {cartography_capability}"
             );
         }
-        assert!(crate::command_acl::APP_COMMANDS.contains(&"map_pin_create"));
-        assert!(crate::command_acl::APP_COMMANDS.contains(&"settings_update"));
+        let app_commands = crate::command_acl::app_commands();
+        assert!(app_commands.contains(&"map_pin_create"));
+        assert!(app_commands.contains(&"settings_update"));
         assert_eq!(
             crate::command_acl::CARTOGRAPHY_COMMANDS,
             [
@@ -1232,7 +1267,9 @@ mod tests {
                 "map_views_list",
                 "maps_scan_coordinates",
                 "pin_configs_list",
-                "planet_maps_list"
+                "planet_maps_list",
+                "set_window_hit_region",
+                "substrate_ready"
             ]
         );
         assert!(!crate::command_acl::CARTOGRAPHY_COMMANDS.contains(&"map_pin_delete"));
@@ -1264,14 +1301,47 @@ mod tests {
                 "navigation_start",
                 "maps_scan_coordinates",
                 "navigation_snapshot",
+                "input_status",
                 "navigation_update_position",
                 "navigation_mark_visited",
                 "navigation_skip",
                 "navigation_resolve_harvest",
                 "navigation_undo",
                 "navigation_end",
+                "navigation_resume_position",
+                "radar_guidance",
+                "show_navigation_overlays",
                 "hide_navigation_overlays",
+                "set_window_hit_region",
+                "substrate_ready",
             ]
         );
+    }
+    #[test]
+    fn the_radar_renderer_keeps_a_read_only_capability() {
+        let capability = include_str!("../capabilities/radar-guidance.json");
+        assert!(capability.contains("\"windows\": [\"radar-guidance\"]"));
+        assert!(capability.contains("radar-guidance-commands"));
+        for forbidden in [
+            "trusted-commands",
+            "core:event:allow-emit",
+            "shell:allow-open",
+            "core:window:allow-create",
+            "core:webview:allow-create-webview-window",
+            "store:allow-set",
+        ] {
+            assert!(
+                !capability.contains(forbidden),
+                "the radar guidance capability must not grant {forbidden}: {capability}"
+            );
+        }
+        // A click-through renderer reads where to point and whether the
+        // backend is up; it writes nothing.
+        assert_eq!(
+            crate::command_acl::RADAR_GUIDANCE_COMMANDS,
+            ["navigation_snapshot", "radar_guidance", "substrate_ready"]
+        );
+        assert!(!crate::command_acl::RADAR_GUIDANCE_COMMANDS.contains(&"navigation_mark_visited"));
+        assert!(!crate::command_acl::RADAR_GUIDANCE_COMMANDS.contains(&"settings_update"));
     }
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Menu from '$lib/components/Menu.svelte';
+	import { filterByQuery } from '$lib/view/search';
 	import DefinitionCataloguePanel from '$lib/features/sessions/DefinitionCataloguePanel.svelte';
 	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
 	import type { HuntingActivitySection } from './huntingModel.svelte';
@@ -29,13 +30,7 @@
 
 	let query = $state('');
 	const entries = $derived(flatten(activities));
-	const filtered = $derived(
-		query.trim() === ''
-			? entries
-			: entries.filter(({ activity }) =>
-					activity.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
-				),
-	);
+	const filtered = $derived(filterByQuery(entries, query, ({ activity }) => activity.label));
 	const COL_NAME = 'min-w-0 flex-[1_1_9rem]';
 	const COL_CYCLED = 'min-w-0 flex-[0_1_4.5rem]';
 	const COL_TT = 'min-w-0 flex-[0_1_4.5rem]';

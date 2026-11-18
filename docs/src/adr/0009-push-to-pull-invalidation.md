@@ -4,6 +4,8 @@
 - Context: reflects the landed implementation
 
 > **Transport update ([ADR-0013](0013-in-process-collapse.md)).** The invalidation model below is unchanged, and the collapse made it the only model: a frame is still a minimal signal and the window still re-reads full state from a hydration GET. Two transport details beneath it moved. Change notifications no longer arrive on a `GET /api/events` HTTP stream but over an in-process Tauri event bridge, and the hydration reads no longer cross a loopback socket but dispatch in-process through the `api_request` IPC command. The reconnect-safe re-hydrate is now expressed as the frontend re-reading on the `substrate:native-installed` event the shell emits once the native services compose.
+>
+> **Startup update ([ADR-0030](0030-startup-readiness-boundary.md)).** That event and the frontend relay that answered it are retired. Each consumer reads its own snapshot on mount, and the typed transport holds that read until the backend reports ready, so the model below needs no startup nudge.
 
 ## Context and problem statement
 

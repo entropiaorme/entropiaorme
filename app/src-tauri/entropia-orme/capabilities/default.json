@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for EntropiaOrme. The `windows` list includes runtime-spawned overlay popups (overlay-menu, overlay-armour-cost) that are created on-demand via WebviewWindow from app/src/routes/overlay.",
-  "windows": ["main", "overlay", "overlay-menu", "overlay-armour-cost", "scan-overlay"],
+  "description": "Default capabilities for EntropiaOrme. The `windows` list includes runtime-spawned overlay popups (overlay-menu) that are created on-demand via WebviewWindow from app/src/routes/overlay.",
+  "windows": ["main", "overlay", "overlay-menu", "scan-overlay"],
   "permissions": [
     "trusted-commands",
     "core:default",
@@ -10,6 +10,7 @@
     "core:window:allow-create",
     "core:window:allow-hide",
     "core:window:allow-set-focus",
+    "core:window:allow-set-focusable",
     "core:window:allow-set-position",
     "core:window:allow-set-size",
     "core:window:allow-show",

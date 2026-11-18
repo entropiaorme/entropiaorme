@@ -36,6 +36,19 @@ describe('window commands', () => {
 		expect(invokeMock).toHaveBeenCalledWith(command);
 	});
 
+	it('opens the account sign-in through the typed transport, so a refusal carries its reason', async () => {
+		invokeMock.mockImplementation(async (command: string) => {
+			if (command === 'substrate_ready') return { state: 'ready' };
+			throw { kind: 'conflict', message: 'the account connection is not available' };
+		});
+		const shell = await loadModule();
+		const { ApiError } = await import('./client');
+		const refusal = await shell.signInToAccount().catch((error: unknown) => error);
+		expect(invokeMock).toHaveBeenCalledWith('account_sign_in', {});
+		expect(refusal).toBeInstanceOf(ApiError);
+		expect(refusal).toMatchObject({ message: 'the account connection is not available' });
+	});
+
 	it('hands route-area selection to the main Maps window with typed context', async () => {
 		const { beginNavigationAreaSelection } = await loadModule();
 		await beginNavigationAreaSelection(4, 'Calypso', 9);
@@ -70,12 +83,17 @@ describe('planetMapImage', () => {
 	});
 });
 
-describe('manualSkillScanCapturePng', () => {
-	it('fetches the capture preview over the capture_png command as a base64 data URL', async () => {
-		const { manualSkillScanCapturePng } = await loadModule();
-		invokeMock.mockResolvedValue('aGVsbG8=');
-		const url = await manualSkillScanCapturePng(3);
-		expect(invokeMock).toHaveBeenCalledWith('capture_png', { page: 3 });
-		expect(url).toBe('data:image/png;base64,aGVsbG8=');
+describe('startup readiness', () => {
+	it('awaits the settled outcome through substrate_ready', async () => {
+		const { awaitSubstrate } = await loadModule();
+		invokeMock.mockResolvedValue({ state: 'ready' });
+		await expect(awaitSubstrate()).resolves.toEqual({ state: 'ready' });
+		expect(invokeMock).toHaveBeenCalledWith('substrate_ready');
+	});
+
+	it('relaunches through restart_app', async () => {
+		const { restartApp } = await loadModule();
+		await restartApp();
+		expect(invokeMock).toHaveBeenCalledWith('restart_app');
 	});
 });

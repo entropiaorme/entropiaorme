@@ -17,6 +17,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 }));
 
 import { anchorBelow, anchorCentreBelow, createAnchorTracker } from './anchor';
+import { OVERLAY_SURFACE_ATTRIBUTE } from './windowSize';
 
 function fakeAnchor(rect: { left: number; bottom: number; width: number }): HTMLElement {
 	const el = document.createElement('div');
@@ -33,6 +34,15 @@ function fakeAnchor(rect: { left: number; bottom: number; width: number }): HTML
 			toJSON: () => ({}),
 		}) as DOMRect;
 	return el;
+}
+
+/** `anchor` placed inside a marked surface whose bottom edge is `bottom`. */
+function insideSurface(anchor: HTMLElement, bottom: number): HTMLElement {
+	const surface = document.createElement('div');
+	surface.setAttribute(OVERLAY_SURFACE_ATTRIBUTE, '');
+	surface.getBoundingClientRect = () => ({ bottom }) as DOMRect;
+	surface.appendChild(anchor);
+	return surface;
 }
 
 beforeEach(() => {
@@ -64,6 +74,25 @@ describe('anchorBelow', () => {
 			y: 252, // round(200 + (20.2 + 6) * 2): the gap is logical, so it scales too
 			width: 55, // the anchor's width stays logical (it sizes the satellite)
 		});
+	});
+});
+
+describe('dropping below the anchor surface', () => {
+	it('hangs a popup below the surface holding its trigger, not over its lower edge', async () => {
+		// A field 8px above the strip's bottom: the menu must clear the strip.
+		const anchor = fakeAnchor({ left: 10, bottom: 40, width: 120 });
+		insideSurface(anchor, 48);
+
+		await expect(anchorBelow(anchor, 6)).resolves.toMatchObject({ y: 254 }); // 200 + 48 + 6
+		const centred = await anchorCentreBelow(anchor, 6);
+		expect(centred.top).toBeCloseTo(254, 10);
+	});
+
+	it('keeps the anchor edge when it already sits below its surface', async () => {
+		const anchor = fakeAnchor({ left: 10, bottom: 60, width: 120 });
+		insideSurface(anchor, 48);
+
+		await expect(anchorBelow(anchor, 6)).resolves.toMatchObject({ y: 266 }); // 200 + 60 + 6
 	});
 });
 

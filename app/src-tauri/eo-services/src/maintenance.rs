@@ -30,7 +30,7 @@ struct Projection {
 }
 
 /// The read models, each rebuildable from the raw tracking tables.
-const PROJECTIONS: [Projection; 9] = [
+const PROJECTIONS: [Projection; 12] = [
     Projection {
         table: "session_summaries",
         snapshot_sql: "SELECT session_id, summary_version, started_at, ended_at, \
@@ -40,14 +40,23 @@ const PROJECTIONS: [Projection; 9] = [
              dominant_mob, dominant_tag, dominant_weapon, dominant_mob_kills, \
              dominant_tag_kills, activity_skill_tt, primary_mobs_json, \
              primary_weapons_json, globals, hofs, harvest_swings, \
-             harvest_successes, harvest_loot_tt, harvest_cost \
+             harvest_successes, harvest_loot_tt, harvest_cost, consumable_cost, \
+             kill_damage_total, kill_damage_max, kill_shots, kill_crits, kill_globals, \
+             kill_hofs, multiplier_sum, multiplier_count, multiplier_max, last_kill_at, \
+             last_kill_loot, last_kill_multiplier, expected_tt_mean, expected_tt_mean_low, \
+             expected_tt_mean_high, expected_tt_animal, expected_tt_animal_low, \
+             expected_tt_animal_high, expected_tt_mutant, expected_tt_mutant_low, \
+             expected_tt_mutant_high, expected_tt_robot, expected_tt_robot_low, \
+             expected_tt_robot_high, overhead_cost \
              FROM session_summaries ORDER BY session_id",
     },
     Projection {
         table: "daily_rollups",
         snapshot_sql: "SELECT day, rollup_version, dirty, has_rows, loot_tt, weapon_cost, \
              enhancer_cost, armour_cost, heal_cost, dangling_cost, skill_tt, codex_pes, \
-             quest_pes, harvest_loot_tt, harvest_cost FROM daily_rollups ORDER BY day",
+             quest_pes, harvest_loot_tt, harvest_cost, consumable_cost, overhead_travel, \
+             overhead_field_logistics, overhead_unclassified, overhead_between_sessions \
+             FROM daily_rollups ORDER BY day",
     },
     Projection {
         table: "daily_ledger_rollups",
@@ -83,6 +92,22 @@ const PROJECTIONS: [Projection; 9] = [
              expected_economics_json, shots_fired, missing_candidate_raw_tt, \
              missing_basis_phases FROM session_offensive_evidence_rollups \
              ORDER BY session_id, context_id, mob_species, evidence_fingerprint",
+    },
+    Projection {
+        table: "session_weapon_rollups",
+        snapshot_sql: "SELECT session_id, tool_name, kills, cycled_ped, loot_tt, play_seconds, \
+             active_seconds FROM session_weapon_rollups ORDER BY session_id, tool_name",
+    },
+    Projection {
+        table: "session_weapon_pes_rollups",
+        snapshot_sql: "SELECT session_id, tool_name, skill_name, pes \
+             FROM session_weapon_pes_rollups ORDER BY session_id, tool_name, skill_name",
+    },
+    Projection {
+        table: "session_weapon_pace_rollups",
+        snapshot_sql: "SELECT session_id, tool_name, mob_species, mob_maturity, kills, \
+             gap_seconds, shots FROM session_weapon_pace_rollups \
+             ORDER BY session_id, tool_name, mob_species, mob_maturity",
     },
     Projection {
         table: "session_rollup_meta",
@@ -151,11 +176,7 @@ fn row_to_json_sync(row: &rusqlite::Row, columns: &[String]) -> Result<Value, Db
 /// canonically serialised (typed by its stored value) for comparison.
 fn snapshot(conn: &rusqlite::Connection, sql: &'static str) -> Result<Vec<Value>, DbError> {
     let mut stmt = conn.prepare(sql)?;
-    let columns: Vec<String> = stmt
-        .column_names()
-        .iter()
-        .map(|&name| name.to_string())
-        .collect();
+    let columns: Vec<String> = stmt.column_names().map(str::to_string).collect();
     let rows = stmt
         .query_map([], |row| Ok(row_to_json_sync(row, &columns)))?
         .collect::<rusqlite::Result<Vec<Result<Value, DbError>>>>()?;
@@ -179,6 +200,9 @@ pub async fn rebuild_and_verify(db: &Db, now: f64) -> Result<RebuildReport, DbEr
         // against an up-to-date maintained state rather than a mid-heal one.
         daily_rollup::heal_rollups(conn, now)?;
         session_summary::heal_summaries(conn)?;
+        for session_id in session_summary::sessions_missing_expectation(conn)? {
+            session_summary::write_session_expectation(conn, &session_id)?;
+        }
         session_rollup::heal(conn)?;
 
         let mut incremental = Vec::with_capacity(PROJECTIONS.len());
@@ -289,7 +313,7 @@ mod tests {
             "every projection is a pure function of the raw tables: {report:?}"
         );
         // Every projection is covered and non-trivial.
-        assert_eq!(report.tables.len(), 9);
+        assert_eq!(report.tables.len(), 12);
         assert!(report
             .tables
             .iter()
@@ -318,6 +342,11 @@ mod tests {
             .tables
             .iter()
             .any(|t| t.table == "session_pes_rollups" && t.row_count == 1));
+        // The rifle's solo kill is a weapon cell.
+        assert!(report
+            .tables
+            .iter()
+            .any(|t| t.table == "session_weapon_rollups" && t.row_count == 1));
         assert!(report
             .tables
             .iter()

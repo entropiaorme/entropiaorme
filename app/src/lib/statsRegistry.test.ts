@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { TrackingStatus } from '$lib/api';
-import { ALL_STAT_IDS, getStatDef, STAT_DEFS, type StatId } from '$lib/statsRegistry';
+import type { LifetimeStats, TrackingStatus } from '$lib/api';
+import {
+	ALL_STAT_IDS,
+	drawsLifetimeValuation,
+	getStatDef,
+	STAT_DEFS,
+	type StatContext,
+	type StatId,
+} from '$lib/statsRegistry';
 
 // Pure render functions over a TrackingStatus. Each stat only ever reads the
 // handful of fields it needs, so fixtures are deliberately minimal: status
@@ -24,6 +31,34 @@ function active(fields: Partial<Record<keyof TrackingStatus, unknown>> = {}): Tr
 function render(id: StatId, status: TrackingStatus | null) {
 	return STAT_DEFS[id].render(status);
 }
+
+// Two recorded sessions: 500 kills over an hour, firing 1,000 shots.
+const FAMILY: LifetimeStats = {
+	instanceCount: 2,
+	cycled: 250,
+	lootTt: 225,
+	net: -25,
+	returnRate: 0.9,
+	pes: 40,
+	durationSeconds: 3600,
+	unpricedShots: 0,
+	pesPer100: 16,
+	expectedCycle: null,
+	kills: 500,
+	damageTotal: 36_000,
+	weaponDamage: 40_000,
+	weaponCost: 200,
+	maxDamage: 151.5,
+	shotsFired: 1000,
+	criticalHits: 25,
+	globals: 3,
+	hofs: 1,
+	harvestSwings: 12,
+	multiplierAvg: 0.9123,
+	multiplierMax: 45.5,
+	multiplierLast: 1.25,
+	latestKillLoot: 2.5,
+};
 
 afterEach(() => {
 	vi.useRealTimers();
@@ -92,6 +127,49 @@ describe('cycled / loot_tt / rate / pes / kills / globals / hofs', () => {
 			color: 'text-text',
 		});
 		expect(render('hofs_count', active())).toEqual({ value: '0', color: 'text-text' });
+	});
+});
+
+describe('live costs from the account readings', () => {
+	const through = '2026-11-17T14:52:00+00:00';
+	const note = `Costs from your account up to ${new Date(through).toLocaleTimeString('en-US', {
+		hour: 'numeric',
+		minute: '2-digit',
+	})}, tracked since`;
+
+	it('net takes the measured overhead off, which Cycled never holds', () => {
+		const status = active({
+			returns: 12,
+			cost: 10,
+			overheadCost: 0.5,
+			costsMeasuredThrough: through,
+		});
+		expect(render('net', status).value).toBe('+1.50');
+		expect(render('cycled', status).value).toBe('10.00');
+	});
+
+	it('the cost figures say they come from the account up to its latest reading', () => {
+		const status = active({ returns: 12, cost: 10, costsMeasuredThrough: through });
+		for (const id of ['cycled', 'net', 'rate'] as StatId[]) {
+			expect(render(id, status).note, id).toBe(note);
+		}
+		// A figure built on the tracked kills alone says nothing of it.
+		const kills = active({ multiplierLast: 1.2, costsMeasuredThrough: through });
+		expect(render('multiplier_last', kills).note).toBeUndefined();
+	});
+
+	it('says nothing while the costs do not rest on the readings', () => {
+		const status = active({ returns: 12, cost: 10 });
+		for (const id of ['cycled', 'net', 'rate'] as StatId[]) {
+			expect(render(id, status).note, id).toBeUndefined();
+		}
+		// Exactly today's figure.
+		expect(render('net', status)).toEqual({ value: '+2.00', color: 'text-positive' });
+	});
+
+	it('an empty figure carries no note', () => {
+		const status = active({ cost: 0, kill_count: 0, costsMeasuredThrough: through });
+		expect(render('avg_cost_per_kill', status)).toEqual(EMPTY);
 	});
 });
 
@@ -359,8 +437,8 @@ describe('drift guard', () => {
 		expect(ALL_STAT_IDS).toEqual(Object.keys(STAT_DEFS));
 	});
 
-	it('ALL_STAT_IDS has length 20', () => {
-		expect(ALL_STAT_IDS).toHaveLength(20);
+	it('ALL_STAT_IDS has length 25', () => {
+		expect(ALL_STAT_IDS).toHaveLength(25);
 	});
 });
 
@@ -373,5 +451,445 @@ describe('uses_tree', () => {
 	it('shows the full label in customise and the compact label on tiles', () => {
 		expect(STAT_DEFS.uses_tree.label).toBe('Uses (Tree)');
 		expect(STAT_DEFS.uses_tree.shortLabel).toBe('Uses (T)');
+	});
+});
+
+describe('figures built on a cost with unpriced shots in it', () => {
+	const COST_BUILT: StatId[] = [
+		'cycled',
+		'net',
+		'rate',
+		'pes_per_100',
+		'avg_cost_per_kill',
+		'multiplier_last',
+		'multiplier_avg',
+		'multiplier_max',
+		'dpp',
+	];
+	const status = active({
+		cost: 10,
+		returns: 12,
+		pes: 1,
+		kill_count: 2,
+		multiplierLast: 1.2,
+		multiplierAvg: 1.1,
+		multiplierMax: 2,
+		weaponCost: 5,
+		weaponDamageDealt: 500,
+		damageDealtTotal: 500,
+		unpricedShots: 3,
+		unpricedCostBound: 0.6,
+	});
+
+	it('are marked incomplete, bounding what they leave out', () => {
+		for (const id of COST_BUILT) {
+			expect(render(id, status).incomplete, id).toBe('3 shots unpriced, up to +0.60 PED');
+		}
+		// No weapon fitted the shot: the count stands alone.
+		expect(render('cycled', active({ cost: 1, unpricedShots: 1 })).incomplete).toBe(
+			'1 shot unpriced',
+		);
+	});
+
+	it('leave everything else, and every figure of a fully priced session, unmarked', () => {
+		for (const id of ALL_STAT_IDS.filter((id) => !COST_BUILT.includes(id))) {
+			expect(render(id, status).incomplete, id).toBeUndefined();
+		}
+		for (const id of COST_BUILT) {
+			expect(render(id, { ...status, unpricedShots: 0 }).incomplete, id).toBeUndefined();
+		}
+	});
+
+	it('never mark an empty reading', () => {
+		expect(render('avg_cost_per_kill', active({ kill_count: 0, unpricedShots: 2 }))).toEqual(EMPTY);
+	});
+
+	it('mark the lifetime figures a family with unpriced shots adds up', () => {
+		const lifetime = { ...FAMILY, unpricedShots: 4 };
+		for (const id of ['cycled', 'net', 'rate', 'pes_per_100'] as StatId[]) {
+			expect(STAT_DEFS[id].renderLifetime(lifetime).incomplete, id).toBe('4 shots unpriced');
+		}
+		expect(STAT_DEFS.loot_tt.renderLifetime(lifetime).incomplete).toBeUndefined();
+		expect(STAT_DEFS.cycled.renderLifetime({ ...lifetime, instanceCount: 0 })).toEqual(EMPTY);
+	});
+});
+
+describe('the live markup stats', () => {
+	const valuation = {
+		sessionId: 's1',
+		items: [],
+		lootTt: 40,
+		marketValuePed: 42,
+		lootMuFactor: 42 / 40,
+		coverage: {
+			marketTt: 40,
+			manualTt: 0,
+			flooredTt: 0,
+			markedTt: 0,
+			shrapnelTt: 0,
+			noTtValuePed: 0,
+		},
+		confidence: 'liquidMiddling' as const,
+		reward: null,
+	};
+	const session = (fields: Partial<Record<keyof TrackingStatus, unknown>> = {}) =>
+		active({ session_id: 's1', cost: 50, ...fields });
+
+	it('reads Loot MU over loot TT and MU Rate over Cycled', () => {
+		expect(STAT_DEFS.loot_mu.render(session(), { valuation }).value).toBe('105.0%');
+		expect(STAT_DEFS.mu_rate.render(session(), { valuation }).value).toBe('84.0%');
+	});
+
+	it('reads empty without a valuation, or with one from another session', () => {
+		expect(STAT_DEFS.loot_mu.render(session())).toEqual(EMPTY);
+		expect(STAT_DEFS.mu_rate.render(session(), { valuation: null })).toEqual(EMPTY);
+		const stale = { ...valuation, sessionId: 's0' };
+		expect(STAT_DEFS.loot_mu.render(session(), { valuation: stale })).toEqual(EMPTY);
+	});
+
+	it('marks MU Rate incomplete while shots sit unpriced', () => {
+		const render = STAT_DEFS.mu_rate.render(session({ unpricedShots: 3 }), { valuation });
+		expect(render.incomplete).toBeTruthy();
+	});
+});
+
+describe('the expected MU rate', () => {
+	const valuation = {
+		sessionId: 's1',
+		items: [],
+		lootTt: 100,
+		marketValuePed: 108,
+		lootMuFactor: 1.08,
+		coverage: {
+			marketTt: 100,
+			manualTt: 0,
+			flooredTt: 0,
+			markedTt: 0,
+			shrapnelTt: 0,
+			noTtValuePed: 0,
+		},
+		confidence: 'liquidMiddling' as const,
+		reward: null,
+	};
+	const basis = (level: number, loot: number, low: number, high: number) => ({
+		looterLevel: level,
+		expectedLootTtPed: loot,
+		lowPed: low,
+		highPed: high,
+		modelledExpectedLootTtPed: loot - 9,
+	});
+	const cycle = {
+		modelVersion: 'community_v1',
+		cycledPed: 112,
+		modelledCostPed: 100,
+		unknownEfficiencyTtPed: 10,
+		lostPed: 2,
+		bases: {
+			threeLooterMean: basis(37, 99.835, 99.45, 100.15),
+			animal: basis(80, 103, 102.6, 103.3),
+			mutant: basis(10, 97, 96.6, 97.3),
+			robot: basis(20, 98, 97.6, 98.3),
+		},
+	};
+	const session = active({ session_id: 's1', cost: 112, expectedCycle: cycle });
+
+	it('values the expected loot at the loot markup, over Cycled, with its margin', () => {
+		const render = STAT_DEFS.expected_mu_rate.render(session, {
+			valuation,
+			looterBasis: 'three_looter_mean',
+		});
+		// 99.835 x 1.08 / 112 = 96.27%; the range halves to 0.34 points.
+		expect(render.value).toBe('96.3%');
+		expect(render.detail).toBe('±0.3');
+		expect(render.qualifier).toBe('mean');
+	});
+
+	it('reads the declared looter basis', () => {
+		const render = STAT_DEFS.expected_mu_rate.render(session, { valuation, looterBasis: 'animal' });
+		expect(render.value).toBe('99.3%');
+		expect(render.qualifier).toBe('A');
+	});
+
+	it('is over the session Cycled, exactly as before, without the account', () => {
+		const unread = active({ session_id: 's1', cost: 120, expectedCycle: cycle });
+		const render = STAT_DEFS.expected_mu_rate.render(unread, {
+			valuation,
+			looterBasis: 'three_looter_mean',
+		});
+		// 99.835 x 1.08 / 120.
+		expect(render.value).toBe('89.9%');
+	});
+
+	it('stays over the tracked Cycled it was modelled on when the account measures the costs', () => {
+		const measured = active({
+			session_id: 's1',
+			cost: 130,
+			expectedCycle: cycle,
+			costsMeasuredThrough: '2026-11-17T14:52:00+00:00',
+		});
+		const render = STAT_DEFS.expected_mu_rate.render(measured, {
+			valuation,
+			looterBasis: 'three_looter_mean',
+		});
+		expect(render.value).toBe('96.3%');
+		// Loot MU Rate is a measured return: over the live Cycled.
+		expect(STAT_DEFS.mu_rate.render(measured, { valuation }).value).toBe('83.1%');
+	});
+
+	it('reads empty before a modelled shot or without a markup', () => {
+		expect(
+			STAT_DEFS.expected_mu_rate.render(active({ session_id: 's1', cost: 5 }), { valuation }),
+		).toEqual(EMPTY);
+		expect(STAT_DEFS.expected_mu_rate.render(session, {})).toEqual(EMPTY);
+	});
+
+	it('adds the confirmed reward at market over Cycled, its margin untouched', () => {
+		const rewarded = {
+			...valuation,
+			reward: { lines: [], ttPed: 10.5, muPed: 11.2 },
+		};
+		const render = STAT_DEFS.expected_mu_rate.render(session, {
+			valuation: rewarded,
+			looterBasis: 'three_looter_mean',
+		});
+		// (99.835 x 1.08 + 11.2) / 112 = 106.27%.
+		expect(render.value).toBe('106.3%');
+		expect(render.detail).toBe('±0.3');
+		// Loot MU Rate stays the loot's own: 108 over 112.
+		expect(STAT_DEFS.mu_rate.render(session, { valuation: rewarded }).value).toBe('96.4%');
+	});
+});
+
+describe('the reward stats', () => {
+	const valuation = {
+		sessionId: 's1',
+		items: [],
+		lootTt: 100,
+		marketValuePed: 108,
+		lootMuFactor: 1.08,
+		coverage: {
+			marketTt: 100,
+			manualTt: 0,
+			flooredTt: 0,
+			markedTt: 0,
+			shrapnelTt: 0,
+			noTtValuePed: 0,
+		},
+		confidence: 'liquidMiddling' as const,
+		reward: {
+			lines: [
+				{
+					itemName: 'Universal Ammo',
+					quantity: 136177,
+					valuePed: 13.61,
+					accounting: 'liquid' as const,
+				},
+				{
+					itemName: 'Blazar Fragment',
+					quantity: 103,
+					valuePed: 0.001,
+					accounting: 'stock' as const,
+				},
+			],
+			ttPed: 13.611,
+			muPed: 14.32,
+		},
+	};
+	const session = active({ session_id: 's1', cost: 400 });
+
+	it('reads the reward at TT and at market once a hand-in has paid one', () => {
+		expect(STAT_DEFS.reward.render(session, { valuation }).value).toBe('13.61');
+		expect(STAT_DEFS.reward_mu.render(session, { valuation }).value).toBe('14.32');
+	});
+
+	it('reads empty until a hand-in, or for another session', () => {
+		const unpaid = { ...valuation, reward: null };
+		expect(STAT_DEFS.reward.render(session, { valuation: unpaid })).toEqual(EMPTY);
+		expect(STAT_DEFS.reward_mu.render(session, { valuation: unpaid })).toEqual(EMPTY);
+		const stale = { ...valuation, sessionId: 's0' };
+		expect(STAT_DEFS.reward.render(session, { valuation: stale })).toEqual(EMPTY);
+	});
+
+	it("reads the family's rewards on the lifetime side", () => {
+		const lifetimeValuation = { ...valuation, sessionId: '7' };
+		expect(STAT_DEFS.reward.renderLifetime(FAMILY, { lifetimeValuation }).value).toBe('13.61');
+		expect(STAT_DEFS.reward_mu.renderLifetime(FAMILY, { lifetimeValuation }).value).toBe('14.32');
+		expect(STAT_DEFS.reward.renderLifetime(FAMILY, {}).value).toBe(EMPTY.value);
+	});
+
+	it('names the loot-only markup figures as loot, keeping their stored ids', () => {
+		expect(STAT_DEFS.mu_rate.label).toBe('Loot MU Rate');
+		expect(ALL_STAT_IDS).toContain('mu_rate');
+		expect(ALL_STAT_IDS).toEqual(expect.arrayContaining(['reward', 'reward_mu']));
+	});
+});
+
+describe('lifetime forms', () => {
+	const value = (id: StatId, lifetime: LifetimeStats = FAMILY) =>
+		STAT_DEFS[id].renderLifetime(lifetime).value;
+
+	it('derives each ratio from the summed parts', () => {
+		expect(value('avg_cost_per_kill')).toBe('0.50');
+		expect(value('avg_damage')).toBe('72.00');
+		// 40,000 damage over 20,000 PEC.
+		expect(value('dpp')).toBe('2.00');
+		expect(value('avg_dps')).toBe('10.00');
+		expect(value('crit_rate')).toBe('2.5%');
+	});
+
+	it('reads the counts, extremes, and most recent kill as handed over', () => {
+		expect(value('kills_count')).toBe('500');
+		expect(value('globals_count')).toBe('3');
+		expect(value('hofs_count')).toBe('1');
+		expect(value('uses_tree')).toBe('12');
+		expect(value('max_damage')).toBe('151.50');
+		expect(value('latest_kill_loot')).toBe('2.50');
+		expect(value('multiplier_avg')).toBe('0.91x');
+		expect(value('multiplier_max')).toBe('45.5x');
+		expect(value('multiplier_last')).toBe('1.25x');
+		expect(value('pes_per_100')).toBe('16.00');
+	});
+
+	it('reads empty where the family has nothing to divide by', () => {
+		const idle = { ...FAMILY, kills: 0, weaponCost: 0, durationSeconds: 0, shotsFired: 0 };
+		for (const id of [
+			'avg_cost_per_kill',
+			'avg_damage',
+			'dpp',
+			'avg_dps',
+			'crit_rate',
+			'max_damage',
+		] as StatId[]) {
+			expect(value(id, idle)).toBe(EMPTY.value);
+		}
+	});
+
+	it('reads the multiplier stats empty when no kill has one', () => {
+		const costless = {
+			...FAMILY,
+			multiplierAvg: null,
+			multiplierMax: null,
+			multiplierLast: null,
+		};
+		for (const id of ['multiplier_avg', 'multiplier_max', 'multiplier_last'] as StatId[]) {
+			expect(value(id, costless)).toBe(EMPTY.value);
+		}
+	});
+
+	it('values the markup stats over the family, from the valuation it is handed', () => {
+		const lifetimeValuation = {
+			sessionId: '7',
+			items: [],
+			lootTt: 225,
+			marketValuePed: 234,
+			lootMuFactor: 1.04,
+			coverage: {
+				marketTt: 225,
+				manualTt: 0,
+				flooredTt: 0,
+				markedTt: 0,
+				shrapnelTt: 0,
+				noTtValuePed: 0,
+			},
+			confidence: 'all',
+			reward: null,
+		} as NonNullable<StatContext['lifetimeValuation']>;
+		const read = (id: StatId, context?: StatContext) =>
+			STAT_DEFS[id].renderLifetime(FAMILY, context).value;
+		expect(read('loot_mu', { lifetimeValuation })).toBe('104.0%');
+		// 234 market value over 250 cycled, whatever the instance reads.
+		expect(read('mu_rate', { lifetimeValuation })).toBe('93.6%');
+		// Absent until the family's loot has been valued.
+		expect(read('loot_mu')).toBe(EMPTY.value);
+		expect(read('mu_rate', { lifetimeValuation: null })).toBe(EMPTY.value);
+	});
+
+	describe('the expected MU rate', () => {
+		const span = (expected: number, low: number, high: number) => ({
+			expectedLootTtPed: expected,
+			lowPed: low,
+			highPed: high,
+		});
+		const expectedCycle = {
+			sessions: 2,
+			cycledPed: 100,
+			bases: {
+				threeLooterMean: span(95, 91, 99),
+				animal: span(96, 93, 99),
+				mutant: span(94, 91, 97),
+				robot: span(93, 90, 96),
+			},
+		};
+		const lifetimeValuation = { lootMuFactor: 1.05 } as NonNullable<
+			StatContext['lifetimeValuation']
+		>;
+		const read = (lifetime: LifetimeStats, context: StatContext = { lifetimeValuation }) =>
+			STAT_DEFS.expected_mu_rate.renderLifetime(lifetime, context);
+
+		it('reads the expected loot at market against the Cycled it covers', () => {
+			// 95 expected at 105%, over the 100 those sessions cycled, not the
+			// 250 the whole family did.
+			expect(read({ ...FAMILY, expectedCycle }).value).toBe('99.8%');
+			expect(read({ ...FAMILY, expectedCycle }).detail).toBe('±4.2');
+		});
+
+		it('reads at the looter basis the tile declares', () => {
+			const rendered = read(
+				{ ...FAMILY, expectedCycle },
+				{ lifetimeValuation, looterBasis: 'animal' },
+			);
+			expect(rendered.value).toBe('100.8%');
+			expect(rendered.qualifier).toBe('A');
+		});
+
+		it('says how much of the family it covers, only when that is not all of it', () => {
+			expect(read({ ...FAMILY, expectedCycle, instanceCount: 5 }).incomplete).toBe(
+				'Covers 2 of 5 sessions: earlier ones recorded no weapon evidence',
+			);
+			expect(read({ ...FAMILY, expectedCycle }).incomplete).toBeUndefined();
+		});
+
+		it('keeps both disclosures when shots also sit unpriced', () => {
+			const rendered = read({ ...FAMILY, expectedCycle, instanceCount: 5, unpricedShots: 4 });
+			expect(rendered.incomplete).toContain('4 shots unpriced');
+			expect(rendered.incomplete).toContain('Covers 2 of 5');
+		});
+
+		it('reads empty with no evidence, or before the loot is valued', () => {
+			expect(read(FAMILY).value).toBe(EMPTY.value);
+			expect(read({ ...FAMILY, expectedCycle }, {}).value).toBe(EMPTY.value);
+		});
+
+		it("adds the family's rewards as their own rate over its whole Cycled", () => {
+			const rewarded = {
+				lootMuFactor: 1.05,
+				reward: { lines: [], ttPed: 9, muPed: 10 },
+			} as unknown as NonNullable<StatContext['lifetimeValuation']>;
+			// 99.75% from the loot, plus 10 over the family's 250 cycled.
+			expect(read({ ...FAMILY, expectedCycle }, { lifetimeValuation: rewarded }).value).toBe(
+				'103.8%',
+			);
+		});
+	});
+
+	it('marks the cost-derived forms while shots sit unpriced', () => {
+		const unpriced = { ...FAMILY, unpricedShots: 3 };
+		for (const id of ['avg_cost_per_kill', 'dpp', 'multiplier_avg', 'pes_per_100'] as StatId[]) {
+			expect(STAT_DEFS[id].renderLifetime(unpriced).incomplete).toBeTruthy();
+		}
+		// Damage and kill counts cost nothing, so they stay unmarked.
+		for (const id of ['avg_damage', 'kills_count', 'crit_rate'] as StatId[]) {
+			expect(STAT_DEFS[id].renderLifetime(unpriced).incomplete).toBeUndefined();
+		}
+	});
+});
+
+describe('drawsLifetimeValuation', () => {
+	it('is true only while a markup stat is selected', () => {
+		expect(drawsLifetimeValuation([{ id: 'loot_mu', enabled: true }])).toBe(true);
+		expect(drawsLifetimeValuation([{ id: 'mu_rate', enabled: true }])).toBe(true);
+		expect(drawsLifetimeValuation([{ id: 'expected_mu_rate', enabled: true }])).toBe(true);
+		expect(drawsLifetimeValuation([{ id: 'loot_mu', enabled: false }])).toBe(false);
+		expect(drawsLifetimeValuation([{ id: 'net', enabled: true }])).toBe(false);
 	});
 });

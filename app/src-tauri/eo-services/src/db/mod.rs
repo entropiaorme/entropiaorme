@@ -167,6 +167,109 @@ pub struct Db {
     path: std::path::PathBuf,
 }
 
+/// The latest calibrated level per skill: the row with the greatest
+/// `scanned_at`, and among rows sharing that instant the greatest id.
+///
+/// This is the single definition of "the current level" over
+/// `skill_calibrations`. Rows are not guaranteed to arrive in time
+/// order (a scan recorded from an older screenshot after a newer one, a
+/// restored backup beside newer rows, a replayed chat log, a backfill),
+/// so the id is never a time order here: it only breaks a tie between
+/// rows written at the same instant. `source` narrows to one source's
+/// anchor (`Some("scan")` for the scan anchor); `skill_names` narrows to
+/// the named skills. Every consumer goes through this function so the
+/// reads cannot drift apart.
+pub fn latest_skill_levels(
+    conn: &rusqlite::Connection,
+    source: Option<&str>,
+    skill_names: Option<&[String]>,
+) -> rusqlite::Result<Vec<(String, f64)>> {
+    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    let mut latest_filters: Vec<String> = Vec::new();
+    if let Some(source) = &source {
+        params.push(source);
+        latest_filters.push("source = ?".to_string());
+    }
+    if let Some(names) = skill_names {
+        let placeholders = vec!["?"; names.len()].join(",");
+        latest_filters.push(format!("skill_name IN ({placeholders})"));
+        for name in names {
+            params.push(name);
+        }
+    }
+    let latest_where = if latest_filters.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", latest_filters.join(" AND "))
+    };
+    // The picking subquery joins on skill name, so only the source
+    // needs restating there; its parameter binds after the CTE's.
+    let pick_where = match &source {
+        Some(source) => {
+            params.push(source);
+            "WHERE s2.source = ?".to_string()
+        }
+        None => String::new(),
+    };
+    // id-order: tiebreak (the CTE has already narrowed each skill to its
+    // latest scanned_at; MAX(id) only separates rows sharing that instant).
+    let sql = format!(
+        "WITH latest_ts AS ( \
+             SELECT skill_name, MAX(scanned_at) AS ts \
+             FROM skill_calibrations {latest_where} \
+             GROUP BY skill_name \
+         ) \
+         SELECT skill_name, level FROM skill_calibrations \
+         WHERE id IN ( \
+             SELECT MAX(s2.id) FROM skill_calibrations s2 \
+             JOIN latest_ts m ON s2.skill_name = m.skill_name AND s2.scanned_at = m.ts \
+             {pick_where} \
+             GROUP BY s2.skill_name \
+         )"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mapped = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    })?;
+    mapped.collect()
+}
+
+/// Insert an equipment-library row, returning its generated id: the one
+/// insert every new library entry goes through, on its own or inside a
+/// caller's transaction.
+pub(crate) fn insert_equipment_row(
+    conn: &rusqlite::Connection,
+    name: &str,
+    item_type: &str,
+    catalog_id: Option<&str>,
+    properties_json: &str,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) \
+         VALUES (?, ?, ?, ?)",
+        rusqlite::params![name, item_type, catalog_id, properties_json],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Delete an equipment-library row inside the caller's transaction
+/// (nothing over a missing row). A sighting of a tool read off the screen
+/// that became this entry keeps its settlement but no longer points at it.
+pub(crate) fn delete_equipment_row(
+    tx: &rusqlite::Transaction<'_>,
+    item_id: i64,
+) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE tool_sightings SET equipment_id = NULL WHERE equipment_id = ?",
+        rusqlite::params![item_id],
+    )?;
+    tx.execute(
+        "DELETE FROM equipment_library WHERE id = ?",
+        rusqlite::params![item_id],
+    )?;
+    Ok(())
+}
+
 impl Db {
     /// Run a read closure on the synchronous core: whichever reader
     /// thread is free runs it to completion on its own connection,
@@ -463,13 +566,13 @@ impl Db {
     }
 
     /// The stored equipment library, oldest first:
-    /// `(id, name, item_type, properties_json)` per row.
+    /// `(id, name, item_type, properties_json, enabled)` per row.
     pub async fn equipment_library_rows(
         &self,
-    ) -> Result<Vec<(i64, String, String, String)>, DbError> {
+    ) -> Result<Vec<(i64, String, String, String, bool)>, DbError> {
         self.with_reader(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, name, item_type, properties_json FROM equipment_library \
+                "SELECT id, name, item_type, properties_json, enabled FROM equipment_library \
                  ORDER BY created_at",
             )?;
             let mapped = stmt.query_map([], |row| {
@@ -478,6 +581,7 @@ impl Db {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, bool>(4)?,
                 ))
             })?;
             Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -488,32 +592,14 @@ impl Db {
     /// The latest calibrated level per skill, by scan instant with the
     /// row id as the tiebreaker: believed-current when `source` is None,
     /// a single source's anchor otherwise (`source='scan'` for the scan
-    /// anchor).
+    /// anchor). The one read every consumer of "the current level" goes
+    /// through; see [`latest_skill_levels`].
     pub async fn latest_skill_calibrations(
         &self,
         source: Option<String>,
     ) -> Result<Vec<(String, f64)>, DbError> {
-        self.with_reader(move |conn| match source {
-            None => {
-                let mut stmt = conn.prepare(
-                    "WITH latest_ts AS (\n                        SELECT skill_name, MAX(scanned_at) AS ts\n                        FROM skill_calibrations\n                        GROUP BY skill_name\n                    )\n                    SELECT skill_name, level FROM skill_calibrations\n                    WHERE id IN (\n                        SELECT MAX(s2.id) FROM skill_calibrations s2\n                        JOIN latest_ts m ON s2.skill_name = m.skill_name AND s2.scanned_at = m.ts\n                        GROUP BY s2.skill_name\n                    )",
-                )?;
-                let mapped = stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-                })?;
-                Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
-            }
-            Some(source) => {
-                let mut stmt = conn.prepare(
-                    "WITH latest_ts AS (\n                        SELECT skill_name, MAX(scanned_at) AS ts\n                        FROM skill_calibrations\n                        WHERE source = ?\n                        GROUP BY skill_name\n                    )\n                    SELECT skill_name, level FROM skill_calibrations\n                    WHERE id IN (\n                        SELECT MAX(s2.id) FROM skill_calibrations s2\n                        JOIN latest_ts m ON s2.skill_name = m.skill_name AND s2.scanned_at = m.ts\n                        WHERE s2.source = ?\n                        GROUP BY s2.skill_name\n                    )",
-                )?;
-                let mapped = stmt.query_map(rusqlite::params![source, source], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-                })?;
-                Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
-            }
-        })
-        .await
+        self.with_reader(move |conn| Ok(latest_skill_levels(conn, source.as_deref(), None)?))
+            .await
     }
 
     /// Epoch timestamp of the most recent skill calibration, or None.
@@ -537,27 +623,29 @@ impl Db {
         properties_json: String,
     ) -> Result<i64, DbError> {
         self.with_writer(move |conn| {
-            conn.execute(
-                "INSERT INTO equipment_library (name, item_type, catalog_id, properties_json) \
-                 VALUES (?, ?, ?, ?)",
-                rusqlite::params![name, item_type, catalog_id, properties_json],
-            )?;
-            Ok(conn.last_insert_rowid())
+            Ok(insert_equipment_row(
+                conn,
+                &name,
+                &item_type,
+                catalog_id.as_deref(),
+                &properties_json,
+            )?)
         })
         .await
     }
 
     /// One equipment-library row by id:
-    /// `(id, name, item_type, properties_json)`, or None when absent.
+    /// `(id, name, item_type, properties_json, enabled)`, or None when
+    /// absent.
     pub async fn equipment_row(
         &self,
         item_id: i64,
-    ) -> Result<Option<(i64, String, String, String)>, DbError> {
+    ) -> Result<Option<(i64, String, String, String, bool)>, DbError> {
         self.with_reader(move |conn| {
             Ok(conn
                 .query_row(
-                    "SELECT id, name, item_type, properties_json FROM equipment_library \
-                     WHERE id = ?",
+                    "SELECT id, name, item_type, properties_json, enabled \
+                     FROM equipment_library WHERE id = ?",
                     rusqlite::params![item_id],
                     |row| {
                         Ok((
@@ -565,6 +653,7 @@ impl Db {
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
                             row.get::<_, String>(3)?,
+                            row.get::<_, bool>(4)?,
                         ))
                     },
                 )
@@ -634,13 +723,44 @@ impl Db {
         .await
     }
 
-    /// Delete a stored equipment row (idempotent over a missing row).
+    /// Turn a stored equipment row on or off in one statement, answering
+    /// the row as it now stands (`(id, name, item_type, properties_json,
+    /// enabled)`, as [`Self::equipment_row`] reads it), or None when absent.
+    /// Nothing else about the row changes.
+    pub async fn set_equipment_enabled(
+        &self,
+        item_id: i64,
+        enabled: bool,
+    ) -> Result<Option<(i64, String, String, String, bool)>, DbError> {
+        self.with_writer(move |conn| {
+            Ok(conn
+                .query_row(
+                    "UPDATE equipment_library SET enabled = ? WHERE id = ? \
+                     RETURNING id, name, item_type, properties_json, enabled",
+                    rusqlite::params![enabled, item_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, bool>(4)?,
+                        ))
+                    },
+                )
+                .optional()?)
+        })
+        .await
+    }
+
+    /// Delete a stored equipment row (idempotent over a missing row). A
+    /// sighting of a tool read off the screen that became this entry keeps
+    /// its settlement but no longer points at it.
     pub async fn delete_equipment(&self, item_id: i64) -> Result<(), DbError> {
         self.with_writer(move |conn| {
-            conn.execute(
-                "DELETE FROM equipment_library WHERE id = ?",
-                rusqlite::params![item_id],
-            )?;
+            let tx = conn.transaction()?;
+            delete_equipment_row(&tx, item_id)?;
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -814,6 +934,17 @@ fn upgrade_to_baseline(tx: &rusqlite::Transaction<'_>, version: i64) -> Result<(
         rusqlite::params![BASELINE_SCHEMA_VERSION.to_string()],
     )?;
     Ok(())
+}
+
+/// A private in-memory database with the whole migration chain applied,
+/// for the crate's own synchronous store tests.
+#[cfg(test)]
+pub(crate) fn migrated_in_memory() -> Result<rusqlite::Connection, DbError> {
+    let mut connection = rusqlite::Connection::open_in_memory()?;
+    // As the pool's connections run.
+    connection.pragma_update(None, "foreign_keys", false)?;
+    migrate::run(&mut connection)?;
+    Ok(connection)
 }
 
 /// The pre-mastery `codex_claims` shape (no `kind` / `attribute_name`), as an
@@ -1029,11 +1160,7 @@ fn snapshot_rows_sync(
         // (no caller input reaches this string).
         let sql = format!("{} ORDER BY {}", spec.query, spec.order_by.join(", "));
         let mut statement = connection.prepare(&sql)?;
-        let columns: Vec<String> = statement
-            .column_names()
-            .iter()
-            .map(|&name| name.to_string())
-            .collect();
+        let columns: Vec<String> = statement.column_names().map(str::to_string).collect();
         let json_rows = statement
             .query_map([], |row| Ok(row_to_json(row, &columns)))?
             .collect::<rusqlite::Result<Vec<Result<Value, DbError>>>>()?
@@ -1047,6 +1174,51 @@ fn snapshot_rows_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Deleting an equipment entry leaves a sighting that became it
+    /// settled as added, but pointing at nothing.
+    #[tokio::test]
+    async fn deleting_an_entry_unlinks_the_sighting_that_became_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = fresh_db(dir.path()).await;
+        db.insert_equipment_for_tests(7, "Rusty Rifle", "weapon", "{}")
+            .await
+            .unwrap();
+        db.insert_equipment_for_tests(8, "Opalo", "weapon", "{}")
+            .await
+            .unwrap();
+        db.with_writer(|conn| {
+            conn.execute_batch(
+                "INSERT INTO tracking_sessions (id, started_at, is_active) VALUES ('s', 1, 0);
+                 INSERT INTO tool_sightings (id, session_id, kind, endpoint, item_id, item_name,
+                     first_seen, last_seen, settled_kind, settled_at, equipment_id)
+                 VALUES ('a', 's', 'bundled', 'weapons', '9', 'Rusty Rifle', 1, 2, 'added', 3, 7),
+                        ('b', 's', 'bundled', 'weapons', '10', 'Opalo', 1, 2, 'added', 3, 8);",
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        db.delete_equipment(7).await.unwrap();
+        let rows: Vec<(String, Option<String>, Option<i64>)> = db
+            .with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, settled_kind, equipment_id FROM tool_sightings ORDER BY id",
+                )?;
+                let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            [
+                ("a".into(), Some("added".into()), None),
+                ("b".into(), Some("added".into()), Some(8)),
+            ]
+        );
+        assert_eq!(db.equipment_row(7).await.unwrap(), None);
+    }
 
     async fn fresh_db(dir: &std::path::Path) -> Db {
         Db::open(&dir.join("entropia_orme.db")).await.unwrap()
@@ -1281,67 +1453,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db = fresh_db(dir.path()).await;
 
-        let count = |kind: &'static str| {
+        let table_exists = |name: &'static str| {
             let db = db.clone();
             async move {
                 db.with_reader(move |connection| {
                     Ok(connection.query_row(
-                        "SELECT COUNT(*) FROM sqlite_master WHERE type = ?1 AND sql IS NOT NULL \
-                         AND name != '_sqlx_migrations' AND name NOT LIKE 'sqlite_%'",
-                        rusqlite::params![kind],
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                        rusqlite::params![name],
                         |row| row.get::<_, i64>(0),
                     )?)
                 })
                 .await
                 .unwrap()
+                    > 0
             }
         };
-        // The fresh backend schema at version 33 (23 declared tables;
-        // sqlite_sequence arrives automatically) plus the daily-rollup
-        // migration's three projection tables, the market migration's
-        // two feed tables, the harvest migration's two activity
-        // tables, the map-pins table, the named-map table, four navigation
-        // tables, the pin-configuration table, and the auction-sales
-        // migration's three tables (listings, conversions, movements), which
-        // also retired the harvest-stock overlay table it replaced;
-        // index migrations: 18 baseline
-        // + 4 analytical + the ledger date index + 2 market + 2 harvest
-        // + the pin planet index + 2 named-map indexes + 4 navigation indexes
-        // + 2 pin-configuration indexes + 2 harvest-yield indexes
-        // + 5 auction-sales indexes + the live-listing index the undone-entry
-        // migration adds + the session-interval migration's 3 interval
-        // tables (intervals, contexts, membership) with 7 indexes (2 on
-        // intervals, 1 on contexts, 1 on membership, and 3 on the event
-        // tables' new context stamp) + the quest-families migration's
-        // table and member index + the session-definitions migration's
-        // 2 tables (definitions, roster) with 2 indexes (roster
-        // definition, session definition stamp) + the hunting-provenance
-        // migration's species index on the rebuilt movement ledger
-        // + the loot item-name migration's 2 partial indexes + the
-        // session-rollup migration's 4 tables (kill, loot, and PES cells
-        // plus the settlement marker) with 4 indexes (session on each
-        // cell table, item on the loot cells) + the hunting-definition
-        // provenance index on the movement ledger + the quest reward
-        // provenance index + the context-loot and quest-reward-item
-        // tables with one index each + the private-sale and stock-removal
-        // tables with their three indexes + the central-inventory
-        // migration's 2 subject-and-state indexes
-        // + the typed-reward, durable-run, unit-price, and reward-review
-        // migrations' 6 tables and 5 indexes + the quest-run ownership
-        // migration's 2 one-to-one indexes and 2 reciprocal-pair triggers
-        // + the protection catalogue, loadout, observation, reconciliation,
-        // interval-snapshot, and defensive-evidence migration's 7 tables and
-        // 7 indexes + deferred protection settlement's 4 tables and 4 indexes
-        // + manual hand-in's 2 raw-clump tables and 5 source, journal, and
-        // waiting indexes + canonical quest rewards' 3 attribution,
-        // reversal, and cooldown tables with 3 indexes, plus 2 provenance
-        // indexes on the rebuilt movement ledger + healing attribution's 3
-        // activation, effect-window, and output tables with 3 session indexes
-        // + expected-hunting's offensive-evidence rollup table and 2 indexes
-        // = 80 tables, 103 indexes, 10 triggers.
-        assert_eq!(count("table").await, 80);
-        assert_eq!(count("index").await, 103);
-        assert_eq!(count("trigger").await, 10);
+        // A representative sample of the core tables a fresh migrated
+        // database must carry, spanning several migrations rather than
+        // pinning the exact schema surface.
+        for table in [
+            "tracking_sessions",
+            "kills",
+            "kill_loot_items",
+            "equipment_library",
+            "consumable_doses",
+        ] {
+            assert!(
+                table_exists(table).await,
+                "expected core table '{table}' in a fresh migrated database"
+            );
+        }
 
         let version = db
             .with_reader(|connection| {
@@ -1817,10 +1958,55 @@ mod tests {
         // 3 tables and 5 attribution and provenance indexes + healing
         // attribution's 3 activation, effect-window, and output tables with
         // 3 session indexes + expected-hunting's offensive-evidence rollup
-        // table and 2 indexes (only SQLite's own bookkeeping is excluded; the
+        // table and 2 indexes + session-grain protection costs' 2 indexes
+        // + healing corrections' table and 6 indexes + weapon attribution's
+        // 3 tables and 4 indexes + weapon effect windows' table and 2 indexes
+        // + consumable doses' table and 3 indexes + session weapon rollups'
+        // 3 tables and 2 indexes + curated quests' 2 catalogue-key indexes
+        // + the codex meta calibration table + session stats exclusion's
+        // derived-ledger source index + weapon correction batches' index
+        // + the market manual markups' 2 tables and 1 index
+        // + item conversions' 2 tables and 3 indexes
+        // + the ledger's session-attribution index
+        // + the listing field sources' table
+        // + kill mob detection's 2 tables and session index
+        // + kill mob routes' carried table and session index
+        // + tool sightings' 2 tables and 2 indexes
+        // + kill mob traces' table and session index
+        // + mob labels' table, and the kills named in review with their
+        //   session index
+        // + the screen look minutes' table
+        // + asset positions' purchases table and 2 indexes
+        // + strongbox openings' 2 tables and opened-on index
+        // + account readings' 3 tables and 2 reading indexes
+        // + the counted-kills view
+        // + account proposals' 2 tables and status index
+        // + account session costs' 3 tables
+        // + session cost resolutions' 2 tables
+        // + limited set pieces' 4 tables and 3 indexes
+        // + enhancer breaks' table and 2 indexes
+        // + the costs' gap ends table, gap verdicts table and the
+        //   remembered chat-log time base
+        // + the cost placements' table
+        // + the costs' top-up steps table and the resolution's weapon parts
+        // + a running session's costs measured so far
+        // + the stock records the readings made on their own, with their
+        //   item index, the steps looked at for them, and where history ends
+        // + stock of unknown origin recorded from an arrival
+        // + the stock reconciliation's draft, its applied reconciliations
+        //   with their lines, records and acknowledged records taken back,
+        //   and the records' index
+        // + the limited pieces' markups with their index, and a session's
+        //   armour billed piece by piece
+        // + the enhancer tiers' markups and their index
+        // + the listing outcomes the readings recorded, and their index
+        // + the steps billed between sessions, and their index
+        // + how far the player has seen what the account did
+        // + the view of the steps billed between sessions that stand
+        // (only SQLite's own bookkeeping is excluded; the
         // conformance comparison filters the ledger externally as its one
         // deliberate difference).
-        assert_eq!(master.len(), 194);
+        assert_eq!(master.len(), 311);
         let mut sorted = master.clone();
         sorted.sort();
         assert_eq!(master, sorted, "ordered by (type, name)");
@@ -2201,7 +2387,8 @@ mod tests {
             .unwrap();
         assert_eq!((first, second), (1, 2));
 
-        // equipment_row: the full four-tuple by id, None when absent.
+        // equipment_row: the full row by id, enabled from the start, None
+        // when absent.
         assert_eq!(
             db.equipment_row(first).await.unwrap(),
             Some((
@@ -2209,6 +2396,7 @@ mod tests {
                 "Opalo".into(),
                 "weapon".into(),
                 r#"{"weapon_entity":{}}"#.into(),
+                true,
             )),
         );
         assert_eq!(db.equipment_row(999).await.unwrap(), None);
@@ -2257,11 +2445,46 @@ mod tests {
                     1,
                     "Opalo".into(),
                     "weapon".into(),
-                    r#"{"weapon_entity":{}}"#.into()
+                    r#"{"weapon_entity":{}}"#.into(),
+                    true
                 ),
-                (2, "Healer".into(), "healing".into(), r#"{"tool":1}"#.into()),
+                (
+                    2,
+                    "Healer".into(),
+                    "healing".into(),
+                    r#"{"tool":1}"#.into(),
+                    true
+                ),
             ],
         );
+
+        // set_equipment_enabled turns one row off and on and nothing else,
+        // and reports a missing row.
+        let off = Some((
+            2,
+            "Healer".into(),
+            "healing".into(),
+            r#"{"tool":1}"#.into(),
+            false,
+        ));
+        assert_eq!(db.set_equipment_enabled(second, false).await.unwrap(), off);
+        assert_eq!(db.equipment_row(second).await.unwrap(), off);
+        assert_eq!(
+            db.equipment_row(first).await.unwrap().map(|row| row.4),
+            Some(true)
+        );
+        assert_eq!(
+            db.set_equipment_enabled(second, true)
+                .await
+                .unwrap()
+                .map(|row| row.4),
+            Some(true)
+        );
+        assert_eq!(
+            db.equipment_row(second).await.unwrap().map(|row| row.4),
+            Some(true)
+        );
+        assert_eq!(db.set_equipment_enabled(999, false).await.unwrap(), None);
 
         // update_equipment replaces name, catalogue binding and properties;
         // the item type is fixed.

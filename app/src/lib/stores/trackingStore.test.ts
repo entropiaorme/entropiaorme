@@ -122,7 +122,7 @@ describe('subscribeTracking', () => {
 
 		const onFrame = listen.mock.calls[0][1] as (event: unknown) => void;
 		// A frame is a pure trigger: the callback ignores the payload entirely,
-		// so a payload-less reconnect nudge re-reads instead of blanking.
+		// so a payload-less frame re-reads instead of blanking.
 		// Wait on the settled PUBLISHED VALUE, not the call count: the write
 		// happens a microtask after the read fires, so settling on the value is
 		// race-free.

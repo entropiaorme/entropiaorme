@@ -23,22 +23,43 @@
 	 * are all reversed, so it is a record rather than a state: it says what was
 	 * taken back, and offers nothing to do about it. Putting something back is
 	 * recording it again, not reviving this.
+	 *
+	 * An entry the account readings recorded on their own says so quietly
+	 * after its line, with when it happened on hover or focus. Its Undo is
+	 * the same as any other, and says that the readings will not record it
+	 * again.
+	 *
+	 * An entry a stock check recorded is undone only with the whole check:
+	 * its Undo offers that instead, naming what the check takes back.
 	 */
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { ActivityHistoryEntry } from '$lib/types/analytics';
-	import { formatLedgerDate, formatPed } from '$lib/utils/format';
+	import { derivedFromLabel } from '$lib/features/inventory/conversionDraft';
+	import { FROM_ACCOUNT_UNDO, fromAccountSentence } from '$lib/features/inventory/fromAccount';
+	import {
+		NO_TT_TITLE,
+		formatCount,
+		formatLedgerDate,
+		formatPed,
+		formatQuantity,
+		isZeroTt,
+		listNames,
+	} from '$lib/utils/format';
 
 	let {
 		entries,
 		loading,
 		onundo,
+		onundocheck,
 		embedded = false,
 	}: {
 		entries: ActivityHistoryEntry[];
 		loading: boolean;
 		onundo: (entry: ActivityHistoryEntry, revertSale: boolean) => Promise<void>;
+		/** Undo the stock check an entry was recorded by, as a whole. */
+		onundocheck?: (reconciliationId: string) => Promise<void>;
 		embedded?: boolean;
 	} = $props();
 
@@ -55,6 +76,7 @@
 		expired: 'Expired',
 		converted: 'Converted',
 		removed: 'Removed',
+		held: 'Added',
 	};
 
 	const STATUS_TONE: Record<string, string> = {
@@ -63,18 +85,75 @@
 		expired: 'text-text-tertiary',
 		converted: 'text-text-secondary',
 		removed: 'text-text-tertiary',
+		held: 'text-text-secondary',
 	};
 
 	/** What happened, in a line. The figures a row leads with are on the
 	 * right, so this says what was done to how much. */
 	function summary(entry: ActivityHistoryEntry): string {
+		// An item with no TT is told by its count alone; a TT of 0.00 says nothing.
+		const noTt = isZeroTt(entry.ttValue);
 		const tt = `${formatPed(entry.ttValue)} PED TT`;
-		if (entry.kind === 'conversion') return `${tt} into ${entry.targetItem ?? 'another item'}`;
-		if (entry.kind === 'removal') return `${entry.quantity} removed, ${tt}`;
-		if (entry.kind === 'trade') return `${entry.quantity} sold by trade, ${tt}`;
-		if (entry.status === 'sold') return `${entry.quantity} sold, ${tt}`;
-		if (entry.status === 'expired') return `${entry.quantity} returned, ${tt}`;
-		return `${entry.quantity} on auction, ${tt}`;
+		const withTt = noTt ? '' : `, ${tt}`;
+		const count = formatQuantity(entry.quantity);
+		if (entry.kind === 'conversion') {
+			if (entry.itemised) {
+				const used = entry.conversionLines
+					.filter((line) => line.side === 'input')
+					.map((line) => `${line.quantity} ${line.itemName}`)
+					.join(', ');
+				return `From ${used}`;
+			}
+			return `${noTt ? count : tt} into ${entry.targetItem ?? 'another item'}`;
+		}
+		const origin = derivedFromLabel(entry.derivedFrom);
+		const suffix = origin ? `, ${origin.charAt(0).toLowerCase()}${origin.slice(1)}` : '';
+		if (entry.kind === 'removal') return `${count} removed${withTt}`;
+		if (entry.kind === 'unknownOrigin') return `${count} held as stock of unknown origin${withTt}`;
+		if (entry.kind === 'trade') return `${count} sold by trade${withTt}${suffix}`;
+		if (entry.status === 'sold') return `${count} sold${withTt}${suffix}`;
+		if (entry.status === 'expired') return `${count} returned${withTt}`;
+		return `${count} on auction${withTt}`;
+	}
+
+	/** An itemised conversion leads with what it produced. */
+	function title(entry: ActivityHistoryEntry): string {
+		if (entry.kind !== 'conversion' || !entry.itemised) return entry.itemName;
+		const made = entry.conversionLines
+			.filter((line) => line.side === 'output')
+			.map((line) => line.itemName);
+		if (made.length === 0) return `${formatPed(entry.pedAmount ?? 0)} PED`;
+		return made.length === 1 ? made[0] : `${made[0]} and ${made.length - 1} more`;
+	}
+
+	/** The stock check an entry is undone with, when it is one's and the
+	 * check can be undone from here. */
+	function checkOf(entry: ActivityHistoryEntry): string | null {
+		return onundocheck && !entry.undone ? entry.reconciliationId : null;
+	}
+
+	/** What undoing a check takes back: what this list shows of it, and
+	 * whatever else it recorded that the list does not show. */
+	function checkSentence(reconciliationId: string): string {
+		const names = entries
+			.filter((row) => row.reconciliationId === reconciliationId && !row.undone)
+			.map((row) => `${title(row)} (${STATUS_LABEL[row.status]?.toLowerCase() ?? row.status})`);
+		const shown = names.length > 4 ? [...names.slice(0, 4), `${names.length - 4} more`] : names;
+		const listed = [...shown, 'anything else the check recorded'];
+		return `Part of a stock check: undo the check as a whole. It takes back ${listNames(listed)}.`;
+	}
+
+	async function undoCheck(entry: ActivityHistoryEntry, reconciliationId: string) {
+		if (busy || !onundocheck) return;
+		busy = entry.id;
+		try {
+			await onundocheck(reconciliationId);
+			confirming = null;
+		} catch {
+			// As for any undo: the reason is on the tab and the row stays open.
+		} finally {
+			busy = null;
+		}
 	}
 
 	function startConfirm(entry: ActivityHistoryEntry) {
@@ -110,6 +189,7 @@
 		<ul class="flex max-h-[32rem] flex-col overflow-y-auto px-5 py-2">
 			{#each entries as entry (entry.id)}
 				{@const isConfirming = confirming === entry.id}
+				{@const check = checkOf(entry)}
 				<li
 					class="border-b border-border/30 py-3 last:border-b-0
 						transition-colors duration-[var(--duration-base)]
@@ -128,9 +208,25 @@
 
 						<div class="min-w-0 flex-1">
 							<p class="truncate text-sm font-medium tracking-tight text-text">
-								{entry.itemName}
+								{title(entry)}
 							</p>
-							<p class="mt-0.5 truncate text-xs text-text-tertiary">{summary(entry)}</p>
+							<p class="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-xs text-text-tertiary">
+								<span class="truncate">{summary(entry)}</span>
+								{#if entry.recordedFromAccount}
+									{@const step = entry.recordedFromAccount}
+									<span class="shrink-0" data-testid="from-account">
+										<InfoTip label="Recorded from your account" align="left" width="w-64">
+											{#snippet trigger()}<span
+													class="underline decoration-dotted underline-offset-2 hover:text-text-secondary"
+													>from your account</span
+												>{/snippet}
+											<span class="block text-xs leading-relaxed text-text-secondary"
+												>{fromAccountSentence(step)}</span
+											>
+										</InfoTip>
+									</span>
+								{/if}
+							</p>
 						</div>
 
 						<div class="w-24 shrink-0 text-right">
@@ -140,6 +236,13 @@
 								</p>
 								<p class="mt-0.5 text-[0.625rem] uppercase tracking-wider text-text-tertiary">
 									Net markup
+								</p>
+							{:else if isZeroTt(entry.ttValue)}
+								<p class="text-sm tabular-nums text-text-tertiary" title={NO_TT_TITLE}>
+									{formatCount(entry.quantity)}
+								</p>
+								<p class="mt-0.5 text-[0.625rem] uppercase tracking-wider text-text-tertiary">
+									No TT
 								</p>
 							{:else}
 								<p class="text-sm tabular-nums text-text-tertiary">
@@ -162,6 +265,16 @@
 									says what the row is, it is not part of the record being
 									struck. -->
 								<span class="inline-block text-xs text-text-tertiary">Undone</span>
+							{:else if check}
+								<Button
+									variant="ghost"
+									size="sm"
+									aria-label="Undo the stock check"
+									loading={busy === entry.id}
+									onclick={() => startConfirm(entry)}
+								>
+									Undo
+								</Button>
 							{:else if !entry.canDelete && !entry.canRevertSale}
 								<span class="flex items-center gap-1 text-xs text-text-tertiary">
 									Held
@@ -187,11 +300,29 @@
 						</div>
 					</div>
 
-					{#if isConfirming}
+					{#if isConfirming && check}
+						<div class="mt-2 flex items-center justify-end gap-2">
+							<p class="mr-auto text-xs text-text-tertiary">{checkSentence(check)}</p>
+							<Button
+								variant="danger"
+								size="sm"
+								loading={busy === entry.id}
+								onclick={() => undoCheck(entry, check)}
+							>
+								Undo the check
+							</Button>
+							<Button variant="ghost" size="sm" onclick={() => (confirming = null)}>
+								Cancel
+							</Button>
+						</div>
+					{:else if isConfirming}
 						<!-- Under the row it belongs to, right-aligned on the action
 							column: the only place with room, and what is about to be
 							undone stays in front of the reader. -->
 						<div class="mt-2 flex items-center justify-end gap-2">
+							{#if entry.recordedFromAccount}
+								<p class="mr-auto text-xs text-text-tertiary">{FROM_ACCOUNT_UNDO}</p>
+							{/if}
 							{#if entry.canRevertSale}
 								<Button
 									variant="danger"

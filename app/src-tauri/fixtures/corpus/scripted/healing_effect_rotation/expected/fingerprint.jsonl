@@ -1,0 +1,45 @@
+{"payload": {"session_id": "<UUID_1>"}, "topic": "session_started"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_1>", "payload": {"reason": "started", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 40.0, "timestamp": "<TS_2>", "type": "damage_received"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_2>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_3>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.04, "equipment_id": 8, "healing_profile": {"base_reload_seconds": null, "direct_max": 32.0, "direct_min": 28.0, "effect_duration_seconds": 20.0, "effective_reload_seconds": null, "mode": "compound", "reload_speed_percent": null, "tick_max": 11.0, "tick_min": 9.0, "tick_seconds": 2.0}, "item_kind": "healing", "item_name": "Restoration Chip", "lifesteal_percent": null, "occurred_at": "<TS_4>", "reload_seconds": 10.0, "slot": "2"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_5>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 30.0, "timestamp": "<TS_6>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_6>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_7>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.05, "equipment_id": 2, "healing_profile": null, "item_kind": "weapon", "item_name": "Rifle", "lifesteal_percent": null, "occurred_at": "<TS_8>", "reload_seconds": 0.0, "slot": "1"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_9>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 10.0, "timestamp": "<TS_10>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_10>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_11>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.03, "equipment_id": 9, "healing_profile": {"base_reload_seconds": null, "direct_max": 100.0, "direct_min": 60.0, "effect_duration_seconds": null, "effective_reload_seconds": null, "mode": "direct", "reload_speed_percent": null, "tick_max": null, "tick_min": null, "tick_seconds": null}, "item_kind": "healing", "item_name": "FAP", "lifesteal_percent": null, "occurred_at": "<TS_12>", "reload_seconds": 3.0, "slot": "3"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_13>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 80.0, "timestamp": "<TS_14>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_14>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_15>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 10.0, "timestamp": "<TS_16>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_16>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_17>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 10.0, "timestamp": "<TS_18>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_18>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_19>", "payload": {"reason": "updated", "sessionId": "<UUID_1>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"session_id": "<UUID_2>"}, "topic": "session_started"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_20>", "payload": {"reason": "started", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 10.0, "timestamp": "<TS_21>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_21>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_22>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 10.0, "timestamp": "<TS_23>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_23>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_24>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.03, "equipment_id": 9, "healing_profile": {"base_reload_seconds": null, "direct_max": 100.0, "direct_min": 60.0, "effect_duration_seconds": null, "effective_reload_seconds": null, "mode": "direct", "reload_speed_percent": null, "tick_max": null, "tick_min": null, "tick_seconds": null}, "item_kind": "healing", "item_name": "FAP", "lifesteal_percent": null, "occurred_at": "<TS_25>", "reload_seconds": 3.0, "slot": "3"}, "topic": "hotbar_intent"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_26>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"amount": 80.0, "timestamp": "<TS_27>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_27>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_28>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"cost_per_use_ped": 0.03, "equipment_id": 9, "healing_profile": {"base_reload_seconds": null, "direct_max": 100.0, "direct_min": 60.0, "effect_duration_seconds": null, "effective_reload_seconds": null, "mode": "direct", "reload_speed_percent": null, "tick_max": null, "tick_min": null, "tick_seconds": null}, "item_kind": "healing", "item_name": "FAP", "lifesteal_percent": null, "occurred_at": "<TS_29>", "reload_seconds": 3.0, "slot": "3"}, "topic": "hotbar_intent"}
+{"payload": {"amount": 80.0, "timestamp": "<TS_30>", "type": "self_heal"}, "topic": "combat"}
+{"payload": {"timestamp": "<TS_30>"}, "topic": "tick_flushed"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_31>", "payload": {"reason": "updated", "sessionId": "<UUID_2>", "status": "active"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}
+{"payload": {"session_id": "<UUID_2>"}, "topic": "session_stopped"}
+{"payload": {"event_version": 1, "occurred_at": "<TS_32>", "payload": {"reason": "stopped", "sessionId": "<UUID_2>", "status": "idle"}, "type": "tracking.session.updated"}, "topic": "tracking.session.updated"}

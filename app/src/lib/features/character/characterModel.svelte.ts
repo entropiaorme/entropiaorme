@@ -1,51 +1,28 @@
 /**
  * Character-surface view model: calibration, stats, the skill and profession
- * tables, the shared data load, and the optimiser and prospect sub-models
- * composed over one page-level error slot. Presentation lives in the feature
+ * tables, the shared data load, and the skilling-hub sub-model. The stats
+ * surface reports into one page-level error slot; the skilling hub reports
+ * into per-facet slots of its own. Presentation lives in the feature
  * components; they compose over this state.
  */
 
 import {
 	getCalibrationStatus,
 	getCharacterProfessions,
-	getCharacterProspectOptions,
 	getCharacterSkills,
 	getCharacterStats,
 	showScanOverlay,
 } from '$lib/api';
-import {
-	characterDemoCalibration,
-	characterDemoProfessions,
-	characterDemoProspectOptions,
-	characterDemoSkills,
-	characterDemoStats,
-} from '$lib/guide/fixtures/character';
 import type { ProfessionLevel, SkillLevel, StatProfession } from '$lib/types/analytics';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
-import { createOptimizerModel, type PageErrorSlot } from './optimizerModel.svelte';
-import { createProspectModel } from './prospectModel.svelte';
-import { createRecommenderModel } from './recommenderModel.svelte';
+import { createErrorSlot } from './errorSlot.svelte';
+import { createSkillingModel } from './skillingModel.svelte';
 
 export const PAGE_SIZE = 12;
 
-function createErrorSlot(): PageErrorSlot {
-	let error = $state<string | null>(null);
-	return {
-		get error() {
-			return error;
-		},
-		set error(value: string | null) {
-			error = value;
-		},
-	};
-}
-
 export function createCharacterModel() {
 	const errors = createErrorSlot();
-	const optimizer = createOptimizerModel(errors);
-	const prospect = createProspectModel(optimizer, errors);
-	const recommender = createRecommenderModel(errors);
 
 	let calibration = $state({
 		calibrated: false,
@@ -56,6 +33,11 @@ export function createCharacterModel() {
 	let skills = $state([] as SkillLevel[]);
 	let professions = $state([] as ProfessionLevel[]);
 	let loading = $state(true);
+
+	const skilling = createSkillingModel({
+		professions: () => professions,
+		hp: () => stats.hp,
+	});
 
 	// ── Split attributes from regular skills ──
 	const attributes = $derived(skills.filter((s) => s.isAttribute));
@@ -76,30 +58,19 @@ export function createCharacterModel() {
 		initialSort: { key: 'level', dir: 'desc' },
 	});
 
-	async function loadCharacterData(guideMode: boolean) {
+	async function loadCharacterData() {
 		errors.error = null;
-		if (guideMode) {
-			calibration = characterDemoCalibration;
-			stats = characterDemoStats;
-			skills = characterDemoSkills.map((s) => ({ ...s }));
-			professions = characterDemoProfessions.map((p) => ({ ...p }));
-			prospect.options = characterDemoProspectOptions;
-			loading = false;
-			return;
-		}
 		try {
-			const [cal, st, sk, pr, po] = await Promise.all([
+			const [cal, st, sk, pr] = await Promise.all([
 				getCalibrationStatus(),
 				getCharacterStats(),
 				getCharacterSkills(),
 				getCharacterProfessions(),
-				getCharacterProspectOptions(),
 			]);
 			calibration = cal;
 			stats = st;
 			skills = sk;
 			professions = pr;
-			prospect.options = po;
 		} catch (e) {
 			errors.error = describeError(e, 'Failed to load character data');
 		} finally {
@@ -115,9 +86,7 @@ export function createCharacterModel() {
 	}
 
 	return {
-		optimizer,
-		prospect,
-		recommender,
+		skilling,
 		skillsTable,
 		professionsTable,
 

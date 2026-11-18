@@ -1,13 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The facade's behaviour is its mapping: which typed command, which
-// params/body shape, and (for the analytics-flavoured reads) the per-call
-// guide-mode demo dispatch. The typed-command transport is mocked out
+// params/body shape. The typed-command transport is mocked out
 // wholesale, so these tests pin the facade layer alone; client.ts has its own
 // suite. vi.hoisted: the module under test is imported statically, so the
 // vi.mock factories run before ordinary top-level consts initialise; these
 // seams must be hoisted alongside them.
-const { FakeApiError, guideState, tauriInvoke } = vi.hoisted(() => {
+const { FakeApiError, tauriInvoke } = vi.hoisted(() => {
 	class FakeApiError extends Error {
 		constructor(
 			public kind: string,
@@ -20,8 +19,6 @@ const { FakeApiError, guideState, tauriInvoke } = vi.hoisted(() => {
 	return {
 		tauriInvoke: vi.fn(),
 		FakeApiError,
-		// Mutable guide-state seam: tests flip isActive to drive demo dispatch.
-		guideState: { isActive: false },
 	};
 });
 
@@ -29,7 +26,9 @@ vi.mock('./client', () => ({
 	ApiError: FakeApiError,
 }));
 
-vi.mock('$lib/guide/state.svelte', () => ({ guideState }));
+// Startup readiness has its own suite; here the backend is already up, so
+// the transport dispatches straight through.
+vi.mock('./readiness.svelte', () => ({ whenSubstrateReady: () => Promise.resolve() }));
 
 // The typed-command transport under the generated bindings: the equipment
 // family invokes Tauri commands rather than the HTTP-shaped client.
@@ -42,14 +41,13 @@ import * as api from './index';
 const DATA = { marker: 'payload' } as const;
 
 beforeEach(() => {
-	guideState.isActive = false;
 	tauriInvoke.mockReset();
 	tauriInvoke.mockResolvedValue(DATA);
 });
 
 // The tracking family serves its live surface over typed IPC commands. The
 // session-scoped writes, lifecycle verbs, and mob/loot edits
-// decision are always commands (no demo branch); the camelCase call
+// decision are always commands; the camelCase call
 // arguments map to the snake_case invoke keys the generated bindings send.
 describe('tracking wrappers dispatch typed commands', () => {
 	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
@@ -78,6 +76,62 @@ describe('tracking wrappers dispatch typed commands', () => {
 			() => api.restoreSessionMob('s1', 'Atrox Mature'),
 			'tracking_restore_mob',
 			{ session_id: 's1', current_mob_name: 'Atrox Mature' },
+		],
+		[
+			'getMobDetections',
+			() => api.getMobDetections('s1'),
+			'tracking_mob_detections',
+			{ session_id: 's1' },
+		],
+		[
+			'settleMobDetection',
+			() =>
+				api.settleMobDetection(
+					's1',
+					{
+						kind: 'mob',
+						species: 'Gloomrat',
+						maturity: '',
+						provisionalKey: 'GLOOMRAT L4 #0',
+					},
+					{ kind: 'declared' },
+				),
+			'tracking_mob_detection_settle',
+			{
+				session_id: 's1',
+				mob: {
+					kind: 'mob',
+					species: 'Gloomrat',
+					maturity: '',
+					provisionalKey: 'GLOOMRAT L4 #0',
+				},
+				target: { kind: 'declared' },
+			},
+		],
+		['getDismissedTools', () => api.getDismissedTools(), 'equipment_dismissed_tools', {}],
+		[
+			'trackToolAgain',
+			() => api.trackToolAgain('Teleport Chip'),
+			'equipment_track_again',
+			{ name: 'Teleport Chip' },
+		],
+		[
+			'getToolSightings',
+			() => api.getToolSightings('s1'),
+			'tracking_tool_sightings',
+			{ session_id: 's1' },
+		],
+		[
+			'settleToolSighting',
+			() => api.settleToolSighting('s1', 't1', 'dismiss'),
+			'tracking_tool_sighting_settle',
+			{ session_id: 's1', sighting_id: 't1', action: 'dismiss' },
+		],
+		[
+			'undoToolSighting',
+			() => api.undoToolSighting('s1', 't1'),
+			'tracking_tool_sighting_undo',
+			{ session_id: 's1', sighting_id: 't1' },
 		],
 		['releaseMob', () => api.releaseMob(), 'tracking_release_mob', {}],
 		[
@@ -111,6 +165,12 @@ describe('tracking wrappers dispatch typed commands', () => {
 			{ session_id: 's1', cost: 1.25 },
 		],
 		[
+			'setSessionExclusion',
+			() => api.setSessionExclusion('s1', true, false, 'hotbar misread'),
+			'tracking_session_exclusion',
+			{ session_id: 's1', economy: true, progression: false, note: 'hotbar misread' },
+		],
+		[
 			'deleteSession',
 			() => api.deleteSession('s1'),
 			'tracking_session_delete',
@@ -122,6 +182,130 @@ describe('tracking wrappers dispatch typed commands', () => {
 		await call();
 		expect(tauriInvoke).toHaveBeenCalledTimes(1);
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);
+	});
+});
+
+describe('account wrappers dispatch typed commands', () => {
+	it.each([
+		['getAccountStatus', () => api.getAccountStatus(), 'account_status', {}],
+		['disconnectAccount', () => api.disconnectAccount(), 'account_disconnect', {}],
+		[
+			'getSessionMeasure',
+			() => api.getSessionMeasure('s1'),
+			'account_session_measure',
+			{ session_id: 's1' },
+		],
+		[
+			'getMeasuredSessions',
+			() => api.getMeasuredSessions(null, 20),
+			'account_measured_sessions',
+			{ cursor: null, limit: 20 },
+		],
+		['getMeasuredSummary', () => api.getMeasuredSummary(), 'account_measured_summary', {}],
+		['getProposals', () => api.getProposals('opening'), 'account_proposals', { kind: 'opening' }],
+		[
+			'claimProposals',
+			() => api.claimProposals({ ids: [3, 4] }),
+			'account_proposals_claim',
+			{ input: { ids: [3, 4] } },
+		],
+		[
+			'releaseProposals',
+			() => api.releaseProposals({ ids: [3] }),
+			'account_proposals_release',
+			{ input: { ids: [3] } },
+		],
+		[
+			'linkProposals',
+			() => api.linkProposals({ ids: [3, 4], recordId: 'run-1' }),
+			'account_proposals_link',
+			{ input: { ids: [3, 4], recordId: 'run-1' } },
+		],
+		[
+			'dismissProposal',
+			() => api.dismissProposal({ id: 3 }),
+			'account_proposal_dismiss',
+			{ input: { id: 3 } },
+		],
+		[
+			'getSessionMinutes',
+			() => api.getSessionMinutes('s1'),
+			'account_session_minutes',
+			{ session_id: 's1' },
+		],
+		[
+			'recordArrivalUnknownOrigin',
+			() => api.recordArrivalUnknownOrigin({ id: 7, retake: true }),
+			'account_arrival_unknown_origin',
+			{ input: { id: 7, retake: true } },
+		],
+		[
+			'undoArrivalUnknownOrigin',
+			() => api.undoArrivalUnknownOrigin({ id: 'r-1' }),
+			'account_arrival_unknown_origin_undo',
+			{ input: { id: 'r-1' } },
+		],
+		[
+			'unignoreArrival',
+			() => api.unignoreArrival({ id: 7 }),
+			'account_arrival_unignore',
+			{ input: { id: 7 } },
+		],
+		['beginAccountRun', () => api.beginAccountRun(), 'account_run_begin', {}],
+		['finishAccountRun', () => api.finishAccountRun(), 'account_run_done', {}],
+		['cancelAccountRun', () => api.cancelAccountRun(), 'account_run_cancel', {}],
+		[
+			'planStockReconciliation',
+			() => api.planStockReconciliation(),
+			'account_reconciliation_plan',
+			{},
+		],
+		[
+			'planStockReconciliationFromPaste',
+			() => api.planStockReconciliationFromPaste({ text: 'Name,Quantity' }),
+			'account_reconciliation_paste',
+			{ input: { text: 'Name,Quantity' } },
+		],
+		[
+			'getStockReconciliationDraft',
+			() => api.getStockReconciliationDraft(),
+			'account_reconciliation_draft',
+			{},
+		],
+		[
+			'reviseStockReconciliation',
+			() =>
+				api.reviseStockReconciliation({
+					draftId: 'd1',
+					revision: { kind: 'set', items: ['Shrapnel'], choice: 'leftAsIs' },
+				}),
+			'account_reconciliation_revise',
+			{
+				input: {
+					draftId: 'd1',
+					revision: { kind: 'set', items: ['Shrapnel'], choice: 'leftAsIs' },
+				},
+			},
+		],
+		[
+			'applyStockReconciliation',
+			() => api.applyStockReconciliation({ draftId: 'd1' }),
+			'account_reconciliation_apply',
+			{ input: { draftId: 'd1' } },
+		],
+		[
+			'undoStockReconciliation',
+			() => api.undoStockReconciliation({ id: 'r1' }),
+			'account_reconciliation_undo',
+			{ input: { id: 'r1' } },
+		],
+	] as const)('%s', async (_name, call, command, args) => {
+		await call();
+		expect(tauriInvoke).toHaveBeenCalledWith(command, args);
+	});
+
+	it('names the account topic in its colon form', () => {
+		expect(api.ACCOUNT_TOPIC).toBe('account:updated');
 	});
 });
 
@@ -143,65 +327,49 @@ describe('session definition lifecycle wrappers dispatch typed commands', () => 
 	});
 });
 
-// The three tracking reads with a guide-mode surface: the live command and the
-// guide-mode demo command share their DTOs. Guide mode dispatches the `demo_*`
-// command with the identical args.
-describe('guide-mode demo dispatch', () => {
-	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>, string][] = [
+// The three tracking reads: each dispatches its typed command with the
+// snake_case args.
+describe('tracking reads dispatch typed commands', () => {
+	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
 		[
 			'getTrackingSessions',
 			() => api.getTrackingSessions(),
 			'tracking_sessions',
 			{ cursor: null, limit: null, definition_id: null },
-			'demo_tracking_sessions',
 		],
 		[
 			'getSessionDetail',
 			() => api.getSessionDetail('s1'),
 			'tracking_session_detail',
 			{ session_id: 's1' },
-			'demo_tracking_session_detail',
+		],
+		['getTrackingSnapshot', () => api.getTrackingSnapshot(), 'tracking_snapshot', {}],
+		[
+			'getDefinitionLoot',
+			() => api.getDefinitionLoot(7),
+			'tracking_definition_loot',
+			{ definition_id: 7 },
 		],
 		[
-			'getTrackingSnapshot',
-			() => api.getTrackingSnapshot(),
-			'tracking_snapshot',
-			{},
-			'demo_tracking_snapshot',
+			'getDefinitionRewards',
+			() => api.getDefinitionRewards(7),
+			'tracking_definition_rewards',
+			{ definition_id: 7 },
 		],
 	];
 
-	it.each(
-		rows,
-	)('%s invokes the live command, or the demo command in guide mode', async (_name, call, command, args, demoCommand) => {
-		guideState.isActive = false;
+	it.each(rows)('%s invokes its command', async (_name, call, command, args) => {
 		await call();
 		expect(tauriInvoke).toHaveBeenCalledTimes(1);
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);
-
-		tauriInvoke.mockClear();
-		guideState.isActive = true;
-		await call();
-		expect(tauriInvoke).toHaveBeenCalledTimes(1);
-		expect(tauriInvoke).toHaveBeenCalledWith(demoCommand, args);
 	});
 });
 
-// The analytics family serves its live surface over typed IPC commands and
-// keeps a per-call demo branch (the guide-mode surface dispatches the parallel
-// `demo_*` command sharing the DTO): the reads dispatch a live command or a
-// demo command by guide state; the writes are always commands (no demo
-// branch).
+// The analytics family serves its surface over typed IPC commands.
 describe('analytics wrappers dispatch typed commands', () => {
-	it('getAnalyticsOverview invokes the live command, or the demo command in guide mode', async () => {
-		guideState.isActive = false;
+	it('getAnalyticsOverview forwards the selected period', async () => {
 		await api.getAnalyticsOverview('30d');
 		expect(tauriInvoke).toHaveBeenCalledWith('analytics_overview', { period: '30d' });
-
-		tauriInvoke.mockClear();
-		guideState.isActive = true;
-		await api.getAnalyticsOverview('30d');
-		expect(tauriInvoke).toHaveBeenCalledWith('demo_analytics_overview', { period: '30d' });
 	});
 
 	it('getAnalyticsOverview defaults the period to "all"', async () => {
@@ -236,15 +404,9 @@ describe('analytics wrappers dispatch typed commands', () => {
 		expect(page.nextCursor).toBeNull();
 	});
 
-	it('getLedgerSummary invokes the live command, or the demo command in guide mode', async () => {
-		guideState.isActive = false;
-		await api.getLedgerSummary('all');
-		expect(tauriInvoke).toHaveBeenCalledWith('ledger_summary', { period: 'all' });
-
-		tauriInvoke.mockClear();
-		guideState.isActive = true;
+	it('getLedgerSummary forwards the selected period', async () => {
 		await api.getLedgerSummary('30d');
-		expect(tauriInvoke).toHaveBeenCalledWith('demo_ledger_summary', { period: '30d' });
+		expect(tauriInvoke).toHaveBeenCalledWith('ledger_summary', { period: '30d' });
 	});
 
 	it('getLedgerPresets / getInventoryItems invoke their list commands live', async () => {
@@ -255,8 +417,7 @@ describe('analytics wrappers dispatch typed commands', () => {
 		expect(tauriInvoke).toHaveBeenCalledWith('inventory_list', {});
 	});
 
-	it('the write wrappers invoke their commands (no demo branch, even in guide mode)', async () => {
-		guideState.isActive = true;
+	it('the write wrappers invoke their commands', async () => {
 		const entry = { date: '2026-05-01', type: 'expense', description: 'ammo', amount: 1, tag: 't' };
 		await api.addLedgerEntry(entry as never);
 		expect(tauriInvoke).toHaveBeenCalledWith('ledger_create', { entry });
@@ -300,10 +461,27 @@ describe('equipment wrappers dispatch typed commands', () => {
 		expect(tauriInvoke).not.toHaveBeenCalled();
 	});
 
-	it('searchEquipmentItems invokes with q and kind from two characters', async () => {
-		tauriInvoke.mockResolvedValue([]);
-		await api.searchEquipmentItems('op', 'amp');
-		expect(tauriInvoke).toHaveBeenCalledWith('equipment_search', { q: 'op', kind: 'amp' });
+	it('searchEquipmentItems loads a vocabulary once and ranks its matches locally', async () => {
+		tauriInvoke.mockResolvedValue([
+			{ name: 'Omegaton A104 Scope' },
+			{ name: 'Omegaton A101 Scope' },
+			{ name: 'Sollomate Opalo' },
+		]);
+		await expect(api.searchEquipmentItems('a101 omegaton', 'scope')).resolves.toEqual([
+			{ name: 'Omegaton A101 Scope' },
+		]);
+		await expect(api.searchEquipmentItems('omegaton', 'scope')).resolves.toHaveLength(2);
+		expect(tauriInvoke).toHaveBeenCalledTimes(1);
+		expect(tauriInvoke).toHaveBeenCalledWith('equipment_catalogue', { kind: 'scope' });
+	});
+
+	it('searchEquipmentItems retries a catalogue whose load failed', async () => {
+		tauriInvoke.mockRejectedValueOnce(new Error('offline'));
+		await expect(api.searchEquipmentItems('drill', 'tool')).rejects.toThrow('offline');
+		tauriInvoke.mockResolvedValueOnce([{ name: 'Ziplex Drill' }]);
+		await expect(api.searchEquipmentItems('drill', 'tool')).resolves.toEqual([
+			{ name: 'Ziplex Drill' },
+		]);
 	});
 
 	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
@@ -319,6 +497,12 @@ describe('equipment wrappers dispatch typed commands', () => {
 			() => api.updateLibrary('7', { type: 'weapon' }),
 			'equipment_update',
 			{ item_id: 7, req: { type: 'weapon' } },
+		],
+		[
+			'setLibraryEnabled coerces the string id to a number',
+			() => api.setLibraryEnabled('7', false),
+			'equipment_set_enabled',
+			{ item_id: 7, enabled: false },
 		],
 		[
 			'removeFromLibrary coerces the string id to a number',
@@ -461,6 +645,14 @@ describe('codex wrappers dispatch typed commands', () => {
 			{ professions: [], target: 'profession' },
 		],
 		['getCodexMetaAttributes', () => api.getCodexMetaAttributes(), 'codex_meta_attributes', {}],
+		['getCodexMetaTargets', () => api.getCodexMetaTargets(), 'codex_meta_targets', {}],
+		['getCodexMetaProgress', () => api.getCodexMetaProgress(), 'codex_meta_progress', {}],
+		[
+			'calibrateCodexMeta',
+			() => api.calibrateCodexMeta(42),
+			'codex_meta_calibrate',
+			{ earned: 42 },
+		],
 		[
 			'claimCodexMeta',
 			() => api.claimCodexMeta('Strength'),
@@ -530,46 +722,39 @@ describe('quests wrappers dispatch typed commands', () => {
 });
 
 describe('suggestion lookups', () => {
-	it('getManualMobSuggestions short-circuits on blank input and trims the query', async () => {
-		await expect(api.getManualMobSuggestions('')).resolves.toEqual([]);
+	it('getManualMobSuggestions answers a blank query without loading the catalogue', async () => {
+		await expect(api.getManualMobSuggestions('  ')).resolves.toEqual([]);
 		expect(tauriInvoke).not.toHaveBeenCalled();
+	});
 
-		await api.getManualMobSuggestions(' atrox ');
-		expect(tauriInvoke).toHaveBeenCalledWith('tracking_manual_mob_suggestions', {
-			q: 'atrox',
-			limit: null,
-		});
+	it('getManualMobSuggestions matches the mob catalogue in any word order', async () => {
+		const young = { display: 'Young Atrox', species: 'Atrox', maturity: 'Young' };
+		const old = { display: 'Old Atrox', species: 'Atrox', maturity: 'Old' };
+		tauriInvoke.mockResolvedValue([old, young]);
+		await expect(api.getManualMobSuggestions(' atrox young ')).resolves.toEqual([young]);
+		expect(tauriInvoke).toHaveBeenCalledWith('tracking_mob_catalogue', {});
 	});
 });
 
-describe('manual-scan wrappers dispatch typed commands', () => {
+describe('skill-scan wrappers dispatch typed commands', () => {
 	const rows: [string, () => Promise<unknown>, string, Record<string, unknown>][] = [
-		['getManualSkillScanStatus', () => api.getManualSkillScanStatus(), 'scan_status', {}],
+		['getSkillScanStatus', () => api.getSkillScanStatus(), 'scan_status', {}],
+		['startSkillScan', () => api.startSkillScan(), 'scan_start', {}],
+		['cancelSkillScan', () => api.cancelSkillScan(), 'scan_cancel', {}],
 		[
-			'startManualSkillScan passes the page count',
-			() => api.startManualSkillScan(5),
-			'scan_start',
-			{ page_count: 5 },
+			'acceptSkillScan names the review and saves only what adds up',
+			() => api.acceptSkillScan(4),
+			'scan_accept',
+			{ scan: 4, save_anyway: false },
 		],
 		[
-			'startManualSkillScan defaults the page count to null',
-			() => api.startManualSkillScan(),
-			'scan_start',
-			{ page_count: null },
+			'acceptSkillScan saves figures that do not add up only when told',
+			() => api.acceptSkillScan(4, true),
+			'scan_accept',
+			{ scan: 4, save_anyway: true },
 		],
-		['captureManualSkillPage', () => api.captureManualSkillPage(), 'scan_capture', {}],
-		['cancelManualSkillScan', () => api.cancelManualSkillScan(), 'scan_cancel', {}],
-		['undoManualSkillCapture', () => api.undoManualSkillCapture(), 'scan_undo', {}],
-		['processManualSkillScan', () => api.processManualSkillScan(), 'scan_process', {}],
-		['acceptManualSkillScan', () => api.acceptManualSkillScan(), 'scan_accept', {}],
-		['rejectManualSkillScan', () => api.rejectManualSkillScan(), 'scan_reject', {}],
-		['getManualSkillScanPending', () => api.getManualSkillScanPending(), 'scan_pending', {}],
-		[
-			'setSpacebarCapture passes the enabled flag',
-			() => api.setSpacebarCapture(true),
-			'scan_spacebar_capture',
-			{ enabled: true },
-		],
+		['rejectSkillScan names the review', () => api.rejectSkillScan(4), 'scan_reject', { scan: 4 }],
+		['getSkillScanReview', () => api.getSkillScanReview(), 'scan_pending', {}],
 	];
 	it.each(rows)('%s', async (_name, call, command, args) => {
 		await call();
@@ -577,14 +762,24 @@ describe('manual-scan wrappers dispatch typed commands', () => {
 		expect(tauriInvoke).toHaveBeenCalledWith(command, args);
 	});
 
-	it('returns the held pending payload when present', async () => {
-		tauriInvoke.mockResolvedValue({ skills: { Anatomy: 12 } });
-		await expect(api.getManualSkillScanPending()).resolves.toEqual({ skills: { Anatomy: 12 } });
+	it('returns the held review when present', async () => {
+		const review = {
+			scan: 4,
+			skills: { Anatomy: 12 },
+			total: { check: 'matches' },
+			nearMisses: [],
+			guesses: [],
+			unknown: [],
+			unplaced: [],
+			repeated: [],
+		};
+		tauriInvoke.mockResolvedValue(review);
+		await expect(api.getSkillScanReview()).resolves.toEqual(review);
 	});
 
-	it('maps an absent pending result to null (the command returns null directly)', async () => {
+	it('maps an absent review to null (the command returns null directly)', async () => {
 		tauriInvoke.mockResolvedValue(null);
-		await expect(api.getManualSkillScanPending()).resolves.toBeNull();
+		await expect(api.getSkillScanReview()).resolves.toBeNull();
 	});
 });
 
@@ -594,18 +789,18 @@ describe('character wrappers dispatch typed commands', () => {
 		['getCharacterStats', () => api.getCharacterStats(), 'character_stats', {}],
 		['getCharacterSkills', () => api.getCharacterSkills(), 'character_skills', {}],
 		['getCharacterProfessions', () => api.getCharacterProfessions(), 'character_professions', {}],
+		['getHpOptimizer', () => api.getHpOptimizer(150), 'character_hp_optimizer', { target_hp: 150 }],
 		[
-			'getProfessionOptimizer',
-			() => api.getProfessionOptimizer('Sniper (Hit)'),
-			'character_profession_optimizer',
-			{ profession: 'Sniper (Hit)' },
+			'getActivityRecommender',
+			() => api.getActivityRecommender({ target: 'hp', professions: [] }),
+			'character_activity_recommender',
+			{ query: { target: 'hp', professions: [] } },
 		],
-		['getHpOptimizer', () => api.getHpOptimizer(), 'character_hp_optimizer', {}],
 		[
-			'getCharacterProspectOptions',
-			() => api.getCharacterProspectOptions(),
-			'character_prospect_options',
-			{},
+			'getSkillingForecast',
+			() => api.getSkillingForecast({ target: 'profession', professions: ['Evader'], goal: 30 }),
+			'character_skilling_forecast',
+			{ query: { target: 'profession', professions: ['Evader'], goal: 30 } },
 		],
 	];
 	it.each(rows)('%s', async (_name, call, command, args) => {
@@ -625,92 +820,20 @@ describe('character wrappers dispatch typed commands', () => {
 
 describe('getProfessionPathOptimizer dispatches the typed command', () => {
 	it('maps a targetLevel goal onto the target_level argument, ped_budget null', async () => {
-		await api.getProfessionPathOptimizer('Sniper (Hit)', { targetLevel: 40 });
+		await api.getProfessionPathOptimizer(['Sniper (Hit)'], { targetLevel: 40 });
 		expect(tauriInvoke).toHaveBeenCalledWith('character_path_optimizer', {
-			profession: 'Sniper (Hit)',
+			professions: ['Sniper (Hit)'],
 			target_level: 40,
 			ped_budget: null,
 		});
 	});
 
 	it('maps a pedBudget goal onto the ped_budget argument, target_level null', async () => {
-		await api.getProfessionPathOptimizer('Sniper (Hit)', { pedBudget: 250 });
+		await api.getProfessionPathOptimizer(['Sniper (Hit)', 'Sniper (Dmg)'], { pedBudget: 250 });
 		expect(tauriInvoke).toHaveBeenCalledWith('character_path_optimizer', {
-			profession: 'Sniper (Hit)',
+			professions: ['Sniper (Hit)', 'Sniper (Dmg)'],
 			target_level: null,
 			ped_budget: 250,
-		});
-	});
-});
-
-describe('getCharacterProspect dispatches the typed command', () => {
-	it('omits sliceValue for the global slice even when one is supplied', async () => {
-		await api.getCharacterProspect({
-			profession: 'Sniper (Hit)',
-			targetLevel: 40,
-			sliceType: 'global',
-			sliceValue: 'ignored',
-		});
-		expect(tauriInvoke).toHaveBeenCalledWith('character_prospect', {
-			query: { profession: 'Sniper (Hit)', targetLevel: 40, sliceType: 'global' },
-		});
-	});
-
-	it('omits sliceValue when it is absent on a non-global slice', async () => {
-		await api.getCharacterProspect({
-			profession: 'Sniper (Hit)',
-			targetLevel: 40,
-			sliceType: 'mob',
-			sliceValue: null,
-		});
-		expect(tauriInvoke).toHaveBeenCalledWith('character_prospect', {
-			query: { profession: 'Sniper (Hit)', targetLevel: 40, sliceType: 'mob' },
-		});
-	});
-
-	it('passes sliceValue for a non-global slice', async () => {
-		await api.getCharacterProspect({
-			profession: 'Sniper (Hit)',
-			targetLevel: 40,
-			sliceType: 'mob',
-			sliceValue: 'Atrox',
-		});
-		expect(tauriInvoke).toHaveBeenCalledWith('character_prospect', {
-			query: {
-				profession: 'Sniper (Hit)',
-				targetLevel: 40,
-				sliceType: 'mob',
-				sliceValue: 'Atrox',
-			},
-		});
-	});
-
-	it('includes markupUplift only when strictly positive', async () => {
-		await api.getCharacterProspect({
-			profession: 'Sniper (Hit)',
-			targetLevel: 40,
-			sliceType: 'global',
-			markupUplift: 0,
-		});
-		expect(tauriInvoke.mock.calls[0][1]).toEqual({
-			query: { profession: 'Sniper (Hit)', targetLevel: 40, sliceType: 'global' },
-		});
-
-		tauriInvoke.mockClear();
-		tauriInvoke.mockResolvedValue(DATA);
-		await api.getCharacterProspect({
-			profession: 'Sniper (Hit)',
-			targetLevel: 40,
-			sliceType: 'global',
-			markupUplift: 1.05,
-		});
-		expect(tauriInvoke.mock.calls[0][1]).toEqual({
-			query: {
-				profession: 'Sniper (Hit)',
-				targetLevel: 40,
-				sliceType: 'global',
-				markupUplift: 1.05,
-			},
 		});
 	});
 });
@@ -719,8 +842,10 @@ describe('re-exported client and shell surface', () => {
 	it('forwards ApiError from ./client and the shell window commands from ./shell', async () => {
 		expect(api.ApiError).toBe(FakeApiError);
 		tauriInvoke.mockResolvedValue('aGVsbG8=');
-		expect(await api.manualSkillScanCapturePng(2)).toBe('data:image/png;base64,aGVsbG8=');
-		expect(tauriInvoke).toHaveBeenCalledWith('capture_png', { page: 2 });
+		expect(await api.planetMapImage('Calypso', 'image/jpeg')).toBe(
+			'data:image/jpeg;base64,aGVsbG8=',
+		);
+		expect(tauriInvoke).toHaveBeenCalledWith('planet_map_image', { planet: 'Calypso' });
 		await api.toggleOverlay();
 		expect(tauriInvoke).toHaveBeenCalledWith('toggle_overlay');
 		await api.toggleCartographyOverlay();

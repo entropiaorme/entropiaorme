@@ -7,13 +7,7 @@
 	import { getPreference } from '$lib/preferences';
 	import { markNewsOptInSeen, NEWS_PREFERENCE_KEYS, setNewsOptIn } from '$lib/news.svelte';
 	import { AUTO_UPDATE_PREFERENCE_KEY, setAutoUpdateEnabled } from '$lib/updater.svelte';
-	import {
-		MARKET_DATA_PREFERENCE_KEYS,
-		markMarketDataOptInSeen,
-		setMarketDataOptIn,
-	} from '$lib/marketData.svelte';
 	import { refreshNews } from '$lib/newsFetch';
-	import { fetchMarketSnapshot } from '$lib/marketDataFetch';
 	import NetworkingStep from '../NetworkingStep.svelte';
 
 	// Re-prompt for users who onboarded before these features existed. Default ON
@@ -22,17 +16,14 @@
 	// existing opt-out back on.
 	let newsOptedIn = $state(true);
 	let autoUpdateOptedIn = $state(true);
-	let marketDataOptedIn = $state(true);
 
 	onMount(async () => {
-		const [savedNews, savedAuto, savedMarket] = await Promise.all([
+		const [savedNews, savedAuto] = await Promise.all([
 			getPreference<boolean | null>(NEWS_PREFERENCE_KEYS.optIn, null),
 			getPreference<boolean | null>(AUTO_UPDATE_PREFERENCE_KEY, null),
-			getPreference<boolean | null>(MARKET_DATA_PREFERENCE_KEYS.fetchOptIn, null),
 		]);
 		newsOptedIn = savedNews ?? true;
 		autoUpdateOptedIn = savedAuto ?? true;
-		marketDataOptedIn = savedMarket ?? true;
 	});
 	let exiting = $state(false);
 
@@ -41,13 +32,8 @@
 		await markNewsOptInSeen();
 		await setNewsOptIn(newsOptedIn);
 		await setAutoUpdateEnabled(autoUpdateOptedIn);
-		await markMarketDataOptInSeen();
-		await setMarketDataOptIn(marketDataOptedIn);
 		if (newsOptedIn) {
 			void refreshNews();
-		}
-		if (marketDataOptedIn) {
-			void fetchMarketSnapshot();
 		}
 		if (typeof sessionStorage !== 'undefined') {
 			sessionStorage.setItem('welcome_just_finished', '1');
@@ -81,11 +67,7 @@
 			out:fade={{ duration: 160 }}
 		>
 			<div class="reprompt-eyebrow eyebrow">Online features</div>
-			<NetworkingStep
-					bind:news={newsOptedIn}
-					bind:autoUpdate={autoUpdateOptedIn}
-					bind:marketData={marketDataOptedIn}
-				/>
+			<NetworkingStep bind:news={newsOptedIn} bind:autoUpdate={autoUpdateOptedIn} />
 		</section>
 	</main>
 

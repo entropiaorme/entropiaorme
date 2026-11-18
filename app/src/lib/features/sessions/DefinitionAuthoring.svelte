@@ -6,7 +6,6 @@
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import Select from '$lib/components/Select.svelte';
 	import Toggle from '$lib/components/Toggle.svelte';
-	import { inDevelopment } from '$lib/inDevelopment';
 	import { shouldSettleInstantly } from '$lib/motion/testMotion';
 	import type {
 		DefinitionsModel,
@@ -94,7 +93,8 @@
 		if (model.mode === 'closed') return;
 		void model.editingId;
 		untrack(() => {
-			activitiesOpen = model.roster.length > 0 || model.adHocSegments;
+			activitiesOpen =
+				model.roster.length > 0 || model.adHocSegments || model.questPlanet !== null;
 			unfolded = new Set();
 		});
 		const previouslyFocused =
@@ -151,45 +151,6 @@
 				disabled={model.saving}
 			/>
 
-			<div class="border-y border-border/60 py-4">
-				<div class="flex items-start justify-between gap-6">
-					<div>
-						<p class="text-sm font-medium text-text">Armour costs</p>
-						<p class="mt-1 max-w-lg text-sm leading-6 text-text-secondary">
-							Track armour decay as part of this session's cost.
-						</p>
-					</div>
-					<Toggle
-						checked={model.trackProtectionCosts}
-						label="Track armour costs"
-						disabled={model.saving}
-						onchange={(checked) => (model.trackProtectionCosts = checked)}
-					/>
-				</div>
-
-				<!-- Segment attribution needs composed armour setups, which live on the
-					 same channel-gated surface; the choice follows what it drives. -->
-				{#if inDevelopment.visible}
-					<div
-						class="mt-4 ml-4 flex items-start justify-between gap-6 border-l border-border/60 pl-4 pt-4
-							{model.trackProtectionCosts ? '' : 'opacity-45'}"
-					>
-						<div>
-							<p class="text-sm font-medium text-text">Armour costs by segment</p>
-							<p class="mt-1 max-w-lg text-sm leading-6 text-text-secondary">
-								Show armour selectors while tracking and attribute measured cost between activity segments.
-							</p>
-						</div>
-						<Toggle
-							checked={model.trackProtectionBySegment}
-							label="Track armour costs by segment"
-							disabled={model.saving || !model.trackProtectionCosts}
-							onchange={(checked) => (model.trackProtectionBySegment = checked)}
-						/>
-					</div>
-				{/if}
-			</div>
-
 			<!-- Activities: the roster and its on-the-fly option, folded away
 				 behind one disclosure. What is authored here is what the
 				 overlay's Activities control offers while the session runs. -->
@@ -214,17 +175,48 @@
 							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
 						</svg>
 						<span class="text-sm font-semibold text-text">Activities</span>
-						{#if model.roster.length > 0}
-							<span class="text-sm text-text-secondary tabular-nums">{model.roster.length}</span>
+						{#if model.questPlanet}
+							<span class="text-sm text-text-secondary">{model.questPlanet} quests</span>
+						{:else if model.visibleRoster.length > 0}
+							<span class="text-sm text-text-secondary tabular-nums">{model.visibleRoster.length}</span>
 						{/if}
 					</button>
 				</div>
 
 				{#if activitiesOpen}
 					<div id="session-activities" class="flex flex-col gap-3 border-t border-border/50 p-4">
-						{#if model.roster.length > 0}
+						<!-- Quests: follow a planet (the overlay offers its slots,
+							 runs and received missions) or hand-pick them. -->
+						{#if model.questPlanets.length > 0}
+							<div class="flex items-start justify-between gap-6 border-b border-border/50 pb-3">
+								<div class="flex flex-col gap-0.5">
+									<label for="session-quest-planet" class="text-sm text-text">Quests</label>
+									<span class="text-sm text-text-secondary leading-relaxed max-w-sm">
+										{#if model.questPlanet}
+											The overlay offers {model.questPlanet}'s daily slots and runs, and any
+											mission you have picked up there.
+										{:else}
+											Follow a planet to offer its quests as you play, or hand-pick them below.
+										{/if}
+									</span>
+								</div>
+								<Select
+									id="session-quest-planet"
+									class="max-w-[12rem] shrink-0"
+									bind:value={model.questPlanet}
+									disabled={model.saving}
+								>
+									<option value={null}>Hand-picked</option>
+									{#each model.questPlanets as option (option)}
+										<option value={option}>{option}</option>
+									{/each}
+								</Select>
+							</div>
+						{/if}
+
+						{#if model.visibleRoster.length > 0}
 							<ul class="flex flex-col gap-1">
-								{#each model.roster as entry, i (entry.key)}
+								{#each model.visibleRoster as entry (entry.key)}
 									<li
 										class="flex items-center gap-2 rounded-md border border-border/60 bg-base/40 px-3 py-2"
 									>
@@ -242,7 +234,7 @@
 											aria-label="Remove from the session"
 											title="Remove"
 											disabled={model.saving}
-											onclick={() => model.removeEntry(i)}
+											onclick={() => model.removeEntryByKey(entry.key)}
 										>&times;</button>
 									</li>
 								{/each}
@@ -253,7 +245,9 @@
 							 what that planet offers appears, as a list rather than a
 							 field of chips. Depth is carried by indentation, weight and
 							 hairlines; nothing here is boxed. -->
-						{#if model.catalogPlanets.length > 0}
+						{#if model.questPlanet !== null}
+							<!-- A planet-following session hand-picks nothing. -->
+						{:else if model.catalogPlanets.length > 0}
 							<div class="flex items-center gap-2">
 								<label for="session-activity-planet" class="eyebrow-strong shrink-0">Planet</label>
 								<Select
@@ -270,11 +264,11 @@
 							</div>
 						{:else if !model.sourcesLoading}
 							<p class="text-sm text-text-secondary px-1">
-								No quests or quest families yet; they are authored on the Quests page.
+								No quests yet; add your own from the Quests board on the dashboard.
 							</p>
 						{/if}
 
-						{#if model.catalogPlanet !== null}
+						{#if model.questPlanet === null && model.catalogPlanet !== null}
 							<SearchInput
 								bind:value={model.catalogFilter}
 								placeholder="Filter {model.catalogPlanet}..."
@@ -399,7 +393,7 @@
 								<p class="text-sm text-text-secondary px-1">
 									{filtering
 										? 'Nothing matches the filter.'
-										: `Nothing on ${model.catalogPlanet} yet; quests are authored on the Quests page.`}
+										: `Nothing on ${model.catalogPlanet} yet; add your own from the Quests board on the dashboard.`}
 								</p>
 							{/if}
 						{/if}

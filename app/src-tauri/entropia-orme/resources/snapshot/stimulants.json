@@ -1,458 +1,2098 @@
 [
   {
     "id": "e409b5210482",
-    "name": "H-DNA"
+    "name": "H-DNA",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Resurrection",
+        "strength": null,
+        "unit": null,
+        "duration_seconds": null
+      }
+    ]
   },
   {
     "id": "b5f5214e2a1b",
-    "name": "Nanobots - Accuracy"
+    "name": "Nanobots - Accuracy",
+    "economy": {
+      "max_tt": 4
+    },
+    "effects": [
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "73f99a215803",
-    "name": "Nanobots - Adrenaline Boost"
+    "name": "Nanobots - Adrenaline Boost",
+    "economy": {
+      "max_tt": 3
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "d976829b66aa",
-    "name": "Nanobots - Kill Strike"
+    "name": "Nanobots - Kill Strike",
+    "economy": {
+      "max_tt": 3
+    },
+    "effects": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "8a567badf2fd",
-    "name": "Nanobots - Memory Enhancer"
+    "name": "Nanobots - Memory Enhancer",
+    "economy": {
+      "max_tt": 3
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 3,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "54a91e985d64",
-    "name": "Nanobots - Metabolic Boost"
+    "name": "Nanobots - Metabolic Boost",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 3,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "645536cf5cc5",
-    "name": "Nanobots - Regenerative"
+    "name": "Nanobots - Regenerative",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "0bb52a987937",
-    "name": "Nanobots - Resilience"
+    "name": "Nanobots - Resilience",
+    "economy": {
+      "max_tt": 3
+    },
+    "effects": [
+      {
+        "name": "Health Added",
+        "strength": 5,
+        "unit": "HP",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "0ffcf4bf08db",
-    "name": "Nanobots - System Overload"
+    "name": "Nanobots - System Overload",
+    "economy": {
+      "max_tt": 6
+    },
+    "effects": [
+      {
+        "name": "Healing Decreased",
+        "strength": 90,
+        "unit": "%",
+        "duration_seconds": 34
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 33,
+        "unit": "%",
+        "duration_seconds": 24
+      },
+      {
+        "name": "Skill Gain Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 24
+      },
+      {
+        "name": "Critical Damage Added",
+        "strength": 25,
+        "unit": "%",
+        "duration_seconds": 24
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 6,
+        "unit": "%",
+        "duration_seconds": 36
+      },
+      {
+        "name": "Regeneration Decreased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 120
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 24
+      }
+    ]
   },
   {
     "id": "d6bdf2a6acea",
-    "name": "AccuStim 5mg"
+    "name": "AccuStim 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Critical Chance Added",
+        "strength": 2,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "d7b1db0805c9",
-    "name": "AccuStim 15mg"
+    "name": "AccuStim 15mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Critical Chance Added",
+        "strength": 4,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "3540fe3f6808",
-    "name": "AccuStim, FEN Edition"
+    "name": "AccuStim, FEN Edition",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Critical Chance Added",
+        "strength": 4,
+        "unit": "%",
+        "duration_seconds": 5400
+      }
+    ]
   },
   {
     "id": "ce9f14ff3dc1",
-    "name": "DevaStim 5mg"
+    "name": "DevaStim 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "3d49b054f6de",
-    "name": "DevaStim 15mg"
+    "name": "DevaStim 15mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "4945012d6edb",
-    "name": "DevaStim, FEN Edition"
+    "name": "DevaStim, FEN Edition",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 60,
+        "unit": "%",
+        "duration_seconds": 5400
+      }
+    ]
   },
   {
     "id": "d1fb2b8e5636",
-    "name": "HyperStim 5mg"
+    "name": "HyperStim 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 5,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 5,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "c01690805b8e",
-    "name": "HyperStim 15mg"
+    "name": "HyperStim 15mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 15,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 15,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "faf5ed5442cd",
-    "name": "HyperStim, FEN Edition"
+    "name": "HyperStim, FEN Edition",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 15,
+        "unit": "%",
+        "duration_seconds": 5400
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 15,
+        "unit": "%",
+        "duration_seconds": 5400
+      }
+    ]
   },
   {
     "id": "a32d5a5da68a",
-    "name": "Loot Collection Pill"
+    "name": "Loot Collection Pill",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Auto Loot",
+        "strength": 20,
+        "unit": "m",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "91f70b820fe4",
-    "name": "Loot Collection Pill, Adjusted"
+    "name": "Loot Collection Pill, Adjusted",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Auto Loot",
+        "strength": 30,
+        "unit": "m",
+        "duration_seconds": 4500
+      }
+    ]
   },
   {
     "id": "0194da2c034e",
-    "name": "Loot Collection Pill, Augmented"
+    "name": "Loot Collection Pill, Augmented",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Auto Loot",
+        "strength": 50,
+        "unit": "m",
+        "duration_seconds": 259200
+      }
+    ]
   },
   {
     "id": "c5531dbf0cb6",
-    "name": "MediStim 5mg"
+    "name": "MediStim 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Regeneration Per Second",
+        "strength": 50,
+        "unit": "HP",
+        "duration_seconds": 60
+      }
+    ]
   },
   {
     "id": "b88b1f9310be",
-    "name": "MediStim 15mg"
+    "name": "MediStim 15mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Regeneration Per Second",
+        "strength": 150,
+        "unit": "HP",
+        "duration_seconds": 60
+      }
+    ]
   },
   {
     "id": "d1f1131ff17a",
-    "name": "MediStim, FEN Edition"
+    "name": "MediStim, FEN Edition",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Regeneration Per Second",
+        "strength": 150,
+        "unit": "HP",
+        "duration_seconds": 90
+      }
+    ]
   },
   {
     "id": "4afd29164c4c",
-    "name": "Merry Mayhem Candy Cane"
+    "name": "Merry Mayhem Candy Cane",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 600
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 600
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 600
+      }
+    ]
   },
   {
     "id": "6e5f8a22963e",
-    "name": "Modified Neurostim"
+    "name": "Modified Neurostim",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 4,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Critical Damage Added",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 35,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 70,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Health Added",
+        "strength": 20,
+        "unit": "HP",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "610dbf8fb2e7",
-    "name": "Neurostim-A"
+    "name": "Neurostim-A",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 14,
+        "unit": "%",
+        "duration_seconds": 900
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 33,
+        "unit": "%",
+        "duration_seconds": 900
+      }
+    ]
   },
   {
     "id": "19450842f12e",
-    "name": "Neurostim-B"
+    "name": "Neurostim-B",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 300
+      },
+      {
+        "name": "Health Added",
+        "strength": 10,
+        "unit": "HP",
+        "duration_seconds": 300
+      }
+    ]
   },
   {
     "id": "7651c1463e45",
-    "name": "Neurostim-C"
+    "name": "Neurostim-C",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 200,
+        "unit": "%",
+        "duration_seconds": 300
+      },
+      {
+        "name": "Health Added",
+        "strength": 25,
+        "unit": "HP",
+        "duration_seconds": 300
+      }
+    ]
   },
   {
     "id": "c9f924befa4e",
-    "name": "Neurostim-H"
+    "name": "Neurostim-H",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Regeneration Per Second",
+        "strength": 10,
+        "unit": "HP",
+        "duration_seconds": 20
+      }
+    ]
   },
   {
     "id": "f70b8a982fda",
-    "name": "NutriStim 5mg"
+    "name": "NutriStim 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Health Added",
+        "strength": 10,
+        "unit": "HP",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Critical Damage Taken Decreased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "0d67dca85a5f",
-    "name": "NutriStim 15mg"
+    "name": "NutriStim 15mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 150,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Health Added",
+        "strength": 30,
+        "unit": "HP",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Critical Damage Taken Decreased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "852c40b98926",
-    "name": "NutriStim, FEN Edition"
+    "name": "NutriStim, FEN Edition",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 150,
+        "unit": "%",
+        "duration_seconds": 5400
+      },
+      {
+        "name": "Health Added",
+        "strength": 30,
+        "unit": "HP",
+        "duration_seconds": 5400
+      },
+      {
+        "name": "Critical Damage Taken Decreased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 5400
+      }
+    ]
   },
   {
     "id": "7eb484106344",
-    "name": "Tethys Creek Mulled Wine"
+    "name": "Tethys Creek Mulled Wine",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "7337eac1b997",
-    "name": "Tethys Creek Mulled Wine, 2013"
+    "name": "Tethys Creek Mulled Wine, 2013",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "46ffa6672ab4",
-    "name": "Lahar Swamp Inoculation"
+    "name": "Lahar Swamp Inoculation",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Lahar Swamp Inoculation",
+        "strength": null,
+        "unit": null,
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "ebc19f64ea45",
-    "name": "Rotten Eyeball"
+    "name": "Rotten Eyeball",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Regeneration Per Second",
+        "strength": 5,
+        "unit": "HP",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Divine Intervention",
+        "strength": 50,
+        "unit": null,
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Synchronization Increased",
+        "strength": 0.7,
+        "unit": null,
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "ef5abb3ce626",
-    "name": "Infected Eyeball"
+    "name": "Infected Eyeball",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Skill Gain - Mining Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "f95387dab279",
-    "name": "Skumtomte Candy"
+    "name": "Skumtomte Candy",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 1200
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 1200
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 1200
+      },
+      {
+        "name": "Skill Gain Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 7200
+      }
+    ]
   },
   {
     "id": "beb2a7ee2541",
-    "name": "Experimental BioStim"
+    "name": "Experimental BioStim",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 600
+      },
+      {
+        "name": "Skill Gain Increased",
+        "strength": 35,
+        "unit": "%",
+        "duration_seconds": 600
+      }
+    ]
   },
   {
     "id": "39ae5188e605",
-    "name": "Octoburger - Frescoquada"
+    "name": "Octoburger - Frescoquada",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Regeneration Per Second",
+        "strength": 0.66,
+        "unit": "HP",
+        "duration_seconds": 30
+      }
+    ]
   },
   {
     "id": "888504150edd",
-    "name": "Boar Barf Treat"
+    "name": "Boar Barf Treat",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "d30127ec0f93",
-    "name": "Solid Fart Treat"
+    "name": "Solid Fart Treat",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Health Added",
+        "strength": 100,
+        "unit": "HP",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "f9325f637f36",
-    "name": "CUHOF Pill"
+    "name": "CUHOF Pill",
+    "economy": {
+      "max_tt": 0.1
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Skill Gain Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 7200
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "d3291a9d9f9e",
-    "name": "30% for 1 Hour Skill Juice"
+    "name": "30% for 1 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "a08ab8788d29",
-    "name": "50% for 1 Hour Skill Juice"
+    "name": "50% for 1 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "ad8d681630a7",
-    "name": "100% for 1 Hour Skill Juice"
+    "name": "100% for 1 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "2ef8e6e51a49",
-    "name": "Neural Infuse: Plasma - 10%"
+    "name": "Neural Infuse: Plasma - 10%",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Plasma Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "b1dc991af12e",
-    "name": "Neural Infuse: Plasma - 20%"
+    "name": "Neural Infuse: Plasma - 20%",
+    "economy": {
+      "max_tt": 2
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Plasma Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 7200
+      }
+    ]
   },
   {
     "id": "166388c93c68",
-    "name": "Neural Infuse: Plasma - 50%"
+    "name": "Neural Infuse: Plasma - 50%",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Plasma Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "fc8ad2e6a506",
-    "name": "Neural Infuse: Gauss - 10%"
+    "name": "Neural Infuse: Gauss - 10%",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Gauss Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "e0581843c526",
-    "name": "Neural Infuse: Gauss - 20%"
+    "name": "Neural Infuse: Gauss - 20%",
+    "economy": {
+      "max_tt": 2
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Gauss Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 7200
+      }
+    ]
   },
   {
     "id": "25d5f5dd3add",
-    "name": "Neural Infuse: Gauss - 50%"
+    "name": "Neural Infuse: Gauss - 50%",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Gauss Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "2ead8cb1850d",
-    "name": "Neural Infuse: Clubs - 10%"
+    "name": "Neural Infuse: Clubs - 10%",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Clubs Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "368f5126ed84",
-    "name": "Neural Infuse: Clubs - 20%"
+    "name": "Neural Infuse: Clubs - 20%",
+    "economy": {
+      "max_tt": 2
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Clubs Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 7200
+      }
+    ]
   },
   {
     "id": "558cb9ff5130",
-    "name": "Neural Infuse: Clubs - 50%"
+    "name": "Neural Infuse: Clubs - 50%",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Clubs Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "417bfac84545",
-    "name": "Neural Infuse: Power Fist - 10%"
+    "name": "Neural Infuse: Power Fist - 10%",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Power Fist Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "317f37cf3ddd",
-    "name": "Neural Infuse: Power Fist - 20%"
+    "name": "Neural Infuse: Power Fist - 20%",
+    "economy": {
+      "max_tt": 2
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Power Fist Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 7200
+      }
+    ]
   },
   {
     "id": "641d6ac51010",
-    "name": "Neural Infuse: Power Fist - 50%"
+    "name": "Neural Infuse: Power Fist - 50%",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Power Fist Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "7567cb0ff663",
-    "name": "Neural Infuse: MindForce - 10%"
+    "name": "Neural Infuse: MindForce - 10%",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Mindforce Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "6b89e091b411",
-    "name": "Neural Infuse: MindForce - 20%"
+    "name": "Neural Infuse: MindForce - 20%",
+    "economy": {
+      "max_tt": 2
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Mindforce Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 7200
+      }
+    ]
   },
   {
     "id": "a9653e88aaea",
-    "name": "Neural Infuse: MindForce - 50%"
+    "name": "Neural Infuse: MindForce - 50%",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Mindforce Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "c1b70d47f761",
-    "name": "Neural Infuse: Construction - 10%"
+    "name": "Neural Infuse: Construction - 10%",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Construction Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "6be90e919210",
-    "name": "Neural Infuse: Construction - 20%"
+    "name": "Neural Infuse: Construction - 20%",
+    "economy": {
+      "max_tt": 2
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Construction Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 7200
+      }
+    ]
   },
   {
     "id": "d3f0c4837a12",
-    "name": "Neural Infuse: Construction - 50%"
+    "name": "Neural Infuse: Construction - 50%",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Skill Gain - Construction Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "065bbb633761",
-    "name": "Loot Collection Pill, Mayhem"
+    "name": "Loot Collection Pill, Mayhem",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Auto Loot",
+        "strength": 40,
+        "unit": "m",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "04b944915f94",
-    "name": "Miner's Delight Stim"
+    "name": "Miner's Delight Stim",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Excavation Speed Increased",
+        "strength": 15,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "7a7e8e632417",
-    "name": "100% for 5 Hour Skill Juice"
+    "name": "100% for 5 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "8aa94cb91392",
-    "name": "Neurobiotic Booster A1 5mg"
+    "name": "Neurobiotic Booster A1 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "44e6b8fc0ed9",
-    "name": "Neurobiotic Booster A2 1mg"
+    "name": "Neurobiotic Booster A2 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "5f93946c82a0",
-    "name": "Neurobiotic Booster A2 5mg"
+    "name": "Neurobiotic Booster A2 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "e0adec21fcca",
-    "name": "Neurobiotic Booster A3 1mg"
+    "name": "Neurobiotic Booster A3 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "55c938941e57",
-    "name": "Neurobiotic Booster A3 5mg"
+    "name": "Neurobiotic Booster A3 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "229471f651ff",
-    "name": "Neurobiotic Booster A4 1mg"
+    "name": "Neurobiotic Booster A4 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 40,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "50b728f32ead",
-    "name": "Neurobiotic Booster A5 5mg"
+    "name": "Neurobiotic Booster A5 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "12c8250ddc7f",
-    "name": "Neurobiotic Booster A6 1mg"
+    "name": "Neurobiotic Booster A6 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 60,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "ad3636364b5e",
-    "name": "Neurobiotic Booster A7 1mg"
+    "name": "Neurobiotic Booster A7 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 70,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "3bf82415f632",
-    "name": "Neurobiotic Booster A8 1mg"
+    "name": "Neurobiotic Booster A8 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 80,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "c28f572442f7",
-    "name": "Neurobiotic Booster A9 1mg"
+    "name": "Neurobiotic Booster A9 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 90,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "281eb3a9344b",
-    "name": "Neurobiotic Booster A1 10mg"
+    "name": "Neurobiotic Booster A1 10mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 36000
+      }
+    ]
   },
   {
     "id": "68c6e1a85d64",
-    "name": "Neurobiotic Booster A4 10mg"
+    "name": "Neurobiotic Booster A4 10mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 40,
+        "unit": "%",
+        "duration_seconds": 36000
+      }
+    ]
   },
   {
     "id": "c9b3346ee313",
-    "name": "Neurobiotic Booster A10 10mg"
+    "name": "Neurobiotic Booster A10 10mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 36000
+      }
+    ]
   },
   {
     "id": "aa3796b0c3c4",
-    "name": "Neurostim-X2"
+    "name": "Neurostim-X2",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 16,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 2,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Damage Added",
+        "strength": 16,
+        "unit": "%",
+        "duration_seconds": 1800
+      }
+    ]
   },
   {
     "id": "9ff6066dbc24",
-    "name": "Neurostim-X"
+    "name": "Neurostim-X",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 12,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Damage Added",
+        "strength": 12,
+        "unit": "%",
+        "duration_seconds": 1800
+      }
+    ]
   },
   {
     "id": "884cbe7703c9",
-    "name": "Neurostim-Y2"
+    "name": "Neurostim-Y2",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 33,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 67,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Health Added",
+        "strength": 18,
+        "unit": "HP",
+        "duration_seconds": 1800
+      }
+    ]
   },
   {
     "id": "434cc1ded751",
-    "name": "Neurostim-Y"
+    "name": "Neurostim-Y",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 33,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Health Added",
+        "strength": 12,
+        "unit": "HP",
+        "duration_seconds": 1800
+      }
+    ]
   },
   {
     "id": "bca89e673a63",
-    "name": "Neurostim-Z2"
+    "name": "Neurostim-Z2",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 16,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 2,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Damage Added",
+        "strength": 16,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 33,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 67,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Health Added",
+        "strength": 18,
+        "unit": "HP",
+        "duration_seconds": 1800
+      }
+    ]
   },
   {
     "id": "65bfec25937c",
-    "name": "Easter Egg"
+    "name": "Easter Egg",
+    "economy": {
+      "max_tt": 5
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 14,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 2,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Critical Damage Added",
+        "strength": 14,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 70,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Health Added",
+        "strength": 14,
+        "unit": "HP",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "ed470960ae95",
-    "name": "Halloween Candy Box"
+    "name": "Halloween Candy Box",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 1200
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 1200
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 1200
+      }
+    ]
   },
   {
     "id": "fc4cdbdae2ba",
-    "name": "Christmas Treat Bag"
+    "name": "Christmas Treat Bag",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 25,
+        "unit": "%",
+        "duration_seconds": 1200
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 1200
+      }
+    ]
   },
   {
     "id": "9b6407b57d6c",
-    "name": "30% for 10 Hour Skill Juice"
+    "name": "30% for 10 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 36000
+      }
+    ]
   },
   {
     "id": "531580dfaa91",
-    "name": "50% for 5 Hour Skill Juice"
+    "name": "50% for 5 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "330b2abd4a38",
-    "name": "50% for 10 Hour Skill Juice"
+    "name": "50% for 10 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 36000
+      }
+    ]
   },
   {
     "id": "f0a76bcf7b07",
-    "name": "100% for 10 Hour Skill Juice"
+    "name": "100% for 10 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 36000
+      }
+    ]
   },
   {
     "id": "69aa668ec700",
-    "name": "AccuStim 10mg"
+    "name": "AccuStim 10mg",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Critical Chance Added",
+        "strength": 3,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "0593e1c281b8",
-    "name": "NutriStim 10mg"
+    "name": "NutriStim 10mg",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Health Added",
+        "strength": 20,
+        "unit": "HP",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Critical Damage Taken Decreased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "ad414dc6a1ab",
-    "name": "Neurobiotic Booster A10 1mg"
+    "name": "Neurobiotic Booster A10 1mg",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "6686f2218ba7",
-    "name": "Neurobiotic Booster A1 1mg"
+    "name": "Neurobiotic Booster A1 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "bc3c8b6f0df5",
-    "name": "Neurobiotic Booster A5 1mg"
+    "name": "Neurobiotic Booster A5 1mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "fe86174e5870",
-    "name": "Neurobiotic Booster A10 5mg"
+    "name": "Neurobiotic Booster A10 5mg",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 100,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "1209f9a84299",
-    "name": "Neurostim-Z"
+    "name": "Neurostim-Z",
+    "economy": {
+      "max_tt": 1
+    },
+    "effects": [
+      {
+        "name": "Reload Speed Increased",
+        "strength": 12,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Chance Added",
+        "strength": 1,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Critical Damage Added",
+        "strength": 12,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Run Speed Increased",
+        "strength": 20,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 33,
+        "unit": "%",
+        "duration_seconds": 1800
+      },
+      {
+        "name": "Health Added",
+        "strength": 12,
+        "unit": "HP",
+        "duration_seconds": 1800
+      }
+    ]
   },
   {
     "id": "60c5bed50e76",
-    "name": "30% for 5 Hour Skill Juice"
+    "name": "30% for 5 Hour Skill Juice",
+    "economy": {
+      "max_tt": 0.05
+    },
+    "effects": [
+      {
+        "name": "Skill Gain Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "1a0ae77dae2f",
-    "name": "Frontier Stimulant Pill"
+    "name": "Frontier Stimulant Pill",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 180000
+      },
+      {
+        "name": "Regeneration Increased",
+        "strength": 70,
+        "unit": "%",
+        "duration_seconds": 180000
+      },
+      {
+        "name": "Skill Gain Increased",
+        "strength": 50,
+        "unit": "%",
+        "duration_seconds": 180000
+      },
+      {
+        "name": "Auto Loot",
+        "strength": 40,
+        "unit": "m",
+        "duration_seconds": 180000
+      }
+    ]
   },
   {
     "id": "249ac591b0b3",
-    "name": "DevaStim 10mg"
+    "name": "DevaStim 10mg",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Critical Damage Added",
+        "strength": 40,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "7b95d729f5c6",
-    "name": "HyperStim 10mg"
+    "name": "HyperStim 10mg",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Run Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Reload Speed Increased",
+        "strength": 10,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "3ca35803037f",
-    "name": "MediStim 10mg"
+    "name": "MediStim 10mg",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Regeneration Per Second",
+        "strength": 100,
+        "unit": "HP",
+        "duration_seconds": 60
+      }
+    ]
   },
   {
     "id": "8dd0c9e5d829",
-    "name": "Medusa Swamp Inoculation"
+    "name": "Medusa Swamp Inoculation",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Medusa Swamp Inoculation",
+        "strength": 0,
+        "unit": null,
+        "duration_seconds": 18000
+      }
+    ]
   },
   {
     "id": "848c8e8f3091",
-    "name": "Tasty Slippery Pike Filet"
+    "name": "Tasty Slippery Pike Filet",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": [
+      {
+        "name": "Evade Chance Increased",
+        "strength": 22,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Dodge Chance Increased",
+        "strength": 22,
+        "unit": "%",
+        "duration_seconds": 3600
+      },
+      {
+        "name": "Jamming Chance Increased",
+        "strength": 22,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "c25e0b8d290e",
-    "name": "Slippery Pike Filet"
+    "name": "Slippery Pike Filet",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": []
   },
   {
     "id": "2c205846fdbb",
-    "name": "Starfish Filet"
+    "name": "Starfish Filet",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Regeneration Increased",
+        "strength": 30,
+        "unit": "%",
+        "duration_seconds": 3600
+      }
+    ]
   },
   {
     "id": "504f8c2dd0e8",
-    "name": "Preserved Longmouth Sucker Filet"
+    "name": "Preserved Longmouth Sucker Filet",
+    "economy": {
+      "max_tt": 0.01
+    },
+    "effects": [
+      {
+        "name": "Auto Loot",
+        "strength": 30,
+        "unit": "m",
+        "duration_seconds": 36000
+      }
+    ]
   },
   {
     "id": "24f639a00a44",
-    "name": "Preserved Swordfish Broth"
+    "name": "Preserved Swordfish Broth",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": []
   },
   {
     "id": "aed32f2b4a39",
-    "name": "Preserved Salmon Brain Bites"
+    "name": "Preserved Salmon Brain Bites",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": []
   },
   {
     "id": "efa0fa2828e7",
-    "name": "Preserved Slippery Eel Filet"
+    "name": "Preserved Slippery Eel Filet",
+    "economy": {
+      "max_tt": 0
+    },
+    "effects": []
   }
 ]

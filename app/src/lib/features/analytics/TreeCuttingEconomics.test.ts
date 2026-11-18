@@ -24,6 +24,9 @@ const item = {
 	tier: 'liquid' as const,
 	salesPed: 320,
 	weeklySalesPed: 320,
+	marketValuePed: 0,
+	manual: null,
+	nanocubeMarked: false,
 };
 
 function section(
@@ -39,6 +42,7 @@ function section(
 		muProjectedReturns: 12,
 		muRate: 1.2,
 		realisedReturns: 11,
+		overhead: 0,
 		realisedRate: 1.1,
 		realisedMarkup: 3,
 		items: [item],
@@ -54,6 +58,8 @@ function overall(): TreeCuttingOverall {
 		muProjectedReturns: 24,
 		muRate: 1.2,
 		realisedReturns: 22,
+		overhead: 0,
+		unassignedOverhead: 0,
 		realisedRate: 1.1,
 		realisedMarkup: 5,
 	};
@@ -98,6 +104,30 @@ describe('Tree Cutting economic comparisons', () => {
 		for (const operation of ['Stock', 'Market', 'History', 'Sell', 'Convert', 'Remove']) {
 			expect(screen.queryByRole('button', { name: operation })).toBeNull();
 		}
+	});
+
+	it('takes the overhead off Realised Net, and says so where realised figures are explained', () => {
+		const sections = [section('huge')];
+		render(TreeCuttingPrimaryView, {
+			props: {
+				overall: { ...overall(), overhead: 1.5, unassignedOverhead: 0.5, realisedRate: 22 / 21.5 },
+				table: table(sections),
+				selected: null,
+				totalCount: sections.length,
+				onselect: vi.fn(),
+			},
+		});
+		const headline = screen.getByTestId('activity-economic-headline');
+		// 22 realised less 20 cycled and 1.5 of overhead.
+		expect(within(headline).getByText('+0.50')).not.toBeNull();
+		// Tree Cutting has no completion rewards: its realised figures name none.
+		expect(screen.getByTestId('realised-meaning').textContent).not.toContain('reward');
+		expect(screen.getByTestId('realised-overhead').textContent).toMatch(
+			/Overhead taken off\s*1\.50 PED/,
+		);
+		expect(screen.getByTestId('realised-unassigned-overhead').textContent).toMatch(
+			/Of which 0\.50 PED came from sessions that cycled nothing on a\s+board activity/,
+		);
 	});
 
 	it('selects rich activity rows from the keyboard-ready overlay', async () => {

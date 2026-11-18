@@ -1,12 +1,21 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { filterByQuery } from '$lib/view/search';
 	import InfoTip from '$lib/components/InfoTip.svelte';
 	import ExpandingActionButton from '$lib/components/ExpandingActionButton.svelte';
+	import { derivedFromLabel } from '$lib/features/inventory/conversionDraft';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import { tick } from 'svelte';
-	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
-	import { shrapnelConversionTip, shrapnelMarkupLabel } from './marketConfidence';
-	import { NO_DATA, formatPed, formatPercent } from '$lib/utils/format';
+	import { stockHasNoTt, type TreeCuttingStock } from './treeCuttingModel.svelte';
+	import {
+		appliedMarkupText,
+		manualMarkupLabel,
+		manualMarkupTip,
+		shrapnelConversionTip,
+		shrapnelMarkupLabel,
+	} from './marketConfidence';
+	import ManualMarkupEditor from '$lib/features/market/ManualMarkupEditor.svelte';
+	import { NO_DATA, NO_TT_TITLE, formatCount, formatPed, formatPercent, formatTt } from '$lib/utils/format';
 
 	let {
 		stock,
@@ -14,6 +23,7 @@
 		onconvert,
 		onremove,
 		onshrapnelconvert,
+		onconvertitems,
 		heading,
 		controlsLabel,
 		actions,
@@ -31,6 +41,8 @@
 		onconvert: (item: TreeCuttingStock) => void;
 		onremove: (item: TreeCuttingStock) => void;
 		onshrapnelconvert: (item: TreeCuttingStock) => void;
+		/** Start a hand-in or box opening from this item. Inventory only. */
+		onconvertitems?: (item: TreeCuttingStock) => void;
 		heading?: Snippet;
 		controlsLabel?: Snippet;
 		/** Page-level actions for the strip's right-hand slot. */
@@ -53,11 +65,7 @@
 	let showEmptied = $state(false);
 	const longList = $derived(stock.length > SEARCH_THRESHOLD);
 	const searchable = $derived(alwaysSearch || longList);
-	const matches = $derived(
-		query.trim() === ''
-			? stock
-			: stock.filter((item) => item.itemName.toLowerCase().includes(query.trim().toLowerCase())),
-	);
+	const matches = $derived(filterByQuery(stock, query, (item) => item.itemName));
 	// A live query overrides the emptied fold: a deliberate search is a
 	// deliberate request for that item, sold out or not. The fold's count
 	// reads against the whole list so the two can never disagree.
@@ -118,6 +126,9 @@
 		if (item.markupBasis === 'shrapnel_conversion') {
 			return shrapnelMarkupLabel(item.markupPct, item.effectiveMarkupPct);
 		}
+		if (item.markupBasis === 'manual') {
+			return manualMarkupLabel(item.marketItem?.manual, item.effectiveMarkupPct, item.heldTt);
+		}
 		if (item.floored && item.markupPct !== null) {
 			return `Observed markup ${formatPercent(item.markupPct / 100)}; projections use ${formatPercent(item.effectiveMarkupPct / 100)} Nanocube markup`;
 		}
@@ -135,6 +146,9 @@
 	} {
 		if (item.markupBasis === 'shrapnel_conversion' && item.effectiveMarkupPct !== null) {
 			return shrapnelConversionTip(item.markupPct, item.effectiveMarkupPct);
+		}
+		if (item.markupBasis === 'manual' && item.marketItem?.manual) {
+			return manualMarkupTip(item.marketItem.manual);
 		}
 		if (item.markupPct == null || !item.opportunity) {
 			return {
@@ -290,7 +304,7 @@
 		{/if}
 		<span class="eyebrow w-20 text-right shrink-0">MU</span>
 		<span class="eyebrow w-12 text-center shrink-0">Conf</span>
-		<span class="eyebrow {actionLayout === 'inventory' ? 'w-[5.25rem]' : 'w-[7.125rem]'} shrink-0 text-right">Actions</span>
+		<span class="eyebrow {actionLayout === 'inventory' ? 'w-[9rem]' : 'w-[7.125rem]'} shrink-0 text-right">Actions</span>
 	</div>
 
 	<div class="relative {fillAvailable ? 'min-h-0 flex-1' : ''}">
@@ -305,19 +319,32 @@
 				activity produces, and its market reading is worth keeping
 				legible for the next time there is stock to sell. -->
 			{@const empty = item.heldQty <= 0}
+			{@const derivedLabel = derivedFromLabel(item.derivedFrom)}
+			{@const noTt = stockHasNoTt(item)}
 			<li class="flex items-center gap-3 rounded-md px-2.5 py-2">
 				<span
 					class="flex-1 min-w-0 text-sm font-medium truncate tracking-tight
 						{empty ? 'text-text-tertiary' : 'text-text'}"
 				>
 					{item.itemName}
+					{#if derivedLabel}
+						<span class="block truncate text-xs font-normal tracking-normal text-text-tertiary">
+							{derivedLabel}
+						</span>
+					{/if}
 				</span>
 
 				<span
 					class="w-24 text-right shrink-0 text-sm tabular-nums font-medium
 						{empty ? 'text-text-tertiary' : 'text-text'}"
 				>
-					{formatPed(item.heldTt)}
+					<!-- An item with no TT is counted: how many are held is what a
+						TT of 0.00 would otherwise hide. -->
+					{#if noTt}
+						<span title={NO_TT_TITLE}>{formatCount(item.heldQty)}</span>
+					{:else}
+						{formatTt(item.heldTt)}
+					{/if}
 					{#if item.listedQty > 0}
 						<span
 							class="block text-[0.625rem] font-normal text-text-tertiary tabular-nums"
@@ -358,16 +385,20 @@
 									class="inline-flex h-5 flex-col items-end justify-center tabular-nums
 										border-b border-dotted border-border/70"
 								>
-									{#if item.floored || item.markupBasis === 'shrapnel_conversion'}
+									{#if item.floored || item.markupBasis === 'shrapnel_conversion' || item.markupBasis === 'manual'}
 										<span class="text-[9px] leading-[9px] text-text-tertiary line-through">
 											{formatPercent(observedMarkup / 100)}
 										</span>
-										<span class="text-xs leading-[11px] text-text-secondary">
-											{formatPercent(appliedMarkup / 100)}
+										<span
+											class="text-xs leading-[11px] {item.markupBasis === 'manual'
+												? 'text-accent'
+												: 'text-text-secondary'}"
+										>
+											{appliedMarkupText(appliedMarkup, item.markupBasis, item.marketItem?.manual)}
 										</span>
 									{:else}
 										<span class="text-sm leading-5 text-text-secondary">
-											{formatPercent(appliedMarkup / 100)}
+											{appliedMarkupText(appliedMarkup, item.markupBasis, item.marketItem?.manual)}
 										</span>
 									{/if}
 								</span>
@@ -377,10 +408,12 @@
 					{:else if item.effectiveMarkupPct !== null}
 						{@const appliedMarkup = item.effectiveMarkupPct}
 						<span
-							class="inline-flex h-5 items-center text-sm tabular-nums text-text-secondary"
+							class="inline-flex h-5 items-center text-sm tabular-nums {item.markupBasis === 'manual'
+								? 'text-accent'
+								: 'text-text-secondary'}"
 							aria-label={markupLabel(item)}
 						>
-							{formatPercent(appliedMarkup / 100)}
+							{appliedMarkupText(appliedMarkup, item.markupBasis, item.marketItem?.manual)}
 						</span>
 					{:else}
 						<span class="text-sm text-text-tertiary">{NO_DATA}</span>
@@ -390,6 +423,13 @@
 				<div class="w-12 shrink-0 flex items-center justify-center">
 					{#if item.markupBasis === 'shrapnel_conversion'}
 						<InfoTip align="right" width="w-96" label="Fixed Shrapnel conversion value">
+							{@render confidenceBody(item)}
+						</InfoTip>
+					{:else if item.markupBasis === 'manual'}
+						<InfoTip align="right" width="w-96" label="Your markup">
+							{#snippet trigger()}
+								<span class="text-accent" aria-label="Your markup" data-testid="conf-manual">✎</span>
+							{/snippet}
 							{@render confidenceBody(item)}
 						</InfoTip>
 					{:else if item.tier}
@@ -416,10 +456,23 @@
 
 				<div
 					class="shrink-0 flex items-center justify-end gap-1.5 {actionLayout === 'inventory'
-						? 'min-w-[5.25rem]'
+						? 'min-w-[9rem]'
 						: ''}"
 				>
 					{#if actionLayout === 'inventory'}
+						{#if item.itemName !== 'Shrapnel'}
+							<ManualMarkupEditor
+								itemName={item.itemName}
+								quantity={item.heldQty}
+								ttValue={item.heldTt}
+								market={item.marketItem ?? undefined}
+								applied={item.effectiveMarkupPct !== null && item.markupBasis !== null
+									? { markupPct: item.effectiveMarkupPct, basis: item.markupBasis }
+									: null}
+							/>
+						{:else}
+							<span class="h-6 w-6 shrink-0" aria-hidden="true"></span>
+						{/if}
 						{#if item.itemName === 'Shrapnel'}
 							<ExpandingActionButton
 								letter="C"
@@ -433,6 +486,21 @@
 								letter="N"
 								label="Nanocubes"
 								onclick={() => onconvert(item)}
+								disabled={item.heldQty <= 0 || noTt}
+								title={noTt
+									? 'It has no TT, so it recycles into nothing'
+									: item.heldQty <= 0
+										? 'Nothing held to convert'
+										: ''}
+							/>
+						{:else}
+							<span class="h-6 w-6 shrink-0" aria-hidden="true"></span>
+						{/if}
+						{#if onconvertitems && item.itemName !== 'Shrapnel'}
+							<ExpandingActionButton
+								letter="C"
+								label="Convert"
+								onclick={() => onconvertitems?.(item)}
 								disabled={item.heldQty <= 0}
 								title={item.heldQty <= 0 ? 'Nothing held to convert' : ''}
 							/>
@@ -469,8 +537,12 @@
 							letter="N"
 							label="Nanocube"
 							onclick={() => onconvert(item)}
-							disabled={item.heldQty <= 0}
-							title={item.heldQty <= 0 ? 'Nothing held to convert' : ''}
+							disabled={item.heldQty <= 0 || noTt}
+							title={noTt
+								? 'It has no TT, so it recycles into nothing'
+								: item.heldQty <= 0
+									? 'Nothing held to convert'
+									: ''}
 						/>
 						<ExpandingActionButton
 							letter="S"

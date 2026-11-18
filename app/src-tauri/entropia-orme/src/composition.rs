@@ -65,14 +65,16 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use eo_services::attack_rate::with_attack_rate;
 use eo_services::bus_events::BusEvent;
 use eo_services::bus_events::HotbarItemKind;
 use eo_services::character_calc::all_profession_levels;
 use eo_services::chatlog_time::ChatLogClock;
 use eo_services::chatlog_watcher::ChatlogWatcher;
 use eo_services::clock::{Clock, RealClock};
-use eo_services::config_service::{
-    active_trifecta_preset, load_config_readonly, AppConfig, ConfigReader, ConfigService,
+use eo_services::config_service::{load_config_readonly, AppConfig, ConfigReader, ConfigService};
+use eo_services::consumables::{
+    consumable_profile_from_props, on_use_effect_from_props, DoseBoard,
 };
 use eo_services::db::{AdoptError, Db};
 use eo_services::equipment_pricing::{
@@ -83,36 +85,43 @@ use eo_services::eu_window;
 use eo_services::event_bus::{EventBus, Topic};
 use eo_services::expected_hunting::{with_current_offensive_efficiencies, HuntingLooterLevels};
 use eo_services::game_data_store::GameDataStore;
+use eo_services::game_ui::geometry::BgrImage;
+use eo_services::game_ui::profile::UiProfile;
+use eo_services::game_ui::sale_queue::ItemCatalogue;
+use eo_services::game_ui::seams::{FrameReader, GameWindowFrame};
+use eo_services::game_ui::skills::SkillVocabulary;
 use eo_services::hotbar_listener::{
-    HotbarListener, HotbarResolver, ResolvedHotbarItem, HOTBAR_SLOT_KEYS,
+    GameFocusProbe, HotbarListener, HotbarResolver, ItemResolver, ResolvedHotbarItem,
+    HOTBAR_SLOT_KEYS,
 };
 use eo_services::keystroke_source::{HookKeystrokeSource, KeystrokeSource, SharedKeystrokeSource};
-use eo_services::ocr_engine::load_bgr_png;
+use eo_services::mob_watch::{
+    CatalogueCell, DetectorSlot, MobDetector, MobWatch, MobWatchProviders,
+};
 pub use eo_services::ocr_engine::OcrEngine;
-use eo_services::passive_effects::{effective_reload_seconds, reload_speed_percent};
+use eo_services::passive_effects::reload_seconds_under;
 use eo_services::paths::{resolve_data_dir, DB_FILE_NAME};
 use eo_services::quests::QuestService;
 use eo_services::repair_ocr::{RepairOcrService, RepairProviders};
-use eo_services::sale_window_ocr::{SaleWindowOcrService, SaleWindowProviders};
-use eo_services::scan_completion::{
-    complete_skill_scan, hydrate_skill_scan_state, latest_skill_levels,
+use eo_services::sale_capture::{SaleCaptureProviders, SaleCaptureService};
+use eo_services::scan_completion::{complete_skill_scan, latest_skill_levels, ScannedLevel};
+pub use eo_services::skill_scan::SkillScanService;
+use eo_services::skill_scan::{
+    CompletionCallback, SkillScanProviders, DEFAULT_IDLE_LIMIT, DEFAULT_TICK,
 };
-use eo_services::scan_presets::ScanPresets;
-use eo_services::screen_capture::{capture_region_bgr, capture_region_png};
-use eo_services::skill_panel::{read_skill_panel, BgrImage};
-pub use eo_services::skill_scan_manual::SkillScanManual;
-use eo_services::skill_scan_manual::{ScanProviders, ScanRegion};
 use eo_services::skill_tracker::SkillTracker;
 pub use eo_services::spacebar_capture_listener::SpacebarCaptureListener;
 use eo_services::time::naive_to_epoch;
+use eo_services::tool_setup::ToolSetup;
 use eo_services::tracker::{
-    ActivityKey, EquipmentLibrary, EquipmentProfile, GuardrailTool, HarvestGuardrailTools,
-    HuntTracker, Providers, TrackingConfig,
+    ActivityKey, CarriedWeapon, CarriedWeaponProfile, EquipmentLibrary, EquipmentProfile,
+    GuardrailTool, HarvestGuardrailTools, HuntTracker, Providers, TrackingConfig,
 };
-use eo_services::trifecta_service::{describe_trifecta, TrifectaPreset};
 use eo_wire::bus::DomainBus;
 use eo_wire::domain_events::DomainEvent;
 use serde_json::{Map, Value};
+
+use crate::substrate::{Decline, DeclineReason};
 
 /// The repository root, compiled into dev builds (the manifest dir is
 /// `app/src-tauri/entropia-orme`). Release builds never read it.
@@ -142,6 +151,24 @@ pub(crate) fn data_dir() -> PathBuf {
     )
 }
 
+/// How the account connection reads, decided by the same build seam as
+/// [`data_dir`]: the installed app reads the account whenever the player is
+/// signed in; a development build reads it only for a tracked session or a
+/// strongbox run, so one running beside the installed app never reads the
+/// account twice, nor records the real account into the development
+/// database.
+pub(crate) fn account_reading_mode() -> eo_services::account::ReadingMode {
+    reading_mode_for(!cfg!(debug_assertions))
+}
+
+fn reading_mode_for(frozen: bool) -> eo_services::account::ReadingMode {
+    if frozen {
+        eo_services::account::ReadingMode::Always
+    } else {
+        eo_services::account::ReadingMode::OnDemand
+    }
+}
+
 /// The rolling-log directory: a `logs/` subdirectory of the resolved data
 /// directory, so the structured logs sit beside the database under the same
 /// OS app-data root the backend already owns. Resolved the same way as
@@ -161,21 +188,6 @@ fn snapshot_dir(resource_dir: Option<&PathBuf>) -> PathBuf {
             .join("entropia-orme")
             .join("resources")
             .join("snapshot"),
-    }
-}
-
-/// Where the bundled guide-mode demo database lives: the bundled resource
-/// directory in an installed build (`<resource_dir>/demo/entropia_orme.db`),
-/// the repository copy (`data/demo/entropia_orme.db`) in dev. The demo
-/// services copy it to a writable per-process file before opening, so the
-/// bundled file is never mutated.
-pub(crate) fn demo_db_path(resource_dir: Option<&PathBuf>) -> PathBuf {
-    match resource_dir {
-        Some(dir) if !cfg!(debug_assertions) => dir.join("demo").join("entropia_orme.db"),
-        _ => dev_project_root()
-            .join("data")
-            .join("demo")
-            .join("entropia_orme.db"),
     }
 }
 
@@ -328,6 +340,9 @@ pub struct ProducerState {
     // the watched `chatlog_path` changes. The exit seam still stops it via
     // [`ProducerState::stop`]; `restart`/`stop` take `&self`, so sharing is safe.
     watcher: Arc<ChatlogWatcher>,
+    // The chat-log time base the watcher derives from the live file, shared
+    // with every service that places a logged line in time.
+    chatlog_clock: ChatLogClock,
     tracker: Arc<HuntTracker>,
     // The substrate runtime handle, kept for the synchronous exit seam's
     // one bridge onto the async tracker.
@@ -363,10 +378,20 @@ pub struct ProducerState {
     // hook is single-instance, so two independent sources would have one
     // stand inert.
     keystroke_source: Arc<dyn KeystrokeSource>,
+    // This machine's identity, read once: keyless tracking is held to it.
+    machine_id: Option<String>,
     // The quest service: its owning task holds the permanent bus
     // subscriptions for the substrate's lifetime, and the typed-command
     // facade serves the quest families over this same instance.
     quests: Arc<QuestService>,
+    // Creature detection, bound once the recogniser has loaded: the tracker
+    // starts and stops it with its sessions, and the exit path waits for
+    // its look in progress.
+    mob_detection: Arc<DetectorSlot>,
+    // Reading the held tool, bound once the recogniser has loaded: the
+    // tracker starts and stops it with its sessions while the setting is
+    // on, and the exit path waits for its look in progress.
+    tool_detection: Arc<eo_services::tool_watch::ToolDetectorSlot>,
 }
 
 impl ProducerState {
@@ -384,7 +409,27 @@ impl ProducerState {
         if self.tracker.is_tracking() {
             let _ = block_on_pool(&self.runtime, self.tracker.stop_session());
         }
+        // Stopping the session stopped the creature and held-tool watchers;
+        // wait, briefly, for a look still in progress, so nothing captures
+        // behind the closing app.
+        self.mob_detection.shutdown();
+        eo_services::tool_watch::ToolDetector::shutdown(self.tool_detection.as_ref());
         self.watcher.stop();
+    }
+
+    /// The substrate runtime, for the exit seam's other bridges onto it.
+    pub fn runtime_handle(&self) -> tokio::runtime::Handle {
+        self.runtime.clone()
+    }
+
+    /// Where creature detection is bound once the recogniser has loaded.
+    pub fn mob_detection_handle(&self) -> Arc<DetectorSlot> {
+        self.mob_detection.clone()
+    }
+
+    /// Where reading the held tool is bound once the recogniser has loaded.
+    pub fn tool_detection_handle(&self) -> Arc<eo_services::tool_watch::ToolDetectorSlot> {
+        self.tool_detection.clone()
     }
 
     /// The composed watcher, for tests driving a replay through it.
@@ -399,6 +444,17 @@ impl ProducerState {
     /// producer-spine side share one watcher.
     pub fn watcher_handle(&self) -> Arc<ChatlogWatcher> {
         self.watcher.clone()
+    }
+
+    /// The game's chat log as read after the fact: the file the watcher
+    /// tails now (it follows a `chatlog_path` change), placed in time by
+    /// the time base the watcher derives.
+    pub fn chat_log_source(&self) -> eo_services::chatlog_span::ChatLogSource {
+        let watcher = self.watcher.clone();
+        eo_services::chatlog_span::ChatLogSource::new(
+            move || watcher.path(),
+            self.chatlog_clock.clone(),
+        )
     }
 
     /// The composed tracker, for tests asserting its readout.
@@ -475,6 +531,12 @@ impl ProducerState {
     pub fn keystroke_source_handle(&self) -> Arc<dyn KeystrokeSource> {
         self.keystroke_source.clone()
     }
+
+    /// This machine's input access for the facade: its identity and the
+    /// shared keyboard source keyless tracking suppresses.
+    pub fn input_access(&self) -> eo_api::settings::InputAccess {
+        eo_api::settings::InputAccess::new(self.machine_id.clone(), self.keystroke_source.clone())
+    }
 }
 
 /// What a successful composition yields: the read surface, the producer
@@ -506,16 +568,21 @@ pub struct Composed {
     /// composition tests, which drive the warmed engine directly.
     #[cfg_attr(not(test), allow(dead_code))]
     pub ocr_engine: Option<Arc<OcrEngine>>,
-    /// The manual skill-scan state machine, composed on the spine bus (its
-    /// `scan.status.changed` envelopes reach the shell's event bridge) over
-    /// the OCR extraction providers. Always constructed so the scan
-    /// operations serve;
-    /// its capture and extraction seams stand down to "engine unavailable"
-    /// when the OCR runtime is absent (a golden-pinned reply).
-    pub skill_scan: Arc<SkillScanManual>,
-    /// The spacebar-capture listener, composed over the scan and the shared
-    /// OS hook. Held for the spacebar-capture toggle and the exit
-    /// seam (its teardown).
+    /// The skill scan, composed on the spine bus (its `scan.status.changed`
+    /// envelopes reach the shell's event bridge) over the whole game
+    /// window, the interface profile and the shared engine. Always
+    /// constructed so the scan operations serve; without the engine or
+    /// the profile it rests unavailable and never captures.
+    pub skill_scan: Arc<SkillScanService>,
+    /// The terminal reads (the Repair Terminal's cost, the Trade
+    /// Terminal's total), as the facade holds them. Nothing reads this
+    /// copy outside the composition tests, which check what reached the
+    /// reader without capturing the screen.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub repair_ocr: Arc<RepairOcrService>,
+    /// The spacebar-capture listener, composed over the shared OS hook for
+    /// the development research capture. Held for the exit seam (its
+    /// teardown).
     pub spacebar_listener: Arc<SpacebarCaptureListener>,
     /// The coordinate-calibration Enter listener, on the same shared OS
     /// hook; enabled only while a calibration flow is live. Held for the
@@ -535,13 +602,16 @@ pub struct Composed {
 /// backend cannot serve); there is no longer an interim "awaiting migration"
 /// state to retry.
 pub enum Composition {
-    /// The native services are built and ready to install.
-    Ready(Composed),
+    /// The native services are built and ready to install. Boxed: the
+    /// services are far larger than a decline, and the outcome is built
+    /// once and moved once.
+    Ready(Box<Composed>),
     /// A terminal decline (a missing/empty snapshot, a producer fault, or a
     /// database that cannot be opened or adopted, including one whose schema
     /// predates the supported baseline, which the retired sidecar used to
-    /// migrate forward). Logged loudly; the backend does not come up.
-    Declined,
+    /// migrate forward). Logged loudly; the backend does not come up. The
+    /// reason is what the startup failure surface tells the user.
+    Declined(Decline),
 }
 
 /// Compose the native services, or decline with a logged reason. The ONNX
@@ -553,35 +623,33 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     // The single shared OS keyboard hook, built at this production site and
     // injected down the compose chain. The allowlist filters at the hook
     // boundary to the hotbar digit keys, the space key, Enter (the
-    // coordinate-calibration confirm key), and F6-F12 (the field-navigation
-    // update hotkeys), so out-of-scope keystrokes never enter the event stream.
+    // coordinate-calibration confirm key), and F (the game's interact key, on
+    // which a route can record its trees visited), so out-of-scope keystrokes
+    // never enter the event stream.
     //
     // SECURITY (deliberate): admission is static for every allowlisted key,
     // not just the digits and spacebar. While the hook runs for any consumer,
     // an allowlisted edge enters the in-process stream and is dropped by every
     // listener unless a flow armed its consumer (calibration for Enter, a live
-    // route for the F-key; neither logs nor persists the keystroke). The
-    // allowlist has since grown past the original three cases to include the
-    // navigation F-keys: this is a re-affirmed acceptance, not an oversight,
-    // because F6-F12 are no more sensitive than the hotbar digits already
-    // admitted, and they only reach the stream while the hook is already
-    // running for another consumer, then get dropped unless a route is live.
+    // route planned to visit on F; neither logs nor persists the keystroke).
+    // F is the one letter admitted, and a re-affirmed acceptance rather than
+    // an oversight: a single letter's edges carry no recoverable text, just as
+    // the hotbar digits already admitted carry none, and the route listener
+    // additionally drops a press made while another window holds focus.
     // Dynamic admission (membership only while a flow is live) would scope
     // tighter but adds mutable shared state to a hook callback deliberately
     // kept to filter-and-enqueue; it remains the documented upgrade path if a
     // future key is genuinely sensitive. Tests inject a hook-free
     // `MockKeystrokeSource` through the same parameter instead, so a generic
     // test run never installs the OS hook (whose attach/detach lifecycle can
-    // intermittently wedge a headless run).
+    // intermittently wedge a headless run). The game-focus probe is the other
+    // half of that input boundary (the hotbar listener asks it whether a slot
+    // press reached the game), so it is injected alongside, and tests pass
+    // none rather than reading the live desktop's focus.
     let allowlist: std::collections::BTreeSet<String> = HOTBAR_SLOT_KEYS
         .iter()
         .map(|key| key.to_string())
-        .chain(
-            [
-                "space", "return", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
-            ]
-            .map(str::to_string),
-        )
+        .chain(["space", "return", "f"].map(str::to_string))
         .collect();
     let keystroke_source: Arc<dyn KeystrokeSource> =
         Arc::new(HookKeystrokeSource::new(Some(allowlist)));
@@ -589,9 +657,9 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
         data_dir(),
         snapshot_dir(resource_dir.as_ref()),
         models_dir(resource_dir.as_ref()),
-        Some(demo_db_path(resource_dir.as_ref())),
         maps_dir(resource_dir.as_ref()),
         keystroke_source,
+        Some(Arc::new(eu_window::game_focus)),
     )
     .await
 }
@@ -605,17 +673,14 @@ async fn compose_with(
     data_dir: PathBuf,
     snapshot: PathBuf,
     models: PathBuf,
-    demo_db_path: Option<PathBuf>,
     maps: PathBuf,
     keystroke_source: Arc<dyn KeystrokeSource>,
+    game_focus: Option<GameFocusProbe>,
 ) -> Composition {
     if let Err(err) = std::fs::create_dir_all(&data_dir) {
-        tracing::error!(
-            target: "eo::composition",
-            "data dir {} not creatable ({err}); native services stand down",
-            data_dir.display()
-        );
-        return Composition::Declined;
+        let detail = format!("data dir {} not creatable ({err})", data_dir.display());
+        tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+        return Composition::Declined(Decline::new(DeclineReason::DataDirUnavailable, detail));
     }
     let db_path = data_dir.join(DB_FILE_NAME);
     let db = match Db::open_adopted(&db_path).await {
@@ -632,20 +697,24 @@ async fn compose_with(
                 target: "eo::composition",
                 "{err}; the backend cannot serve until the database is at the supported baseline"
             );
-            return Composition::Declined;
+            return Composition::Declined(Decline::new(
+                DeclineReason::DatabaseBelowBaseline,
+                err.to_string(),
+            ));
         }
         Err(err @ AdoptError::Quarantined { .. }) => {
             // An existing database we cannot adopt (for any other reason) is
             // surfaced loudly and left untouched for diagnosis.
             tracing::error!(target: "eo::composition", "{err}");
-            return Composition::Declined;
+            return Composition::Declined(Decline::new(
+                DeclineReason::DatabaseUnreadable,
+                err.to_string(),
+            ));
         }
         Err(err) => {
-            tracing::error!(
-                target: "eo::composition",
-                "database open failed ({err}); native services stand down"
-            );
-            return Composition::Declined;
+            let detail = format!("database open failed ({err})");
+            tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+            return Composition::Declined(Decline::new(DeclineReason::DatabaseUnreadable, detail));
         }
     };
     // A bounded corruption probe: PRAGMA quick_check on a reader connection,
@@ -681,12 +750,12 @@ async fn compose_with(
     let game_data = match GameDataStore::new(&snapshot) {
         Ok(store) => Arc::new(store),
         Err(err) => {
-            tracing::error!(
-                target: "eo::composition",
-                "game-data snapshot at {} unreadable ({err}); native services stand down",
+            let detail = format!(
+                "game-data snapshot at {} unreadable ({err})",
                 snapshot.display()
             );
-            return Composition::Declined;
+            tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+            return Composition::Declined(Decline::new(DeclineReason::GameDataUnavailable, detail));
         }
     };
     // The store tolerates a missing directory (warn-and-continue), but an
@@ -695,14 +764,30 @@ async fn compose_with(
     // silently diverge from the reference's embedded copy. Stand down
     // (a terminal decline) rather than serve divergent data.
     if game_data.total_entities() == 0 {
-        tracing::error!(
-            target: "eo::composition",
-            "game-data snapshot at {} is empty; native services stand down",
-            snapshot.display()
-        );
-        return Composition::Declined;
+        let detail = format!("game-data snapshot at {} is empty", snapshot.display());
+        tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+        return Composition::Declined(Decline::new(DeclineReason::GameDataUnavailable, detail));
     }
     let clock: Arc<dyn Clock> = Arc::new(RealClock::new());
+
+    // The curated quest catalogue ships with the binary and is materialised
+    // before any service reads quests. A failure leaves the catalogue as the
+    // last launch left it and the app keeps serving (degrade, never crash).
+    match eo_services::quests::catalogue::sync_catalogue(&db, clock.as_ref()).await {
+        Ok(report) if report != Default::default() => tracing::info!(
+            target: "eo::composition",
+            "quest catalogue synced: {} inserted, {} adopted, {} updated, {} retired",
+            report.inserted,
+            report.adopted,
+            report.updated,
+            report.retired
+        ),
+        Ok(_) => {}
+        Err(err) => tracing::error!(
+            target: "eo::composition",
+            "quest catalogue sync failed ({err}); the previous catalogue stays in place"
+        ),
+    }
 
     // The producer spine shares the substrate's single-owner pool with
     // the read surface: one connection, one owner, serialised access
@@ -713,21 +798,21 @@ async fn compose_with(
     // share one connection (one owner, serialised access) rather than
     // opening a second.
     let producer_db = db.clone();
+    let navigation_focus = game_focus.clone();
     let producers = match compose_producers(
         producer_db,
         clock.clone(),
         &data_dir,
         None,
         keystroke_source,
+        game_focus,
         Some(game_data.clone()),
     ) {
         Ok(producers) => producers,
         Err(err) => {
-            tracing::error!(
-                target: "eo::composition",
-                "producer spine failed ({err}); native services stand down"
-            );
-            return Composition::Declined;
+            let detail = format!("producer spine failed ({err})");
+            tracing::error!(target: "eo::composition", "{detail}; native services stand down");
+            return Composition::Declined(Decline::new(DeclineReason::TrackingUnavailable, detail));
         }
     };
 
@@ -741,80 +826,144 @@ async fn compose_with(
 
     // The scan services compose on the spine bus (so their status frames
     // reach the shell's event bridge) over the OCR extraction providers
-    // and the
-    // shared single-owner pool, before the read surface takes ownership of
-    // `db`/`game_data`/`clock`/`data_dir`. The calibration artefact sits
-    // beside the snapshot dir in both the dev and installed layouts, so it
-    // resolves as the snapshot's sibling.
-    let geometry_path = snapshot
-        .parent()
-        .map(|parent| parent.join("panel_geometry.json"))
-        .unwrap_or_else(|| snapshot.join("panel_geometry.json"));
-    let (skill_scan, repair_ocr, sale_window_ocr, spacebar_listener) = compose_scan_services(
-        producers.bus_handle(),
-        ocr_engine.clone(),
-        game_data.clone(),
-        db.clone(),
-        clock.clone(),
-        ScanPaths {
-            geometry: geometry_path,
-            debug: data_dir.join("debug"),
-        },
-        producers.keystroke_source_handle(),
-    )
-    .await;
+    // and the shared single-owner pool, before the read surface takes
+    // ownership of `db`/`game_data`/`clock`/`data_dir`. The interface
+    // profile sits beside the snapshot dir in both the dev and installed
+    // layouts, so it resolves as the snapshot's sibling.
+    let resources = resource_root(&snapshot);
 
-    // Coordinate capture: the maps feature's two-point calibration flow
-    // plus the one-shot coordinate scan, composed over the same seams the
-    // repair scan rides (screen capture, the shared recogniser) plus the
-    // cursor-position lookup and the config-owned capture rectangle. The
-    // region provider and the frame reader are each one narrow closure on
-    // purpose: an automatic UI locator or a specialised digit recogniser
-    // replaces its closure without touching the scan path.
-    let coord_capture = {
-        use eo_services::coord_capture::{CoordCaptureProviders, CoordCaptureService};
-        let region_reader = {
-            let config = producers.config_service_handle();
-            let reader = config.lock().expect("config service").reader();
-            move || reader.current().map_coord_region
-        };
-        let persist_config = producers.config_service_handle();
-        let coord_engine = ocr_engine.clone();
-        // Every scan drops its last frame + recogniser answers under the
-        // data dir's debug/ (tiny, overwritten, local-only): the standing
-        // instrument for diagnosing a readout that will not read.
-        let coord_debug_dir = data_dir.join("debug");
-        CoordCaptureService::new(CoordCaptureProviders {
-            cursor_position: Arc::new(eu_window::cursor_position),
-            region: Arc::new(region_reader),
-            capture_region: Arc::new(capture_region_bgr),
-            read_text: Arc::new(move |frame: &BgrImage| {
-                coord_engine
-                    .as_ref()?
-                    .recognize_bgr(&frame.data, frame.h, frame.w)
-                    .ok()
-            }),
-            persist_region: Arc::new(move |region| {
-                let mut updates = serde_json::Map::new();
-                updates.insert(
-                    "map_coord_region".to_string(),
-                    serde_json::to_value(region).map_err(|err| err.to_string())?,
-                );
-                persist_config
-                    .lock()
-                    .map_err(|_| "config service lock poisoned".to_string())?
-                    .update(&updates)
-                    .map(|_| ())
-                    .map_err(|err| err.to_string())
-            }),
-            debug_dir: Arc::new(move || Some(coord_debug_dir.clone())),
-        })
+    // The readers that find what they want in the game window themselves
+    // are composed over one capture seam for the whole window and one
+    // interface profile (bundled beside the snapshot). A profile that will
+    // not load is logged and leaves those readers unavailable; composition
+    // goes on without them.
+    let game_ui = GameUi {
+        frame: Arc::new(eu_window::capture_game_window),
+        profile: load_ui_profile(&resources.join(UI_PROFILE_FILE)),
     };
-    let coord_confirm = eo_services::coord_capture::CoordConfirmListener::new(
-        coord_capture.clone(),
-        Some(producers.keystroke_source_handle()),
+
+    // Creature detection: the whole game window, the interface profile and
+    // the shared engine, matching names against the bundled creatures and
+    // the ones the player has confirmed. Bound into the slot the tracker
+    // was built with, so sessions started from now on can watch.
+    let mob_catalogue = Arc::new(match &game_ui.profile {
+        Some(profile) => {
+            match eo_services::mob_review::build_catalogue(&db, &game_data, &profile.mob_names)
+                .await
+            {
+                Ok(catalogue) => CatalogueCell::new(catalogue),
+                Err(err) => {
+                    tracing::warn!(
+                        target: "eo::composition",
+                        "confirmed creature names unreadable ({err}); matching the bundled list only"
+                    );
+                    CatalogueCell::new(eo_services::game_ui::mob_names::MobCatalogue::from_store(
+                        &game_data,
+                        Vec::<String>::new(),
+                        &profile.mob_names,
+                    ))
+                }
+            }
+        }
+        None => CatalogueCell::default(),
+    });
+    let mob_watch = MobWatch::new(
+        MobWatchProviders {
+            // Never the shared seam, which may start capture: the watcher
+            // captures only from a capture already running, and starts one
+            // only for the player's turning detection on.
+            frame: Arc::new(eu_window::capture_game_window_running),
+            capture_running: Arc::new(eo_services::screen_capture::capture_running),
+            start_capture: Arc::new(eo_services::screen_capture::start_capture),
+            enabled: {
+                let reader = producers
+                    .config_service_handle()
+                    .lock()
+                    .expect("config service")
+                    .reader();
+                Arc::new(move || reader.current().mob_detection_on())
+            },
+            focus: navigation_focus.clone(),
+            profile: game_ui.profile.clone(),
+            read_text: frame_reader(ocr_engine.clone()),
+            catalogue: mob_catalogue.clone(),
+            keep_unread: {
+                let reader = producers
+                    .config_service_handle()
+                    .lock()
+                    .expect("config service")
+                    .reader();
+                let plates = eo_services::unread_plates::UnreadPlates::new(
+                    data_dir.join("unread-plates"),
+                    Arc::new(move || reader.current().keep_unread_plates),
+                );
+                Arc::new(move |at_ms, why, picture| plates.keep(at_ms, why, picture))
+            },
+            wait: None,
+        },
+        clock.clone(),
     );
-    coord_capture.attach_confirm_listener(&coord_confirm);
+    let mob_capture: eo_services::mob_watch::CaptureStatusProbe = {
+        let mob_watch = mob_watch.clone();
+        Arc::new(move || mob_watch.capture_status())
+    };
+    let mob_detector: Arc<dyn MobDetector> = Arc::new(mob_watch);
+    producers.mob_detection_handle().bind(mob_detector);
+
+    // Reading the held tool: the game window, the interface profile and the
+    // shared engine, matching names against the player's library, the names
+    // they dismissed and the bundled tools. Composed exactly as creature
+    // detection is, and bound into the slot the tracker was built with.
+    // The catalogue is built only while the reading is on: here, if it is on
+    // already, before the watcher is bound (so before any session can start
+    // it); otherwise when the player turns it on, before the tracker
+    // re-reads its config and starts the watch.
+    let tool_reading_on: eo_services::tool_catalogue::ReadingOn = {
+        let reader = producers
+            .config_service_handle()
+            .lock()
+            .expect("config service")
+            .reader();
+        Arc::new(move || reader.current().tool_reading_on())
+    };
+    let tool_catalogues = eo_services::tool_catalogue::ToolCatalogues::new(
+        db.clone(),
+        game_data.clone(),
+        tool_reading_on.clone(),
+    );
+    if tool_reading_on() {
+        tool_catalogues.ensure_current().await;
+    }
+    let tool_capture = bind_tool_watch(
+        &producers,
+        ToolWatchInputs {
+            focus: navigation_focus.clone(),
+            profile: game_ui.profile.clone(),
+            read_text: frame_reader(ocr_engine.clone()),
+            catalogue: tool_catalogues.cell(),
+            clock: clock.clone(),
+        },
+    );
+
+    let (skill_scan, sale_capture, spacebar_listener) = compose_scan_services(ScanInputs {
+        bus: producers.bus_handle(),
+        ocr_engine: ocr_engine.clone(),
+        game_ui: &game_ui,
+        game_data: game_data.clone(),
+        db: db.clone(),
+        clock: clock.clone(),
+        keystroke_source: producers.keystroke_source_handle(),
+    });
+
+    // The terminal reads (the Repair Terminal's cost, the Trade Terminal's
+    // total): the whole game window, the interface profile, and the shared
+    // engine. When the engine did not load they are told so here, and
+    // refuse as unavailable without capturing anything.
+    let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders {
+        frame: game_ui.frame.clone(),
+        profile: game_ui.profile.clone(),
+        read_text: frame_reader(ocr_engine.clone()),
+    }));
 
     // The planet-map bundle is optional: a missing or broken bundle stands
     // the maps surface down (an empty catalogue) with a logged reason,
@@ -831,6 +980,75 @@ async fn compose_with(
             None
         }
     };
+
+    // Coordinate capture: the player's position read from under the radar
+    // wherever it is in the game window, through the same capture seam,
+    // interface profile and engine as the other readers. The hand-drawn
+    // region (the two-point calibration, persisted in config) is read only
+    // when the radar cannot be found.
+    let coord_capture = {
+        use eo_services::coord_capture::{CoordCaptureProviders, CoordCaptureService};
+        let region_reader = {
+            let config = producers.config_service_handle();
+            let reader = config.lock().expect("config service").reader();
+            move || reader.current().map_coord_region
+        };
+        let persist_config = producers.config_service_handle();
+        // In a debug build, a failed read leaves its crop and what was read
+        // there under the data dir's debug/ (tiny, overwritten, local-only):
+        // the standing instrument for diagnosing coordinates that will not
+        // read. A clean read leaves nothing, and a release build never keeps
+        // a capture of the screen.
+        let coord_debug_dir = data_dir.join("debug");
+        CoordCaptureService::new(
+            CoordCaptureProviders {
+                frame: game_ui.frame.clone(),
+                profile: game_ui.profile.clone(),
+                read_text: frame_reader(ocr_engine.clone()),
+                // The names a radar may print, from the bundled maps: each
+                // map's name and the game's own name for its planet.
+                planets: planet_maps
+                    .as_ref()
+                    .map(|store| {
+                        store
+                            .records()
+                            .iter()
+                            .map(|record| eo_services::coord_capture::KnownPlanet {
+                                name: record.name.clone(),
+                                printed: std::iter::once(record.name.clone())
+                                    .chain(record.technical_name.clone())
+                                    .collect(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                cursor_position: Arc::new(eu_window::cursor_position),
+                region: Arc::new(region_reader),
+                persist_region: Arc::new(move |region| {
+                    let mut updates = serde_json::Map::new();
+                    updates.insert(
+                        "map_coord_region".to_string(),
+                        serde_json::to_value(region).map_err(|err| err.to_string())?,
+                    );
+                    persist_config
+                        .lock()
+                        .map_err(|_| "config service lock poisoned".to_string())?
+                        .update(&updates)
+                        .map(|_| ())
+                        .map_err(|err| err.to_string())
+                }),
+                debug_dir: Arc::new(move || {
+                    cfg!(debug_assertions).then(|| coord_debug_dir.clone())
+                }),
+            },
+            clock.clone(),
+        )
+    };
+    let coord_confirm = eo_services::coord_capture::CoordConfirmListener::new(
+        coord_capture.clone(),
+        Some(producers.keystroke_source_handle()),
+    );
+    coord_capture.attach_confirm_listener(&coord_confirm);
 
     let navigation = {
         let bus = producers.bus_handle();
@@ -855,20 +1073,22 @@ async fn compose_with(
                 .calibration
                 .as_ref()?
                 .bounds;
-            Some(eo_services::coord_capture::CoordBounds {
-                lon_min: bounds.lon_min,
-                lon_max: bounds.lon_max,
-                lat_min: bounds.lat_min,
-                lat_max: bounds.lat_max,
+            Some(eo_services::game_ui::radar::CoordinateBounds {
+                lon: (bounds.lon_min, bounds.lon_max),
+                lat: (bounds.lat_min, bounds.lat_max),
             })
         });
         let service = eo_services::navigation::NavigationService::new(
             db.clone(),
             clock.clone(),
-            coord_capture.clone(),
-            bounds,
-            changed,
-            Some(producers.keystroke_source_handle()),
+            eo_services::navigation::NavigationProviders {
+                coord_capture: coord_capture.clone(),
+                bounds,
+                changed,
+                input: Some(producers.keystroke_source_handle()),
+                focus: navigation_focus,
+                settings: eo_services::navigation::NavigationSettings::default(),
+            },
         )
         .await;
         let radar_confirm = service.attach_radar_confirm_listener(
@@ -887,42 +1107,243 @@ async fn compose_with(
         (service, radar_confirm)
     };
 
+    // The account connection: reads the player's own account site once the
+    // player has connected, always in the installed app and only while a
+    // tracked session or a strongbox run needs it in a development build
+    // (see `account_reading_mode`). It hears
+    // session starts and stops on the producer bus and announces its
+    // changes there for the frontend. Without a reader it stands down and
+    // the account commands answer an internal error.
+    let account = match eo_services::account::HttpAccountSite::new() {
+        Ok(site) => Some(eo_services::account::AccountRecorder::start(
+            &producers.bus_handle(),
+            eo_services::account::RecorderParts {
+                db: db.clone(),
+                clock: clock.clone(),
+                site: Arc::new(site),
+                flag: Arc::new(eo_services::account::recorder::SettingsFlag(
+                    producers.config_service_handle(),
+                )),
+                game_data: Some(game_data.clone()),
+                // A sign-in the site accepts is kept for the next launch.
+                store: crate::account_window::session_store(),
+                // The game's chat log shows a gap a session's readings
+                // leave clean, or not.
+                chat_log: Some(producers.chat_log_source()),
+                changed: Some({
+                    let bus = producers.bus_handle();
+                    let clock = clock.clone();
+                    Arc::new(move || {
+                        use eo_wire::domain_events::{
+                            AccountUpdated, AccountUpdatedPayload, AccountUpdatedTag,
+                        };
+                        bus.publish(&BusEvent::AccountUpdated(AccountUpdated {
+                            topic: AccountUpdatedTag,
+                            event_version: 1,
+                            occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                            payload: AccountUpdatedPayload {},
+                        }));
+                    })
+                }),
+                mode: account_reading_mode(),
+            },
+            &tokio::runtime::Handle::current(),
+        )),
+        Err(error) => {
+            tracing::error!(target: "eo::composition", %error, "the account site reader could not be built; the account connection stands down");
+            None
+        }
+    };
+
     // The typed-command facade shares the read surface's handles plus the
     // producers the write families signal (the config writer, the hunt
     // tracker, the hotbar gate, the chat-log watcher, the skill tracker
-    // a codex claim suppresses on, and the manual-scan state machine +
-    // spacebar listener the scan family drives), so the facade and the
+    // a codex claim suppresses on, the skill scan the scan family drives,
+    // and the spacebar listener the research capture arms), so the facade and the
     // producer spine serve over the same live instances.
-    let api = Arc::new(eo_api::Api::new(
-        db.clone(),
-        game_data.clone(),
-        clock.clone(),
-        data_dir.clone(),
-        producers.config_service_handle(),
-        producers.tracker_handle(),
-        producers.hotbar_handle(),
-        producers.watcher_handle(),
-        producers.skill_tracker_handle(),
-        skill_scan.clone(),
-        spacebar_listener.clone(),
-        repair_ocr.clone(),
-        sale_window_ocr.clone(),
-        producers.quests_handle(),
-        demo_db_path,
-        planet_maps,
-        Some(coord_capture.clone()),
-        Some(navigation.0),
-    ));
-    Composition::Ready(Composed {
+    let api = Arc::new(
+        eo_api::Api::new(
+            db.clone(),
+            game_data.clone(),
+            clock.clone(),
+            data_dir.clone(),
+            producers.config_service_handle(),
+            producers.tracker_handle(),
+            producers.hotbar_handle(),
+            producers.watcher_handle(),
+            producers.skill_tracker_handle(),
+            skill_scan.clone(),
+            spacebar_listener.clone(),
+            repair_ocr.clone(),
+            sale_capture.clone(),
+            producers.quests_handle(),
+            planet_maps,
+            Some(coord_capture.clone()),
+            Some(navigation.0),
+        )
+        .with_input_access(producers.input_access())
+        .with_mob_detection(
+            mob_catalogue,
+            game_ui
+                .profile
+                .as_ref()
+                .map(|profile| profile.mob_names.clone()),
+            Some(mob_capture),
+        )
+        // The library groups the entries the held-tool bar cannot tell
+        // apart by the same profile the readers load; without one it
+        // reports none and the library still reads.
+        .with_tool_names(
+            game_ui
+                .profile
+                .as_ref()
+                .map(|profile| profile.tool_names.clone()),
+        )
+        // An edit to the library rebuilds the tools the held-tool watcher
+        // matches against, so its next look matches with the library as it
+        // now stands.
+        .with_tool_reading(tool_catalogues, Some(tool_capture))
+        .with_protection_changed({
+            // Recording happens in the overlay's Cost popup while Equipment,
+            // History, and the dashboard may be open elsewhere: each re-reads
+            // on this signal rather than holding a stale armour cost.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    ProtectionUpdated, ProtectionUpdatedPayload, ProtectionUpdatedTag,
+                };
+                bus.publish(&BusEvent::ProtectionUpdated(ProtectionUpdated {
+                    topic: ProtectionUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: ProtectionUpdatedPayload {},
+                }));
+            })
+        })
+        .with_healing_changed({
+            // A correction in History moves a session's heal cost while the
+            // review list may be open, and may take back or restore an effect
+            // window a running session is still matching ticks against: the
+            // tracker and every open surface re-read on this signal.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    HealingUpdated, HealingUpdatedPayload, HealingUpdatedTag,
+                };
+                bus.publish(&BusEvent::HealingUpdated(HealingUpdated {
+                    topic: HealingUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: HealingUpdatedPayload {},
+                }));
+            })
+        })
+        .with_market_changed({
+            // A paste, a quote, a manual markup, or a Nanocube mark moves the
+            // markup loot is valued at while the dashboard, the overlay, and
+            // Inventory may all be open: each re-reads on this signal.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    MarketUpdated, MarketUpdatedPayload, MarketUpdatedTag,
+                };
+                bus.publish(&BusEvent::MarketUpdated(MarketUpdated {
+                    topic: MarketUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: MarketUpdatedPayload {},
+                }));
+            })
+        })
+        .with_weapons_changed({
+            // Assigning an unpriced shot in History moves an ended session's
+            // weapon cost while its detail and the session list may be open:
+            // every open surface re-reads on this signal.
+            let bus = producers.bus_handle();
+            let clock = clock.clone();
+            Arc::new(move || {
+                use eo_wire::domain_events::{
+                    WeaponsUpdated, WeaponsUpdatedPayload, WeaponsUpdatedTag,
+                };
+                bus.publish(&BusEvent::WeaponsUpdated(WeaponsUpdated {
+                    topic: WeaponsUpdatedTag,
+                    event_version: 1,
+                    occurred_at: eo_services::time::to_iso_utc(naive_to_epoch(clock.now())),
+                    payload: WeaponsUpdatedPayload {},
+                }));
+            })
+        })
+        .with_account(account),
+    );
+    Composition::Ready(Box::new(Composed {
         db,
         api,
         producers,
         ocr_engine,
         skill_scan,
+        repair_ocr,
         spacebar_listener,
         coord_confirm,
         radar_confirm: navigation.1,
-    })
+    }))
+}
+
+/// What the held-tool watcher reads with, beside the producers it is bound
+/// into.
+struct ToolWatchInputs {
+    focus: Option<GameFocusProbe>,
+    profile: Option<Arc<UiProfile>>,
+    read_text: Option<FrameReader>,
+    catalogue: Arc<eo_services::tool_watch::ToolCatalogueCell>,
+    clock: Arc<dyn Clock>,
+}
+
+/// The held-tool watcher's seams. It captures only from a capture already
+/// running (never the shared seam, which may start capture), starts one only
+/// for the player's turning the reading on, and is on only while the
+/// player's setting is, read live from `reader` before every look.
+fn tool_watch_providers(
+    reader: ConfigReader,
+    inputs: ToolWatchInputs,
+) -> eo_services::tool_watch::ToolWatchProviders {
+    eo_services::tool_watch::ToolWatchProviders {
+        frame: Arc::new(eu_window::capture_game_window_running),
+        capture_running: Arc::new(eo_services::screen_capture::capture_running),
+        start_capture: Arc::new(eo_services::screen_capture::start_capture),
+        enabled: Arc::new(move || reader.current().tool_reading_on()),
+        focus: inputs.focus,
+        profile: inputs.profile,
+        read_text: inputs.read_text,
+        catalogue: inputs.catalogue,
+        wait: None,
+    }
+}
+
+/// Build the held-tool watcher and bind it into the tracker's slot; its
+/// capture status, for the settings. It captures under the one lock every
+/// watcher of the game window shares.
+fn bind_tool_watch(
+    producers: &ProducerState,
+    inputs: ToolWatchInputs,
+) -> eo_services::screen_watch::CaptureStatusProbe {
+    use eo_services::tool_watch::{ToolDetector, ToolWatch};
+    let reader = producers
+        .config_service_handle()
+        .lock()
+        .expect("config service")
+        .reader();
+    let clock = inputs.clock.clone();
+    let tool_watch = ToolWatch::new(tool_watch_providers(reader, inputs), clock);
+    let capture: eo_services::screen_watch::CaptureStatusProbe = {
+        let tool_watch = tool_watch.clone();
+        Arc::new(move || tool_watch.capture_status())
+    };
+    let detector: Arc<dyn ToolDetector> = Arc::new(tool_watch);
+    producers.tool_detection_handle().bind(detector);
+    capture
 }
 
 /// Construct the OCR engine off the async runtime worker, then warm it up
@@ -980,216 +1401,139 @@ async fn build_ocr_engine(models: PathBuf) -> Option<Arc<OcrEngine>> {
     Some(engine)
 }
 
-/// Where the scan services read their calibration and drop what they saw.
-struct ScanPaths {
-    /// The calibration artefact, beside the snapshot in both layouts.
-    geometry: PathBuf,
-    /// Where a scan leaves its last captured frame for later inspection.
-    debug: PathBuf,
-}
-
-/// Compose the manual skill scan, the repair-cost OCR and the sale-window
-/// read over the OCR engine, the live game-window region lookups, and the
-/// on-demand screen capturer. The scan publishes `scan.status.changed` on
-/// the spine `bus` (so its frames reach the shell's event bridge), persists
-/// accepted calibrations through the shared `pool`, and hydrates its resting
-/// status from the same. When the OCR runtime is absent the providers stand
-/// down to "engine unavailable" rather than declining composition, so the
-/// scan operations still serve (the scan reports offline, a golden-pinned
-/// reply). All three services are always constructed.
-async fn compose_scan_services(
+/// What the scan services are composed over.
+struct ScanInputs<'a> {
+    /// The spine bus their status frames publish on.
     bus: Arc<EventBus>,
     ocr_engine: Option<Arc<OcrEngine>>,
+    game_ui: &'a GameUi,
     game_data: Arc<GameDataStore>,
     db: Db,
     clock: Arc<dyn Clock>,
-    paths: ScanPaths,
+    /// The shared OS keyboard hook the spacebar listener rides.
     keystroke_source: Arc<dyn KeystrokeSource>,
-) -> (
-    Arc<SkillScanManual>,
-    Arc<RepairOcrService>,
-    Arc<SaleWindowOcrService>,
-    Arc<SpacebarCaptureListener>,
-) {
-    let runtime = tokio::runtime::Handle::current();
-
-    // The calibrated panel grid and the canonical skill vocabulary the
-    // panel reader resolves names against; both read existing snapshot
-    // assets (the geometry artefact beside the snapshot dir, the skill
-    // names from the bundled `skills` endpoint), so this is port scope, not
-    // new surface.
-    let presets = Arc::new(ScanPresets::new(&paths.geometry));
-    let skill_geom = presets.skill.to_geom_value();
-    let vocab: Vec<String> = game_data
-        .get_entities("skills")
-        .iter()
-        .filter_map(|entity| {
-            entity
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect();
-
-    // The skill-scan provider seams: engine availability is fixed at the
-    // load attempt (the engine never reloads at runtime); the region lookup
-    // reads the live game window through the calibrated anchor; the capturer
-    // grabs the PNG on demand; the extractor decodes, slices, OCRs, and
-    // filters to resolved (name, level) rows.
-    let has_engine = ocr_engine.is_some();
-    let region_presets = presets.clone();
-    let skill_region: Arc<dyn Fn() -> Option<ScanRegion> + Send + Sync> =
-        Arc::new(move || eu_window::skill_region(&region_presets));
-    let capture_region: Arc<dyn Fn(ScanRegion) -> Option<Vec<u8>> + Send + Sync> =
-        Arc::new(|(tl, br): ScanRegion| {
-            capture_region_png(tl[0], tl[1], br[0] - tl[0], br[1] - tl[1])
-        });
-    let extract_engine = ocr_engine.clone();
-    let extract_geom = skill_geom;
-    let extract_vocab = vocab;
-    let extract_page_levels: eo_services::skill_scan_manual::PageExtractor =
-        Arc::new(move |png: &[u8]| {
-            read_skill_page_levels(&extract_engine, &extract_geom, &extract_vocab, png)
-        });
-
-    let scan_providers = ScanProviders {
-        engine_available: Arc::new(move || has_engine),
-        skill_region,
-        capture_region,
-        extract_page_levels,
-    };
-
-    // Hydrate the resting status (last scan time, skills count) from the
-    // persisted calibration history.
-    let (initial_scan_time, initial_skills_count) =
-        hydrate_skill_scan_state(&db).await.unwrap_or((None, 0));
-
-    let skill_scan = SkillScanManual::new(
-        scan_providers,
-        clock.clone(),
-        Some(bus),
-        initial_scan_time,
-        initial_skills_count,
-    );
-
-    // The completion callback persists accepted calibrations through the
-    // shared database handle, bridging onto the runtime from the scan's
-    // worker thread the same dual way the tracker's providers do; a
-    // persist error surfaces on the scan status rather than panicking.
-    let completion_db = db.clone();
-    let completion_clock = clock.clone();
-    let completion_runtime = runtime;
-    skill_scan.set_completion_callback(Arc::new(move |levels: &[(String, f64)]| {
-        let scan_time = naive_to_epoch(completion_clock.now());
-        let levels = levels.to_vec();
-        let db = completion_db.clone();
-        block_on_pool(&completion_runtime, async move {
-            complete_skill_scan(&db, &levels, scan_time).await
-        })
-        .map(|_drift| ())
-        .map_err(Into::into)
-    }));
-
-    // The repair-OCR provider seams: the same calibrated region lookup and
-    // capturer (BGR pixels here), recognised by the shared engine.
-    let repair_presets = presets.clone();
-    let trade_terminal_presets = presets.clone();
-    let trade_terminal_calibrated = presets.trade_terminal_calibrated;
-    let repair_engine_for_sale = ocr_engine.clone();
-    let repair_engine = ocr_engine;
-    let repair_ocr = Arc::new(RepairOcrService::new(RepairProviders {
-        repair_region: Arc::new(move || eu_window::repair_region(&repair_presets)),
-        trade_terminal_region: Arc::new(move || {
-            eu_window::trade_terminal_region(&trade_terminal_presets)
-        }),
-        trade_terminal_calibrated,
-        capture_region: Arc::new(capture_region_bgr),
-        read_text: Arc::new(move |frame: &BgrImage| {
-            repair_engine
-                .as_ref()?
-                .recognize_bgr(&frame.data, frame.h, frame.w)
-                .ok()
-        }),
-    }));
-
-    // The sale-window read: the same seams again, over the same warm
-    // engine and capturer. It takes the anchor as well as the region,
-    // because it crops each field out of the one captured panel.
-    let sale_presets = presets;
-    let sale_engine = repair_engine_for_sale;
-    let anchor_presets = sale_presets.clone();
-    let sale_window_ocr = Arc::new(SaleWindowOcrService::new(SaleWindowProviders {
-        sale_window_region: Arc::new(move || eu_window::sale_window_region(&sale_presets)),
-        anchor: Arc::new(move || anchor_presets.sale_window.clone()),
-        capture_region: Arc::new(capture_region_bgr),
-        read_text: Arc::new(move |frame: &BgrImage| {
-            sale_engine
-                .as_ref()?
-                .recognize_bgr(&frame.data, frame.h, frame.w)
-                .ok()
-        }),
-    }));
-
-    // A development read drops its captured panel under the data dir's
-    // debug/, the way a coordinate scan drops its frame: one small
-    // overwritten file, local only, and the only way to see afterwards what
-    // the recogniser was actually looking at when a field would not read.
-    // Release builds do not retain transaction pixels after recognition.
-    let sale_debug_dir = paths.debug;
-    sale_window_ocr.set_capture_tap(Arc::new(move |_panel, _region, frame| {
-        if cfg!(debug_assertions) {
-            eo_services::screen_capture::write_debug_frame(
-                &sale_debug_dir,
-                "sale-window-last.png",
-                frame,
-            );
-        }
-    }));
-
-    // The spacebar-capture listener fires a manual-scan capture on a space
-    // press while the scan is capturing, over the SAME OS hook the hotbar
-    // listener rides (the hook is single-instance). Off until the overlay
-    // toggle enables it through the spacebar-capture command.
-    let spacebar = SpacebarCaptureListener::new(skill_scan.clone(), Some(keystroke_source));
-
-    (skill_scan, repair_ocr, sale_window_ocr, spacebar)
 }
 
-/// Extract `{canonical_name: level}` rows from one captured skill-panel
-/// PNG: decode to BGR, slice the calibrated grid, OCR each name/level cell,
-/// estimate each bar fill, and keep only the rows that both resolved a name
-/// and parsed a level. Returns no rows when the engine is absent, the PNG
-/// is unreadable, or the grid is uncalibrated (the reader would otherwise
-/// have no rows to slice and would panic), so an installed build missing
-/// the calibration artefact degrades to an empty scan rather than crashing.
-fn read_skill_page_levels(
-    engine: &Option<Arc<OcrEngine>>,
-    skill_geom: &Value,
-    vocab: &[String],
-    png: &[u8],
-) -> Vec<(String, f64)> {
-    let Some(engine) = engine.as_ref() else {
-        return Vec::new();
-    };
-    if skill_geom.get("n_rows").and_then(Value::as_i64).is_none() {
-        return Vec::new();
+/// What the readers of the game's interface are composed over: the
+/// whole game window, captured on demand, and the interface profile.
+struct GameUi {
+    frame: GameWindowFrame,
+    profile: Option<Arc<UiProfile>>,
+}
+
+/// The interface profile's file name, bundled beside the snapshot dir
+/// (`tauri.conf.json` maps `resources/ui_profile.json` there).
+const UI_PROFILE_FILE: &str = "ui_profile.json";
+
+/// The directory the bundled data files sit in: the snapshot dir's parent,
+/// in the dev and installed layouts alike.
+fn resource_root(snapshot: &std::path::Path) -> PathBuf {
+    snapshot.parent().unwrap_or(snapshot).to_path_buf()
+}
+
+/// The bundled interface profile, or None (logged) when it cannot be
+/// used, which leaves the readers that need it unavailable.
+fn load_ui_profile(path: &std::path::Path) -> Option<Arc<UiProfile>> {
+    match UiProfile::load(path) {
+        Ok(profile) => Some(Arc::new(profile)),
+        Err(err) => {
+            tracing::warn!(
+                target: "eo::composition",
+                "interface profile at {} unusable ({err}); the readers of the game window stand down",
+                path.display()
+            );
+            None
+        }
     }
-    let Ok((data, h, w)) = load_bgr_png(png) else {
-        return Vec::new();
-    };
-    let panel = BgrImage { data, h, w };
-    let read = |crop: &BgrImage| -> (String, f64) {
-        engine
-            .recognize_bgr(&crop.data, crop.h, crop.w)
-            .unwrap_or_default()
-    };
-    read_skill_panel(&read, &panel, skill_geom, vocab)
-        .into_iter()
-        .filter_map(|row| match (row.name, row.level) {
-            (Some(name), Some(level)) => Some((name, level)),
-            _ => None,
-        })
-        .collect()
+}
+
+/// The skill scan's completion callback: it persists an accepted scan's
+/// levels through the shared database handle, each stamped with when its
+/// page was read, bridging onto the runtime from the calling thread the
+/// same dual way the tracker's providers do. A persist error is answered
+/// to the player rather than panicking.
+fn skill_scan_completion(db: Db, runtime: tokio::runtime::Handle) -> CompletionCallback {
+    Arc::new(move |levels: &[ScannedLevel]| {
+        let levels = levels.to_vec();
+        let db = db.clone();
+        block_on_pool(
+            &runtime,
+            async move { complete_skill_scan(&db, &levels).await },
+        )
+        .map(|_drift| ())
+        .map_err(Into::into)
+    })
+}
+
+/// The engine as a recogniser of one crop; `None` without an engine.
+fn frame_reader(engine: Option<Arc<OcrEngine>>) -> Option<FrameReader> {
+    engine.map(|engine| -> FrameReader {
+        Arc::new(move |frame: &BgrImage| engine.recognize_bgr(&frame.data, frame.h, frame.w).ok())
+    })
+}
+
+/// Compose the skill scan, the sell-queue capture, and the spacebar
+/// listener. The skill scan reads the whole game window through the
+/// interface profile and the shared engine, checking what it reads
+/// against the bundled skill list; it publishes `scan.status.changed` on
+/// the spine `bus` (so its frames reach the shell's event bridge) and
+/// persists an accepted scan through the shared database. Without the
+/// engine or the profile it rests unavailable rather than declining
+/// composition, so the scan operations still serve. The sell-queue capture
+/// reads the whole game window through the same profile and engine,
+/// confirming queued names against the bundled item data. All three
+/// services are always constructed.
+fn compose_scan_services(
+    inputs: ScanInputs<'_>,
+) -> (
+    Arc<SkillScanService>,
+    Arc<SaleCaptureService>,
+    Arc<SpacebarCaptureListener>,
+) {
+    let ScanInputs {
+        bus,
+        ocr_engine,
+        game_ui,
+        game_data,
+        db,
+        clock,
+        keystroke_source,
+    } = inputs;
+
+    let skill_scan = SkillScanService::new(
+        SkillScanProviders {
+            frame: game_ui.frame.clone(),
+            profile: game_ui.profile.clone(),
+            read_text: frame_reader(ocr_engine.clone()),
+            vocabulary: SkillVocabulary::from_entities(game_data.get_entities("skills")),
+            tick: DEFAULT_TICK,
+            idle_limit: DEFAULT_IDLE_LIMIT,
+        },
+        clock.clone(),
+        Some(bus),
+    );
+    skill_scan
+        .set_completion_callback(skill_scan_completion(db, tokio::runtime::Handle::current()));
+
+    // The sell-queue capture: the whole game window, the interface profile
+    // and the shared engine, with the bundled item data built once into
+    // the catalogue that confirms a queued name.
+    let sale_capture = Arc::new(SaleCaptureService::new(
+        SaleCaptureProviders {
+            frame: game_ui.frame.clone(),
+            profile: game_ui.profile.clone(),
+            catalogue: Arc::new(ItemCatalogue::from_store(&game_data)),
+            read_text: frame_reader(ocr_engine),
+        },
+        clock,
+    ));
+
+    // The spacebar-capture listener, over the SAME OS hook the hotbar
+    // listener rides (the hook is single-instance). Unarmed until the
+    // development research capture arms it.
+    let spacebar = SpacebarCaptureListener::new(Some(keystroke_source));
+
+    (skill_scan, sale_capture, spacebar)
 }
 
 /// Subscriber backlog bound for the typed domain channel (the shell's
@@ -1219,6 +1563,7 @@ fn compose_producers(
     data_dir: &std::path::Path,
     chatlog_override: Option<PathBuf>,
     keystroke_source: Arc<dyn KeystrokeSource>,
+    game_focus: Option<GameFocusProbe>,
     game_data: Option<Arc<GameDataStore>>,
 ) -> Result<ProducerState, ComposeError> {
     // The producers run on the substrate's tokio runtime; the trackers
@@ -1262,7 +1607,12 @@ fn compose_producers(
     // publishes. The log is stamped in the game server's zone, so this
     // is what keeps a logged instant comparable with one the app
     // stamped itself; see `eo_services::chatlog_time`.
-    let chatlog_clock = ChatLogClock::observed();
+    // The offset it settles is remembered between runs, so an instant from
+    // before a restart is still placed by it when it settles again at the
+    // same value.
+    let chatlog_clock = ChatLogClock::observed_remembering(Arc::new(
+        eo_services::chatlog_time::StoredOffsetMemory::new(db.clone()),
+    ));
     let watcher = Arc::new(ChatlogWatcher::new(
         bus.clone(),
         watched_chatlog,
@@ -1270,6 +1620,11 @@ fn compose_producers(
         chatlog_clock.clone(),
     ));
     watcher.set_signal_reward_filter(quests.watcher_signal_filter());
+    // A loot line's arrival is stamped on the application's clock, the one
+    // the creature watcher stamps its looks on, so the two compare.
+    watcher.set_arrival_clock(clock.clone());
+    let mob_detection = Arc::new(DetectorSlot::default());
+    let tool_detection = Arc::new(eo_services::tool_watch::ToolDetectorSlot::default());
 
     let skill_tracker = SkillTracker::new(&bus, db.clone(), clock.clone(), chatlog_clock.clone());
 
@@ -1285,33 +1640,87 @@ fn compose_producers(
     // is inert, so both listeners never run.
     let keystroke_source: Arc<dyn KeystrokeSource> =
         Arc::new(SharedKeystrokeSource::new(keystroke_source));
+    // Keyless tracking is held to the machine it was turned on for. Apply it
+    // before any consumer can start the keyboard, so a keyless machine never
+    // opens it at all.
+    let machine_id = eo_services::machine_identity::current();
+    keystroke_source.set_suppressed(config.keyless_input_on(machine_id.as_deref()));
+    // The running doses, published by the tracker and read by every other
+    // surface that prices under the reload speed in effect.
+    let doses = DoseBoard::new(clock.clone());
+    let items = build_item_resolver(db.clone(), data_dir, game_data.clone(), doses.clone());
     let hotbar = HotbarListener::new(
         bus.clone(),
         Some(keystroke_source.clone()),
-        Some(build_hotbar_resolver(
-            db.clone(),
-            data_dir,
-            game_data.clone(),
-        )),
+        Some(build_hotbar_resolver(data_dir, items.clone())),
+        game_focus,
     );
+    hotbar.set_item_resolver(items.clone());
     // Apply the stored toggle; the source still only attaches while a session
     // is active (the listener reconciles on the session bus events).
-    hotbar.set_hotbar_hooks_enabled(config.hotbar_hooks_enabled);
+    hotbar.set_hotbar_hooks_enabled(config.hotbar_keys_observed(machine_id.as_deref()));
 
     let config_reader = config_service
         .lock()
         .expect("config service lock at composition")
         .reader();
-    let tracker = block_on_pool(
-        &runtime,
-        HuntTracker::new(
-            bus.clone(),
-            db.clone(),
-            clock.clone(),
-            chatlog_clock,
-            build_providers(db, config_reader, &config, runtime.clone(), game_data),
-        ),
-    )?;
+    let tracker =
+        block_on_pool(
+            &runtime,
+            HuntTracker::new(
+                bus.clone(),
+                db.clone(),
+                clock.clone(),
+                chatlog_clock.clone(),
+                Providers {
+                    detector: mob_detection.clone(),
+                    tool_detector: tool_detection.clone(),
+                    cpu_pressure: Arc::new(eo_services::look_record::system_cpu_pressure),
+                    // A library entry read off the screen resolves as a press
+                    // or a declaration of it does; a tool the library does not
+                    // hold prices bare from the game data.
+                    items: Some(items.clone()),
+                    // An enhancer break is priced from the game data's TT for
+                    // the enhancer's exact name.
+                    enhancer_tt: game_data
+                        .clone()
+                        .map(eo_services::enhancer_breaks::tt_resolver),
+                    // And at the markup set for its kind and tier, read when it
+                    // breaks (rarely), through the synchronous reader core.
+                    enhancer_markup: Some({
+                        let db = db.clone();
+                        Arc::new(move |name: &str, at: f64| {
+                            let name = name.to_string();
+                            db.with_reader_blocking(move |conn| {
+                                Ok(eo_services::enhancer_breaks::TierMarkups::read(conn)?
+                                    .at(&name, at))
+                            })
+                            .ok()
+                            .flatten()
+                        })
+                    }),
+                    bundled_tools: game_data.clone().map(|data| {
+                        let reader = config_reader.clone();
+                        let doses = doses.clone();
+                        eo_services::bundled_tools::resolver(
+                            data,
+                            Arc::new(move || {
+                                doses.reload_speed_percent(&reader.current().passive_effect_sources)
+                            }),
+                        )
+                    }),
+                    ..build_providers(
+                        db,
+                        config_reader,
+                        machine_id.clone(),
+                        &config,
+                        runtime.clone(),
+                        game_data,
+                        doses,
+                    )
+                },
+            ),
+        )?;
 
     // Wire the quest service's interval sink now that the tracker owning
     // the interval state exists (the quest service is built first, so this
@@ -1394,6 +1803,7 @@ fn compose_producers(
 
     Ok(ProducerState {
         watcher,
+        chatlog_clock,
         tracker,
         runtime,
         domain_bus,
@@ -1402,27 +1812,47 @@ fn compose_producers(
         bus,
         hotbar,
         keystroke_source,
+        machine_id,
         quests,
+        mob_detection,
+        tool_detection,
     })
 }
 
 /// The hotbar slot resolver: the
 /// live config maps the slot key to an equipment-library id; the row's item
 /// type selects the outcome (a healing tool's per-use cost and reload from its
-/// entity, a consumable's zero-cost one-off, or a weapon's per-shot cost
-/// looked up by name fragment exactly as the cost provider does). An unbound
-/// slot, an absent row, or a read failure yields None (no tool change).
-fn build_hotbar_resolver(
-    db: Db,
-    data_dir: &std::path::Path,
-    game_data: Option<Arc<GameDataStore>>,
-) -> HotbarResolver {
+/// entity, a consumable's dose, or a weapon's per-shot cost looked up by name
+/// fragment exactly as the cost provider does). Reloads and attack rates are
+/// under the reload speed in effect at the press: the equipped sources and
+/// the running doses. An unbound slot, an absent row, or a read failure
+/// yields None (no tool change).
+/// Resolve a hotbar slot to the item bound there, through the item resolver
+/// an overlay declaration uses too, so a press and a declaration price alike.
+fn build_hotbar_resolver(data_dir: &std::path::Path, items: ItemResolver) -> HotbarResolver {
     let data_dir = data_dir.to_path_buf();
     Arc::new(move |slot: &str| {
         let config = load_config_readonly(&data_dir).ok()?;
         let equip_id = config.hotbar.get(slot).and_then(Value::as_i64)?;
+        items(equip_id)
+    })
+}
+
+/// Resolve an equipment-library item to its intent snapshot: kind, per-use
+/// cost and reload under the reload speed in effect, and its healing,
+/// lifesteal, or dose profile.
+fn build_item_resolver(
+    db: Db,
+    data_dir: &std::path::Path,
+    game_data: Option<Arc<GameDataStore>>,
+    doses: DoseBoard,
+) -> ItemResolver {
+    let data_dir = data_dir.to_path_buf();
+    Arc::new(move |equip_id: i64| {
+        let config = load_config_readonly(&data_dir).ok()?;
         let db = db.clone();
         let game_data = game_data.clone();
+        let reload_speed = doses.reload_speed_percent(&config.passive_effect_sources);
         // The hotbar listener runs on the input listener's plain OS key
         // thread (no async runtime), so the slot lookup reads through the
         // synchronous reader core rather than bridging an async query onto
@@ -1437,15 +1867,17 @@ fn build_hotbar_resolver(
             let outcome = match item_type.as_str() {
                 "healing" => {
                     let (cost_ped, base_reload_seconds) = heal_cost_from_props(&properties_json);
-                    let speed_percent = reload_speed_percent(&config.passive_effect_sources);
-                    let reload_seconds = effective_reload_seconds(
-                        base_reload_seconds,
-                        &config.passive_effect_sources,
-                    );
+                    let reload_seconds = reload_seconds_under(base_reload_seconds, reload_speed);
                     let mut healing_profile = healing_profile_from_props(&properties_json);
                     healing_profile.base_reload_seconds = Some(base_reload_seconds);
-                    healing_profile.reload_speed_percent = Some(speed_percent);
+                    healing_profile.reload_speed_percent = Some(reload_speed);
                     healing_profile.effective_reload_seconds = Some(reload_seconds);
+                    let tt_per_use_ped =
+                        eo_services::equipment_pricing::heal_tt_from_props(&properties_json);
+                    healing_profile.tt_per_use_ped = Some(tt_per_use_ped);
+                    healing_profile.on_use = serde_json::from_str::<Value>(&properties_json)
+                        .ok()
+                        .and_then(|props| on_use_effect_from_props(&props, game_data.as_deref()));
                     ResolvedHotbarItem {
                         equipment_id: equip_id,
                         name,
@@ -1454,22 +1886,36 @@ fn build_hotbar_resolver(
                         reload_seconds,
                         healing_profile: Some(healing_profile),
                         lifesteal_percent: None,
+                        consumable_profile: None,
+                        setup: ToolSetup::from_props_json(&properties_json, Some(tt_per_use_ped)),
                     }
                 }
-                "consumable" => ResolvedHotbarItem {
-                    equipment_id: equip_id,
-                    name,
-                    kind: HotbarItemKind::Consumable,
-                    cost_per_use_ped: 0.0,
-                    reload_seconds: 0.0,
-                    healing_profile: None,
-                    lifesteal_percent: None,
-                },
+                "consumable" => {
+                    // One dose as the item stands at the press, over the
+                    // current catalogue.
+                    let props =
+                        serde_json::from_str::<Value>(&properties_json).unwrap_or(Value::Null);
+                    let profile =
+                        consumable_profile_from_props(&props, game_data.as_deref()).profile;
+                    ResolvedHotbarItem {
+                        equipment_id: equip_id,
+                        name,
+                        kind: HotbarItemKind::Consumable,
+                        cost_per_use_ped: profile.booked_cost_ped(),
+                        reload_seconds: 0.0,
+                        healing_profile: None,
+                        lifesteal_percent: None,
+                        consumable_profile: Some(profile),
+                        setup: ToolSetup::default(),
+                    }
+                }
                 // A harvesting tool stores the same single-entity props
                 // shape as a healing tool (tool_entity + markup), so the
                 // heal per-use recipe prices it; no reload semantics.
                 "tool" => {
                     let (cost_ped, _) = heal_cost_from_props(&properties_json);
+                    let tt_per_use_ped =
+                        eo_services::equipment_pricing::heal_tt_from_props(&properties_json);
                     ResolvedHotbarItem {
                         equipment_id: equip_id,
                         name,
@@ -1478,10 +1924,14 @@ fn build_hotbar_resolver(
                         reload_seconds: 0.0,
                         healing_profile: None,
                         lifesteal_percent: None,
+                        consumable_profile: None,
+                        setup: ToolSetup::from_props_json(&properties_json, Some(tt_per_use_ped)),
                     }
                 }
                 _ => {
-                    let cost = weapon_cost_by_name(conn, &name);
+                    let cost = weapon_cost_by_name(conn, &name, &|props| {
+                        with_attack_rate(props, game_data.as_deref(), reload_speed)
+                    });
                     ResolvedHotbarItem {
                         equipment_id: equip_id,
                         name,
@@ -1498,6 +1948,11 @@ fn build_hotbar_resolver(
                                 )
                             })
                             .or_else(|| lifesteal_percent_from_props(&properties_json)),
+                        consumable_profile: None,
+                        // A weapon's price and its TT follow the tracker's
+                        // own pricing of it (its enhancers wear down), so only
+                        // its parts are taken here.
+                        setup: ToolSetup::from_props_json(&properties_json, None),
                     }
                 }
             };
@@ -1521,6 +1976,12 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
         Topic::ScanStatusChanged,
         Topic::HarvestRecorded,
         Topic::NavigationUpdated,
+        Topic::ProtectionUpdated,
+        Topic::HealingUpdated,
+        Topic::WeaponsUpdated,
+        Topic::ConsumablesUpdated,
+        Topic::MarketUpdated,
+        Topic::AccountUpdated,
     ] {
         let domain_bus = domain_bus.clone();
         bus.subscribe(topic, move |event| match event {
@@ -1536,6 +1997,24 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
             BusEvent::NavigationUpdated(envelope) => {
                 domain_bus.publish(DomainEvent::NavigationUpdated(envelope.clone()));
             }
+            BusEvent::ProtectionUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::ProtectionUpdated(envelope.clone()));
+            }
+            BusEvent::HealingUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::HealingUpdated(envelope.clone()));
+            }
+            BusEvent::WeaponsUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::WeaponsUpdated(envelope.clone()));
+            }
+            BusEvent::ConsumablesUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::ConsumablesUpdated(envelope.clone()));
+            }
+            BusEvent::MarketUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::MarketUpdated(envelope.clone()));
+            }
+            BusEvent::AccountUpdated(envelope) => {
+                domain_bus.publish(DomainEvent::AccountUpdated(envelope.clone()));
+            }
             // A foreign event on a domain topic is unrepresentable at the
             // publish site; nothing to forward.
             _ => {}
@@ -1544,8 +2023,8 @@ fn subscribe_domain_bridge(bus: &EventBus, domain_bus: &Arc<DomainBus>) {
 }
 
 /// The live equipment library behind the tracker's equipment seam:
-/// profile and cost lookups over the equipment tables, and the
-/// trifecta resolution over the live config plus those tables. The
+/// profile and cost lookups over the equipment tables, and the carried
+/// weapons resolved over the live config plus those tables. The
 /// lookups bridge onto the runtime from the synchronous trait calls
 /// (the tracker invokes them inline on its own task).
 struct LiveEquipmentLibrary {
@@ -1553,6 +2032,25 @@ struct LiveEquipmentLibrary {
     reader: ConfigReader,
     runtime: tokio::runtime::Handle,
     game_data: Option<Arc<GameDataStore>>,
+    doses: DoseBoard,
+}
+
+impl LiveEquipmentLibrary {
+    /// A stored weapon's props as tracking prices and attributes them:
+    /// offensive efficiencies from the current catalogue, and the attack
+    /// rate under the reload speed in effect (the declared passive effects
+    /// and the running doses).
+    fn current_weapon_props(&self, props: &Value) -> Value {
+        let game_data = self.game_data.as_deref();
+        let props = game_data.map_or_else(
+            || props.clone(),
+            |game_data| with_current_offensive_efficiencies(props, game_data),
+        );
+        let reload_speed = self
+            .doses
+            .reload_speed_percent(&self.reader.current().passive_effect_sources);
+        with_attack_rate(&props, game_data, reload_speed)
+    }
 }
 
 impl EquipmentLibrary for LiveEquipmentLibrary {
@@ -1566,12 +2064,7 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
                 .flatten()
         })?;
         match serde_json::from_str::<Value>(&json) {
-            Ok(props @ Value::Object(_)) => {
-                let current = self.game_data.as_ref().map_or(props.clone(), |game_data| {
-                    with_current_offensive_efficiencies(&props, game_data)
-                });
-                current.as_object().cloned()
-            }
+            Ok(props @ Value::Object(_)) => self.current_weapon_props(&props).as_object().cloned(),
             _ => None,
         }
     }
@@ -1585,38 +2078,73 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
         }
     }
 
-    fn resolve_trifecta(&self) -> Option<Map<String, Value>> {
-        // Resolve the active preset's attribution map off the live
-        // config and the equipment library; the resolver discards the
-        // validation reason and yields just the data.
+    fn carried_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        // Every preset's weapons (the live preset's first, in slot order),
+        // then the weapons carried without a slot, each once. A slot holding
+        // a healer, harvesting tool, or consumable, and an id no longer in
+        // the library, carry nothing. Each weapon's props are prepared as
+        // the profile lookup's are, so its band carries the same attack rate
+        // its cost does.
         let config = self.reader.current();
-        let preset = active_trifecta_preset(&config).map(|p| TrifectaPreset {
-            small_weapon_id: p.small_weapon_id,
-            big_weapon_id: p.big_weapon_id,
-            heal_id: p.heal_id,
-        });
-        let db = self.db.clone();
-        let mut resolved = block_on_pool(&self.runtime, async move {
-            describe_trifecta(&db, preset.as_ref())
-                .await
-                .ok()
-                .and_then(|(data, _error)| data)
-        })?;
-        if let Some(game_data) = self.game_data.as_ref() {
-            for key in ["small_weapon", "big_weapon"] {
-                let Some(weapon) = resolved.get_mut(key).and_then(Value::as_object_mut) else {
-                    continue;
-                };
-                let Some(props) = weapon.get("weapon_props").cloned() else {
-                    continue;
-                };
-                weapon.insert(
-                    "weapon_props".into(),
-                    with_current_offensive_efficiencies(&props, game_data),
-                );
+        let mut ids = config.hotbar_ids_live_first();
+        for id in config.carried_weapon_ids.iter().copied() {
+            if !ids.contains(&id) {
+                ids.push(id);
             }
         }
-        Some(resolved)
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let db = self.db.clone();
+        let rows = block_on_pool(&self.runtime, async move {
+            db.with_reader(move |conn| {
+                let mut rows = Vec::with_capacity(ids.len());
+                for id in ids {
+                    if let Some((name, item_type, properties_json)) =
+                        hotbar_equipment_row_sync(conn, id)?
+                    {
+                        if item_type == "weapon" {
+                            rows.push((id, name, properties_json));
+                        }
+                    }
+                }
+                Ok(rows)
+            })
+            .await
+            .ok()
+        })
+        .unwrap_or_default();
+        rows.into_iter()
+            .filter_map(|(id, name, properties_json)| {
+                let props = serde_json::from_str::<Value>(&properties_json).ok()?;
+                let props = self.current_weapon_props(&props);
+                Some(CarriedWeaponProfile {
+                    weapon: CarriedWeapon::from_props(id, name, &props),
+                    props: props.as_object().cloned().unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
+    fn enabled_weapons(&self) -> Vec<CarriedWeaponProfile> {
+        // Every weapon entry the player has on, in the library's order, each
+        // prepared as the carried weapons' props are.
+        let db = self.db.clone();
+        let rows = block_on_pool(&self.runtime, async move {
+            db.equipment_library_rows().await.ok()
+        })
+        .unwrap_or_default();
+        rows.into_iter()
+            .filter(|(_, _, item_type, _, enabled)| *enabled && item_type == "weapon")
+            .filter_map(|(id, name, _, properties_json, _)| {
+                let props = serde_json::from_str::<Value>(&properties_json).ok()?;
+                let props = self.current_weapon_props(&props);
+                Some(CarriedWeaponProfile {
+                    weapon: CarriedWeapon::from_props(id, name, &props),
+                    props: props.as_object().cloned().unwrap_or_default(),
+                })
+            })
+            .collect()
     }
 
     fn resolve_harvest_guardrail(&self) -> Option<HarvestGuardrailTools> {
@@ -1701,6 +2229,7 @@ impl EquipmentLibrary for LiveEquipmentLibrary {
 /// filesystem.
 struct LiveTrackingConfig {
     reader: ConfigReader,
+    machine_id: Option<String>,
 }
 
 impl TrackingConfig for LiveTrackingConfig {
@@ -1726,14 +2255,32 @@ impl TrackingConfig for LiveTrackingConfig {
         Some((species, maturity))
     }
 
-    fn weapon_attribution_trifecta(&self) -> bool {
-        // `not hotbar_hooks_enabled`: hotbar hooks off selects
-        // trifecta attribution.
-        !self.reader.current().hotbar_hooks_enabled
-    }
-
     fn loot_filter_blacklist(&self) -> Vec<String> {
         self.reader.current().loot_filter_blacklist.clone()
+    }
+
+    fn passive_effect_sources(&self) -> Vec<eo_services::passive_effects::PassiveEffectSource> {
+        self.reader.current().passive_effect_sources.clone()
+    }
+
+    fn hotbar_hooks_enabled(&self) -> bool {
+        self.reader
+            .current()
+            .hotbar_keys_observed(self.machine_id.as_deref())
+    }
+
+    fn keyless_input(&self) -> bool {
+        self.reader
+            .current()
+            .keyless_input_on(self.machine_id.as_deref())
+    }
+
+    fn mob_detection_enabled(&self) -> bool {
+        self.reader.current().mob_detection_on()
+    }
+
+    fn tool_reading_enabled(&self) -> bool {
+        self.reader.current().tool_reading_on()
     }
 }
 
@@ -1743,9 +2290,11 @@ impl TrackingConfig for LiveTrackingConfig {
 fn build_providers(
     db: Db,
     reader: ConfigReader,
+    machine_id: Option<String>,
     initial_config: &AppConfig,
     runtime: tokio::runtime::Handle,
     game_data: Option<Arc<GameDataStore>>,
+    doses: DoseBoard,
 ) -> Providers {
     Providers {
         equipment: Arc::new(LiveEquipmentLibrary {
@@ -1753,9 +2302,23 @@ fn build_providers(
             reader: reader.clone(),
             runtime,
             game_data,
+            doses: doses.clone(),
         }),
-        config: Arc::new(LiveTrackingConfig { reader }),
+        config: Arc::new(LiveTrackingConfig { reader, machine_id }),
         player_name: initial_config.player_name.clone(),
+        doses,
+        // Bound by `compose_producers`, which owns the detector slot.
+        detector: Arc::new(eo_services::mob_watch::NoDetector),
+        // Filled by the tracker from the database as it starts.
+        mob_names: Arc::default(),
+        // Bound by `compose_producers`, which owns the held-tool slot.
+        tool_detector: Arc::new(eo_services::tool_watch::NoToolDetector),
+        // Wired where the tracker is built.
+        cpu_pressure: Arc::new(|| None),
+        items: None,
+        bundled_tools: None,
+        enhancer_tt: None,
+        enhancer_markup: None,
     }
 }
 
@@ -1763,7 +2326,10 @@ fn build_providers(
 /// from either calling context: a runtime worker thread (a facade-driven
 /// reload) yields its slot, while a plain producer thread parks. The
 /// tracker's own `block_on` uses this exact dual shape.
-fn block_on_pool<F: std::future::Future>(handle: &tokio::runtime::Handle, future: F) -> F::Output {
+pub(crate) fn block_on_pool<F: std::future::Future>(
+    handle: &tokio::runtime::Handle,
+    future: F,
+) -> F::Output {
     // Never `Handle::current()`: the provider callbacks run on the
     // chat-log watcher's plain OS thread (no current runtime), so the
     // handle is the one captured at composition time. A runtime worker
@@ -1838,9 +2404,9 @@ mod tests {
             dir.path().join("data"),
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await
         else {
@@ -1866,13 +2432,19 @@ mod tests {
             data_dir,
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await;
         assert!(
-            matches!(composed, Composition::Declined),
+            matches!(
+                composed,
+                Composition::Declined(Decline {
+                    reason: DeclineReason::DatabaseUnreadable,
+                    ..
+                })
+            ),
             "quarantine declines composition"
         );
         assert_eq!(std::fs::read(&db_path).unwrap(), b"not a database");
@@ -1906,13 +2478,19 @@ mod tests {
             data_dir,
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await;
         assert!(
-            matches!(composed, Composition::Declined),
+            matches!(
+                composed,
+                Composition::Declined(Decline {
+                    reason: DeclineReason::DatabaseBelowBaseline,
+                    ..
+                })
+            ),
             "a below-baseline database declines (nothing migrates it without the sidecar)"
         );
     }
@@ -1924,13 +2502,19 @@ mod tests {
             dir.path().join("data"),
             dir.path().join("no-such-snapshot"),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await;
         assert!(
-            matches!(composed, Composition::Declined),
+            matches!(
+                composed,
+                Composition::Declined(Decline {
+                    reason: DeclineReason::GameDataUnavailable,
+                    ..
+                })
+            ),
             "missing snapshot declines composition"
         );
     }
@@ -2115,9 +2699,9 @@ mod tests {
             dir.path().join("data"),
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await
         else {
@@ -2167,14 +2751,11 @@ mod tests {
     }
 
     /// The composed scan services are reachable and wired over the LIVE
-    /// providers, not the inert defaults: the manual scan reports a resting
-    /// idle status whose `configured` flag mirrors whether the OCR engine
-    /// loaded (the inert default's `engine_available` is always false, so a
-    /// host where the engine loads proves the real provider), and the repair
-    /// reader runs its provider chain to the window-not-found leg. The scan
-    /// also publishes onto the spine bus: a status-moving verb dispatches one
-    /// `scan.status.changed` frame through the domain bridge composed
-    /// alongside.
+    /// providers, not the inert defaults: the skill scan rests idle, able
+    /// to run exactly when the OCR engine loaded (the inert default has no
+    /// recogniser, profile or skill list, so a host where the engine loads
+    /// proves the real providers), and the terminal reader is composed
+    /// with its profile.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn composes_the_scan_services_over_live_providers() {
         let _ort = ORT_TEST_LOCK.lock().await;
@@ -2191,35 +2772,67 @@ mod tests {
             dir.path().join("data"),
             repo_snapshot(),
             repo_models(),
-            None,
             repo_maps(),
             Arc::new(MockKeystrokeSource::new()),
+            None,
         )
         .await
         else {
             panic!("composition succeeds");
         };
 
-        let status = composed.skill_scan.get_status();
-        assert_eq!(status["phase"], "idle");
-        assert_eq!(status["captured_pages"], 0);
-        // `configured` mirrors whether the engine loaded (the real provider);
-        // `game_window_present` mirrors the live window-discovery seam, so
-        // it is compared against that seam's own answer rather than assumed
-        // absent (a dev host can legitimately have the real game running,
-        // which is precisely the live-provider wiring this test proves).
-        assert_eq!(status["configured"], composed.ocr_engine.is_some());
+        // Available means the engine, the bundled profile and the bundled
+        // skill list all reached the scan.
         assert_eq!(
-            status["game_window_present"],
-            eo_services::eu_window::game_window_present()
+            composed.skill_scan.status(),
+            eo_services::skill_scan::ScanStatus::Idle {
+                available: composed.ocr_engine.is_some(),
+                stopped: None,
+            }
         );
         // The scan composed on the spine bus (its status frames reach the
         // domain bridge); the forwarding is covered by
-        // `the_domain_bridge_forwards_typed_envelopes_to_a_subscriber`. The
-        // repair reader's no-window leg is covered by the facade test
-        // `tracking_facade::repair_scan_soft_error_rides_the_body`.
+        // `the_domain_bridge_forwards_typed_envelopes_to_a_subscriber`.
+
+        // With an engine and the bundled profile, the terminal reader is
+        // available. (A profile at the wrong path would leave it not.)
+        // Asked without reading a terminal: a read captures the game
+        // window, and on a desktop with the game open that raises the
+        // screen-sharing prompt.
+        assert_eq!(
+            composed.repair_ocr.is_available(),
+            composed.ocr_engine.is_some(),
+            "the composed terminal reader has no profile"
+        );
 
         composed.producers.stop();
+    }
+
+    /// The interface profile is where composition looks for it, in the
+    /// dev layout (beside the repository snapshot) and the installed one
+    /// (the bundle map puts it beside the bundled snapshot dir).
+    #[test]
+    fn the_interface_profile_loads_from_where_composition_looks() {
+        let dev = resource_root(&repo_snapshot()).join(UI_PROFILE_FILE);
+        assert!(load_ui_profile(&dev).is_some(), "{}", dev.display());
+
+        // Installed, the snapshot dir is `<resources>/snapshot`.
+        assert_eq!(
+            resource_root(&PathBuf::from("/installed/resources/snapshot")),
+            PathBuf::from("/installed/resources")
+        );
+        let conf: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            conf["bundle"]["resources"][format!("resources/{UI_PROFILE_FILE}")],
+            serde_json::json!(UI_PROFILE_FILE),
+            "the installed build bundles the profile beside the snapshot dir"
+        );
     }
 
     use std::io::Write as _;
@@ -2243,6 +2856,7 @@ mod tests {
             data_dir,
             Some(chatlog),
             Arc::new(MockKeystrokeSource::new()),
+            None,
             None,
         )
         .expect("producer spine composes")
@@ -2424,6 +3038,146 @@ mod tests {
         assert_eq!(ended_set, 1, "the closed session carries an ended_at stamp");
     }
 
+    /// A spine over a fresh database, for the held-tool watcher's tests.
+    async fn held_tool_spine(dir: &std::path::Path) -> (ProducerState, Arc<dyn Clock>) {
+        let db = Db::open_adopted(&dir.join(DB_FILE_NAME))
+            .await
+            .expect("fresh database adopts");
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(None, 0.0));
+        let chatlog = dir.join("chat_replay.log");
+        std::fs::File::create(&chatlog).expect("empty chatlog exists before the watcher starts");
+        let producers = compose_producers_for_test(db, clock.clone(), dir, chatlog);
+        (producers, clock)
+    }
+
+    fn turn_tool_reading(producers: &ProducerState, on: bool) {
+        let mut updates = serde_json::Map::new();
+        updates.insert("tool_reading".into(), Value::Bool(on));
+        producers
+            .config_service_handle()
+            .lock()
+            .unwrap()
+            .update(&updates)
+            .unwrap();
+    }
+
+    fn bare_inputs(clock: Arc<dyn Clock>) -> ToolWatchInputs {
+        ToolWatchInputs {
+            focus: None,
+            profile: None,
+            read_text: None,
+            catalogue: Arc::new(eo_services::tool_watch::ToolCatalogueCell::default()),
+            clock,
+        }
+    }
+
+    /// The held-tool watcher is bound into the slot the tracker was built
+    /// with, and says it cannot run without the recogniser and the profile.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_held_tool_watcher_is_bound_into_the_trackers_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let (producers, clock) = held_tool_spine(dir.path()).await;
+        assert!(producers.tool_detection_handle().bound().is_none());
+        let capture = bind_tool_watch(&producers, bare_inputs(clock));
+        assert!(
+            producers.tool_detection_handle().bound().is_some(),
+            "bound into the slot the tracker was built with"
+        );
+        assert_eq!(
+            capture(),
+            eo_services::screen_watch::CaptureStatus::Unavailable,
+            "without the recogniser and the profile it cannot run"
+        );
+        producers.stop();
+    }
+
+    /// The watcher's own setting probe, and the tracker's, both follow a
+    /// live write of the player's setting.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_held_tool_watcher_and_the_tracker_follow_the_live_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let (producers, clock) = held_tool_spine(dir.path()).await;
+        let reader = producers.config_service_handle().lock().unwrap().reader();
+        let providers = tool_watch_providers(reader.clone(), bare_inputs(clock));
+        let config = LiveTrackingConfig {
+            reader,
+            machine_id: None,
+        };
+        assert!(!(providers.enabled)(), "the watcher is off until chosen");
+        assert!(!config.tool_reading_enabled(), "and so is the tracker");
+        turn_tool_reading(&producers, true);
+        assert!(
+            (providers.enabled)(),
+            "the watcher follows the player's word"
+        );
+        assert!(config.tool_reading_enabled());
+        turn_tool_reading(&producers, false);
+        assert!(!(providers.enabled)(), "and off again");
+        assert!(!config.tool_reading_enabled());
+        producers.stop();
+    }
+
+    /// A held-tool watcher that records what is asked of it.
+    #[derive(Default)]
+    struct RecordingToolWatch {
+        watching: Mutex<Option<String>>,
+        shutdowns: Mutex<usize>,
+    }
+
+    impl eo_services::tool_watch::ToolDetector for RecordingToolWatch {
+        fn start(
+            &self,
+            session_id: &str,
+            _sink: eo_services::tool_watch::ToolPulseSink,
+            _ended: eo_services::screen_watch::WatchEnded,
+        ) {
+            *self.watching.lock().unwrap() = Some(session_id.to_string());
+        }
+
+        fn stop(&self) {
+            *self.watching.lock().unwrap() = None;
+        }
+
+        fn watches(&self, session_id: &str) -> bool {
+            self.watching.lock().unwrap().as_deref() == Some(session_id)
+        }
+
+        fn permit_capture(&self) {}
+
+        fn hint(&self) {}
+
+        fn shutdown(&self) {
+            *self.shutdowns.lock().unwrap() += 1;
+            self.stop();
+        }
+    }
+
+    /// A watch running for a session at exit is stopped, and the exit path
+    /// reaches the watcher's shutdown, which waits for a look in progress.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_held_tool_watch_is_stopped_and_shut_down_with_the_spine() {
+        let dir = tempfile::tempdir().unwrap();
+        let (producers, _clock) = held_tool_spine(dir.path()).await;
+        let watch = Arc::new(RecordingToolWatch::default());
+        let detector: Arc<dyn eo_services::tool_watch::ToolDetector> = watch.clone();
+        producers.tool_detection_handle().bind(detector);
+        turn_tool_reading(&producers, true);
+        producers.tracker().reload_config().await;
+        producers
+            .tracker()
+            .start_session()
+            .await
+            .expect("composed session starts");
+        assert!(
+            watch.watching.lock().unwrap().is_some(),
+            "with the setting on, a session starts the watch"
+        );
+
+        producers.stop();
+        assert_eq!(watch.watching.lock().unwrap().as_deref(), None, "stopped");
+        assert_eq!(*watch.shutdowns.lock().unwrap(), 1, "shut down at exit");
+    }
+
     /// Seed a weapon row directly through the shared handle, the same
     /// shape `Db::weapon_properties_by_name_fragment` reads (item_type
     /// 'weapon', a name carrying the lookup fragment, a JSON-object
@@ -2468,8 +3222,9 @@ mod tests {
     ///   and `/`->`*` mutants.
     /// - the facet reads carry the stored values through unchanged
     ///   (session_name verbatim, declared_skill_boost_percent as stored).
-    /// - weapon_attribution_trifecta is `!hotbar_hooks_enabled`: false when
-    ///   hooks are on, true when off (kills the deleted `!`, which flips both).
+    /// - carried_weapons reads the hotbar's weapons in slot order, then the
+    ///   carried ones, each once, skipping non-weapons and absent rows, with
+    ///   each weapon's damage band from its stored props.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn build_providers_transforms_pin_their_exact_outputs() {
         let dir = tempfile::tempdir().unwrap();
@@ -2494,14 +3249,36 @@ mod tests {
         )
         .await;
 
+        // A second weapon with a damage figure, and a healer.
+        seed_weapon(
+            &db,
+            2,
+            "Opalo",
+            &serde_json::json!({"weapon_entity": {"damage": {"impact": 20.0}}}).to_string(),
+        )
+        .await;
+        db.with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO equipment_library (id, name, item_type, properties_json) \
+                 VALUES (3, 'FAP', 'healing', '{}')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("healer seeds");
+
         // First on-disk config: a named session with a boost, hotbar
-        // hooks ENABLED.
+        // hooks ENABLED, the Korss and the healer bound, and the Opalo,
+        // the Korss again, and a sold weapon carried without a slot.
         write_settings(
             &data_dir,
             &serde_json::json!({
                 "session_name": "ARIS Dailies",
                 "declared_skill_boost_percent": 50,
                 "hotbar_hooks_enabled": true,
+                "hotbar": {"2": 1, "3": 3},
+                "carried_weapon_ids": [2, 1, 99],
             }),
         );
         let config = load_config_readonly(&data_dir).expect("config reads");
@@ -2509,9 +3286,11 @@ mod tests {
         let providers = build_providers(
             db.clone(),
             config_service.reader(),
+            None,
             &config,
             tokio::runtime::Handle::current(),
             None,
+            DoseBoard::new(Arc::new(eo_services::clock::RealClock::new())),
         );
 
         // The equipment seam: the parsed property object, by fragment.
@@ -2537,32 +3316,66 @@ mod tests {
              (% would be 50.0, * would be 25000.0)"
         );
 
-        // The config seam reads the live snapshot: the facets come
-        // through verbatim, and hooks-on means no trifecta attribution.
-        assert_eq!(providers.config.session_name(), "ARIS Dailies");
-        assert_eq!(providers.config.declared_skill_boost_percent(), Some(50));
-        assert!(
-            !providers.config.weapon_attribution_trifecta(),
-            "trifecta attribution is off when hotbar hooks are enabled"
+        // The carried weapons: the slotted Korss, then the carried Opalo;
+        // the healer, the repeat, and the sold weapon carry nothing.
+        let carried: Vec<(i64, String, Option<eo_services::tracker::DamageBand>)> = providers
+            .equipment
+            .carried_weapons()
+            .into_iter()
+            .map(|profile| {
+                (
+                    profile.weapon.equipment_id,
+                    profile.weapon.name,
+                    profile.weapon.band,
+                )
+            })
+            .collect();
+        assert_eq!(
+            carried,
+            vec![
+                (1, "Korss H400 (L)".to_string(), None),
+                (
+                    2,
+                    "Opalo".to_string(),
+                    Some(eo_services::tracker::DamageBand {
+                        min: 10.0,
+                        max: 20.0
+                    })
+                ),
+            ]
         );
 
+        // The config seam reads the live snapshot: the facets come
+        // through verbatim.
+        assert_eq!(providers.config.session_name(), "ARIS Dailies");
+        assert_eq!(providers.config.declared_skill_boost_percent(), Some(50));
+
         // A config-service write publishes a new snapshot, and the SAME
-        // seam follows it: the facets move and hooks-off turns trifecta
-        // attribution on.
+        // seams follow it.
         let mut updates = serde_json::Map::new();
         updates.insert("session_name".into(), serde_json::json!("Solo Run"));
         updates.insert(
             "declared_skill_boost_percent".into(),
             serde_json::json!(100),
         );
-        updates.insert("hotbar_hooks_enabled".into(), serde_json::json!(false));
+        updates.insert("carried_weapon_ids".into(), serde_json::json!([]));
         config_service.update(&updates).expect("settings write");
         assert_eq!(providers.config.session_name(), "Solo Run");
         assert_eq!(providers.config.declared_skill_boost_percent(), Some(100));
-        assert!(
-            providers.config.weapon_attribution_trifecta(),
-            "trifecta attribution is on when hotbar hooks are disabled"
-        );
+        assert_eq!(providers.equipment.carried_weapons().len(), 1);
+
+        // Switching to an empty preset parks the Korss, and a weapon on a
+        // parked preset is still carried.
+        let mut updates = serde_json::Map::new();
+        updates.insert("active_hotbar_preset".into(), serde_json::json!(2));
+        config_service.update(&updates).expect("preset switch");
+        let carried: Vec<i64> = providers
+            .equipment
+            .carried_weapons()
+            .into_iter()
+            .map(|profile| profile.weapon.equipment_id)
+            .collect();
+        assert_eq!(carried, vec![1]);
     }
 
     /// REGRESSION: the equipment seam must resolve from a plain OS
@@ -2597,9 +3410,11 @@ mod tests {
         let providers = build_providers(
             db.clone(),
             config_service.reader(),
+            None,
             &config,
             tokio::runtime::Handle::current(),
             None,
+            DoseBoard::new(Arc::new(eo_services::clock::RealClock::new())),
         );
 
         // Invoke the lookup AND the derived cost from a plain OS thread
@@ -2741,7 +3556,7 @@ mod tests {
     }
 
     /// The LIVE scan-status path now the scan composes on the spine bus: a
-    /// status-moving verb on a `SkillScanManual` built over the same bus the
+    /// status-moving verb on a `SkillScanService` built over the same bus the
     /// bridge subscribes reaches a domain-channel subscriber as a typed
     /// `scan.status.changed` envelope, end to end (the bridge-forwards test
     /// publishes the event directly; this proves the scan's own publish
@@ -2756,24 +3571,105 @@ mod tests {
         let mut receiver = domain_bus.subscribe();
 
         let clock: Arc<dyn Clock> = Arc::new(MockClock::new(None, 0.0));
-        let scan = SkillScanManual::new(
-            ScanProviders {
-                engine_available: Arc::new(|| true),
-                skill_region: Arc::new(|| Some(([0, 0], [100, 200]))),
-                capture_region: Arc::new(|_| Some(vec![1, 2, 3])),
-                extract_page_levels: Arc::new(|_: &[u8]| Vec::new()),
+        let scan = SkillScanService::new(
+            SkillScanProviders {
+                frame: Arc::new(|_| {
+                    Err(eo_services::game_ui::seams::FrameUnavailable::WindowNotFound)
+                }),
+                profile: load_ui_profile(&resource_root(&repo_snapshot()).join(UI_PROFILE_FILE)),
+                read_text: Some(Arc::new(|_: &BgrImage| Some((String::new(), 0.0)))),
+                vocabulary: SkillVocabulary::new(vec!["Agility".into()], Vec::new()),
+                tick: DEFAULT_TICK,
+                idle_limit: DEFAULT_IDLE_LIMIT,
             },
             clock,
             Some(bus.clone()),
-            None,
-            0,
         );
-        // `start` moves the status idle -> capturing, publishing one envelope.
-        scan.start(Some(2));
+        // `start` moves the status idle -> collecting, publishing one envelope.
+        scan.surface_shown();
+        scan.start().expect("the scan starts");
         let event = receiver.recv().await.expect("the envelope arrives");
         let DomainEvent::ScanStatusChanged(envelope) = event else {
             panic!("the scan publish routed to the wrong variant: {event:?}");
         };
         assert_eq!(envelope.payload.phase, ScanPhase::Capturing);
+        scan.shutdown();
+    }
+
+    /// The skill scan's composed completion writes each accepted level to
+    /// the database stamped with when its page was read, not when the
+    /// review was accepted: a gain the chat log recorded after a page was
+    /// read stays the current level.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_composed_scan_completion_writes_each_level_at_its_read_time() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open(&dir.path().join(DB_FILE_NAME)).await.unwrap();
+        db.with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
+                 VALUES ('Rifle', 4000.60, 'chatlog', 160.0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let complete = skill_scan_completion(db.clone(), tokio::runtime::Handle::current());
+        let levels = vec![
+            ScannedLevel {
+                skill: "Rifle".into(),
+                level: 4000.10,
+                scanned_at: 100.0,
+            },
+            ScannedLevel {
+                skill: "Aim".into(),
+                level: 1268.53,
+                scanned_at: 220.0,
+            },
+        ];
+        tokio::task::spawn_blocking(move || complete(&levels))
+            .await
+            .unwrap()
+            .expect("the levels are written");
+        let rows: Vec<(String, f64, f64)> = db
+            .with_reader(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT skill_name, level, scanned_at FROM skill_calibrations \
+                     WHERE source = 'scan' ORDER BY scanned_at",
+                )?;
+                let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("Rifle".to_string(), 4000.10, 100.0),
+                ("Aim".to_string(), 1268.53, 220.0),
+            ]
+        );
+        let mut current = latest_skill_levels(&db).await.unwrap();
+        current.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(
+            current,
+            vec![("Aim".to_string(), 1268.53), ("Rifle".to_string(), 4000.60)]
+        );
+    }
+
+    #[test]
+    fn the_installed_app_reads_the_account_always_and_a_development_build_on_demand() {
+        use eo_services::account::ReadingMode;
+        assert_eq!(reading_mode_for(true), ReadingMode::Always);
+        assert_eq!(reading_mode_for(false), ReadingMode::OnDemand);
+        // The same seam that picks the data directory: a test build is a
+        // development build, and reads the dev data directory too.
+        assert_eq!(
+            account_reading_mode(),
+            reading_mode_for(!cfg!(debug_assertions))
+        );
+        if cfg!(debug_assertions) {
+            assert_eq!(account_reading_mode(), ReadingMode::OnDemand);
+        }
     }
 }

@@ -21,6 +21,8 @@ const seams = vi.hoisted(() => {
 		emit = vi.fn(async () => {});
 		show = vi.fn(async () => {});
 		setFocus = vi.fn(async () => {});
+		setFocusable = vi.fn(async (_focusable: boolean) => {});
+		isFocused = vi.fn(async () => false);
 
 		constructor(label: string, options: Record<string, unknown>) {
 			this.label = label;
@@ -272,6 +274,19 @@ describe('show', () => {
 		expect(order(existing.setPosition)).toBeLessThan(order(existing.emit));
 		expect(order(existing.emit)).toBeLessThan(order(existing.show));
 		expect(order(existing.show)).toBeLessThan(order(existing.setFocus));
+		// A satellite that is to take focus must accept it before it maps.
+		expect(existing.setFocusable).toHaveBeenCalledWith(true);
+		expect(order(existing.setFocusable)).toBeLessThan(order(existing.show));
+	});
+
+	it('reveals an unfocused satellite non-focusable, so the host keeps the keyboard', async () => {
+		const { satellite, existing } = await reusableSatellite();
+
+		await satellite.show({}, { x: 1, y: 2 });
+
+		expect(existing.setFocusable).toHaveBeenCalledWith(false);
+		expect(order(existing.setFocusable)).toBeLessThan(order(existing.show));
+		expect(existing.show).toHaveBeenCalledTimes(1);
 	});
 
 	it('defaults the size to the creation size and skips focus by default', async () => {
@@ -310,12 +325,20 @@ describe('show', () => {
 
 		// A self-revealing satellite (it measures, positions, and shows itself
 		// from the payload) gets the state and nothing else: no host-side
-		// reveal, no host-side focus.
+		// reveal, no host-side focus. Whether it may take the keyboard is
+		// settled first, since the satellite reveals itself.
 		await satellite.show(state, undefined, { reveal: false, focus: true });
 
 		expect(existing.emit).toHaveBeenCalledWith(options.showEvent, state);
 		expect(existing.show).not.toHaveBeenCalled();
 		expect(existing.setFocus).not.toHaveBeenCalled();
+		expect(existing.setFocusable).toHaveBeenCalledWith(true);
+		expect(existing.setFocusable.mock.invocationCallOrder[0]).toBeLessThan(
+			existing.emit.mock.invocationCallOrder[0],
+		);
+
+		await satellite.show(state, undefined, { reveal: false });
+		expect(existing.setFocusable).toHaveBeenLastCalledWith(false);
 	});
 });
 
@@ -345,6 +368,34 @@ describe('emitTo', () => {
 		const satellite = createSatelliteWindow(options);
 
 		await expect(satellite.emitTo('satellite-under-test:update', {})).resolves.toBeUndefined();
+	});
+});
+
+describe('isFocused', () => {
+	it("answers the existing window's focus state", async () => {
+		const existing = new seams.FakeWebviewWindow(options.label, {});
+		seams.FakeWebviewWindow.instances = [];
+		seams.FakeWebviewWindow.getByLabel.mockResolvedValue(existing);
+		existing.isFocused.mockResolvedValueOnce(true);
+		const satellite = createSatelliteWindow(options);
+
+		await expect(satellite.isFocused()).resolves.toBe(true);
+	});
+
+	it('is false when the window does not exist, and never creates one', async () => {
+		const satellite = createSatelliteWindow(options);
+
+		await expect(satellite.isFocused()).resolves.toBe(false);
+		expect(seams.FakeWebviewWindow.instances).toHaveLength(0);
+	});
+
+	it('is false when the query fails', async () => {
+		const existing = new seams.FakeWebviewWindow(options.label, {});
+		seams.FakeWebviewWindow.getByLabel.mockResolvedValue(existing);
+		existing.isFocused.mockRejectedValueOnce(new Error('window gone'));
+		const satellite = createSatelliteWindow(options);
+
+		await expect(satellite.isFocused()).resolves.toBe(false);
 	});
 });
 

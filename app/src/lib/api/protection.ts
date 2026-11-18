@@ -1,46 +1,67 @@
-/** Protection setup, selection, and limited-layer observation commands. */
+/** Protection cost recording: limited sets, recording candidates, the two recordings, and undo. */
 
-import type { ProtectionLoadoutInput, ProtectionSetInput } from './commands.gen';
+import type { ProtectionSetUpdateInput } from './commands.gen';
 import * as commands from './commands.gen';
 
 export type {
-	PendingProtectionSession,
+	ProtectionBacklog,
+	ProtectionBaselineSource,
+	ProtectionCandidateSession,
+	ProtectionConfirmedPiece,
+	ProtectionContextShare,
 	ProtectionCostAllocation,
+	ProtectionCostKind,
+	ProtectionCostStatus,
 	ProtectionCostWindow,
-	ProtectionEconomyKind,
-	ProtectionLoadout,
-	ProtectionLoadoutInput,
 	ProtectionObservation,
 	ProtectionObservationInput,
 	ProtectionObservationOutcome,
 	ProtectionObservationSource,
 	ProtectionOverview,
-	ProtectionReconciliation,
-	ProtectionReconciliationStatus,
+	ProtectionReadingSource,
+	ProtectionRecordingCandidates,
 	ProtectionRepairInput,
 	ProtectionRepairOutcome,
-	ProtectionScanResult,
+	ProtectionSessionStatus,
 	ProtectionSet,
 	ProtectionSetInput,
 	ProtectionSetKind,
-	ProtectionSetRef,
+	ProtectionSetPieces,
+	ProtectionSetUpdateInput,
+	ProtectionStream,
+	ProtectionUndoTarget,
+	TerminalReadRefusal,
+	TerminalReadResult,
+	UnrecordedProtection,
 } from './commands.gen';
+
+/**
+ * The Tauri-bus topic the shell's event bridge emits after any protection
+ * write commits (the colon form of the `protection.updated` wire topic): a
+ * pure trigger for surfaces showing armour costs to re-read them.
+ */
+export const PROTECTION_TOPIC = 'protection:updated';
 
 export const getProtectionOverview = commands.protectionOverview;
 export const createProtectionSet = commands.protectionSetCreate;
-export const updateProtectionSet = (id: string, input: ProtectionSetInput) =>
+export const updateProtectionSet = (id: string, input: ProtectionSetUpdateInput) =>
 	commands.protectionSetUpdate(Number(id), input);
-export const createProtectionLoadout = commands.protectionLoadoutCreate;
-export const updateProtectionLoadout = (id: string, input: ProtectionLoadoutInput) =>
-	commands.protectionLoadoutUpdate(Number(id), input);
 export const archiveProtectionSet = (id: string) => commands.protectionSetArchive(Number(id));
-export const archiveProtectionLoadout = (id: string) =>
-	commands.protectionLoadoutArchive(Number(id));
-export const selectProtectionLoadout = (id: string) => commands.protectionSelect(Number(id));
-export const assignSessionProtectionLoadout = (sessionId: string, loadoutId: string) =>
-	commands.protectionAssignSessionLoadout(sessionId, Number(loadoutId));
-/** The sessions whose defence evidence still has no armour setup named for it. */
-export const pendingProtectionAttribution = commands.protectionPendingAttribution;
+export const restoreProtectionSet = (id: string) => commands.protectionSetRestore(Number(id));
+/** A limited set's confirmed pieces, and what the latest account reading suggests for it. */
+export const getProtectionSetPieces = (id: string) => commands.protectionSetPieces(Number(id));
+/** Name a limited set's pieces once: the account readings bill the set by them. */
+export const confirmProtectionSetPieces = (id: string, names: string[]) =>
+	commands.protectionSetPiecesConfirm(Number(id), names);
+/** Undo the latest recording of one stream, handing its cost back to its sessions. */
+export const undoProtectionRecording = commands.protectionUndo;
+/** Which of the given sessions still have hits no armour recording covers. */
+export const getUnrecordedArmourSessions = commands.protectionUnrecordedSessions;
+/** One session's protection standing: its hits no recording covers yet. */
+export const getProtectionSessionStatus = commands.protectionSessionStatus;
+/** The sessions a recording of one stream would be spread over. */
+export const getProtectionRecordingCandidates = commands.protectionRecordingCandidates;
 export const confirmProtectionObservation = commands.protectionObservationConfirm;
 export const confirmProtectionRepair = commands.protectionRepairConfirm;
+/** Read the Trade Terminal's total off the game window, or why it could not be. */
 export const scanTradeTerminalValue = commands.protectionTradeTerminalScan;

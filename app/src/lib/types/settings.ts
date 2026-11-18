@@ -1,8 +1,7 @@
 /**
  * Settings-surface types. The wire shapes re-export from the generated
  * bindings (the authoritative contract); only genuinely frontend-owned
- * names live here. `TrifectaPreset` is the historical consumer-facing
- * name of the generated `TrifectaPresetView`.
+ * names live here.
  */
 
 export type {
@@ -11,11 +10,13 @@ export type {
 	HarvestGuardrailInput,
 	HarvestGuardrailSettings,
 	PassiveEffectSourceView,
-	TrifectaPresetView as TrifectaPreset,
-	TrifectaSettings,
+	ReloadSpeedInEffect,
 } from '$lib/api/commands.gen';
 
 /** Hotbar slot mapping: key "1"-"9" (and "0", stored last) to an
  * equipment-library id or null. The wire carries the stored JSON map
  * verbatim; `hotbarFromSettings` ($lib/api) narrows it to this shape. */
 export type Hotbar = Record<string, number | null>;
+
+/** A hotbar preset, as the game numbers its three. */
+export type HotbarPreset = 1 | 2 | 3;

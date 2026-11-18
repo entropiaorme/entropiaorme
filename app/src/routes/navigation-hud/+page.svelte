@@ -2,18 +2,18 @@
 	import { onMount } from 'svelte';
 	import { listen } from '@tauri-apps/api/event';
 	import { getCurrentWindow } from '@tauri-apps/api/window';
+	import Toggle from '$lib/components/Toggle.svelte';
 	import { createWindowSizeSync } from '$lib/windows/windowSize';
 	import { formatGamePoint } from '$lib/features/maps/coords';
 	import { pinGlyph } from '$lib/features/maps/pinIcons';
 	import { CARTOGRAPHY_OVERLAY_CHANGED_EVENT } from '$lib/features/maps/cartographyOverlay.svelte';
 	import { createNavigationHudController } from '$lib/features/maps/navigationHudController.svelte';
+	import { RADAR_GUIDANCE_CHANGED_EVENT } from '$lib/features/maps/radarGuidance';
 	import {
 		ROUTE_AREA_SELECTION_CANCELLED_EVENT,
 		ROUTE_AREA_SELECTION_RESULT_EVENT,
 	} from '$lib/features/maps/routeAreaSelection';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
-
-	const NAVIGATION_HOTKEYS = ['f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12'];
 
 	let root: HTMLDivElement;
 	const c = createNavigationHudController();
@@ -24,9 +24,14 @@
 		let unlistenContext: (() => void) | undefined;
 		let unlistenAreaResult: (() => void) | undefined;
 		let unlistenAreaCancelled: (() => void) | undefined;
+		let unlistenGuidance: (() => void) | undefined;
 		void c.hydrate();
 		void c.loadPrefs();
+		void c.refreshGuidance();
 		void listen('navigation:updated', c.hydrate).then((stop) => (unlisten = stop));
+		void listen(RADAR_GUIDANCE_CHANGED_EVENT, c.refreshGuidance).then(
+			(stop) => (unlistenGuidance = stop),
+		);
 		void listen(CARTOGRAPHY_OVERLAY_CHANGED_EVENT, (event) => c.applyContext(event.payload)).then(
 			(stop) => (unlistenContext = stop),
 		);
@@ -36,27 +41,32 @@
 		void listen(ROUTE_AREA_SELECTION_CANCELLED_EVENT, (event) => c.applyRouteAreaSelectionCancelled(event.payload)).then(
 			(stop) => (unlistenAreaCancelled = stop),
 		);
-		sizeSync.schedule();
-		const observer = new ResizeObserver(() => sizeSync.schedule());
-		observer.observe(root);
+		const disconnectSizeSync = sizeSync.connect();
 		return () => {
 			unlisten?.();
 			unlistenContext?.();
 			unlistenAreaResult?.();
 			unlistenAreaCancelled?.();
-			observer.disconnect();
-			sizeSync.cancel();
+			unlistenGuidance?.();
+			disconnectSizeSync();
 			c.dispose();
 		};
 	});
 
-	// Automatic updating polls the observe-only path while a route is live. The
-	// poll routes through the sanctioned visibility-gated helper (the single home
-	// for timer loops), and the effect attaches it to the HUD's lifecycle.
+	// The position poll runs the observe-only path while a route is live. It
+	// routes through the sanctioned visibility-gated helper (the single home for
+	// timer loops), and the effect attaches it to the HUD's lifecycle.
 	$effect(() => {
-		if (!c.autoUpdate || c.run?.status !== 'active') return;
+		if (c.run?.status !== 'active') return;
 		const period = Math.max(1, c.updateIntervalSec) * 1000;
-		return useVisiblePoll(() => c.autoUpdateTick(), { intervalMs: period, immediate: false });
+		return useVisiblePoll(() => c.pollPosition(), { intervalMs: period, immediate: false });
+	});
+
+	// A position ages while no new one arrives; past a few poll intervals it
+	// is not steered from.
+	$effect(() => {
+		if (c.run?.status !== 'active') return;
+		return useVisiblePoll(() => c.tick(), { intervalMs: 1000, immediate: false });
 	});
 
 	function drag(event: PointerEvent) {
@@ -67,12 +77,12 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div bind:this={root} class="p-2" onpointerdown={drag}>
-	<div class="glass-panel w-72 rounded-xl p-3 text-white shadow-xl">
+<div bind:this={root} class="w-max" onpointerdown={drag}>
+	<div class="glass-panel w-72 rounded-xl p-3 text-white" data-overlay-surface>
 		<div class="flex items-start justify-between gap-3 border-b border-white/10 pb-2">
 			<div class="min-w-0">
 				<p class="text-[9px] font-bold uppercase tracking-wider text-white/35">{c.run ? 'Route guidance' : 'Plan route'}</p>
-				<p class="mt-1 truncate text-[11px] text-white/65">{c.run ? `${c.run.planet} · ${c.run.mapViewName ?? 'Default'} · ${c.autoUpdate ? `auto ${c.updateIntervalSec}s` : `${c.run.hotkey.toUpperCase()} updates`}` : c.planet ? `${c.planet} · new route` : 'No planet selected'}</p>
+				<p class="mt-1 truncate text-[11px] text-white/65">{c.run ? `${c.run.planet} · ${c.run.mapViewName ?? 'Default'}${c.run.visitOnKey ? ' · F marks visited' : ''}` : c.planet ? `${c.planet} · new route` : 'No planet selected'}</p>
 			</div>
 			<div class="flex items-center gap-2">
 				{#if c.run && c.active}
@@ -103,14 +113,14 @@
 						{:else if c.badge === 'visited'}
 							<span class="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">Visited</span>
 						{:else}
-							<span class="text-[10px] tabular-nums text-sky-300">{c.run.distanceToActive?.toFixed(1) ?? '-'} m</span>
+							<span class="text-[10px] tabular-nums text-sky-300">{c.positionCurrent && c.run.distanceToActive != null ? `${c.run.distanceToActive.toFixed(1)} m` : '- m'}</span>
 						{/if}
 					</div>
 				{/if}
 			</div>
 			{#if c.pendingHarvest}
 				<div class="mb-2 rounded-md border border-emerald-300/30 bg-emerald-300/10 p-2">
-					<p class="text-[10px] text-emerald-200">Harvest {c.pendingHarvest.distance.toFixed(1)} m from {c.pendingHarvest.name}. Cutting this tree?</p>
+					<p class="text-[10px] text-emerald-200">{c.pendingHarvest.distance != null ? `Harvest ${c.pendingHarvest.distance.toFixed(1)} m from ${c.pendingHarvest.name}.` : `Harvest at ${c.pendingHarvest.name}? Your position did not read.`} Cutting this tree?</p>
 					<div class="mt-1.5 grid grid-cols-2 gap-1.5">
 						<button class="hud-btn primary" disabled={c.busy} onclick={() => c.resolveHarvest(true)}>Yes, mark cut</button>
 						<button class="hud-btn" disabled={c.busy} onclick={() => c.resolveHarvest(false)}>Not this one</button>
@@ -126,10 +136,7 @@
 					</div>
 				</div>
 			{/if}
-			<div class="grid {c.autoUpdate ? 'grid-cols-3' : 'grid-cols-2'} gap-1.5">
-				{#if !c.autoUpdate}
-					<button class="hud-btn primary" disabled={c.busy} onclick={c.updatePosition}>Update</button>
-				{/if}
+			<div class="grid grid-cols-3 gap-1.5">
 				<button class="hud-btn" disabled={c.busy} onclick={() => c.markVisited(false)}>Visited</button>
 				<button class="hud-btn" disabled={c.busy} onclick={c.skip}>Skip</button>
 				<button class="hud-btn" disabled={c.busy} onclick={c.undo}>Undo</button>
@@ -165,32 +172,32 @@
 						</div>
 					{/if}
 				</div>
-				<label class="block">
-					<span class="mb-0.5 block text-[9px] uppercase tracking-wider text-white/35">Update hotkey</span>
-					<select class="hud-field w-full" bind:value={c.hotkey} aria-label="Navigation update hotkey">
-						{#each NAVIGATION_HOTKEYS as key}<option value={key}>{key.toUpperCase()}</option>{/each}
-					</select>
-				</label>
-				<div>
-					<span class="mb-0.5 block text-[9px] uppercase tracking-wider text-white/35">Location updates</span>
-					<div class="grid grid-cols-2 gap-1.5">
-						<button class="hud-btn {c.autoUpdate ? '' : 'primary'}" onclick={() => c.setAutoUpdate(false)}>Manual</button>
-						<button class="hud-btn {c.autoUpdate ? 'primary' : ''}" onclick={() => c.setAutoUpdate(true)}>Automatic</button>
+				<div class="flex items-center justify-between gap-2">
+					<div class="min-w-0">
+						<p class="text-[11px] text-white/70">Visit on F press</p>
+						<p class="text-[10px] text-white/40">{c.keyless ? 'Keys cannot be read here; cuts are detected from your harvests' : c.visitOnKey ? 'Pressing F records the tree you are heading to' : 'Cuts are detected from your harvests'}</p>
 					</div>
-					{#if c.autoUpdate}
-						<label class="mt-1.5 flex items-center gap-2">
-							<span class="text-[10px] text-white/55">Every</span>
-							<input class="hud-field w-16" type="number" min="1" max="60" bind:value={c.updateIntervalSec} onchange={c.persistInterval} aria-label="Automatic update interval in seconds" />
-							<span class="text-[10px] text-white/55">seconds</span>
-						</label>
-					{/if}
+					<Toggle checked={c.visitOnKey} disabled={c.keyless} onchange={c.setVisitOnKey} label="Visit on F press" />
 				</div>
+				<label class="flex items-center gap-2">
+					<span class="text-[10px] text-white/55">Update position every</span>
+					<input class="hud-field w-14" type="number" min="1" max="60" bind:value={c.updateIntervalSec} onchange={c.persistInterval} aria-label="Position update interval in seconds" />
+					<span class="text-[10px] text-white/55">s</span>
+				</label>
 				<button class="hud-btn primary w-full" disabled={!c.canStart} onclick={c.beginRoute}>Start route</button>
+				<p class="text-[10px] text-white/40">Radar guidance needs the game's radar locked north-up.</p>
 			</div>
 		{:else}
 			<p class="py-4 text-xs text-white/55">Open a planet map in the app to plan a route.</p>
 		{/if}
-		<div class="h-4 pt-1"><p class="truncate text-[9px] text-orange-300/85" role="status">{c.feedback ?? ''}</p></div>
+		<div class="flex h-4 items-center gap-2 pt-1">
+			<p class="min-w-0 flex-1 truncate text-[9px] text-orange-300/85" role="status" title={c.note ?? undefined}>{c.note ?? ''}</p>
+			{#if c.run?.status === 'active' && c.pollStopped}
+				<button class="shrink-0 text-[9px] text-sky-300 hover:underline" onclick={c.resumePolling}>Resume</button>
+			{:else if c.run?.status === 'active' && c.guidanceStopped}
+				<button class="shrink-0 text-[9px] text-sky-300 hover:underline" onclick={c.lookForRadarAgain}>Look again</button>
+			{/if}
+		</div>
 	</div>
 </div>
 
@@ -203,14 +210,4 @@
 	.hud-btn:disabled { opacity: .4; cursor: default; }
 	.hud-field { width: 100%; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.05); border-radius: 5px; padding: 4px 7px; color: rgba(255,255,255,.85); font-size: 11px; }
 	.hud-field:focus { outline: none; border-color: rgba(56,189,248,.5); }
-	select.hud-field {
-		appearance: none;
-		padding-right: 22px;
-		cursor: pointer;
-		background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23ffffff88' stroke-width='1.4'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
-		background-repeat: no-repeat;
-		background-position: right 6px center;
-		background-size: 12px;
-	}
-	.hud-field option { color: #0a0e17; background: #e5edf5; }
 </style>

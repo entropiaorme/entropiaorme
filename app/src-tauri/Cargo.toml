@@ -24,6 +24,13 @@ authors = ["Mikel Williams-Lekuona <MikelWL@protonmail.com>"]
 edition = "2021"
 license = "MIT"
 
+# Development and test builds keep line tables (a panic or backtrace still
+# names the file and line) but not full variable debug info, which made every
+# test binary several times larger and its link several times slower. Release
+# builds are unaffected.
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.dependencies]
 # Tauri is pinned to the 2.11 minor (the known-good release line when this
 # workspace was laid down). The backend runs inside the shell process, and a
@@ -40,8 +47,27 @@ tauri = { version = "~2.11", features = ["tray-icon"] }
 tauri-build = { version = "~2.6", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
-tauri-plugin-updater = "2"
+# Default features off to drop `zip`: the update payload is a raw signed MSI
+# (`createUpdaterArtifacts: true`, the non-archived updater format), so the
+# plugin's archive extraction is never needed. deny.toml bans `zip` to keep
+# it that way.
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
 tauri-plugin-process = "2"
+# The account connection's reader (`eo-services` `account::site`): two
+# fixed read requests to the Entropia Universe account site over HTTPS.
+# reqwest 0.13 is already in the graph through the updater plugin. This
+# crate asks for default features off and only `rustls-no-provider`: no
+# native TLS, no cookie store (its one cookie is set on each request), no
+# HTTP/2, and no system proxy lookup; it reads bodies as capped bytes and
+# hands them to the strict reading parser. The crypto provider is passed in
+# explicitly below rather than installed process-wide.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+# The TLS stack under that reader, at the versions the updater already
+# resolves: rustls over the ring provider (no aws-lc-rs), its floor at the
+# first release clear of its open advisories, and the platform's own
+# certificate verifier.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.6"
 serde = { version = "1", features = ["derive"] }
 # preserve_order keeps JSON object members in insertion order end to end,
 # which the typed command DTOs' byte-for-byte response fidelity (the facades
@@ -64,21 +90,44 @@ serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "api-24", "directml"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 windows = "0.61"
-# Linux counterparts of the Windows input plumbing: passive keystroke
-# observation reads the kernel evdev nodes; libc supplies the poll(2)
-# and fcntl(2) calls that keep those reads interruptible.
+# Linux counterparts of the Windows input plumbing: the fallback passive
+# keystroke observer reads the kernel evdev nodes; libc supplies the
+# poll(2) and fcntl(2) calls that keep the reads interruptible.
 evdev = "0.13"
 libc = "0.2"
+# The GTK binding Tauri's Linux shell is built on (pinned to the line it
+# resolves), for the overlay input shapes the shell sets on its windows.
+gtk = "0.18"
+# The platform webviews under Tauri, at the versions it already resolves,
+# for the one thing Tauri does not expose: refusing the permission
+# requests (camera, microphone, location, notifications, clipboard) a
+# remote page makes in the account sign-in window.
+webkit2gtk = "2"
+webview2-com = "0.38"
+# The native window handles Tauri already exposes, read to tell the
+# account sign-in window this app opened from another carrying its label.
+raw-window-handle = "0.6"
+# Window-pattern matching as Tauri reads a capability's window list, for
+# the test that no capability reaches the account sign-in window.
+glob = "0.3"
 # Pure-Rust, safe X11 protocol bindings: the Linux game-window discovery
 # and geometry lookups run over XWayland (where the game and our windows
 # both live), mirroring the Windows EnumWindows/GetClientRect helpers.
-x11rb = "0.13"
+# XInput2 carries the primary Linux keystroke observer: raw key events
+# from the X server, which include keys injected by remappers such as
+# Steam Input that never pass through the kernel input layer.
+x11rb = { version = "0.13", features = ["xinput"] }
 # Wayland screen capture: the ScreenCast desktop portal opens a consented
 # PipeWire stream (ashpd drives the portal D-Bus dance + restore tokens);
 # GStreamer consumes the node as frames. GStreamer is already an app-level
 # runtime dependency via WebKitGTK's media backend, so binding to it adds
 # no new package dependency.
 ashpd = { version = "0.11", default-features = false, features = ["tokio"] }
+# The operating system's keyring for the kept account sign-in: the Windows
+# Credential Manager and the Linux Secret Service over D-Bus (the `dbus`
+# crate the windowing stack already links). No macOS backend: no build
+# ships there.
+keyring = { version = "3.6", default-features = false, features = ["windows-native", "sync-secret-service"] }
 gstreamer = "0.24"
 gstreamer-app = "0.24"
 gstreamer-video = "0.24"
@@ -100,9 +149,11 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 html-escape = "0.2"
 # The persistence stack: the synchronous SQLite core behind the database
 # seam, which sits behind a narrow handle so the driver stays swappable.
-# Pinned to the 0.39 minor; `bundled` compiles a private SQLite so the graph
+# Pinned to the 0.41 minor, the first line on libsqlite3-sys 0.39, whose
+# bundled SQLite carries the fix for RUSTSEC-2026-0459 (0.40 still bundles
+# the affected library); `bundled` compiles a private SQLite so the graph
 # carries exactly one copy (the `links` key permits no second).
-rusqlite = { version = "~0.39", features = ["bundled", "hooks"] }
+rusqlite = { version = "~0.41", features = ["bundled", "hooks"] }
 # SHA-384 for the migration ledger's checksum column (the accounting the
 # database seam validates on every open).
 sha2 = "0.10"

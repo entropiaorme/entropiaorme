@@ -5,12 +5,18 @@
 //! and an active tracking session, observed through the bus's session
 //! events. Resolution runs on one owned worker rather than a
 //! short-lived thread per press; a failing resolver is contained.
+//!
+//! The keystroke source observes keys globally, so a slot key typed
+//! into another application arrives here too. An injected focus probe
+//! drops presses made while another window holds focus: they never
+//! reached the game, so they must not move the tracked tool.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::bus_events::{BusEvent, HotbarIntentPayload, HotbarItemKind};
+use crate::eu_window::GameFocus;
 use crate::event_bus::{EventBus, Registration, Topic};
 use crate::healing_profile::HealingProfile;
 use crate::keystroke_source::{KeystrokeEvent, KeystrokeKind, KeystrokeSource};
@@ -27,11 +33,32 @@ pub struct ResolvedHotbarItem {
     pub reload_seconds: f64,
     pub healing_profile: Option<HealingProfile>,
     pub lifesteal_percent: Option<f64>,
+    pub consumable_profile: Option<crate::consumables::ConsumableProfile>,
+    /// What is fitted to the entry, and the TT of one use, as it was
+    /// resolved: what the overlay names as the set-up of the tool in hand.
+    pub setup: crate::tool_setup::ToolSetup,
 }
 
 /// The resolver: slot key to the current equipment snapshot, or None for an
 /// empty or unreadable slot. It runs on the listener-owned worker.
 pub type HotbarResolver = Arc<dyn Fn(&str) -> Option<ResolvedHotbarItem> + Send + Sync>;
+
+/// The item resolver: an equipment-library id to its current snapshot, the
+/// way a press resolves its slot's item. Overlay declarations use it.
+pub type ItemResolver = Arc<dyn Fn(i64) -> Option<ResolvedHotbarItem> + Send + Sync>;
+
+/// Why an overlay declaration was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum DeclareError {
+    #[error("no tracking session is running")]
+    NoSession,
+    #[error("that item is not in the equipment library")]
+    UnknownItem,
+}
+
+/// The focus seam: where keyboard focus sits relative to the game client
+/// at the moment it is asked. Production wires `eu_window::game_focus`.
+pub type GameFocusProbe = Arc<dyn Fn() -> GameFocus + Send + Sync>;
 
 /// A keystroke observer (the recording controller's seam): called with
 /// (key, kind) for each hotbar-slot press.
@@ -48,17 +75,22 @@ struct Gate {
     session_active: AtomicBool,
     active_session_id: Mutex<Option<String>>,
     source_running: AtomicBool,
-    // One-shot per start episode: whether the "first keystroke delivered"
+    // One-shot per start episode: whether the "first slot press admitted"
     // breadcrumb has been logged. Lets the rolling logfile show whether the
-    // OS hook actually delivered after attaching.
+    // OS hook actually delivered a press the tracker will see.
     first_delivery_logged: AtomicBool,
+    // One-shot per start episode: whether a slot press dropped for want of
+    // game focus has been logged at info. Later drops stay at debug.
+    focus_drop_logged: AtomicBool,
 }
 
 pub struct HotbarListener {
     bus: Arc<EventBus>,
     source: Option<Arc<dyn KeystrokeSource>>,
+    focus: Option<GameFocusProbe>,
     gate: Arc<Gate>,
     key_tap: Arc<Mutex<Option<KeyTap>>>,
+    item_resolver: Mutex<Option<ItemResolver>>,
     resolve_queue: Mutex<Option<Sender<HotbarResolveRequest>>>,
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     session_subscriptions: Mutex<Option<(Registration, Registration)>>,
@@ -66,11 +98,13 @@ pub struct HotbarListener {
 
 impl HotbarListener {
     /// A `None` source leaves the listener inert, matching the
-    /// original's missing-hook-library path.
+    /// original's missing-hook-library path. A `None` focus probe admits
+    /// every press, as does a probe answering `Unknown`.
     pub fn new(
         bus: Arc<EventBus>,
         source: Option<Arc<dyn KeystrokeSource>>,
         resolver: Option<HotbarResolver>,
+        focus: Option<GameFocusProbe>,
     ) -> Arc<Self> {
         let gate = Arc::new(Gate {
             hooks_enabled: AtomicBool::new(false),
@@ -78,6 +112,7 @@ impl HotbarListener {
             active_session_id: Mutex::new(None),
             source_running: AtomicBool::new(false),
             first_delivery_logged: AtomicBool::new(false),
+            focus_drop_logged: AtomicBool::new(false),
         });
         let key_tap: Arc<Mutex<Option<KeyTap>>> = Arc::new(Mutex::new(None));
 
@@ -104,8 +139,10 @@ impl HotbarListener {
         let listener = Arc::new(Self {
             bus: bus.clone(),
             source: source.clone(),
+            focus,
             gate: gate.clone(),
             key_tap: key_tap.clone(),
+            item_resolver: Mutex::new(None),
             resolve_queue: Mutex::new(queue),
             worker: Mutex::new(worker),
             session_subscriptions: Mutex::new(None),
@@ -170,6 +207,106 @@ impl HotbarListener {
         *self.key_tap.lock().expect("key tap") = None;
     }
 
+    /// Wire the item resolver overlay declarations resolve through.
+    pub fn set_item_resolver(&self, resolver: ItemResolver) {
+        *self.item_resolver.lock().expect("item resolver") = Some(resolver);
+    }
+
+    /// Declare an equipment item as in hand, as its hotbar press would: the
+    /// overlay's path, and the only one on a machine that cannot read keys.
+    /// Independent of the keyboard: it needs a running session, not the
+    /// capability toggle. Resolves synchronously (a database read), so call
+    /// it off the async runtime.
+    pub fn declare(
+        &self,
+        equipment_id: i64,
+        occurred_at: f64,
+    ) -> Result<ResolvedHotbarItem, DeclareError> {
+        let session_id = self
+            .gate
+            .active_session_id
+            .lock()
+            .expect("active session")
+            .clone()
+            .filter(|_| self.gate.session_active.load(Ordering::SeqCst))
+            .ok_or(DeclareError::NoSession)?;
+        let resolver = self
+            .item_resolver
+            .lock()
+            .expect("item resolver")
+            .clone()
+            .ok_or(DeclareError::UnknownItem)?;
+        let item =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resolver(equipment_id)))
+                .unwrap_or(None)
+                .ok_or(DeclareError::UnknownItem)?;
+        if !session_matches(&self.gate, &session_id) {
+            return Err(DeclareError::NoSession);
+        }
+        publish_intent(
+            &self.bus,
+            session_id,
+            String::new(),
+            crate::bus_events::IntentSource::Overlay,
+            occurred_at,
+            &item,
+        );
+        Ok(item)
+    }
+
+    /// Resolve an equipment item as a declaration of it would, without
+    /// declaring it: a running session is needed, as for a declaration, and
+    /// is answered with the item, for [`Self::declare_resolved`] to require.
+    /// Resolves synchronously (a database read), so call it off the async
+    /// runtime.
+    pub fn resolve(&self, equipment_id: i64) -> Result<(String, ResolvedHotbarItem), DeclareError> {
+        let session_id = self
+            .gate
+            .active_session_id
+            .lock()
+            .expect("active session")
+            .clone()
+            .filter(|_| self.gate.session_active.load(Ordering::SeqCst))
+            .ok_or(DeclareError::NoSession)?;
+        let resolver = self
+            .item_resolver
+            .lock()
+            .expect("item resolver")
+            .clone()
+            .ok_or(DeclareError::UnknownItem)?;
+        let item =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| resolver(equipment_id)))
+                .unwrap_or(None)
+                .ok_or(DeclareError::UnknownItem)?;
+        if !session_matches(&self.gate, &session_id) {
+            return Err(DeclareError::NoSession);
+        }
+        Ok((session_id, item))
+    }
+
+    /// Declare an item already resolved (see [`Self::resolve`]) as in hand,
+    /// as its press would, for the session it was resolved in: refused when
+    /// that session is no longer the running one.
+    pub fn declare_resolved(
+        &self,
+        session_id: &str,
+        item: &ResolvedHotbarItem,
+        occurred_at: f64,
+    ) -> Result<(), DeclareError> {
+        if !session_matches(&self.gate, session_id) {
+            return Err(DeclareError::NoSession);
+        }
+        publish_intent(
+            &self.bus,
+            session_id.to_string(),
+            String::new(),
+            crate::bus_events::IntentSource::Overlay,
+            occurred_at,
+            item,
+        );
+        Ok(())
+    }
+
     /// Apply the hotbar capability toggle; the source still only runs
     /// while a tracking session is active.
     pub fn set_hotbar_hooks_enabled(&self, enabled: bool) {
@@ -229,6 +366,7 @@ impl HotbarListener {
         self.gate
             .first_delivery_logged
             .store(false, Ordering::SeqCst);
+        self.gate.focus_drop_logged.store(false, Ordering::SeqCst);
         tracing::info!(target: "eo::input", attached, "hotbar keystroke source start requested");
     }
 
@@ -249,19 +387,42 @@ impl HotbarListener {
         {
             return;
         }
-        // One-shot per start: confirm the hook is actually delivering
-        // keystrokes. Non-content: no key value.
-        if !self.gate.first_delivery_logged.swap(true, Ordering::SeqCst) {
-            tracing::info!(
-                target: "eo::input",
-                "hotbar listener received its first keystroke since start"
-            );
-        }
         if event.kind != KeystrokeKind::Press {
             return;
         }
         if !HOTBAR_SLOT_KEYS.contains(&event.key.as_str()) {
             return;
+        }
+        // Asked on the source's dispatch worker, never the hook thread.
+        // Only another window definitely in front, the app's own
+        // included, drops the press: a platform that cannot tell keeps
+        // admitting every press, as before the probe.
+        if let Some(focus) = &self.focus {
+            if !focus().keys_reach_game() {
+                // A dropped press silently changes which weapon is
+                // declared, so the first one per start is worth a line in
+                // the default log.
+                if !self.gate.focus_drop_logged.swap(true, Ordering::SeqCst) {
+                    tracing::info!(
+                        target: "eo::input",
+                        "hotbar press ignored: the game window does not hold focus"
+                    );
+                } else {
+                    tracing::debug!(
+                        target: "eo::input",
+                        "hotbar press ignored: the game window does not hold focus"
+                    );
+                }
+                return;
+            }
+        }
+        // One-shot per start: confirm the hook is delivering slot presses
+        // the tracker will see. Non-content: no key value.
+        if !self.gate.first_delivery_logged.swap(true, Ordering::SeqCst) {
+            tracing::info!(
+                target: "eo::input",
+                "hotbar listener admitted its first slot press since start"
+            );
         }
         let tap = self.key_tap.lock().expect("key tap").clone();
         if let Some(tap) = tap {
@@ -305,11 +466,29 @@ fn resolve_hotbar_slot(
     if !session_matches(gate, &request.session_id) {
         return;
     }
-    let slot = request.slot;
-    bus.publish(&BusEvent::HotbarIntent(HotbarIntentPayload {
-        session_id: Some(request.session_id),
+    publish_intent(
+        bus,
+        request.session_id,
+        request.slot,
+        crate::bus_events::IntentSource::Key,
+        request.occurred_at.timestamp_micros() as f64 / 1_000_000.0,
+        &item,
+    );
+}
+
+fn publish_intent(
+    bus: &EventBus,
+    session_id: String,
+    slot: String,
+    source: crate::bus_events::IntentSource,
+    occurred_at: f64,
+    item: &ResolvedHotbarItem,
+) {
+    bus.publish(&BusEvent::HotbarIntent(Box::new(HotbarIntentPayload {
+        session_id: Some(session_id),
         slot,
-        occurred_at: request.occurred_at.timestamp_micros() as f64 / 1_000_000.0,
+        source,
+        occurred_at,
         equipment_id: item.equipment_id,
         item_name: item.name.clone(),
         item_kind: item.kind,
@@ -317,7 +496,8 @@ fn resolve_hotbar_slot(
         reload_seconds: item.reload_seconds,
         healing_profile: item.healing_profile.clone(),
         lifesteal_percent: item.lifesteal_percent,
-    }));
+        consumable_profile: item.consumable_profile.clone(),
+    })));
 }
 
 fn session_matches(gate: &Gate, session_id: &str) -> bool {
@@ -350,6 +530,10 @@ mod tests {
     }
 
     fn rig(resolver: Option<HotbarResolver>) -> Rig {
+        rig_with_focus(resolver, None)
+    }
+
+    fn rig_with_focus(resolver: Option<HotbarResolver>, focus: Option<GameFocusProbe>) -> Rig {
         let bus = Arc::new(EventBus::new());
         let stream = Arc::new(Mutex::new(Vec::new()));
         let sink = stream.clone();
@@ -359,7 +543,7 @@ mod tests {
                 .push((event.topic(), event.payload_value()));
         });
         let source = Arc::new(MockKeystrokeSource::new());
-        let listener = HotbarListener::new(bus.clone(), Some(source.clone()), resolver);
+        let listener = HotbarListener::new(bus.clone(), Some(source.clone()), resolver, focus);
         Rig {
             bus,
             source,
@@ -378,6 +562,8 @@ mod tests {
                 reload_seconds: 0.0,
                 healing_profile: None,
                 lifesteal_percent: None,
+                consumable_profile: None,
+                setup: Default::default(),
             }),
             "2" => Some(ResolvedHotbarItem {
                 equipment_id: 2,
@@ -391,6 +577,8 @@ mod tests {
                     ..HealingProfile::default()
                 }),
                 lifesteal_percent: None,
+                consumable_profile: None,
+                setup: Default::default(),
             }),
             "3" => Some(ResolvedHotbarItem {
                 equipment_id: 3,
@@ -400,9 +588,99 @@ mod tests {
                 reload_seconds: 0.0,
                 healing_profile: None,
                 lifesteal_percent: None,
+                consumable_profile: None,
+                setup: Default::default(),
             }),
             _ => None,
         })
+    }
+
+    #[test]
+    fn a_resolved_declaration_is_published_only_into_the_session_it_was_resolved_in() {
+        let rig = rig(None);
+        rig.listener
+            .set_item_resolver(Arc::new(|id: i64| standard_resolver()(&id.to_string())));
+        assert_eq!(rig.listener.resolve(2), Err(DeclareError::NoSession));
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        assert_eq!(rig.listener.resolve(9), Err(DeclareError::UnknownItem));
+        let (session_id, item) = rig.listener.resolve(2).expect("resolved");
+        assert_eq!(session_id, "s1");
+        // The session is swapped between the resolve and the declaration:
+        // the declaration is refused, as a declaration across a swap is.
+        rig.bus
+            .publish(&BusEvent::SessionStopped(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s2".into(),
+            }));
+        assert_eq!(
+            rig.listener.declare_resolved(&session_id, &item, 100.0),
+            Err(DeclareError::NoSession)
+        );
+        let (session_id, item) = rig.listener.resolve(2).expect("resolved");
+        rig.listener
+            .declare_resolved(&session_id, &item, 100.5)
+            .expect("declared");
+        let intents: Vec<Value> = rig
+            .stream
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(topic, _)| *topic == Topic::HotbarIntent)
+            .map(|(_, payload)| payload.clone())
+            .collect();
+        assert_eq!(intents.len(), 1, "only the declaration in its own session");
+        assert_eq!(intents[0]["session_id"], "s2");
+        assert_eq!(intents[0]["source"], "overlay");
+    }
+
+    #[test]
+    fn an_overlay_declaration_publishes_the_item_without_any_keyboard() {
+        let rig = rig(None);
+        rig.listener
+            .set_item_resolver(Arc::new(|id: i64| standard_resolver()(&id.to_string())));
+        // The capability toggle stays off and the source never starts: a
+        // declaration needs only a running session.
+        assert_eq!(rig.listener.declare(2, 100.0), Err(DeclareError::NoSession));
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        assert_eq!(
+            rig.listener.declare(9, 100.0),
+            Err(DeclareError::UnknownItem)
+        );
+        let item = rig.listener.declare(2, 100.5).expect("declared");
+        assert_eq!(item.name, "Healer");
+        // The keyboard stayed detached: a key now is never observed.
+        rig.source
+            .inject("1", chrono::Utc::now(), KeystrokeKind::Press);
+
+        let intents: Vec<Value> = rig
+            .stream
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(topic, _)| *topic == Topic::HotbarIntent)
+            .map(|(_, payload)| payload.clone())
+            .collect();
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0]["source"], "overlay");
+        assert_eq!(intents[0]["slot"], "");
+        assert_eq!(intents[0]["session_id"], "s1");
+        assert_eq!(intents[0]["equipment_id"], 2);
+        assert_eq!(intents[0]["occurred_at"], 100.5);
+
+        rig.bus
+            .publish(&BusEvent::SessionStopped(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+        assert_eq!(rig.listener.declare(2, 101.0), Err(DeclareError::NoSession));
     }
 
     fn wait_for_intents(rig: &Rig, expected: usize) {
@@ -480,6 +758,10 @@ mod tests {
                 .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
                     session_id: "s1".into(),
                 }));
+            // A key that is no hotbar slot, and a slot release, prove
+            // nothing about slot presses: neither may claim the breadcrumb.
+            rig.source.inject("w", now(), KeystrokeKind::Press);
+            rig.source.inject("1", now(), KeystrokeKind::Release);
             rig.source.inject("1", now(), KeystrokeKind::Press);
             wait_for_intents(&rig, 1);
             rig.listener.stop();
@@ -495,11 +777,13 @@ mod tests {
                 .any(|(_, e)| e.message.contains("start requested") && e.attached == Some(true)),
             "the attach breadcrumb fires with attached=true: {input:?}"
         );
-        assert!(
+        assert_eq!(
             input
                 .iter()
-                .any(|(_, e)| e.message.contains("first keystroke since start")),
-            "the first-keystroke breadcrumb fires: {input:?}"
+                .filter(|(_, e)| e.message.contains("first slot press since start"))
+                .count(),
+            1,
+            "the first-press breadcrumb fires once, for the slot press: {input:?}"
         );
     }
 
@@ -597,6 +881,56 @@ mod tests {
     }
 
     #[test]
+    fn presses_made_while_another_window_holds_focus_are_dropped() {
+        let focus = Arc::new(Mutex::new(GameFocus::Unfocused));
+        let probe_focus = focus.clone();
+        let probe: GameFocusProbe = Arc::new(move || *probe_focus.lock().unwrap());
+        let rig = rig_with_focus(Some(standard_resolver()), Some(probe));
+        rig.listener.set_hotbar_hooks_enabled(true);
+        rig.bus
+            .publish(&BusEvent::SessionStarted(SessionLifecyclePayload {
+                session_id: "s1".into(),
+            }));
+
+        let taps = Arc::new(Mutex::new(Vec::new()));
+        let sink = taps.clone();
+        rig.listener
+            .set_key_tap(Arc::new(move |key: &str, _kind: &str| {
+                sink.lock().unwrap().push(key.to_string());
+            }));
+
+        rig.source.inject("1", now(), KeystrokeKind::Press);
+        // Typed into one of the app's own windows: not the game's either.
+        *focus.lock().unwrap() = GameFocus::OwnWindow;
+        rig.source.inject("4", now(), KeystrokeKind::Press);
+        *focus.lock().unwrap() = GameFocus::Focused;
+        rig.source.inject("2", now(), KeystrokeKind::Press);
+        *focus.lock().unwrap() = GameFocus::Unknown;
+        rig.source.inject("3", now(), KeystrokeKind::Press);
+        wait_for_intents(&rig, 2);
+        rig.listener.stop();
+
+        assert_eq!(
+            *taps.lock().unwrap(),
+            ["2", "3"],
+            "the unfocused press never reaches the key tap"
+        );
+        // The resolve queue is FIFO, so an admitted "1" would have
+        // published ahead of "2".
+        let stream = rig.stream.lock().unwrap();
+        let slots: Vec<&Value> = stream
+            .iter()
+            .filter(|(topic, _)| *topic == Topic::HotbarIntent)
+            .map(|(_, payload)| &payload["slot"])
+            .collect();
+        assert_eq!(
+            slots,
+            ["2", "3"],
+            "focused and unknown presses both resolve"
+        );
+    }
+
+    #[test]
     fn a_panicking_resolver_is_contained() {
         let resolver: HotbarResolver = Arc::new(|_| panic!("resolver down"));
         let rig = rig(Some(resolver));
@@ -640,6 +974,8 @@ mod tests {
                 reload_seconds: 0.0,
                 healing_profile: None,
                 lifesteal_percent: None,
+                consumable_profile: None,
+                setup: Default::default(),
             })
         });
         let rig = rig(Some(resolver));
@@ -723,8 +1059,12 @@ mod tests {
     fn the_explicit_stop_is_what_releases_the_listener() {
         let bus = Arc::new(EventBus::new());
         let source = Arc::new(MockKeystrokeSource::new());
-        let listener =
-            HotbarListener::new(bus.clone(), Some(source.clone()), Some(standard_resolver()));
+        let listener = HotbarListener::new(
+            bus.clone(),
+            Some(source.clone()),
+            Some(standard_resolver()),
+            None,
+        );
         // The bus subscriptions hold the listener alive through their
         // closures; scope exit alone cannot tear it down.
         assert!(bus.has_subscribers(Topic::SessionStarted));

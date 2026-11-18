@@ -1,6 +1,5 @@
-//! The equipment family: catalogue search, the library CRUD (including
-//! the trifecta-reference delete guard), the expanded detail, and the
-//! cost shaping behind both.
+//! The equipment family: catalogue search, the library CRUD, the
+//! expanded detail, and the cost shaping behind both.
 //!
 //! The stored `properties_json` bytes are an owned on-disk contract:
 //! the writes serialise with the canonical spacing the DB-state goldens
@@ -10,10 +9,11 @@
 //! JSON values through untyped, the DTOs pin the number/string types
 //! the writes have always produced.
 
-use eo_services::config_service::load_config_readonly;
+use eo_services::attack_rate::{AttackRate, WeaponPricing};
+use eo_services::consumables::consumable_profile_from_props;
 use eo_services::cost_engine::{
-    cost_per_shot_from_props, get_weapon_damage_profile, heal_cost_per_use,
-    heal_cost_per_use_with_implant, heal_reload_seconds, is_limited,
+    cost_per_shot_from_props, heal_cost_per_use, heal_cost_per_use_with_implant,
+    heal_reload_seconds, is_limited, weapon_damage_profile_from_props,
 };
 use eo_services::equipment_pricing::{
     healing_profile_from_props, lifesteal_percent_from_props,
@@ -23,6 +23,12 @@ use eo_services::expected_hunting::{
     self, HuntingLooterLevels, LooterSource, OffensiveLoadoutEvidence,
 };
 use eo_services::game_data_store::GameDataStore;
+use eo_services::game_ui::tool_names::{indistinguishable, LibraryTool, ToolNameProfile};
+use eo_services::passive_effects::reload_seconds_under;
+use eo_services::tool_catalogue::holdable;
+use eo_services::weapon_effect::{
+    effect_profile_from_props, WeaponEffectProfile, EFFECT_PROFILE_KEY,
+};
 use eo_wire::normalizer::{round_half_even, to_python_json_dumps};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -31,7 +37,7 @@ use serde_json::{json, Map, Value};
 use crate::Nullable;
 use crate::{Api, ApiError};
 
-/// A catalogue vocabulary the search accepts; each maps to one snapshot
+/// A catalogue vocabulary the equipment pickers search; each maps to one snapshot
 /// endpoint. An out-of-vocabulary value cannot be constructed (the
 /// bindings expose the closed union), so the old unknown-type reply
 /// class is unrepresentable rather than handled.
@@ -86,7 +92,7 @@ impl EquipmentKind {
     }
 }
 
-/// A catalogue search hit.
+/// One catalogue entry, as the equipment pickers search and select it.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EquipmentSearchHit {
@@ -104,6 +110,12 @@ pub struct EquipmentSearchHit {
     pub heal_max: Nullable<f64>,
     pub reload_seconds: Nullable<f64>,
     pub lifesteal_percent: Nullable<f64>,
+    /// A weapon's catalogue attack rate, attacks a minute; null for other
+    /// items and for weapons the catalogue gives no rate.
+    pub uses_per_minute: Nullable<f64>,
+    /// A stimulant's dose as the catalogue prints it (at 100% markup, cost
+    /// tracking off until the player chooses); null for every other item.
+    pub consumable: Nullable<ConsumableSettings>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -137,6 +149,227 @@ pub struct HealingProfileDto {
     pub tick_seconds: Nullable<f64>,
 }
 
+/// How a paid activation of a weapon with a damage-over-time effect shows
+/// in the chat log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WeaponEffectMode {
+    /// Only ticks: the first tick is the activation's outcome.
+    OverTime,
+    /// An initial hit, then ticks.
+    Compound,
+}
+
+impl From<WeaponEffectMode> for eo_services::weapon_effect::WeaponEffectMode {
+    fn from(value: WeaponEffectMode) -> Self {
+        match value {
+            WeaponEffectMode::OverTime => Self::OverTime,
+            WeaponEffectMode::Compound => Self::Compound,
+        }
+    }
+}
+
+impl From<eo_services::weapon_effect::WeaponEffectMode> for WeaponEffectMode {
+    fn from(value: eo_services::weapon_effect::WeaponEffectMode) -> Self {
+        match value {
+            eo_services::weapon_effect::WeaponEffectMode::OverTime => Self::OverTime,
+            eo_services::weapon_effect::WeaponEffectMode::Compound => Self::Compound,
+        }
+    }
+}
+
+/// A weapon's declared damage-over-time effect: what one paid activation
+/// prints, and for how long its ticks follow.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponEffectProfileDto {
+    pub mode: WeaponEffectMode,
+    /// The initial hit's range; null for an effect with only ticks.
+    pub hit_min: Nullable<f64>,
+    pub hit_max: Nullable<f64>,
+    pub duration_seconds: f64,
+    pub tick_min: f64,
+    pub tick_max: f64,
+    pub tick_seconds: Nullable<f64>,
+}
+
+fn weapon_effect_dto(props: &Value) -> Option<WeaponEffectProfileDto> {
+    effect_profile_from_props(props).map(|profile| WeaponEffectProfileDto {
+        mode: profile.mode.into(),
+        hit_min: profile.hit_min.into(),
+        hit_max: profile.hit_max.into(),
+        duration_seconds: profile.duration_seconds,
+        tick_min: profile.tick_min,
+        tick_max: profile.tick_max,
+        tick_seconds: profile.tick_seconds.into(),
+    })
+}
+
+/// A weapon's damage-over-time effect as an add or update request declares
+/// it, in the request's casing. Absent: the weapon's every hit is a shot.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct WeaponEffectRequest {
+    pub mode: WeaponEffectMode,
+    #[serde(default)]
+    pub hit_min: Option<f64>,
+    #[serde(default)]
+    pub hit_max: Option<f64>,
+    pub duration_seconds: f64,
+    pub tick_min: f64,
+    pub tick_max: f64,
+    #[serde(default)]
+    pub tick_seconds: Option<f64>,
+}
+
+impl WeaponEffectRequest {
+    /// The profile to store, or why it cannot be.
+    fn profile(&self) -> Result<WeaponEffectProfile, ApiError> {
+        WeaponEffectProfile {
+            mode: self.mode.into(),
+            hit_min: self.hit_min,
+            hit_max: self.hit_max,
+            duration_seconds: self.duration_seconds,
+            tick_min: self.tick_min,
+            tick_max: self.tick_max,
+            tick_seconds: self.tick_seconds,
+        }
+        .validated()
+        .map_err(|error| ApiError::bad_request(error.to_string()))
+    }
+}
+
+/// A consumable's dose as Equipment configures it: what the catalogue
+/// supplies and what the player declared, and what one dose costs.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsumableSettings {
+    /// How long one dose lasts, seconds; 0 for an immediate item.
+    pub duration_seconds: f64,
+    pub effects: Vec<crate::consumables::ConsumableEffect>,
+    /// One dose's TT value, PED.
+    pub tt_value_ped: f64,
+    /// The acquisition markup, percent of TT.
+    pub markup_percent: f64,
+    /// One dose at that markup, PED.
+    pub dose_cost_ped: f64,
+    /// Whether taking a dose books its cost to the session.
+    pub track_cost: bool,
+    /// Which figures the catalogue supplies (the rest are declared).
+    pub catalogue_effects: bool,
+    pub catalogue_duration: bool,
+    pub catalogue_value: bool,
+    /// What the player declared, for editing: used where the catalogue
+    /// has nothing.
+    pub declared_reload_speed_percent: Nullable<f64>,
+    pub declared_duration_seconds: Nullable<f64>,
+    pub declared_tt_value_ped: Nullable<f64>,
+}
+
+impl ConsumableSettings {
+    /// What taking one dose books, PEC.
+    fn booked_cost_pec(&self) -> f64 {
+        if self.track_cost {
+            self.dose_cost_ped * 100.0
+        } else {
+            0.0
+        }
+    }
+}
+
+fn consumable_settings(props: &Value, game_data: Option<&GameDataStore>) -> ConsumableSettings {
+    let resolved = consumable_profile_from_props(props, game_data);
+    let declared = |key: &str| {
+        props
+            .get("dose")
+            .and_then(|dose| dose.get(key))
+            .and_then(Value::as_f64)
+    };
+    let profile = resolved.profile;
+    ConsumableSettings {
+        duration_seconds: profile.duration_seconds,
+        effects: profile
+            .effects
+            .iter()
+            .map(crate::consumables::ConsumableEffect::from)
+            .collect(),
+        tt_value_ped: profile.tt_value_ped,
+        markup_percent: profile.markup_percent,
+        dose_cost_ped: profile.dose_cost_ped(),
+        track_cost: profile.track_cost,
+        catalogue_effects: resolved.catalogue_effects,
+        catalogue_duration: resolved.catalogue_duration,
+        catalogue_value: resolved.catalogue_value,
+        declared_reload_speed_percent: declared("reload_speed_percent").into(),
+        declared_duration_seconds: declared("duration_seconds").into(),
+        declared_tt_value_ped: declared("tt_value_ped").into(),
+    }
+}
+
+/// A consumable's dose settings as an add or update request declares them,
+/// in the request's casing. The effects, duration, and TT value are used
+/// only where the catalogue has none.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct ConsumableDoseRequest {
+    /// The acquisition markup, percent of TT.
+    pub markup_percent: f64,
+    /// Whether taking a dose books its cost to the session.
+    pub track_cost: bool,
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    #[serde(default)]
+    pub reload_speed_percent: Option<f64>,
+    #[serde(default)]
+    pub tt_value_ped: Option<f64>,
+}
+
+impl ConsumableDoseRequest {
+    /// The stored `dose` object, or why it cannot be stored.
+    fn stored(&self) -> Result<Value, ApiError> {
+        if !self.markup_percent.is_finite()
+            || self.markup_percent < 1.0
+            || self.markup_percent > 100_000.0
+        {
+            return Err(ApiError::bad_request(
+                "Markup must be between 1% and 100000%",
+            ));
+        }
+        if let Some(duration) = self.duration_seconds {
+            if !duration.is_finite() || !(0.0..=604_800.0).contains(&duration) {
+                return Err(ApiError::bad_request(
+                    "Duration must be between 0 and 7 days",
+                ));
+            }
+        }
+        if let Some(percent) = self.reload_speed_percent {
+            if !percent.is_finite() || percent <= -100.0 || percent > 100.0 {
+                return Err(ApiError::bad_request(
+                    "Reload speed must be above -100% and at most 100%",
+                ));
+            }
+        }
+        if let Some(value) = self.tt_value_ped {
+            if !value.is_finite() || !(0.0..=100_000.0).contains(&value) {
+                return Err(ApiError::bad_request(
+                    "TT value must be between 0 and 100000 PED",
+                ));
+            }
+        }
+        let mut dose = Map::new();
+        dose.insert("markup_percent".into(), json!(self.markup_percent));
+        dose.insert("track_cost".into(), json!(self.track_cost));
+        for (key, value) in [
+            ("duration_seconds", self.duration_seconds),
+            ("reload_speed_percent", self.reload_speed_percent),
+            ("tt_value_ped", self.tt_value_ped),
+        ] {
+            if let Some(value) = value {
+                dose.insert(key.into(), json!(value));
+            }
+        }
+        Ok(Value::Object(dose))
+    }
+}
+
 /// A library entry in the list shape.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +378,10 @@ pub struct EquipmentSummary {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: EquipmentKind,
+    /// Whether the player has the entry in use: of entries that cannot be
+    /// told apart by name, the one left on. Its set-up and cost are the
+    /// same either way.
+    pub enabled: bool,
     pub amplifier_name: Nullable<String>,
     pub cost_per_use: f64,
     pub damage_min: Nullable<f64>,
@@ -155,6 +392,30 @@ pub struct EquipmentSummary {
     pub enrichment_level: i64,
     pub healing_profile: Nullable<HealingProfileDto>,
     pub lifesteal_percent: Nullable<f64>,
+    /// A weapon's declared damage-over-time effect, when it has one.
+    pub effect_profile: Nullable<WeaponEffectProfileDto>,
+    /// A consumable's dose; null for every other kind.
+    pub consumable: Nullable<ConsumableSettings>,
+}
+
+/// The stored library: its entries, and which of them the held-tool bar
+/// cannot tell apart.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EquipmentLibrary {
+    /// Every entry, oldest first.
+    pub entries: Vec<EquipmentSummary>,
+    /// The groups of entries a player can hold (weapons, healing tools and
+    /// harvesting tools) whose names read the same on the held-tool bar:
+    /// one name kept in two set-ups, or long names the game client cuts
+    /// short alike. Each group lists two entry ids or more, on or off
+    /// alike; no entry is in two groups. Empty when every entry stands
+    /// apart, or when the interface profile is unavailable.
+    pub indistinguishable: Vec<Vec<String>>,
+    /// How the player tells each member of those groups apart, by entry
+    /// id: its name, then its set-up, then its place (the one rule the
+    /// overlay names such entries by too).
+    pub lookalike_labels: std::collections::BTreeMap<String, String>,
 }
 
 /// One configured component of a stored weapon setup.
@@ -246,6 +507,23 @@ pub struct EquipmentExpectedReturn {
     pub consumed_premium_per_use: f64,
     pub coverage: f64,
     pub incomplete: bool,
+    /// PEC lost per 100 HP removed at the looter level above, a maxed weapon
+    /// assumed: Effective Efficiency and damage per PEC combined. It ranks
+    /// weapons for mobs several hits deep; on small mobs the smaller shot
+    /// can win regardless.
+    pub loss_per_100_hp_pec: Nullable<f64>,
+}
+
+/// One setup's expected return read at each looter basis the player can
+/// choose: the three-looter mean for an unknown target, or the one hunting
+/// looter that applies when the target's class is known.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EquipmentExpectedReturns {
+    pub three_looter_mean: EquipmentExpectedReturn,
+    pub animal: EquipmentExpectedReturn,
+    pub mutant: EquipmentExpectedReturn,
+    pub robot: EquipmentExpectedReturn,
 }
 
 /// The absorber component of a stored weapon setup.
@@ -271,6 +549,38 @@ pub struct CostBreakdownLine {
     pub effective_cost_pec: f64,
 }
 
+/// A weapon's attack rate under the reload speed in effect. Past the
+/// server's limit of 100 attacks a minute, the rate the reload speed asks
+/// for turns into per-attack damage and cost instead: `factor` is that
+/// multiplier (1 within the limit), already applied to the detail's cost
+/// breakdown and to the weapon's damage range.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WeaponAttackRate {
+    /// The catalogue rate, attacks a minute, before any effect.
+    pub base_per_minute: f64,
+    /// The reload speed in effect, after the game's stacking limit.
+    pub reload_speed_percent: f64,
+    /// The rate the reload speed asks for.
+    pub buffed_per_minute: f64,
+    /// The rate the server runs: the buffed rate, held at the limit.
+    pub effective_per_minute: f64,
+    /// Per-attack damage and cost multiplier; 1 within the limit.
+    pub factor: f64,
+}
+
+impl From<AttackRate> for WeaponAttackRate {
+    fn from(rate: AttackRate) -> Self {
+        Self {
+            base_per_minute: rate.base_per_minute,
+            reload_speed_percent: rate.reload_speed_percent,
+            buffed_per_minute: rate.buffed_per_minute,
+            effective_per_minute: rate.effective_per_minute,
+            factor: rate.factor,
+        }
+    }
+}
+
 /// The expanded library-entry detail.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -288,9 +598,15 @@ pub struct EquipmentDetail {
     pub implant: Nullable<AbsorberComponent>,
     pub cost_breakdown: Vec<CostBreakdownLine>,
     pub total_cost_per_use: f64,
-    pub expected_return: Nullable<EquipmentExpectedReturn>,
+    pub expected_returns: Nullable<EquipmentExpectedReturns>,
     pub healing_profile: Nullable<HealingProfileDto>,
     pub lifesteal_percent: Nullable<f64>,
+    /// A weapon's declared damage-over-time effect, when it has one.
+    pub effect_profile: Nullable<WeaponEffectProfileDto>,
+    /// A weapon's attack rate, when its catalogue publishes a base rate.
+    pub attack_rate: Nullable<WeaponAttackRate>,
+    /// A consumable's dose; null for every other kind.
+    pub consumable: Nullable<ConsumableSettings>,
 }
 
 /// An add or update request. Field names stay in the request casing the
@@ -337,10 +653,49 @@ pub struct EquipmentRequest {
     pub tick_max: Option<f64>,
     #[serde(default)]
     pub tick_seconds: Option<f64>,
+    /// A weapon's damage-over-time effect; absent for every other kind.
+    #[serde(default)]
+    pub weapon_effect: Option<WeaponEffectRequest>,
+    /// A consumable's dose settings; absent for every other kind, and for
+    /// a consumable that keeps its dose unbooked with no declared figures.
+    #[serde(default)]
+    pub dose: Option<ConsumableDoseRequest>,
 }
 
 fn default_markup() -> i64 {
     100
+}
+
+impl EquipmentRequest {
+    /// The request the add path takes for a catalogue pick of `kind` with
+    /// nothing else chosen: no attachments, implant or enhancers, every
+    /// markup at its default, a healer's healing as its catalogue gives it.
+    pub(crate) fn bare(kind: EquipmentKind, catalog_id: &str) -> Self {
+        Self {
+            kind,
+            catalog_id: Some(catalog_id.to_string()),
+            name: None,
+            amp_catalog_id: None,
+            scope_catalog_id: None,
+            absorber_catalog_id: None,
+            weapon_markup: default_markup(),
+            amp_markup: default_markup(),
+            scope_markup: default_markup(),
+            absorber_markup: default_markup(),
+            damage_enhancers: 0,
+            implant_catalog_id: None,
+            implant_markup: default_markup(),
+            healing_mode: HealingMode::default(),
+            heal_min: None,
+            heal_max: None,
+            effect_duration_seconds: None,
+            tick_min: None,
+            tick_max: None,
+            tick_seconds: None,
+            weapon_effect: None,
+            dose: None,
+        }
+    }
 }
 
 /// Python `str.strip()`: `char::is_whitespace` plus the four
@@ -476,6 +831,13 @@ fn search_hit(row: &Value) -> EquipmentSearchHit {
             .get("lifesteal_percent")
             .and_then(Value::as_f64)
             .into(),
+        uses_per_minute: (row["endpoint"].as_str() == Some("weapons"))
+            .then(|| entity.get("uses_per_minute").and_then(Value::as_f64))
+            .flatten()
+            .into(),
+        consumable: (row["endpoint"].as_str() == Some("stimulants"))
+            .then(|| consumable_settings(&json!({ "entity": entity }), None))
+            .into(),
     }
 }
 
@@ -516,10 +878,14 @@ fn row_to_summary(
     id: i64,
     name: &str,
     item_type: &str,
+    enabled: bool,
     props: &Value,
     game_data: &GameDataStore,
+    pricing: &WeaponPricing,
 ) -> Result<EquipmentSummary, ApiError> {
     if item_type == "weapon" {
+        let priced_props = pricing.prepare(props);
+        let props = &priced_props;
         let weapon_e = props
             .get("weapon_entity")
             .filter(|v| !v.is_null())
@@ -527,9 +893,8 @@ fn row_to_summary(
                 ApiError::invalid_state(format!("stored weapon row {id} missing weapon_entity"))
             })?;
         let amp_e = props.get("amp_entity").filter(|v| !v.is_null());
-        let enhancers = stored_enhancers(props).max(0);
         let cost_result = cost_per_shot_from_props(props, None);
-        let damage_profile = get_weapon_damage_profile(weapon_e, amp_e, enhancers);
+        let damage_profile = weapon_damage_profile_from_props(props);
         let rounded = |key: &str| -> Option<f64> {
             damage_profile
                 .as_ref()
@@ -541,6 +906,7 @@ fn row_to_summary(
             id: id.to_string(),
             name: name.to_string(),
             kind: EquipmentKind::Weapon,
+            enabled,
             amplifier_name: amp_e
                 .and_then(|amp| amp.get("name"))
                 .and_then(Value::as_str)
@@ -554,16 +920,21 @@ fn row_to_summary(
             enrichment_level: compute_enrichment(props),
             healing_profile: None.into(),
             lifesteal_percent: lifesteal_for_props(props, game_data).into(),
+            effect_profile: weapon_effect_dto(props).into(),
+            consumable: None.into(),
         });
     }
 
     if item_type == "consumable" {
+        let settings = consumable_settings(props, Some(game_data));
         return Ok(EquipmentSummary {
             id: id.to_string(),
             name: name.to_string(),
             kind: EquipmentKind::Consumable,
+            enabled,
             amplifier_name: None.into(),
-            cost_per_use: 0.0,
+            // What taking a dose books, PEC: the dose cost when tracked.
+            cost_per_use: round_half_even(settings.booked_cost_pec(), 4),
             damage_min: None.into(),
             damage_max: None.into(),
             reload_seconds: None.into(),
@@ -571,6 +942,8 @@ fn row_to_summary(
             enrichment_level: 1,
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
+            effect_profile: None.into(),
+            consumable: Some(settings).into(),
         });
     }
 
@@ -588,6 +961,7 @@ fn row_to_summary(
             id: id.to_string(),
             name: name.to_string(),
             kind: EquipmentKind::Tool,
+            enabled,
             amplifier_name: None.into(),
             cost_per_use: heal_cost_per_use(tool_e, markup),
             damage_min: None.into(),
@@ -597,6 +971,8 @@ fn row_to_summary(
             enrichment_level: 1,
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
+            effect_profile: None.into(),
+            consumable: None.into(),
         });
     }
 
@@ -611,20 +987,30 @@ fn row_to_summary(
         id: id.to_string(),
         name: name.to_string(),
         kind: EquipmentKind::Healing,
+        enabled,
         amplifier_name: None.into(),
         cost_per_use: heal_cost_with_stored_implant(props, tool_e, markup),
         damage_min: None.into(),
         damage_max: None.into(),
-        reload_seconds: Some(round_half_even(heal_reload_seconds(tool_e), 2)).into(),
+        // The reload in effect: the catalogue reload under the reload speed
+        // the equipped sources and running doses put in force.
+        reload_seconds: Some(round_half_even(
+            reload_seconds_under(heal_reload_seconds(tool_e), pricing.reload_speed_percent()),
+            2,
+        ))
+        .into(),
         is_limited: is_limited(tool_e),
         enrichment_level: 1,
         healing_profile: Some(healing_profile_dto(props)).into(),
         lifesteal_percent: None.into(),
+        effect_profile: None.into(),
+        consumable: None.into(),
     })
 }
 
 /// Convert a library row to the expanded detail shape. `catalog_id` is
 /// the row's own column.
+#[allow(clippy::too_many_arguments)]
 fn row_to_detail(
     id: i64,
     name: &str,
@@ -632,13 +1018,15 @@ fn row_to_detail(
     catalog_id: Option<&str>,
     props: &Value,
     game_data: &GameDataStore,
+    pricing: &WeaponPricing,
     looters: HuntingLooterLevels,
 ) -> Result<EquipmentDetail, ApiError> {
     let item_id = id.to_string();
 
     if item_type == "weapon" {
-        let enriched_props =
-            expected_hunting::with_current_offensive_efficiencies(props, game_data);
+        let enriched_props = pricing.prepare(
+            &expected_hunting::with_current_offensive_efficiencies(props, game_data),
+        );
         let props = &enriched_props;
         let weapon_e = props
             .get("weapon_entity")
@@ -713,13 +1101,20 @@ fn row_to_detail(
             .into(),
             cost_breakdown: breakdown_lines(&cost_result)?,
             total_cost_per_use: cost_result["totalCostPerUse"].as_f64().unwrap_or(0.0),
-            expected_return: equipment_expected_return(props, enhancers, looters)?.into(),
+            expected_returns: equipment_expected_returns(props, enhancers, looters)?.into(),
             healing_profile: None.into(),
             lifesteal_percent: lifesteal_for_props(props, game_data).into(),
+            effect_profile: weapon_effect_dto(props).into(),
+            attack_rate: pricing
+                .attack_rate(props)
+                .map(WeaponAttackRate::from)
+                .into(),
+            consumable: None.into(),
         });
     }
 
     if item_type == "consumable" {
+        let settings = consumable_settings(props, Some(game_data));
         return Ok(EquipmentDetail {
             id: item_id,
             kind: EquipmentKind::Consumable,
@@ -728,7 +1123,7 @@ fn row_to_detail(
                 name: name.to_string(),
                 decay: 0.0,
                 ammo_burn: 0.0,
-                markup_percent: 100.0,
+                markup_percent: settings.markup_percent,
                 is_limited: false,
                 damage_enhancers: 0,
                 efficiency_pct: None.into(),
@@ -738,10 +1133,13 @@ fn row_to_detail(
             absorber: None.into(),
             implant: None.into(),
             cost_breakdown: Vec::new(),
-            total_cost_per_use: 0.0,
-            expected_return: None.into(),
+            total_cost_per_use: round_half_even(settings.booked_cost_pec(), 4),
+            expected_returns: None.into(),
             healing_profile: None.into(),
             lifesteal_percent: None.into(),
+            effect_profile: None.into(),
+            attack_rate: None.into(),
+            consumable: Some(settings).into(),
         });
     }
 
@@ -825,19 +1223,22 @@ fn row_to_detail(
         .into(),
         cost_breakdown: breakdown,
         total_cost_per_use: cost,
-        expected_return: None.into(),
+        expected_returns: None.into(),
         healing_profile: (item_type == "healing")
             .then(|| healing_profile_dto(props))
             .into(),
         lifesteal_percent: None.into(),
+        effect_profile: None.into(),
+        attack_rate: None.into(),
+        consumable: None.into(),
     })
 }
 
-fn equipment_expected_return(
+fn equipment_expected_returns(
     props: &Value,
     enhancers: i64,
     looters: HuntingLooterLevels,
-) -> Result<Option<EquipmentExpectedReturn>, ApiError> {
+) -> Result<Option<EquipmentExpectedReturns>, ApiError> {
     let evidence: OffensiveLoadoutEvidence =
         expected_hunting::evidence_from_equipment_props(props, Some(enhancers), looters);
     if evidence.components.is_empty() {
@@ -849,66 +1250,95 @@ fn equipment_expected_return(
         .filter(|component| component.efficiency_pct.is_some())
         .map(|component| component.consumed_premium_per_use)
         .sum();
-    let result = expected_hunting::evaluate(&evidence)
-        .map_err(ApiError::internal("equipment expected return"))?;
-    Ok(Some(EquipmentExpectedReturn {
-        model_version: result.model_version,
-        looter_source: result.looter_source.into(),
-        looter_level: result.looter_level,
-        weighted_efficiency_pct: result.weighted_efficiency_pct.into(),
-        offensive_tt_recovery: result.offensive_tt_recovery.into(),
-        expected_tt_rate: result.expected_tt_rate.into(),
-        effective_efficiency: result.effective_efficiency.map(Into::into).into(),
-        break_even_loot_markup: result.break_even_loot_markup.into(),
-        modelled_raw_tt_per_use: result.modelled_raw_tt * 100.0,
-        eligible_offensive_cost_per_use: result.eligible_offensive_cost * 100.0,
-        consumed_premium_per_use: premium * 100.0,
-        coverage: result.coverage,
-        incomplete: result.incomplete,
+    let at = |looter_source: LooterSource| -> Result<EquipmentExpectedReturn, ApiError> {
+        let evidence = OffensiveLoadoutEvidence {
+            looter_source,
+            ..evidence.clone()
+        };
+        let level = evidence.selected_looter_level();
+        let result = expected_hunting::evaluate(&evidence)
+            .map_err(ApiError::internal("equipment expected return"))?;
+        Ok(EquipmentExpectedReturn {
+            model_version: result.model_version,
+            looter_source: result.looter_source.into(),
+            looter_level: result.looter_level,
+            weighted_efficiency_pct: result.weighted_efficiency_pct.into(),
+            offensive_tt_recovery: result.offensive_tt_recovery.into(),
+            expected_tt_rate: result.expected_tt_rate.into(),
+            effective_efficiency: result.effective_efficiency.map(Into::into).into(),
+            break_even_loot_markup: result.break_even_loot_markup.into(),
+            modelled_raw_tt_per_use: result.modelled_raw_tt * 100.0,
+            eligible_offensive_cost_per_use: result.eligible_offensive_cost * 100.0,
+            consumed_premium_per_use: premium * 100.0,
+            coverage: result.coverage,
+            incomplete: result.incomplete,
+            // The loss engine reads the mean of the levels it is given, so
+            // the basis's one level stands in for all three.
+            loss_per_100_hp_pec: eo_services::loadout_comparison::setup_economics(
+                props,
+                HuntingLooterLevels {
+                    animal: level,
+                    mutant: level,
+                    robot: level,
+                },
+                None,
+                &eo_services::loadout_comparison::ComparisonAssumptions::STANDARD,
+            )
+            .ok()
+            .map(|economics| economics.loss_per_hp_pec * 100.0)
+            .filter(|value| value.is_finite())
+            .into(),
+        })
+    };
+    Ok(Some(EquipmentExpectedReturns {
+        three_looter_mean: at(LooterSource::ThreeLooterMean)?,
+        animal: at(LooterSource::Animal)?,
+        mutant: at(LooterSource::Mutant)?,
+        robot: at(LooterSource::Robot)?,
     }))
 }
 
 /// The stored props built for an add/update request.
-struct BuiltProps {
-    name: String,
+pub(crate) struct BuiltProps {
+    pub(crate) name: String,
     stored_catalog_id: Option<String>,
-    props: Value,
+    pub(crate) props: Value,
 }
 
 impl Api {
-    /// Catalogue search: substring match by display name over one
-    /// vocabulary. Queries under two characters answer empty before any
-    /// lookup.
-    pub async fn equipment_search(
+    /// One vocabulary's whole catalogue, in catalogue order, for the
+    /// frontend's shared search to match against.
+    pub async fn equipment_catalogue(
         &self,
-        q: &str,
         kind: SearchKind,
     ) -> Result<Vec<EquipmentSearchHit>, ApiError> {
-        if q.chars().count() < 2 {
-            return Ok(Vec::new());
-        }
-        let rows = self.game_data.search_entities(q, Some(kind.endpoint()), 50);
+        let rows = self.game_data.catalogue(kind.endpoint());
         Ok(rows.iter().map(search_hit).collect())
     }
 
-    /// The stored library, oldest first.
-    pub async fn equipment_library(&self) -> Result<Vec<EquipmentSummary>, ApiError> {
+    /// The stored library, oldest first, with the groups of entries the
+    /// held-tool bar cannot tell apart.
+    pub async fn equipment_library(&self) -> Result<EquipmentLibrary, ApiError> {
         let rows = self
             .db
             .equipment_library_rows()
             .await
             .map_err(ApiError::internal("equipment library read"))?;
-        let mut results = Vec::with_capacity(rows.len());
-        for (id, name, item_type, raw_props) in rows {
-            results.push(summary_from_parts(
-                id,
-                &name,
-                &item_type,
-                &raw_props,
+        let indistinguishable = indistinguishable_groups(&rows, self.tool_names.as_ref());
+        let lookalike_labels = crate::held_tool::group_labels(&rows, &indistinguishable);
+        let mut entries = Vec::with_capacity(rows.len());
+        for row in rows {
+            entries.push(summary_from_parts(
+                row,
                 &self.game_data,
+                &self.weapon_pricing,
             )?);
         }
-        Ok(results)
+        Ok(EquipmentLibrary {
+            entries,
+            indistinguishable,
+            lookalike_labels,
+        })
     }
 
     /// Store a new library entry.
@@ -928,7 +1358,8 @@ impl Api {
             )
             .await
             .map_err(ApiError::internal("equipment insert"))?;
-        let Some((id, name, item_type, raw_props)) = self
+        self.equipment_changed().await;
+        let Some(row) = self
             .db
             .equipment_row(inserted)
             .await
@@ -940,7 +1371,7 @@ impl Api {
                 "inserted equipment read-back failed",
             ));
         };
-        summary_from_parts(id, &name, &item_type, &raw_props, &self.game_data)
+        summary_from_parts(row, &self.game_data, &self.weapon_pricing)
     }
 
     /// Replace a stored entry's configuration; its class is fixed.
@@ -968,7 +1399,8 @@ impl Api {
             .update_equipment(item_id, built.name, built.stored_catalog_id, props_json)
             .await
             .map_err(ApiError::internal("equipment update"))?;
-        let Some((id, name, item_type, raw_props)) = self
+        self.equipment_changed().await;
+        let Some(row) = self
             .db
             .equipment_row(item_id)
             .await
@@ -980,41 +1412,54 @@ impl Api {
                 "updated equipment read-back failed",
             ));
         };
-        summary_from_parts(id, &name, &item_type, &raw_props, &self.game_data)
+        summary_from_parts(row, &self.game_data, &self.weapon_pricing)
     }
 
-    /// Delete a stored entry; refused while a trifecta preset references
-    /// it. Idempotent over a missing row.
+    /// Turn a stored entry on or off. Only the flag changes: the entry's
+    /// configuration and cost are as they were.
+    pub async fn equipment_set_enabled(
+        &self,
+        item_id: i64,
+        enabled: bool,
+    ) -> Result<EquipmentSummary, ApiError> {
+        let Some(row) = self
+            .db
+            .set_equipment_enabled(item_id, enabled)
+            .await
+            .map_err(ApiError::internal("equipment enabled update"))?
+        else {
+            return Err(ApiError::not_found(format!(
+                "Equipment item {item_id} not found"
+            )));
+        };
+        self.equipment_changed().await;
+        summary_from_parts(row, &self.game_data, &self.weapon_pricing)
+    }
+
+    /// Delete a stored entry. Idempotent over a missing row. A hotbar slot
+    /// or carried-weapon entry naming it simply stops resolving: the
+    /// tracker skips ids the library no longer holds.
     pub async fn equipment_delete(&self, item_id: i64) -> Result<(), ApiError> {
-        let config = load_config_readonly(&self.data_dir)
-            .map_err(ApiError::internal("settings read for the delete guard"))?;
-        let referenced = config.trifecta_presets.iter().any(|preset| {
-            [preset.small_weapon_id, preset.big_weapon_id, preset.heal_id].contains(&Some(item_id))
-        });
-        if referenced {
-            return Err(ApiError::conflict(
-                "Cannot remove equipment selected in a trifecta preset",
-            ));
-        }
         self.db
             .delete_equipment(item_id)
             .await
             .map_err(ApiError::internal("equipment delete"))?;
+        self.equipment_changed().await;
         Ok(())
+    }
+
+    /// The library changed: the tools a name read off the held-tool bar is
+    /// matched against are rebuilt while the reading is on, so the
+    /// watcher's next look matches with the library as it now stands.
+    /// Called once the write has succeeded, whatever follows it.
+    pub(crate) async fn equipment_changed(&self) {
+        if let Some(catalogues) = &self.tool_catalogues {
+            catalogues.changed().await;
+        }
     }
 
     /// The expanded detail for a stored entry.
     pub async fn equipment_detail(&self, item_id: i64) -> Result<EquipmentDetail, ApiError> {
-        self.equipment_detail_with_looters(item_id, None).await
-    }
-
-    /// Internal batch seam for callers that already derived the exact three
-    /// hunting looters. Avoids repeating the character calculation per row.
-    pub(crate) async fn equipment_detail_with_looters(
-        &self,
-        item_id: i64,
-        supplied_looters: Option<HuntingLooterLevels>,
-    ) -> Result<EquipmentDetail, ApiError> {
         let row = self
             .db
             .equipment_detail_row(item_id)
@@ -1028,22 +1473,18 @@ impl Api {
         let props = serde_json::from_str::<Value>(&raw_props)
             .map_err(ApiError::internal("stored equipment props parse"))?;
         let looters = if item_type == "weapon" {
-            if let Some(looters) = supplied_looters {
-                looters
-            } else {
-                let professions = self.character_professions().await?;
-                let level = |name: &str| {
-                    professions
-                        .iter()
-                        .find(|profession| profession.name == name)
-                        .map(|profession| profession.level)
-                        .unwrap_or(0.0)
-                };
-                HuntingLooterLevels {
-                    animal: level("Animal Looter"),
-                    mutant: level("Mutant Looter"),
-                    robot: level("Robot Looter"),
-                }
+            let professions = self.character_professions().await?;
+            let level = |name: &str| {
+                professions
+                    .iter()
+                    .find(|profession| profession.name == name)
+                    .map(|profession| profession.level)
+                    .unwrap_or(0.0)
+            };
+            HuntingLooterLevels {
+                animal: level("Animal Looter"),
+                mutant: level("Mutant Looter"),
+                robot: level("Robot Looter"),
             }
         } else {
             HuntingLooterLevels {
@@ -1059,6 +1500,7 @@ impl Api {
             catalog_id.as_deref(),
             &props,
             &self.game_data,
+            &self.weapon_pricing,
             looters,
         )
     }
@@ -1077,7 +1519,7 @@ impl Api {
     /// Build the stored props for an add/update request, reproducing
     /// the route-order validation (missing catalogue id refusals,
     /// catalogue misses, the consumable identity rule).
-    fn build_props(&self, req: &EquipmentRequest) -> Result<BuiltProps, ApiError> {
+    pub(crate) fn build_props(&self, req: &EquipmentRequest) -> Result<BuiltProps, ApiError> {
         match req.kind {
             EquipmentKind::Weapon => {
                 let catalog_id = req
@@ -1096,7 +1538,7 @@ impl Api {
                 let scope_e =
                     optional("weapon_vision_attachments", req.scope_catalog_id.as_deref())?;
                 let absorber_e = optional("absorbers", req.absorber_catalog_id.as_deref())?;
-                let name = weapon_e["name"].as_str().unwrap_or_default().to_string();
+                let name = eo_services::bundled_tools::entity_name(&weapon_e).unwrap_or_default();
                 let mut props = Map::new();
                 props.insert("weapon_entity".into(), weapon_e);
                 props.insert("weapon_catalog_id".into(), json!(catalog_id));
@@ -1123,6 +1565,16 @@ impl Api {
                     props.insert("implant_catalog_id".into(), json!(req.implant_catalog_id));
                     props.insert("implant_markup".into(), json!(req.implant_markup));
                 }
+                // Likewise the damage-over-time effect: stored only when
+                // declared, validated as attribution will read it.
+                if let Some(effect) = &req.weapon_effect {
+                    let profile = effect.profile()?;
+                    props.insert(
+                        EFFECT_PROFILE_KEY.into(),
+                        serde_json::to_value(profile)
+                            .map_err(ApiError::internal("weapon effect encode"))?,
+                    );
+                }
                 Ok(BuiltProps {
                     name,
                     stored_catalog_id: Some(catalog_id.to_string()),
@@ -1136,7 +1588,7 @@ impl Api {
                     .filter(|id| !id.is_empty())
                     .ok_or_else(|| ApiError::bad_request("catalog_id required for healing"))?;
                 let tool_e = self.fetch_entity("medical_tools", catalog_id)?;
-                let name = tool_e["name"].as_str().unwrap_or_default().to_string();
+                let name = eo_services::bundled_tools::entity_name(&tool_e).unwrap_or_default();
                 let direct_min = req
                     .heal_min
                     .or_else(|| tool_e.get("min_heal").and_then(Value::as_f64));
@@ -1194,7 +1646,7 @@ impl Api {
                     .filter(|id| !id.is_empty())
                     .ok_or_else(|| ApiError::bad_request("catalog_id required for tool"))?;
                 let tool_e = self.fetch_entity("harvesting_tools", catalog_id)?;
-                let name = tool_e["name"].as_str().unwrap_or_default().to_string();
+                let name = eo_services::bundled_tools::entity_name(&tool_e).unwrap_or_default();
                 let mut props = Map::new();
                 props.insert("tool_entity".into(), tool_e);
                 props.insert("tool_catalog_id".into(), json!(catalog_id));
@@ -1207,12 +1659,20 @@ impl Api {
             }
             EquipmentKind::Consumable => {
                 // Catalogue pick or free-text name.
+                let dose = req
+                    .dose
+                    .as_ref()
+                    .map(ConsumableDoseRequest::stored)
+                    .transpose()?;
                 if let Some(catalog_id) = req.catalog_id.as_deref().filter(|id| !id.is_empty()) {
                     let entity = self.fetch_entity("stimulants", catalog_id)?;
                     let name = entity["name"].as_str().unwrap_or_default().to_string();
                     let mut props = Map::new();
                     props.insert("catalog_id".into(), json!(catalog_id));
                     props.insert("entity".into(), entity);
+                    if let Some(dose) = dose {
+                        props.insert("dose".into(), dose);
+                    }
                     return Ok(BuiltProps {
                         name,
                         stored_catalog_id: Some(catalog_id.to_string()),
@@ -1228,6 +1688,9 @@ impl Api {
                     let mut props = Map::new();
                     props.insert("catalog_id".into(), Value::Null);
                     props.insert("entity".into(), Value::Null);
+                    if let Some(dose) = dose {
+                        props.insert("dose".into(), dose);
+                    }
                     return Ok(BuiltProps {
                         name: name.to_string(),
                         stored_catalog_id: None,
@@ -1313,16 +1776,30 @@ fn heal_cost_with_stored_implant(props: &Value, tool_e: &Value, markup: f64) -> 
     )
 }
 
-/// Shape one library row (id, name, item_type, properties_json) to the
-/// list form.
+/// Shape one library row (id, name, item_type, properties_json, enabled)
+/// to the list form.
 fn summary_from_parts(
-    id: i64,
-    name: &str,
-    item_type: &str,
-    raw_props: &str,
+    (id, name, item_type, raw_props, enabled): (i64, String, String, String, bool),
     game_data: &GameDataStore,
+    pricing: &WeaponPricing,
 ) -> Result<EquipmentSummary, ApiError> {
-    let props = serde_json::from_str::<Value>(raw_props)
+    let props = serde_json::from_str::<Value>(&raw_props)
         .map_err(ApiError::internal("stored equipment props parse"))?;
-    row_to_summary(id, name, item_type, &props, game_data)
+    row_to_summary(id, &name, &item_type, enabled, &props, game_data, pricing)
+}
+
+/// The groups of library `rows` the held-tool bar cannot tell apart under
+/// `names`, as entry ids; none without a profile.
+fn indistinguishable_groups(
+    rows: &[(i64, String, String, String, bool)],
+    names: Option<&ToolNameProfile>,
+) -> Vec<Vec<String>> {
+    let Some(names) = names else {
+        return Vec::new();
+    };
+    let holdable: Vec<LibraryTool> = rows.iter().filter_map(holdable).collect();
+    indistinguishable(&holdable, names)
+        .into_iter()
+        .map(|group| group.into_iter().map(|id| id.to_string()).collect())
+        .collect()
 }

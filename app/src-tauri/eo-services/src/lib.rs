@@ -7,24 +7,30 @@
 //! [`cost_engine`] is the pure-arithmetic leaf its per-unit `cargo test`
 //! loop runs on.
 
+pub mod account;
 pub mod activity_recommender;
 pub mod analytics;
+pub mod attack_rate;
 pub mod auction_fee;
 pub mod auction_fee_research;
+pub mod bundled_tools;
 pub mod bus_events;
 pub mod character_calc;
 pub mod chatlog_parser;
+pub mod chatlog_span;
 pub mod chatlog_time;
 pub mod chatlog_watcher;
 pub mod clock;
 pub mod codex;
 pub mod codex_categories;
 pub mod config_service;
+pub mod consumables;
 pub mod coord_capture;
 pub mod cost_engine;
 pub mod daily_rollup;
 pub mod db;
 pub mod difflib;
+pub mod enhancer_breaks;
 pub mod equipment_pricing;
 pub mod eu_window;
 pub mod event_bus;
@@ -32,21 +38,30 @@ pub mod expected_hunting;
 pub mod fingerprint_recorder;
 pub mod fuzzy_match;
 pub mod game_data_store;
+pub mod game_ui;
 pub mod harvest_yield;
 pub mod healing_profile;
+pub mod healing_review;
 pub mod hotbar_listener;
+pub mod inventory_changes;
 pub mod keyset;
 pub mod keystroke_source;
+pub mod loaded_expectation;
+pub mod loadout_comparison;
+pub mod look_record;
 pub mod loot_filter;
+pub mod machine_identity;
 pub mod maintenance;
 pub mod map_pins;
 pub mod market_paste;
 pub mod market_service;
+pub mod mob_display;
 pub mod mob_lookup_service;
+pub mod mob_review;
+pub mod mob_watch;
 pub mod navigation;
 pub mod observability_config;
 pub mod ocr_engine;
-pub mod ocr_text;
 pub mod passive_effects;
 pub mod paths;
 pub mod ped;
@@ -55,31 +70,49 @@ pub mod planet_maps;
 pub mod protection;
 pub mod quests;
 pub mod repair_ocr;
-pub mod sale_window_ocr;
+pub mod sale_capture;
 pub mod scan_completion;
 pub mod scan_drift;
-pub mod scan_presets;
 pub mod screen_capture;
+pub mod screen_watch;
+pub mod session_costs;
 pub mod session_definitions;
+pub mod session_delete;
+pub mod session_expectation;
 pub mod session_rollup;
+pub mod session_scope;
 pub mod session_summary;
-pub mod skill_panel;
-pub mod skill_scan_manual;
+pub mod session_weapon_rollup;
+pub mod skill_scan;
 pub mod skill_tracker;
+pub mod skilling_forecast;
+pub mod skilling_routes;
 pub mod spacebar_capture_listener;
 pub mod stock_allocation;
 pub mod time;
-pub mod tool_inference;
+pub mod tool_catalogue;
+pub mod tool_review;
+pub mod tool_setup;
+pub mod tool_watch;
 pub mod tracker;
 pub mod tracking_models;
 pub mod tracking_reads;
-pub mod trifecta_service;
 pub mod tt_value_curve;
+pub mod unread_plates;
+pub mod weapon_effect;
+pub mod weapon_review;
 
 /// Identifies this crate in diagnostics and smoke checks.
 pub fn crate_name() -> &'static str {
     "eo-services"
 }
+
+#[cfg(test)]
+mod cycled_reconciliation_tests;
+#[cfg(test)]
+mod session_costs_live_tests;
+#[cfg(test)]
+mod session_costs_tests;
 
 #[cfg(test)]
 mod tests {

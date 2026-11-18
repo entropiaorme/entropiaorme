@@ -18,7 +18,8 @@
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "backgroundColor": "#0a0e17"
       },
       {
         "label": "overlay",
@@ -26,7 +27,7 @@
         "url": "/overlay",
         "width": 840,
         "height": 72,
-        "resizable": true,
+        "resizable": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -40,7 +41,7 @@
         "url": "/scan-overlay",
         "width": 320,
         "height": 220,
-        "resizable": true,
+        "resizable": false,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -106,7 +107,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' https://entropiaorme.com https://market-data.entropiaorme.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' https://entropiaorme.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
     }
   },
   "plugins": {
@@ -133,9 +134,8 @@
     "resources": {
       "resources/snapshot/": "snapshot/",
       "resources/maps/": "maps/",
-      "resources/panel_geometry.json": "panel_geometry.json",
+      "resources/ui_profile.json": "ui_profile.json",
       "resources/models/": "models/",
-      "../../../data/demo/entropia_orme.db": "demo/entropia_orme.db",
       "resources/ort/*.dll": "ort/"
     },
     "license": "MIT",

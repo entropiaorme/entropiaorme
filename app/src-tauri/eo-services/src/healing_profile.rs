@@ -51,9 +51,29 @@ pub struct HealingProfile {
     pub reload_speed_percent: Option<f64>,
     #[serde(default)]
     pub effective_reload_seconds: Option<f64>,
+    /// The buff each paid use grants (Eir Mk 1: reload speed for eight
+    /// seconds), opened as a dose; absent for most tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_use: Option<crate::consumables::OnUseEffect>,
+    /// The TT one paid use consumes (decay plus ammunition, before any
+    /// markup), resolved with the tool's price by the live hotbar
+    /// resolver. A limited tool's cost per use exceeds it by the markup
+    /// paid over TT, which the expected-return model counts as consumed
+    /// premium rather than loot-bearing spend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tt_per_use_ped: Option<f64>,
 }
 
 impl HealingProfile {
+    /// The TT of one use that cost `cost_ped`. A profile resolved without
+    /// its TT basis counts the whole cost as TT.
+    pub fn tt_of_use(&self, cost_ped: f64) -> f64 {
+        match self.tt_per_use_ped {
+            Some(tt) if tt.is_finite() && tt >= 0.0 => tt.min(cost_ped),
+            _ => cost_ped,
+        }
+    }
+
     pub fn direct_matches(&self, amount: f64) -> bool {
         if !self.mode.has_direct() {
             return false;
@@ -69,6 +89,13 @@ impl HealingProfile {
             Some(max) => amount <= max,
             None => true,
         }
+    }
+
+    /// Whether `amount` can confirm a paid use: a direct heal inside the
+    /// direct interval or, for an item with no direct part, the first tick
+    /// of its effect.
+    pub fn confirms_activation(&self, amount: f64) -> bool {
+        self.direct_matches(amount) || (!self.mode.has_direct() && self.tick_matches(amount))
     }
 
     pub fn tick_matches(&self, amount: f64) -> bool {
@@ -112,6 +139,8 @@ mod tests {
             base_reload_seconds: None,
             reload_speed_percent: None,
             effective_reload_seconds: None,
+            on_use: None,
+            tt_per_use_ped: None,
         };
         assert!(profile.direct_matches(80.0));
         assert!(!profile.direct_matches(10.0));

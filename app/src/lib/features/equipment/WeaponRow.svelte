@@ -2,14 +2,49 @@
 	import { Badge, Button, DataTable, StatDisplay } from '$lib/components';
 	import ExpectedReturnInfoTip from '$lib/components/ExpectedReturnInfoTip.svelte';
 	import type { Equipment } from '$lib/types';
-	import { NO_DATA, formatPercent } from '$lib/utils/format';
-	import { enrichmentColor, enrichmentLabel, formatPec } from './display';
+	import { NO_DATA, formatPec, formatPercent } from '$lib/utils/format';
+	import { enrichmentColor, enrichmentLabel } from './display';
 	import EffectiveEfficiencyInfoTip from '$lib/components/EffectiveEfficiencyInfoTip.svelte';
+	import InfoTip from '$lib/components/InfoTip.svelte';
 	import type { LibraryModel } from './libraryModel.svelte';
+	import EntrySwitch from './EntrySwitch.svelte';
+	import LookalikeNote from './LookalikeNote.svelte';
+	import type { LookalikeNote as LookalikeNoteText } from './toolReading';
+	import { describeAttackRate } from './attackRate';
+	import { describeEffectProfile } from './weaponEffect';
+	import LooterBasisSelect from '$lib/components/LooterBasisSelect.svelte';
+	import { atLooterBasis, looterBasis, looterBasisCaption } from '$lib/looterBasis.svelte';
 
-	let { model, item }: { model: LibraryModel; item: Equipment } = $props();
+	let {
+		model,
+		item,
+		note = undefined,
+	}: {
+		model: LibraryModel;
+		item: Equipment;
+		/** The bar cannot tell this entry from others (while the tool in hand
+		 * is read off the screen). */
+		note?: LookalikeNoteText;
+	} = $props();
+	// While the tool in hand is read off the screen an entry is switched on
+	// or off; one that is off reads muted, and is otherwise as usable.
+	const muted = $derived(model.toolReading && !item.enabled);
 
 	const detail = $derived(model.detailCache[item.id] ?? null);
+	// The expected figures at the app-wide looter basis, and the three
+	// looters' levels the basis picker lists.
+	const expectedReturn = $derived(
+		detail?.expectedReturns ? atLooterBasis(detail.expectedReturns, looterBasis.current) : null,
+	);
+	const looterLevels = $derived(
+		detail?.expectedReturns
+			? {
+					animal: detail.expectedReturns.animal.looterLevel,
+					mutant: detail.expectedReturns.mutant.looterLevel,
+					robot: detail.expectedReturns.robot.looterLevel,
+				}
+			: null,
+	);
 
 	// Absorption annotation for a breakdown line, mirroring the markup
 	// multiplier tag: the split devices show the share of weapon decay they
@@ -44,7 +79,7 @@
 		})),
 	);
 	const effectiveEfficiencyValue = $derived.by(() => {
-		const effective = detail?.expectedReturn?.effectiveEfficiency;
+		const effective = expectedReturn?.effectiveEfficiency;
 		if (!effective) return NO_DATA;
 		switch (effective.status) {
 			case 'within_model_range':
@@ -61,25 +96,43 @@
 
 {#snippet expectedReturnTip()}
 	<ExpectedReturnInfoTip
-		looterLevel={detail?.expectedReturn?.looterLevel}
-		coverage={detail?.expectedReturn?.coverage}
-		incomplete={detail?.expectedReturn?.incomplete}
+		looterLevel={expectedReturn?.looterLevel}
+		looterBasis={looterBasis.current}
+		coverage={expectedReturn?.coverage}
+		incomplete={expectedReturn?.incomplete}
 	/>
 {/snippet}
 
 {#snippet effectiveEfficiencyTip()}
 		<EffectiveEfficiencyInfoTip
-			effectiveEfficiency={detail?.expectedReturn?.effectiveEfficiency ?? null}
-			weightedEfficiencyPct={detail?.expectedReturn?.weightedEfficiencyPct ?? null}
-			consumedPremiumLabel={formatPec((detail?.expectedReturn?.consumedPremiumPerUse ?? 0) * 100)}
-			looterLevel={detail?.expectedReturn?.looterLevel ?? 0}
+			effectiveEfficiency={expectedReturn?.effectiveEfficiency ?? null}
+			weightedEfficiencyPct={expectedReturn?.weightedEfficiencyPct ?? null}
+			consumedPremiumLabel={formatPec((expectedReturn?.consumedPremiumPerUse ?? 0) * 100)}
+			looterLevel={expectedReturn?.looterLevel ?? 0}
+			looterBasis={looterBasis.current}
 		/>
 {/snippet}
 
+{#snippet lossPerHpTip()}
+	<InfoTip label="What Loss / 100 HP means" width="w-80">
+		<p class="text-xs leading-relaxed text-text-secondary">
+			The PEC this setup loses for every 100 HP it removes, at
+			{looterBasisCaption(looterBasis.current, expectedReturn?.looterLevel ?? 0)} and assuming the
+			weapon is maxed. It
+			combines Effective Efficiency with damage per PEC, so it ranks weapons where neither does alone.
+		</p>
+		<p class="mt-1.5 text-xs leading-relaxed text-text-secondary">
+			Lower is better on mobs that take several hits. On small mobs the cost per use matters more: a
+			big shot wastes most of itself on the last hit. Compare them in Equipment's Compare tab to be
+			sure.
+		</p>
+	</InfoTip>
+{/snippet}
+
 <!-- Equipment row -->
+{#snippet row()}
 <button
 	type="button"
-	data-guide-anchor="library-row-{item.id}"
 	class="w-full text-left px-4 py-3 rounded-md transition-colors duration-[var(--duration-fast)]
 		cursor-pointer
 		{model.expandedId === item.id
@@ -96,7 +149,7 @@
 		<!-- Name + amp -->
 		<div class="flex-1 min-w-0">
 			<div class="flex items-center gap-2">
-				<span class="text-sm font-medium text-text truncate">{item.name}</span>
+				<span class="text-sm font-medium {muted ? 'text-text-tertiary' : 'text-text'} truncate">{item.name}</span>
 			</div>
 			{#if item.amplifierName}
 				<p class="text-xs text-text-tertiary mt-0.5 truncate">
@@ -106,18 +159,24 @@
 			{#if item.lifestealPercent}
 				<p class="text-xs text-positive mt-0.5">{item.lifestealPercent}% lifesteal</p>
 			{/if}
+			{#if item.effectProfile}
+				<p class="text-xs text-text-tertiary mt-0.5 truncate" data-testid="weapon-effect-summary">
+					{describeEffectProfile(item.effectProfile)}
+				</p>
+			{/if}
+			<LookalikeNote {note} />
 		</div>
 
 		<!-- Cost -->
 		<div class="text-right shrink-0">
-			<span class="text-sm font-medium tabular-nums text-text">
+			<span class="text-sm font-medium tabular-nums {muted ? 'text-text-tertiary' : 'text-text'}">
 				{formatPec(item.costPerUse)}
 			</span>
 			<span class="text-xs text-text-tertiary ml-0.5">PEC</span>
 		</div>
 
 		<!-- Enrichment badge -->
-		<span data-guide-anchor="enrichment-badge-{item.id}" class="shrink-0">
+		<span class="shrink-0">
 			<Badge variant={enrichmentColor(item.enrichmentLevel)} class="shrink-0">
 				{enrichmentLabel(item.enrichmentLevel)}
 			</Badge>
@@ -139,6 +198,16 @@
 		</svg>
 	</div>
 </button>
+{/snippet}
+
+{#if model.toolReading}
+	<div class="flex items-center gap-3">
+		<div class="min-w-0 flex-1">{@render row()}</div>
+		<EntrySwitch name={model.lookalikeLabels[item.id] ?? item.name} enabled={item.enabled} onchange={(on) => void model.setEnabled(item.id, on)} />
+	</div>
+{:else}
+	{@render row()}
+{/if}
 
 <!-- Inline detail panel -->
 {#if model.expandedId === item.id}
@@ -183,13 +252,25 @@
 						{formatPec(detail.totalCostPerUse)} PEC
 					</span>
 				</div>
+				{#if detail.attackRate}
+					{@const attack = describeAttackRate(detail.attackRate)}
+					<div
+						class="flex items-center justify-between gap-4 text-sm px-3 pb-2.5"
+						data-testid="weapon-attack-rate"
+					>
+						<span class="text-text-secondary">Attack rate</span>
+						<span class="tabular-nums text-text-secondary">{attack.value}</span>
+					</div>
+					{#if attack.note}
+						<p class="px-3 pb-2 text-xs leading-5 text-text-tertiary">{attack.note}</p>
+					{/if}
+				{/if}
 			</div>
 
-			{#if detail.expectedReturn}
-				{@const expected = detail.expectedReturn}
+			{#if expectedReturn && looterLevels}
+				{@const expected = expectedReturn}
 				<div
-					class="grid grid-cols-3 gap-5 border-y border-border/35 py-3 mb-4"
-					data-guide-anchor="expected-return-{item.id}"
+					class="grid grid-cols-4 gap-5 border-y border-border/35 py-3 mb-4"
 				>
 					<StatDisplay
 						label="Expected Return"
@@ -211,13 +292,23 @@
 						emphasis="secondary"
 						labelSuffix={effectiveEfficiencyTip}
 					/>
+					<StatDisplay
+						label="Loss / 100 HP"
+						value={expected.lossPer100HpPec !== null
+							? `${expected.lossPer100HpPec.toFixed(2)} PEC`
+							: NO_DATA}
+						valueClass={expected.lossPer100HpPec !== null ? 'text-text' : 'text-text-tertiary'}
+						emphasis="secondary"
+						labelSuffix={lossPerHpTip}
+					/>
 				</div>
-				<p class="-mt-2 mb-4 text-[11px] leading-relaxed text-text-tertiary">
-					Community model v1 · three-looter mean {expected.looterLevel.toFixed(1)}
+				<!-- The caption names the figures' model and looter basis; the basis is the control. -->
+				<div class="-mt-2 mb-4 text-[11px] leading-relaxed text-text-tertiary">
+					Community model v1 · <LooterBasisSelect levels={looterLevels} />
 					{#if expected.incomplete}
 						· partial Efficiency coverage ({formatPercent(expected.coverage)})
 					{/if}
-				</p>
+				</div>
 			{/if}
 
 			<!-- Component list -->

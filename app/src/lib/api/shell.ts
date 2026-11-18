@@ -12,6 +12,8 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import type { SaleQueueRefusal } from './commands.gen';
+import { invokeCommand } from './invoke';
 
 /** Toggle the pre-spawned tracking overlay window's visibility. */
 export async function toggleOverlay(): Promise<void> {
@@ -21,6 +23,24 @@ export async function toggleOverlay(): Promise<void> {
 /** Toggle the pre-spawned cartography pin overlay window. */
 export async function toggleCartographyOverlay(): Promise<void> {
 	await invoke('toggle_cartography_overlay');
+}
+
+/** One surface an overlay window draws, in its logical (CSS) pixels
+ * (mirrors the Rust `HitShape`). */
+export interface HitShape {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	/** Corner radius; 0 for a square-cornered surface. */
+	radius: number;
+}
+
+/** Cut the calling window's pointer input to the surfaces it draws, so
+ * clicks anywhere else pass through to whatever lies beneath. An empty
+ * list restores input across the whole window. */
+export async function setWindowHitRegion(shapes: HitShape[]): Promise<void> {
+	await invoke('set_window_hit_region', { shapes });
 }
 
 export async function showNavigationOverlays(): Promise<void> {
@@ -49,30 +69,41 @@ export async function showScanOverlay(): Promise<void> {
 	await invoke('show_scan_overlay');
 }
 
-/** Hide the scan overlay window. */
+/** Hide the scan overlay window; the skill scan stops collecting with it. */
 export async function hideScanOverlay(): Promise<void> {
 	await invoke('hide_scan_overlay');
 }
 
-/** Show the sale-window capture button where a fullscreen game leaves it
+/** Show the sell-queue capture button where a fullscreen game leaves it
  * reachable. It is the main window's button in another place. */
 export async function showSaleCaptureOverlay(): Promise<void> {
 	await invoke('show_sale_capture_overlay');
 }
 
-/** Hide the sale-window capture overlay. */
+/** Hide the sell-queue capture overlay. */
 export async function hideSaleCaptureOverlay(): Promise<void> {
 	await invoke('hide_sale_capture_overlay');
 }
 
-export interface OverlayCaptureReply {
-	message: string;
-	failed: boolean;
-}
+/** What the capture button is told of its capture: how many queued items
+ * read, or why none did. Never a figure: the drafts wait for the main
+ * window's form. */
+export type OverlayCaptureReply =
+	| { kind: 'read'; drafts: number; unread: number }
+	| { kind: 'refused'; reason: SaleQueueRefusal };
 
 /** Consume the one-shot capture authority granted when Inventory opened the overlay. */
 export async function captureSaleFromOverlay(): Promise<OverlayCaptureReply> {
 	return invoke('capture_sale_from_overlay');
+}
+
+/** Open the window where the player signs in to their Entropia Universe
+ * account, or bring it forward. The app connects once the site accepts
+ * the sign-in; the window closes itself then. The command refuses with the
+ * typed commands' error shape, so it rides the typed transport and a
+ * refusal arrives as an `ApiError` carrying its reason. */
+export async function signInToAccount(): Promise<void> {
+	await invokeCommand<void>('account_sign_in', {});
 }
 
 /** Metadata about an available update (mirrors the Rust `UpdateInfo`). */
@@ -102,16 +133,34 @@ export async function installUpdate(): Promise<void> {
 	await invoke('install_update');
 }
 
-/** The manual-scan capture preview PNG for a page, as a base64 `data:`
- * URL for an `<img>` `src`. */
-export async function manualSkillScanCapturePng(page: number): Promise<string> {
-	const encoded = await invoke<string>('capture_png', { page });
-	return `data:image/png;base64,${encoded}`;
-}
-
 /** A bundled planet map's raster as a base64 `data:` URL for an `<img>`
  * `src`. `mime` comes from the planet's `planet_maps_list` record. */
 export async function planetMapImage(planet: string, mime: string): Promise<string> {
 	const encoded = await invoke<string>('planet_map_image', { planet });
 	return `data:${mime};base64,${encoded}`;
+}
+
+/** Why the backend declined to start (mirrors the Rust `DeclineReason`). */
+export type SubstrateDeclineReason =
+	| 'data_dir_unavailable'
+	| 'database_below_baseline'
+	| 'database_unreadable'
+	| 'game_data_unavailable'
+	| 'tracking_unavailable'
+	| 'unexpected';
+
+/** The settled startup outcome (mirrors the Rust `SubstrateOutcome`). */
+export type SubstrateOutcome =
+	| { state: 'ready' }
+	| { state: 'failed'; reason: SubstrateDeclineReason; detail: string };
+
+/** Wait for the backend to finish starting and answer how it went. Resolves
+ * at once when startup has already settled, so a late caller cannot miss it. */
+export async function awaitSubstrate(): Promise<SubstrateOutcome> {
+	return invoke('substrate_ready');
+}
+
+/** Relaunch the app (the startup failure surface's recovery action). */
+export async function restartApp(): Promise<void> {
+	await invoke('restart_app');
 }

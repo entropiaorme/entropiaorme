@@ -30,6 +30,7 @@ function activity(overrides: Partial<HuntingActivitySection> = {}): HuntingActiv
 		cycled: 100,
 		returns: 90,
 		lootRate: 0.9,
+		overhead: 0,
 		expected: null,
 		confirmedRewardPed: 15,
 		realisedRewardMarkup: 0,
@@ -62,6 +63,9 @@ function activity(overrides: Partial<HuntingActivitySection> = {}): HuntingActiv
 				tier: 'liquid',
 				salesPed: 5000,
 				weeklySalesPed: 5000,
+				marketValuePed: 0,
+				manual: null,
+				nanocubeMarked: false,
 			},
 		],
 		variants: [],
@@ -70,6 +74,20 @@ function activity(overrides: Partial<HuntingActivitySection> = {}): HuntingActiv
 }
 
 describe('HuntingSessionActivities', () => {
+	it("takes the activity's overhead off its Realised Net, beside the backend's rate", () => {
+		render(HuntingSessionActivities, {
+			props: {
+				activities: [activity({ overhead: 2, rewardedRate: 105 / 102 })],
+				marketAvailable: true,
+			},
+		});
+		const grid = screen.getByTestId('activity-economic-grid');
+		// 105 realised less 100 cycled and 2 of overhead.
+		expect(within(grid).getByText('+3.00')).not.toBeNull();
+		expect(within(grid).queryByText('+5.00')).toBeNull();
+		expect(within(grid).getByText('102.9%')).not.toBeNull();
+	});
+
 	it('opens the first activity detail and switches through the searchable economic picker', async () => {
 		const alternative = activity({
 			label: 'Bonus Challenge',

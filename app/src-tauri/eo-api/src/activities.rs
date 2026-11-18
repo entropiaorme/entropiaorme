@@ -279,10 +279,9 @@ fn active_views(standing: &[ActiveActivity], offers: &[QuestOffer]) -> Vec<Activ
 /// Shared with the tracking snapshot, which publishes the strip-level
 /// subset of it on every frame: one computation, so the chip's cue and
 /// the menu's rows can never disagree about what is available. A free
-/// function rather than a facade method because the guide-mode demo
-/// assembles the same snapshot over its own database and tracker, with
-/// no definition service of its own (`definitions: None`, which reads
-/// as a session outside any definition).
+/// function rather than a facade method so the snapshot assembly can call
+/// it with or without a definition service (`definitions: None` reads as
+/// a session outside any definition).
 ///
 /// Answers while IDLE too, over the definition a start would stamp:
 /// picking a session should show what it will offer, rather than making
@@ -341,6 +340,81 @@ pub(crate) async fn activity_picture(
     // repeated below as an off-roster row.
     let mut represented: Vec<i64> = Vec::new();
 
+    // A session that follows a planet offers that planet's quests in place
+    // of its roster's quest entries: every family slot and every standing
+    // run (signal and hand-in quests) on the planet, plus any plain mission
+    // already in the log. A mission not yet received is the dashboard
+    // board's business, not a row to scroll past mid-play.
+    let quest_planet = definition
+        .as_ref()
+        .and_then(|definition| definition.quest_planet.as_deref());
+    if let Some(planet) = quest_planet {
+        let mut families: Vec<(i64, String)> = Vec::new();
+        for offer in offers.iter().filter(|offer| offer.planet == planet) {
+            match (offer.family_id, offer.family_name.as_deref()) {
+                (Some(family_id), Some(name)) => {
+                    if !families.iter().any(|(id, _)| *id == family_id) {
+                        families.push((family_id, name.to_string()));
+                    }
+                }
+                _ => {
+                    if !(offer.signal_quest || offer.manual_hand_in || offer.in_progress) {
+                        continue;
+                    }
+                    let (available, reason) = quest_availability(offer, now);
+                    represented.push(offer.id);
+                    let order = options.len() as i64;
+                    options.push(ActivityOption {
+                        key: quest_key(offer.id),
+                        kind: SessionRosterEntryKind::Quest,
+                        name: offer.name.clone(),
+                        quest_id: Some(offer.id).into(),
+                        active: is_standing_quest(offer.id),
+                        available,
+                        resettable: !offer.in_progress && cooling(offer.own_available_from, now),
+                        unavailable_reason: reason.map(str::to_string).into(),
+                        available_from: offer.available_from.into(),
+                        off_roster: false,
+                        manual_hand_in: offer.manual_hand_in,
+                        hand_in_waiting: offer.hand_in_waiting,
+                        roster_order: Some(order).into(),
+                    });
+                }
+            }
+        }
+        for (family_id, name) in families {
+            let serving = serving_member(&offers, family_id);
+            if let Some(offer) = serving {
+                represented.push(offer.id);
+            }
+            let available_from = family_available_from(&offers, family_id);
+            let (available, reason) = match serving {
+                Some(_) => (true, None),
+                None if cooling(available_from, now) => (false, Some(REASON_COOLDOWN)),
+                None => (false, Some(REASON_NO_VARIANT)),
+            };
+            let order = options.len() as i64;
+            options.push(ActivityOption {
+                key: format!("quest_family:{family_id}"),
+                kind: SessionRosterEntryKind::QuestFamily,
+                name: match serving {
+                    Some(offer) => offer.name.clone(),
+                    None => name,
+                },
+                quest_id: serving.map(|offer| offer.id).into(),
+                active: serving.is_some_and(|offer| is_standing_quest(offer.id)),
+                available,
+                resettable: false,
+                unavailable_reason: reason.map(str::to_string).into(),
+                available_from: available_from.into(),
+                off_roster: false,
+                manual_hand_in: serving.is_some_and(|offer| offer.manual_hand_in),
+                hand_in_waiting: serving.is_some_and(|offer| offer.hand_in_waiting),
+                roster_order: Some(order).into(),
+            });
+        }
+    }
+
     for (roster_order, entry) in definition
         .as_ref()
         .map(|definition| definition.roster.as_slice())
@@ -348,6 +422,11 @@ pub(crate) async fn activity_picture(
         .iter()
         .enumerate()
     {
+        // A planet-following session's quests come from the planet above;
+        // its roster still carries the segments.
+        if quest_planet.is_some() && entry.kind != RosterEntryKind::Segment {
+            continue;
+        }
         match entry.kind {
             RosterEntryKind::Segment => {
                 let Some(label) = entry.label.as_deref() else {
@@ -524,7 +603,10 @@ pub(crate) async fn activity_picture(
         // A session that offers nothing gets no surface. The only thing
         // that overrides that is a stretch already recording, which the
         // control cannot honestly hide.
-        visible: rostered > 0 || ad_hoc_segments || options.len() > rostered,
+        visible: rostered > 0
+            || quest_planet.is_some()
+            || ad_hoc_segments
+            || options.len() > rostered,
         ad_hoc_segments,
         ready_count,
         options,
@@ -556,7 +638,7 @@ impl Api {
                 )
                 .await
                 .map_err(ApiError::internal("activity options selection"))?
-                .map(|(id, _, _, _)| id)
+                .map(|(id, _, _)| id)
             }
         };
         let now = eo_services::time::naive_to_epoch(self.clock.now());

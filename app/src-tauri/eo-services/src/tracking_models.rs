@@ -71,6 +71,8 @@ pub struct Kill {
     /// Where the mob stamp came from; None when the kill recorded with
     /// no declaration in force (the stamp is "Unknown").
     pub mob_stamp_source: Option<crate::tracker::MobStampSource>,
+    /// How the kill's creature was named; None when nothing named it.
+    pub mob_route: Option<crate::tracker::MobRoute>,
     /// Epoch seconds (UTC, fractional seconds preserved): when the
     /// loot arrived. The representation deliberately differs from the
     /// session's calendar fields below because the original carries
@@ -99,6 +101,10 @@ pub struct Kill {
     /// belongs to. None when the row predates the interval model,
     /// never "nothing was in force".
     pub context_id: Option<i64>,
+    /// A quest hand-in claimed this mob-less clump as its reward: the row
+    /// stays as the reward's evidence and is no longer a kill, so no kill
+    /// count or per-kill figure includes it.
+    pub reward_claimed: bool,
 }
 
 /// One harvesting swing (tree cutting): a successful swing arrives as
@@ -145,6 +151,43 @@ pub struct TrackingSession {
     pub dangling_cost: Ped,
 }
 
+/// The Cycled bucket a live breakdown line belongs to: the session's
+/// operating spend, split the way every Cycled breakdown splits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CycledBucket {
+    Weapon,
+    Enhancer,
+    Healing,
+    Armour,
+    Consumable,
+    Harvesting,
+}
+
+/// One line of the live Cycled breakdown: a weapon, a healing tool, an
+/// armour stream, a consumable, or a harvesting tool, with what it cost
+/// this session. A session's lines always sum to its Cycled.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CycledLine {
+    pub bucket: CycledBucket,
+    pub label: String,
+    pub cost_ped: f64,
+}
+
+/// Expected loot over the live session's whole Cycled at every looter basis
+/// (Community Model v1 for the modelled offensive streams, the model's
+/// Efficiency span for unknown-efficiency TT, nothing for lost spend). The
+/// split of Cycled is the same at every basis; the frontend reads the basis
+/// the player declares.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveExpectation {
+    pub model_version: &'static str,
+    pub split: crate::loaded_expectation::CycledSplit,
+    pub three_looter_mean: crate::loaded_expectation::LoadedExpectation,
+    pub animal: crate::loaded_expectation::LoadedExpectation,
+    pub mutant: crate::loaded_expectation::LoadedExpectation,
+    pub robot: crate::loaded_expectation::LoadedExpectation,
+}
+
 /// Immutable view of the active-session readout: computed under the
 /// tracker's ownership and returned detached, so a caller on the web
 /// thread never sees the live kill list mid-mutation.
@@ -162,8 +205,26 @@ pub struct ActiveSessionView {
     pub damage_dealt_total: f64,
     pub weapon_damage_dealt: f64,
     pub weapon_cost: f64,
+    /// Armour and plate cost against this session so far, part of `cost`:
+    /// what the account readings measured up to their latest reading when
+    /// they measured it, otherwise what the player's repair or Trade
+    /// Terminal recordings spread over it, arriving with each recording.
+    pub armour_cost: f64,
+    /// `cost` split by what it was spent on, one line per item.
+    pub cycled_breakdown: Vec<CycledLine>,
+    /// What the session cost beyond performing its activity, as the
+    /// account readings measured it so far: in `net`, never in `cost`.
+    /// None while none of the costs rests on the readings.
+    pub overhead_cost: Option<f64>,
+    /// When the costs the account readings measured run to (unix
+    /// seconds): `cost` is what they measured up to then and the tracked
+    /// cost of the play since, where they measured it. None while none of
+    /// the costs rests on the readings.
+    pub costs_measured_through: Option<f64>,
+    /// Expected loot over the whole `cost`; None until a modelled shot.
+    pub expected_cycle: Option<LiveExpectation>,
     /// Community-model offensive-only expected TT return over captured
-    /// weapon and amplifier evidence. Null until a modelled shot exists.
+    /// weapon, amplifier, and scope evidence. Null until a modelled shot exists.
     pub expected_tt_rate: Option<f64>,
     pub expected_return_coverage: Option<f64>,
     pub expected_return_model: Option<String>,
@@ -176,16 +237,21 @@ pub struct ActiveSessionView {
     pub multiplier_last: Option<f64>,
     pub multiplier_avg: Option<f64>,
     pub multiplier_max: Option<f64>,
+    /// What `multiplier_avg` divides, unrounded: the lifetime figures add
+    /// these to the family's own so their mean spans every kill.
+    pub multiplier_sum: f64,
+    pub multiplier_count: i64,
     pub multiplier_history: Vec<f64>,
     pub cumulative_net_history: Vec<f64>,
-    pub current_mob: Option<String>,
+    /// The session's mob source: the pin, the typed creature, and what
+    /// the screen reads.
+    pub mob_source: crate::tracker::MobSourceView,
     /// The session's designated name facet, when one was set.
     pub session_name: Option<String>,
     /// The session definition this session is an instance of, as
     /// stamped at start; None for a session outside any definition.
     pub definition_id: Option<i64>,
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
     /// The skill-boost facet the session runs under (percent), when set.
     pub skill_boost_percent: Option<i64>,
     /// The activities standing on the session, in the order they were
@@ -201,6 +267,29 @@ pub struct ActiveSessionView {
     /// The standing harvest-guardrail disagreement, when the loot
     /// evidence last contradicted the hotbar-equipped tool.
     pub harvest_guardrail_mismatch: Option<HarvestGuardrailMismatchView>,
+    /// The standing weapon mismatch: the damage evidence says another
+    /// carried weapon is being fired than the one the hotbar declared.
+    pub weapon_guardrail_mismatch: Option<WeaponGuardrailMismatchView>,
+    /// Shots recorded without a price because no single carried weapon
+    /// explains them: the session's cost leaves them out.
+    pub unpriced_shots: i64,
+    /// The most those shots could have cost: each at the dearest carried
+    /// weapon that fitted it.
+    pub unpriced_cost_bound: f64,
+    /// Of those shots, the ones no carried weapon fitted, which add nothing
+    /// to the bound.
+    pub unpriced_no_fit: i64,
+    /// Whether a weapon is declared: pressed on the hotbar, or held from
+    /// a press before the session started. Without one, a hit several
+    /// carried weapons explain goes unpriced, and the weapon shown is only
+    /// what the damage last pointed to.
+    pub weapon_declared: bool,
+    /// What the held weapon's latest hits say about its damage, when they
+    /// land outside its listed range.
+    pub weapon_hit_cue: Option<crate::tracker::HitMargin>,
+    /// The session runs keyless: equipment is declared in the overlay and
+    /// healing uses are inferred from the chat log.
+    pub keyless: bool,
     pub healing: HealingRuntimeView,
     /// Raw rows (event_type, mob_or_item, value_ped, timestamp): the
     /// presentation mapping lives in the HTTP layer.
@@ -232,6 +321,18 @@ pub struct HarvestGuardrailMismatchView {
     pub observed_tool: Option<String>,
     pub tree_size: String,
     pub at_epoch: f64,
+}
+
+/// The weapon guardrail's live cue: the weapon the hotbar declared, the
+/// weapon the damage evidence says is being fired (and what is recorded),
+/// when the evidence first disagreed, and how many shots it has recorded
+/// since.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeaponGuardrailMismatchView {
+    pub hotbar_tool: String,
+    pub recording_tool: String,
+    pub since: f64,
+    pub shots: i64,
 }
 
 /// Immutable view of the whole tracking readout: `active` is the

@@ -27,17 +27,22 @@ pub fn cost_per_shot_ped(props: &Value) -> f64 {
 }
 
 /// The per-shot weapon cost in PED for a tool by name fragment
-/// (`totalCostPerUse / 100`), or 0 when the tool is unknown. A read
-/// failure degrades to 0 (the tool-unknown value), so a weapon slot
-/// still resolves rather than dropping the tool change.
-pub fn weapon_cost_by_name(conn: &rusqlite::Connection, name: &str) -> f64 {
+/// (`totalCostPerUse / 100`), its stored props prepared by `pricing` (the
+/// attack rate in force, see [`crate::attack_rate`]), or 0 when the tool is
+/// unknown. A read failure degrades to 0 (the tool-unknown value), so a
+/// weapon slot still resolves rather than dropping the tool change.
+pub fn weapon_cost_by_name(
+    conn: &rusqlite::Connection,
+    name: &str,
+    pricing: &dyn Fn(&Value) -> Value,
+) -> f64 {
     match weapon_properties_by_name_fragment_sync(conn, name)
         .ok()
         .flatten()
     {
         Some(properties_json) => {
             let props: Value = serde_json::from_str(&properties_json).unwrap_or(Value::Null);
-            cost_per_shot_ped(&props)
+            cost_per_shot_ped(&pricing(&props))
         }
         None => 0.0,
     }
@@ -66,6 +71,21 @@ pub fn heal_cost_from_props(properties_json: &str) -> (f64, f64) {
         heal_cost_per_use_with_implant(tool, markup, implant, implant_markup) / 100.0,
         heal_reload_seconds(tool),
     )
+}
+
+/// The TT a healing (or harvesting) tool consumes per use, in PED: the
+/// [`heal_cost_from_props`] recipe with every markup at TT, so the gap to
+/// the priced cost is exactly the markup paid over TT.
+pub fn heal_tt_from_props(properties_json: &str) -> f64 {
+    let props: Value = serde_json::from_str(properties_json).unwrap_or(Value::Null);
+    let tool = props
+        .get("tool_entity")
+        .filter(|value| !value.is_null() && value.as_object().is_none_or(|map| !map.is_empty()));
+    let Some(tool) = tool else {
+        return 0.0;
+    };
+    let implant = props.get("implant_entity").filter(|value| !value.is_null());
+    heal_cost_per_use_with_implant(tool, 1.0, implant, 1.0) / 100.0
 }
 
 /// The activation/output profile stored with a healing setup. Existing rows
@@ -247,6 +267,18 @@ mod tests {
     }
 
     #[test]
+    fn heal_tt_from_props_prices_the_same_use_at_tt() {
+        // (decay 0.0512 + ammo 0.3) at TT = 0.3512 pec, over 100 for PED;
+        // the priced cost at 110% is 0.003863, so 0.000351 is markup.
+        let props = json!({
+            "tool_entity": {"economy": {"decay": 0.0512, "ammo_burn": 30}, "uses_per_minute": 30},
+            "markup": 110,
+        });
+        assert_eq!(heal_tt_from_props(&props.to_string()), 0.003512);
+        assert_eq!(heal_tt_from_props("{}"), 0.0);
+    }
+
+    #[test]
     fn heal_cost_from_props_uses_the_tool_economy_and_markup() {
         // (decay 0.0512 + ammo 0.3) * markup 1.1 = 0.38632 -> 0.3863 pec,
         // over 100 for PED; reload 60 / 30 uses = 2.0s.
@@ -343,14 +375,28 @@ mod tests {
         .await;
 
         let cost = db
-            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Opalo")))
+            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Opalo", &Value::clone)))
             .await
             .unwrap();
         assert_eq!(cost, 2.05 / 100.0);
 
+        // Pricing sees the props after preparation: a weapon held at the
+        // attack-rate limit costs its factor more per attack.
+        let limited = db
+            .with_reader(|conn| {
+                Ok(weapon_cost_by_name(conn, "Opalo", &|props| {
+                    let mut props = props.clone();
+                    props["weapon_entity"]["uses_per_minute"] = serde_json::json!(90);
+                    crate::attack_rate::with_attack_rate(&props, None, 30.0)
+                }))
+            })
+            .await
+            .unwrap();
+        assert!((limited - 2.05 * 1.17 / 100.0).abs() < 1e-9);
+
         // An unknown tool prices to zero rather than dropping the tool change.
         let unknown = db
-            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Nonexistent")))
+            .with_reader(|conn| Ok(weapon_cost_by_name(conn, "Nonexistent", &Value::clone)))
             .await
             .unwrap();
         assert_eq!(unknown, 0.0);

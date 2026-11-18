@@ -31,13 +31,11 @@ const CEILINGS: &[(&str, usize)] = &[
     ("app/src/routes/updates/+page.svelte", 425),
     ("app/src/routes/analytics/OverviewTab.svelte", 575),
     ("app/src/routes/news/+page.svelte", 575),
-    ("app/src/routes/scan-overlay/+page.svelte", 600),
+    ("app/src/routes/character/CodexTab.svelte", 600),
     ("app/src/routes/settings/+page.svelte", 625),
-    ("app/src/routes/character/CodexTab.svelte", 675),
-    ("app/src/routes/equipment/TrifectaTab.svelte", 675),
     ("app/src/routes/analytics/LedgerTab.svelte", 700),
+    ("app/src/routes/overlay/+page.svelte", 850),
     ("app/src/routes/welcome/+page.svelte", 875),
-    ("app/src/routes/overlay/+page.svelte", 1050),
 ];
 
 const SCAN_ROOT: &str = "app/src/routes";
@@ -164,9 +162,9 @@ mod tests {
 
     #[test]
     fn a_mapped_route_is_held_to_its_own_ceiling() {
-        assert!(check_text("app/src/routes/overlay/+page.svelte", &text_of(1000)).is_none());
-        let f = check_text("app/src/routes/overlay/+page.svelte", &text_of(1051)).unwrap();
-        assert_eq!(f.ceiling, 1050);
+        assert!(check_text("app/src/routes/overlay/+page.svelte", &text_of(840)).is_none());
+        let f = check_text("app/src/routes/overlay/+page.svelte", &text_of(851)).unwrap();
+        assert_eq!(f.ceiling, 850);
     }
 
     #[test]
@@ -191,6 +189,6 @@ mod tests {
     #[test]
     fn ceiling_map_has_the_expected_entry_count() {
         // Guards against an accidental drop when editing the map.
-        assert_eq!(CEILINGS.len(), 10);
+        assert_eq!(CEILINGS.len(), 8);
     }
 }

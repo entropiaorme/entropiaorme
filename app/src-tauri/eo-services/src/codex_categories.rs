@@ -131,6 +131,44 @@ pub fn get_reward_ped(rank: i64, base_cost: f64, category: &str) -> f64 {
     round_half_even(cost / divisor, 4)
 }
 
+/// Ranks between meta rewards: every species pays one meta reward at
+/// ranks 5, 10, 15, 20, and 25.
+pub const META_INTERVAL: i64 = 5;
+
+/// The most meta rewards a character can claim across all species.
+pub const META_CAP: i64 = 750;
+
+/// The planning rate that turns codex cost into PED cycled. Codex
+/// progress follows the work done on a species rather than its kill
+/// count: on tracked history, kills per cost unit varied about seventy
+/// fold across species while PED cycled per cost unit stayed between
+/// about 1.2 and 2.8 (one rank window logged live measured 1.16; the
+/// others are upper bounds). The rate is a modelled estimate for
+/// comparing targets, never an accounting figure.
+pub const ESTIMATED_PED_PER_CODEX_COST: f64 = 1.5;
+
+/// The meta breakpoint a species at `rank` reaches next, or `None` once
+/// rank 25 (the last breakpoint) is reached. A rank exactly on a
+/// breakpoint has already earned that meta, so the next one is five on.
+pub fn next_meta_rank(rank: i64) -> Option<i64> {
+    let rank = rank.max(0);
+    (rank < 25).then(|| (rank / META_INTERVAL + 1) * META_INTERVAL)
+}
+
+/// The meta rewards a species at `rank` has earned (one per breakpoint
+/// passed, clamped to the 0-25 rank domain).
+pub fn metas_earned(rank: i64) -> i64 {
+    rank.clamp(0, 25) / META_INTERVAL
+}
+
+/// The codex cost of advancing from `from_rank` to `to_rank`: the sum of
+/// the cost of every rank in between, `from_rank` exclusive.
+pub fn cost_between_ranks(from_rank: i64, to_rank: i64, base_cost: f64) -> f64 {
+    (from_rank.max(0) + 1..=to_rank.min(25))
+        .map(|rank| get_rank_cost(rank, base_cost))
+        .sum()
+}
+
 /// The mastery reward's fixed cost basis. The in-game mastery skill
 /// picks (observed values 25 / 15.62 / 7.81 PED, display-rounded)
 /// decode exactly as 5000 divided by the skill's category divisor
@@ -247,6 +285,43 @@ mod tests {
             get_reward_ped(5, 10.0, "cat3"),
             round_half_even(60.0 / 640.0, 4)
         );
+    }
+
+    #[test]
+    fn next_meta_rank_steps_to_the_following_breakpoint() {
+        assert_eq!(next_meta_rank(0), Some(5));
+        assert_eq!(next_meta_rank(4), Some(5));
+        // On a breakpoint, that meta is already earned.
+        assert_eq!(next_meta_rank(5), Some(10));
+        assert_eq!(next_meta_rank(12), Some(15));
+        assert_eq!(next_meta_rank(24), Some(25));
+        assert_eq!(next_meta_rank(25), None);
+        assert_eq!(next_meta_rank(-1), Some(5));
+    }
+
+    #[test]
+    fn metas_earned_counts_breakpoints_passed() {
+        assert_eq!(metas_earned(0), 0);
+        assert_eq!(metas_earned(4), 0);
+        assert_eq!(metas_earned(5), 1);
+        assert_eq!(metas_earned(14), 2);
+        assert_eq!(metas_earned(25), 5);
+        assert_eq!(metas_earned(-3), 0);
+        assert_eq!(metas_earned(40), 5);
+    }
+
+    #[test]
+    fn meta_band_costs_sum_the_rank_multipliers() {
+        // Each five-rank band's multipliers sum to 16, 60, 122, 224, 406
+        // (828 over all 25 ranks).
+        let bands: Vec<f64> = (0..5)
+            .map(|band| cost_between_ranks(band * 5, band * 5 + 5, 1.0))
+            .collect();
+        assert_eq!(bands, vec![16.0, 60.0, 122.0, 224.0, 406.0]);
+        assert_eq!(cost_between_ranks(0, 25, 1.0), 828.0);
+        // A partial band: ranks 13 to 15 (multipliers 24, 28, 32).
+        assert_eq!(cost_between_ranks(12, 15, 2.5), 210.0);
+        assert_eq!(cost_between_ranks(25, 30, 1.0), 0.0);
     }
 
     #[test]

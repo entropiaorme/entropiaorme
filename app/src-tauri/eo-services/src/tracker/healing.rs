@@ -1,17 +1,45 @@
 //! Intent-led healing attribution.
 //!
-//! A resolved healer hotbar press opens an activation candidate. Chat-log
-//! healing is output evidence: it can confirm one paid activation, belong to
-//! an already-open effect window, or remain passive/unattributed at zero
-//! cost. Cross-producer ordering is handled by retaining a short unresolved
-//! output tail and reconciling it when the earlier OS key occurrence arrives.
+//! A resolved healer hotbar press (or an overlay declaration of the healer)
+//! opens an activation candidate. Chat-log healing is output evidence: it can
+//! confirm one paid activation, belong to an already-open effect window, or
+//! remain passive/unattributed at zero cost. Cross-producer ordering is
+//! handled by retaining a short unresolved output tail and reconciling it
+//! when the earlier OS key occurrence arrives.
+//!
+//! While the tool in hand is read off the game screen, the screen says
+//! which healer is held but not that it was used: holding it is a standing
+//! claim, not a press. Only a press of the held healer's key (which passes
+//! through as a use) gives a heal the edge a press gives. Under a standing
+//! claim, a heal is a paid use only when it fits the healer's band, its
+//! reload has passed, no open effect window takes it, and the held weapon's
+//! lifesteal does not explain it; a capped heal (below the band) needs that
+//! fresh press, since without one it cannot be told from passive healing.
+//! A session whose keys are the source keeps the press-led rules above.
+//!
+//! A keyless session (a machine that cannot read keys) has no press to open
+//! a candidate, so the healer last declared in the overlay stays in hand and
+//! a heal it explains is inferred as a paid use: it must fit the healer's
+//! band, respect its reload, fall in no open effect window, and not be the
+//! held weapon's lifesteal. A capped heal (below the band because health
+//! topped out) cannot be told from other healing without a press, so it
+//! stays zero-cost evidence. Inferred uses are stored as such.
+//!
+//! Persisted absolute expiry is the truth for effect windows: a session starts
+//! from every live window whose expiry is still ahead, whichever session paid
+//! for it, so a restart or a new session never loses a running heal-over-time
+//! effect. Its later ticks keep the paying activation's provenance at zero
+//! cost while stamping the context they land in. Expiry closes a window by
+//! comparison with the injected clock, so it closes once however often the
+//! state is read back.
 
 use std::collections::HashMap;
 
 use crate::bus_events::{
-    ActiveHarvestToolChangedPayload, ActiveHealToolChangedPayload, ActiveToolChangedPayload,
-    BusEvent, HotbarIntentPayload, HotbarItemKind,
+    ActiveHarvestToolChangedPayload, ActiveHealToolChangedPayload, BusEvent, HotbarIntentPayload,
+    HotbarItemKind, IntentSource,
 };
+use crate::db::DbError;
 use crate::healing_profile::HealingProfile;
 use crate::ped::Ped;
 
@@ -20,6 +48,16 @@ use super::time::{instant_to_epoch, resolve_local};
 
 const DELIVERY_TAIL_SECONDS: f64 = 1.25;
 const DAMAGE_CORRELATION_SECONDS: f64 = 1.0;
+/// How far back a starting session looks for each healer's latest paid use.
+/// Reloads are seconds long, so an hour bounds the read without ever cutting
+/// a cooldown short.
+const COOLDOWN_LOOKBACK_SECONDS: f64 = 3600.0;
+/// How much sooner than its reload a healer's next paid use may be observed.
+/// Heals are timed by when their chat lines are read, and the log is read in
+/// polls and written in bursts, so a use at the healer's full rate can reach
+/// the tracker a little inside the reload. A retry during a real cooldown
+/// prints no heal at all, so the allowance cannot bill one.
+const COOLDOWN_LEEWAY_SECONDS: f64 = 0.3;
 
 #[derive(Debug, Clone)]
 pub(super) struct HealingIntent {
@@ -30,13 +68,15 @@ pub(super) struct HealingIntent {
     pub(super) profile: HealingProfile,
     pub(super) occurred_at: f64,
     pub(super) closed_at: Option<f64>,
+    pub(super) source: IntentSource,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct HealingEffectWindow {
     pub(super) id: String,
     pub(super) activation_id: String,
-    pub(super) equipment_id: i64,
+    /// Absent once the paying item was deleted from the equipment library.
+    pub(super) equipment_id: Option<i64>,
     pub(super) tool_name: String,
     pub(super) profile: HealingProfile,
     pub(super) started_at: f64,
@@ -60,8 +100,17 @@ pub(super) struct HealingRuntime {
     pub(super) effect_windows: Vec<HealingEffectWindow>,
     last_activation: HashMap<i64, f64>,
     pending_outputs: Vec<PendingOutput>,
-    last_damage: Option<(f64, f64)>,
+    /// The latest hit: when, how much, and the lifesteal percent of the
+    /// weapon declared when it landed (so a later swap cannot change which
+    /// weapon's lifesteal the hit carried).
+    last_damage: Option<(f64, f64, Option<f64>)>,
     pub(super) weapon_lifesteal_percent: Option<f64>,
+    /// The session runs keyless (snapshotted at start): heals the declared
+    /// healer explains are inferred as paid uses.
+    pub(super) keyless: bool,
+    /// The healer last declared, kept in hand across weapon declarations; only
+    /// a keyless session infers from it.
+    pub(super) declared_healer: Option<HealingIntent>,
     pub(super) activation_count: i64,
     pub(super) direct_output_count: i64,
     pub(super) effect_output_count: i64,
@@ -81,15 +130,110 @@ struct ActivationWrite {
     context_id: Option<i64>,
     provenance: &'static str,
     retrospective: bool,
+    /// Inferred in a keyless session rather than confirmed by an intent.
+    inferred: bool,
+}
+
+/// The healing state persisted beyond any one session: every live effect
+/// window whose absolute expiry is still ahead, and each healer's latest live
+/// paid use.
+#[derive(Debug, Default)]
+pub(super) struct PersistedHealing {
+    windows: Vec<HealingEffectWindow>,
+    last_activation: HashMap<i64, f64>,
+}
+
+/// Read the persisted healing state as of `now`. Superseded windows and
+/// activations are corrections' provenance, never live state. A window whose
+/// stored profile cannot be read is skipped rather than guessed at: its later
+/// ticks then stay zero-cost unattributed evidence.
+pub(super) fn read_persisted_healing(
+    conn: &rusqlite::Connection,
+    now: f64,
+) -> Result<PersistedHealing, DbError> {
+    let mut windows = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT w.id, w.activation_id, w.equipment_id, w.tool_name, \
+                    w.started_at, w.expires_at, a.profile_json \
+             FROM healing_effect_windows w \
+             JOIN healing_activations a ON a.id = w.activation_id \
+             WHERE w.superseded_at IS NULL AND a.superseded_at IS NULL \
+               AND w.expires_at >= ?1 \
+             ORDER BY w.started_at, w.id",
+        )?;
+        let rows = stmt.query_map([now - DELIVERY_TAIL_SECONDS], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, f64>(4)?,
+                row.get::<_, f64>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, activation_id, equipment_id, tool_name, started_at, expires_at, profile) =
+                row?;
+            match serde_json::from_str::<HealingProfile>(&profile) {
+                Ok(profile) => windows.push(HealingEffectWindow {
+                    id,
+                    activation_id,
+                    equipment_id,
+                    tool_name,
+                    profile,
+                    started_at,
+                    expires_at,
+                }),
+                Err(error) => tracing::warn!(
+                    target: "eo::tracker",
+                    window = %id,
+                    %error,
+                    "healing effect window has an unreadable profile; not restored",
+                ),
+            }
+        }
+    }
+    let mut last_activation = HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT equipment_id, MAX(observed_at) FROM healing_activations \
+             WHERE superseded_at IS NULL AND equipment_id IS NOT NULL \
+               AND observed_at >= ?1 \
+             GROUP BY equipment_id",
+        )?;
+        let rows = stmt.query_map([now - COOLDOWN_LOOKBACK_SECONDS], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+        })?;
+        for row in rows {
+            let (equipment_id, observed_at) = row?;
+            last_activation.insert(equipment_id, observed_at);
+        }
+    }
+    Ok(PersistedHealing {
+        windows,
+        last_activation,
+    })
 }
 
 impl HealingRuntime {
+    /// Adopt the persisted state as the live effect windows and cooldowns.
+    /// Every live activation is written before memory changes, so the
+    /// persisted state already holds this session's own windows; replacing
+    /// wholesale is what lets a correction elsewhere take a window away or
+    /// give one back.
+    pub(super) fn restore(&mut self, persisted: PersistedHealing) {
+        self.effect_windows = persisted.windows;
+        self.last_activation = persisted.last_activation;
+    }
+
     pub(super) fn last_activation_at(&self, equipment_id: i64) -> Option<f64> {
         self.last_activation.get(&equipment_id).copied()
     }
 
     pub(super) fn note_damage(&mut self, observed_at: f64, amount: f64) {
-        self.last_damage = Some((observed_at, amount));
+        self.last_damage = Some((observed_at, amount, self.weapon_lifesteal_percent));
     }
 
     fn prune(&mut self, observed_at: f64) {
@@ -142,37 +286,92 @@ impl HealingRuntime {
         }
     }
 
+    /// The latest hit (its damage, and the lifesteal it carried), when a
+    /// heal at `observed_at` falls just after it.
+    fn recent_hit(&self, observed_at: f64) -> Option<(f64, Option<f64>)> {
+        let (damage_at, damage, percent) = self.last_damage?;
+        (observed_at - damage_at <= DAMAGE_CORRELATION_SECONDS && observed_at >= damage_at - 0.05)
+            .then_some((damage, percent))
+    }
+
+    /// Whether `amount` is the lifesteal share of a hit of `damage`.
+    fn lifesteal_share(damage: f64, percent: f64, amount: f64) -> bool {
+        let expected = damage * percent / 100.0;
+        let tolerance = (expected * 0.2).max(0.5);
+        (amount - expected).abs() <= tolerance
+    }
+
     fn damage_correlated(&self, observed_at: f64, amount: f64) -> bool {
-        let Some((damage_at, damage)) = self.last_damage else {
+        let Some((damage, _)) = self.recent_hit(observed_at) else {
             return false;
         };
-        if observed_at - damage_at > DAMAGE_CORRELATION_SECONDS || observed_at < damage_at - 0.05 {
-            return false;
-        }
         match self.weapon_lifesteal_percent {
-            Some(percent) => {
-                let expected = damage * percent / 100.0;
-                let tolerance = (expected * 0.2).max(0.5);
-                (amount - expected).abs() <= tolerance
-            }
+            Some(percent) => Self::lifesteal_share(damage, percent, amount),
             None => true,
         }
+    }
+
+    /// Whether a weapon's lifesteal explains this heal: a hit landed just
+    /// before it, and the heal is that hit's lifesteal share, at the
+    /// lifesteal of the weapon that landed it (whatever is held since).
+    /// Unlike [`Self::damage_correlated`], a weapon with no lifesteal
+    /// explains nothing, so a heal in the middle of a fight still counts.
+    fn lifesteal_explains(&self, observed_at: f64, amount: f64) -> bool {
+        self.recent_hit(observed_at)
+            .is_some_and(|(damage, percent)| {
+                percent.is_some_and(|percent| Self::lifesteal_share(damage, percent, amount))
+            })
+    }
+
+    /// The declared healer as an inferred use's intent, when this keyless
+    /// session's heal fits it.
+    fn inferred_candidate(&self, observed_at: f64, amount: f64) -> Option<HealingIntent> {
+        if !self.keyless {
+            return None;
+        }
+        let healer = self.declared_healer.as_ref()?;
+        (healer.profile.confirms_activation(amount)
+            && self.cooldown_ready(healer, observed_at)
+            && !self.lifesteal_explains(observed_at, amount))
+        .then(|| HealingIntent {
+            occurred_at: observed_at,
+            closed_at: None,
+            ..healer.clone()
+        })
     }
 
     fn cooldown_ready(&self, intent: &HealingIntent, observed_at: f64) -> bool {
         self.last_activation
             .get(&intent.equipment_id)
-            .is_none_or(|last| observed_at - last >= intent.reload_seconds.max(0.0))
+            .is_none_or(|last| {
+                observed_at - last >= (intent.reload_seconds - COOLDOWN_LEEWAY_SECONDS).max(0.0)
+            })
+    }
+
+    /// Whether a heal at `observed_at` lands on `intent`'s fresh edge: inside
+    /// the delivery tail of the moment it opened.
+    fn on_fresh_edge(intent: &HealingIntent, observed_at: f64) -> bool {
+        observed_at >= intent.occurred_at - 0.05
+            && observed_at - intent.occurred_at <= DELIVERY_TAIL_SECONDS
+    }
+
+    /// Whether `intent` is only a standing claim on a heal at `observed_at`:
+    /// the screen is the source of the tool in hand (`screen`), and the heal
+    /// is not on the fresh edge of a press of the held healer's key. The
+    /// screen seeing a healer, or the player choosing one in the overlay, is
+    /// not a use.
+    /// A claim the screen opened stays standing after the reading stops: it
+    /// was never a press.
+    fn standing(intent: &HealingIntent, observed_at: f64, screen: bool) -> bool {
+        (screen || intent.source == IntentSource::Screen)
+            && !(intent.source == IntentSource::Key && Self::on_fresh_edge(intent, observed_at))
     }
 
     fn activation_match(&self, intent: &HealingIntent, amount: f64) -> Option<&'static str> {
-        if intent.profile.direct_matches(amount) {
-            return Some("direct");
-        }
-        if !intent.profile.mode.has_direct() && intent.profile.tick_matches(amount) {
-            return Some("direct");
-        }
-        None
+        intent
+            .profile
+            .confirms_activation(amount)
+            .then_some("direct")
     }
 }
 
@@ -196,7 +395,9 @@ impl TrackerActor {
             match payload.item_kind {
                 HotbarItemKind::Healing => {
                     if let Some(profile) = payload.healing_profile.clone() {
-                        active.healing.intent = Some(intent_from_payload(payload, profile));
+                        let intent = intent_from_payload(payload, profile);
+                        active.healing.declared_healer = Some(intent.clone());
+                        active.healing.intent = Some(intent);
                         true
                     } else {
                         close_healing_intent(&mut active.healing, payload.occurred_at);
@@ -209,10 +410,13 @@ impl TrackerActor {
                     active.healing.weapon_lifesteal_percent = payload.lifesteal_percent;
                     false
                 }
-                HotbarItemKind::Harvesting | HotbarItemKind::Consumable => {
+                HotbarItemKind::Harvesting => {
                     close_healing_intent(&mut active.healing, payload.occurred_at);
                     false
                 }
+                // A consumable is used, never held: the tool in hand before
+                // the press is still the one a heal came from.
+                HotbarItemKind::Consumable => false,
             }
         };
 
@@ -220,13 +424,20 @@ impl TrackerActor {
         // session-scoped event. Publishing a second, unscoped event from
         // the listener would leave a session transition between validation
         // and dispatch where stale equipment could reach the next session.
-        let source = Some(format!("hotbar:{}", payload.slot));
+        let source = Some(match payload.source {
+            IntentSource::Key => format!("hotbar:{}", payload.slot),
+            IntentSource::Overlay => "overlay".to_string(),
+            IntentSource::Screen => "screen".to_string(),
+        });
+        if let (HotbarItemKind::Healing, Some(profile)) =
+            (payload.item_kind, payload.healing_profile.clone())
+        {
+            // The hand outlives the session, as the held weapon does.
+            self.declared_healer = Some(intent_from_payload(payload, profile));
+        }
         match payload.item_kind {
             HotbarItemKind::Weapon => {
-                self.on_tool_changed(&BusEvent::ActiveToolChanged(ActiveToolChangedPayload {
-                    tool_name: payload.item_name.clone(),
-                    source,
-                }));
+                self.on_weapon_press(&payload.item_name, payload.occurred_at);
             }
             HotbarItemKind::Healing => {
                 self.on_heal_tool_changed(&BusEvent::ActiveHealToolChanged(
@@ -247,11 +458,78 @@ impl TrackerActor {
                     },
                 ));
             }
-            HotbarItemKind::Consumable => {}
+            HotbarItemKind::Consumable => {
+                // The press is the dose: the item's key in game uses it.
+                if let Some(profile) = payload.consumable_profile.clone() {
+                    let start = super::doses::DoseStart {
+                        equipment_id: payload.equipment_id,
+                        item_name: payload.item_name.clone(),
+                        profile,
+                        untimed: false,
+                    };
+                    if let Err(error) = self
+                        .start_dose(start, crate::consumables::DoseSource::Hotbar, None)
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "eo::tracker",
+                            %error,
+                            "a consumable's hotbar dose could not be recorded",
+                        );
+                    }
+                }
+            }
         }
 
         if should_reconcile {
             self.reconcile_pending_heal(payload.occurred_at).await;
+        }
+    }
+
+    /// Adopt the persisted healing state as of `now`: the session start's
+    /// read-back, and the re-read after a correction elsewhere committed. A
+    /// failed read leaves the live state as it was; the session keeps
+    /// tracking, and ticks no window explains stay zero-cost evidence.
+    pub(super) async fn restore_persisted_healing(&mut self, now: f64) -> bool {
+        if self.session.active().is_none() {
+            return false;
+        }
+        match self
+            .db
+            .with_reader(move |conn| read_persisted_healing(conn, now))
+            .await
+        {
+            Ok(persisted) => match self.session.active_mut() {
+                Some(active) => {
+                    active.healing.restore(persisted);
+                    true
+                }
+                None => false,
+            },
+            Err(error) => {
+                tracing::warn!(
+                    target: "eo::tracker",
+                    %error,
+                    "persisted healing state could not be read; live effect windows unchanged",
+                );
+                false
+            }
+        }
+    }
+
+    /// A correction superseded or restored an activation: re-read the live
+    /// windows so a taken-back effect stops explaining ticks and an undone
+    /// correction's effect explains them again. The readout's effect state
+    /// may have moved, so the next tick announces it.
+    pub(super) async fn on_healing_updated(&mut self) {
+        // A correction may have taken a heal's on-use buff away or given it
+        // back.
+        self.restore_doses().await;
+        let now = instant_to_epoch(resolve_local(self.clock.now()));
+        if self.restore_persisted_healing(now).await {
+            if let Some(active) = self.session.active_mut() {
+                active.dirty = true;
+            }
         }
     }
 
@@ -260,6 +538,7 @@ impl TrackerActor {
             return false;
         }
         let observed_at = instant_to_epoch(resolve_local(self.clock.now()));
+        let screen = self.screen_is_source();
         let decision = {
             let Some(active) = self.session.active_mut() else {
                 return false;
@@ -267,15 +546,24 @@ impl TrackerActor {
             active.healing.prune(observed_at);
             let context_id = active.intervals.context_id();
             let session_id = active.session.id.clone();
+            let standing =
+                |intent: &HealingIntent| HealingRuntime::standing(intent, observed_at, screen);
+            // A standing claim is not billed for a heal the held weapon's
+            // lifesteal explains, as an inferred use is not.
             let direct = active.healing.candidate(observed_at).and_then(|intent| {
                 active
                     .healing
                     .activation_match(intent, amount)
                     .filter(|_| active.healing.cooldown_ready(intent, observed_at))
+                    .filter(|_| {
+                        !standing(intent) || !active.healing.lifesteal_explains(observed_at, amount)
+                    })
                     .map(|provenance| (intent.clone(), provenance))
             });
+            // A capped heal is told from passive healing only by a press.
             let capped = active.healing.candidate(observed_at).and_then(|intent| {
-                (!active.healing.damage_correlated(observed_at, amount)
+                (!standing(intent)
+                    && !active.healing.damage_correlated(observed_at, amount)
                     && intent.profile.health_capped_direct_matches(amount)
                     && active.healing.cooldown_ready(intent, observed_at))
                 .then(|| intent.clone())
@@ -286,11 +574,11 @@ impl TrackerActor {
             // activation evidence even when an old effect overlaps it. Once
             // that edge ages out, the effect receives the conservative claim:
             // a merely held healer cannot turn an ambiguous tick into cost.
-            let direct_has_fresh_edge = direct.as_ref().is_some_and(|(intent, _)| {
-                observed_at >= intent.occurred_at - 0.05
-                    && observed_at - intent.occurred_at <= DELIVERY_TAIL_SECONDS
+            // Under a standing claim there is no edge: the screen seeing the
+            // healer is not a press.
+            let fresh_direct = direct.clone().filter(|(intent, _)| {
+                HealingRuntime::on_fresh_edge(intent, observed_at) && !standing(intent)
             });
-            let fresh_direct = direct.clone().filter(|_| direct_has_fresh_edge);
 
             if let Some((intent, provenance)) = fresh_direct {
                 HealingDecision::Activation {
@@ -344,6 +632,22 @@ impl TrackerActor {
                         false,
                     )),
                 }
+            } else if let Some(intent) = active.healing.inferred_candidate(observed_at, amount) {
+                HealingDecision::Activation {
+                    session_id,
+                    write: Box::new(
+                        activation_write(
+                            intent,
+                            observed_at,
+                            chat_timestamp,
+                            amount,
+                            context_id,
+                            "direct",
+                            false,
+                        )
+                        .inferred(),
+                    ),
+                }
             } else {
                 let passive = active.healing.damage_correlated(observed_at, amount);
                 HealingDecision::Uncosted {
@@ -369,6 +673,7 @@ impl TrackerActor {
     }
 
     async fn reconcile_pending_heal(&mut self, intent_at: f64) {
+        let screen = self.screen_is_source();
         let pending = {
             let Some(active) = self.session.active_mut() else {
                 return;
@@ -389,7 +694,11 @@ impl TrackerActor {
                         .activation_match(&intent, output.amount)
                         .is_some();
                     let cooldown = active.healing.cooldown_ready(&intent, output.observed_at);
-                    (within_tail && matches && cooldown).then(|| output.clone())
+                    let lifesteal = HealingRuntime::standing(&intent, output.observed_at, screen)
+                        && active
+                            .healing
+                            .lifesteal_explains(output.observed_at, output.amount);
+                    (within_tail && matches && cooldown && !lifesteal).then(|| output.clone())
                 })
         };
         let Some(output) = pending else {
@@ -451,8 +760,9 @@ impl TrackerActor {
                         tx.execute(
                             "INSERT INTO healing_activations \
                              (id, session_id, equipment_id, tool_name, intent_at, observed_at, \
-                              chat_timestamp, context_id, cost_ped, profile_json, provenance) \
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                              chat_timestamp, context_id, cost_ped, profile_json, provenance, \
+                              confirming_output_id, reload_speed_percent, intent_source) \
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             rusqlite::params![
                                 db_write.activation_id,
                                 sid,
@@ -465,6 +775,9 @@ impl TrackerActor {
                                 db_write.intent.cost_per_use.value(),
                                 profile_json,
                                 db_write.provenance,
+                                db_write.output_id,
+                                db_write.intent.profile.reload_speed_percent,
+                                db_write.intent_source(),
                             ],
                         )?;
                         if let Some(window) = &db_write.effect {
@@ -533,6 +846,15 @@ impl TrackerActor {
                     if active.session.id == session_id {
                         active.heal_cost += write.intent.cost_per_use;
                         active
+                            .heal_times
+                            .push((write.observed_at, write.intent.cost_per_use));
+                        let spend = active
+                            .heal_spend
+                            .entry(write.intent.tool_name.clone())
+                            .or_default();
+                        spend.cost += write.intent.cost_per_use;
+                        spend.tt += write.intent.tt_per_use();
+                        active
                             .healing
                             .last_activation
                             .insert(write.intent.equipment_id, write.observed_at);
@@ -561,6 +883,36 @@ impl TrackerActor {
                             }
                         }
                         active.dirty = true;
+                    }
+                }
+                // A tool that grants a buff on use (Eir Mk 1) opens it as a
+                // dose with the paid heal; the heal already carries the cost.
+                if let Some(on_use) = write.intent.profile.on_use.clone() {
+                    let start = super::doses::DoseStart {
+                        equipment_id: write.intent.equipment_id,
+                        item_name: write.intent.tool_name.clone(),
+                        profile: crate::consumables::ConsumableProfile {
+                            duration_seconds: on_use.duration_seconds,
+                            effects: on_use.effects,
+                            tt_value_ped: 0.0,
+                            markup_percent: 100.0,
+                            track_cost: false,
+                        },
+                        untimed: false,
+                    };
+                    if let Err(error) = self
+                        .start_dose(
+                            start,
+                            crate::consumables::DoseSource::OnUse,
+                            Some(write.activation_id.clone()),
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            target: "eo::tracker",
+                            %error,
+                            "a healing tool's on-use buff could not be recorded",
+                        );
                     }
                 }
                 true
@@ -693,6 +1045,15 @@ enum HealingDecision {
     },
 }
 
+impl HealingIntent {
+    /// The TT one paid use consumes: the cost per use less the markup paid
+    /// over TT for a limited tool. A profile resolved without its TT basis
+    /// counts the whole cost as TT.
+    pub(super) fn tt_per_use(&self) -> Ped {
+        Ped(self.profile.tt_of_use(self.cost_per_use.value()))
+    }
+}
+
 fn intent_from_payload(payload: &HotbarIntentPayload, profile: HealingProfile) -> HealingIntent {
     HealingIntent {
         equipment_id: payload.equipment_id,
@@ -702,10 +1063,11 @@ fn intent_from_payload(payload: &HotbarIntentPayload, profile: HealingProfile) -
         profile,
         occurred_at: payload.occurred_at,
         closed_at: None,
+        source: payload.source,
     }
 }
 
-fn close_healing_intent(runtime: &mut HealingRuntime, occurred_at: f64) {
+pub(super) fn close_healing_intent(runtime: &mut HealingRuntime, occurred_at: f64) {
     if let Some(mut intent) = runtime.intent.take() {
         intent.closed_at = Some(occurred_at);
         runtime.recent_intent = Some(intent);
@@ -728,7 +1090,7 @@ fn activation_write(
         .map(|duration| HealingEffectWindow {
             id: uuid::Uuid::new_v4().to_string(),
             activation_id: activation_id.clone(),
-            equipment_id: intent.equipment_id,
+            equipment_id: Some(intent.equipment_id),
             tool_name: intent.tool_name.clone(),
             profile: intent.profile.clone(),
             started_at: observed_at,
@@ -745,6 +1107,7 @@ fn activation_write(
         context_id,
         provenance,
         retrospective,
+        inferred: false,
     }
 }
 
@@ -752,5 +1115,19 @@ impl ActivationWrite {
     fn with_output_id(mut self, output_id: String) -> Self {
         self.output_id = output_id;
         self
+    }
+
+    fn inferred(mut self) -> Self {
+        self.inferred = true;
+        self
+    }
+
+    /// The stored evidence behind the use (`healing_activations.intent_source`).
+    fn intent_source(&self) -> &'static str {
+        if self.inferred {
+            "inferred"
+        } else {
+            self.intent.source.as_str()
+        }
     }
 }

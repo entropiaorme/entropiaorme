@@ -26,11 +26,15 @@ thiserror = { workspace = true }
 rusqlite = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
-# The guide-mode demo services build a parallel tracker on the async runtime
-# (`Handle`) and stand up lazily behind a `OnceCell`.
 tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+# The facade tests drive the skill scan over drawn skills windows, the same
+# fixtures the service's own tests use (dev builds only: features a
+# dev-dependency enables do not reach a normal build).
+eo-services = { workspace = true, features = ["test-support"] }
+# Paused time drives the account connection's minute cadence in its facade
+# tests.
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 chrono = { workspace = true }

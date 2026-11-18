@@ -1,18 +1,13 @@
 <script lang="ts">
-	// The networking and privacy onboarding panel. The three features here
-	// are download-only and on by default; the user opts out here. The
-	// promise is worded to stay exactly true: none of these send anything
-	// about the user, and the one feature that does send data (contributing
-	// market observations) is a separate, default-off opt-in in Settings
-	// that never appears pre-enabled anywhere.
+	// The networking and privacy onboarding panel. Both features here are
+	// download-only and on by default; the user opts out here. The promise
+	// is worded to stay exactly true: neither sends anything about the user.
 	let {
 		news = $bindable(true),
 		autoUpdate = $bindable(true),
-		marketData = $bindable(true),
 	} = $props<{
 		news?: boolean;
 		autoUpdate?: boolean;
-		marketData?: boolean;
 	}>();
 </script>
 
@@ -36,16 +31,6 @@
 		<span class="toggle-copy">
 			<span class="toggle-title">Automatic updates</span>
 			<span class="toggle-sub">Check for new updates and install them with your permission.</span>
-		</span>
-	</label>
-	<label class="toggle">
-		<input type="checkbox" bind:checked={marketData} />
-		<span class="toggle-copy">
-			<span class="toggle-title">Market data</span>
-			<span class="toggle-sub">
-				Fetch the shared market snapshot from market-data.entropiaorme.com. Download-only;
-				contributing your own observations is a separate opt-in in Settings.
-			</span>
 		</span>
 	</label>
 	<span class="footnote">Change any of these at any time from Settings.</span>

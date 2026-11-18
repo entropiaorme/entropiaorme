@@ -11,7 +11,6 @@ import {
 	completeQuest,
 	createQuest,
 	deleteQuest,
-	getAnalyticsOverview,
 	getMarketHuntMarkups,
 	getQuestAnalytics,
 	getQuestFamilies,
@@ -19,13 +18,6 @@ import {
 	startQuest,
 	updateQuest,
 } from '$lib/api';
-import {
-	questsDemoFamilies,
-	questsDemoGlobalLiquidReturnRate,
-	questsDemoGlobalSkillProgressionRate,
-	questsDemoQuestAnalytics,
-	questsDemoQuests,
-} from '$lib/guide/fixtures/quests';
 import type {
 	Quest,
 	QuestAnalyticsRow,
@@ -36,8 +28,9 @@ import type {
 	QuestRewardPolicy,
 } from '$lib/types';
 import { describeError } from '$lib/view/errorState';
+import { filterByQuery } from '$lib/view/search';
 import { getCooldownStatus } from './cooldown';
-import { type GlobalRates, globalRates, type RewardMode } from './economics';
+import type { RewardMode } from './economics';
 
 /** The planet options the quest forms offer. */
 export const PLANETS = [
@@ -148,7 +141,6 @@ export function createQuestsModel() {
 	let analyticsLoading = $state(false);
 	let analyticsError = $state<string | null>(null);
 	let analyticsLoaded = $state(false);
-	let rates = $state<GlobalRates>({ liquidReturnRate: 0, skillProgressionRate: 0 });
 	let rewardMarket = $state<MarketHarvestData | null>(null);
 	let analyticsRewardMode = $state<RewardMode>('tt');
 
@@ -169,14 +161,12 @@ export function createQuestsModel() {
 			result = result.filter((q) => q.targetMobs.includes(mob));
 		}
 		if (searchQuery) {
-			const s = searchQuery.toLowerCase();
-			result = result.filter(
-				(q) =>
-					q.name.toLowerCase().includes(s) ||
-					q.targetMobs.some((m) => m.toLowerCase().includes(s)) ||
-					q.planet.toLowerCase().includes(s) ||
-					(q.category?.toLowerCase().includes(s) ?? false),
-			);
+			result = filterByQuery(result, searchQuery, (q) => [
+				q.name,
+				...q.targetMobs,
+				q.planet,
+				q.category,
+			]);
 		}
 		return result;
 	});
@@ -215,25 +205,12 @@ export function createQuestsModel() {
 		categoriesInitialised = true;
 	}
 
-	async function loadData(guideMode: boolean) {
+	async function loadData() {
 		loading = true;
 		error = null;
 		try {
-			if (guideMode) {
-				quests = questsDemoQuests.map((q) => ({ ...q }));
-				families = questsDemoFamilies.map((f) => ({ ...f }));
-				analyticsData = questsDemoQuestAnalytics.map((a) => ({ ...a }));
-				rates = {
-					liquidReturnRate: questsDemoGlobalLiquidReturnRate,
-					skillProgressionRate: questsDemoGlobalSkillProgressionRate,
-				};
-				analyticsLoaded = true;
-				analyticsError = null;
-				initialiseCollapsedCategories(quests);
-				return;
-			}
-			// Leaving guide mode must drop the seeded demo analytics: re-arm
-			// the lazy analytics load so the next visit reads live data.
+			// A full load re-arms the lazy analytics read so it follows the
+			// freshly loaded quests.
 			analyticsLoaded = false;
 			const [q, f] = await Promise.all([getQuests(), getQuestFamilies()]);
 			quests = q;
@@ -271,13 +248,11 @@ export function createQuestsModel() {
 		analyticsLoading = true;
 		analyticsError = null;
 		try {
-			const [qAnalytics, overview, market] = await Promise.all([
+			const [qAnalytics, market] = await Promise.all([
 				getQuestAnalytics(),
-				getAnalyticsOverview('all'),
 				getMarketHuntMarkups().catch(() => null),
 			]);
 			analyticsData = qAnalytics;
-			rates = globalRates(overview);
 			if (market !== null) rewardMarket = market;
 			analyticsLoaded = true;
 		} catch (e) {
@@ -606,9 +581,6 @@ export function createQuestsModel() {
 		},
 		get analyticsLoaded() {
 			return analyticsLoaded;
-		},
-		get rates() {
-			return rates;
 		},
 		get rewardMarket() {
 			return rewardMarket;

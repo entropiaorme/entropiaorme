@@ -1,0 +1,38 @@
+name: healing_effect_rotation
+flavour: scripted
+description: >
+  A restoration chip (a direct heal plus ticks over 20 seconds) used,
+  then a FAP used while the restoration still ticks. Pins intent-led
+  healing through the whole pipeline: the restoration and the FAP each
+  bill exactly once, every later tick stays a zero-cost output of the
+  restoration, a tick after a segment change stamps the new context
+  while the cost stays where it was paid, a crash mid-effect leaves the
+  running effect explaining ticks in the next session, the effect's
+  expiry ends it, and a FAP retry inside its reload bills nothing.
+surfaces:
+  - tracking-healing-paid-activation
+  - tracking-healing-effect-window
+  - tracking-healing-context-stamp
+  - tracking-healing-restart-rehydration
+  - tracking-healing-expiry
+  - tracking-healing-cooldown
+events: 10
+expected_kills: 0
+character_context:
+  profession_set: ""
+  location: ""
+  mob_species: ""
+notes: >
+  Hand-authored. steps.jsonl interleaves the chat log's tick groups
+  with the hotbar presses, clock steps, the segment declaration, and
+  the crash-restart the chat log cannot carry. Heal amounts sit inside
+  the declared intervals: 30 confirms the restoration's direct heal,
+  10 is a restoration tick, 80 confirms the FAP.
+
+# The committed clock plan: the frozen, driver-advanced instant schedule a
+# replay of this scenario runs on (parsed by load_clock_plan in the corpus
+# replay test). The start instant is chosen away from the scenario's chat-log
+# instants so a plan-stamped timestamp never collides with a domain timestamp.
+clock:
+  start: 2026-01-01T00:00:00
+  step_seconds: 1.0

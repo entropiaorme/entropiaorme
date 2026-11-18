@@ -44,6 +44,26 @@ pub(crate) fn cooldown_lift(instant: Option<f64>, hours: Option<f64>) -> Option<
     }
 }
 
+/// The instant a completion-anchored timer runs from: the later of the
+/// last completion and the last abandon. Giving today's mission up holds
+/// the slot exactly as finishing it would, only without the reward.
+pub(crate) fn completion_anchor_instant(
+    last_completed: Option<f64>,
+    last_abandoned: Option<f64>,
+) -> Option<f64> {
+    match (last_completed, last_abandoned) {
+        (Some(completed), Some(abandoned)) => Some(completed.max(abandoned)),
+        (instant, None) | (None, instant) => instant,
+    }
+}
+
+/// The refusal a curated row answers any authoring write with.
+pub(super) fn curated_refusal(what: &str) -> QuestError {
+    QuestError::Invalid(format!(
+        "This {what} is maintained by the app and cannot be edited"
+    ))
+}
+
 impl CooldownAnchor {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -69,7 +89,7 @@ impl CooldownAnchor {
 /// management surface can show availability without a second read.
 const FAMILY_SELECT: &str = "\
     SELECT f.id, f.name, f.planet, f.cooldown_hours, f.cooldown_anchor, \
-           f.is_active, f.created_at, f.updated_at, \
+           f.is_active, f.created_at, f.updated_at, f.catalogue_key, \
            (SELECT COUNT(*) FROM quests m \
             WHERE m.family_id = f.id AND m.is_active = 1) AS member_count, \
            (SELECT MAX(m.last_started_at) FROM quests m \
@@ -79,7 +99,10 @@ const FAMILY_SELECT: &str = "\
             JOIN quests m ON m.id = c.quest_id \
             WHERE m.family_id = f.id \
               AND NOT EXISTS (SELECT 1 FROM quest_cooldown_resets r \
-                              WHERE r.completion_id = c.id)) AS last_completed_at \
+                              WHERE r.completion_id = c.id)) AS last_completed_at, \
+           (SELECT MAX(r.abandoned_at) FROM quest_runs r \
+            JOIN quests m ON m.id = r.quest_id \
+            WHERE m.family_id = f.id) AS last_abandoned_at \
     FROM quest_families f";
 
 impl QuestService {
@@ -173,6 +196,9 @@ impl QuestService {
         if existing.get("is_active").and_then(Value::as_i64) != Some(1) {
             return Ok(None);
         }
+        if existing.get("curated").and_then(Value::as_bool) == Some(true) {
+            return Err(curated_refusal("quest family"));
+        }
 
         let mut updates: Vec<(&str, Value)> = Vec::new();
         if let Some(value) = data.get("name") {
@@ -239,6 +265,11 @@ impl QuestService {
     /// a deleted family must stop gating availability, and a member
     /// pointing at a dead family would keep its timers alive.
     pub async fn delete_family(&self, family_id: i64) -> Result<bool, QuestError> {
+        if let Some(family) = self.get_family(family_id).await? {
+            if family.get("curated").and_then(Value::as_bool) == Some(true) {
+                return Err(curated_refusal("quest family"));
+            }
+        }
         Ok(self
             .db
             .with_writer(move |conn| {
@@ -398,14 +429,19 @@ fn row_to_family(row: &rusqlite::Row) -> Map<String, Value> {
         "member_count".into(),
         json!(row.get_unwrap::<_, i64>("member_count")),
     );
+    let catalogue_key = row.get_unwrap::<_, Option<String>>("catalogue_key");
+    family.insert("curated".into(), json!(catalogue_key.is_some()));
+    family.insert("catalogue_key".into(), json!(catalogue_key));
     let last_started = row.get_unwrap::<_, Option<f64>>("last_started_at");
     let last_completed = row.get_unwrap::<_, Option<f64>>("last_completed_at");
+    let last_abandoned = row.get_unwrap::<_, Option<f64>>("last_abandoned_at");
     family.insert("last_started_at".into(), json!(last_started));
     family.insert("last_completed_at".into(), json!(last_completed));
+    family.insert("last_abandoned_at".into(), json!(last_abandoned));
 
     let anchor_instant = match anchor.as_str() {
         "pickup" => last_started,
-        _ => last_completed,
+        _ => completion_anchor_instant(last_completed, last_abandoned),
     };
     let expires = cooldown_lift(anchor_instant, cooldown_hours).map(to_iso_utc);
     family.insert("cooldown_expires_at".into(), json!(expires));

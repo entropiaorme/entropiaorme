@@ -23,7 +23,10 @@
 
 mod actor;
 mod analytics;
+pub mod catalogue;
 mod crud;
+#[cfg(test)]
+mod curated_tests;
 mod families;
 mod hand_in;
 mod lifecycle;

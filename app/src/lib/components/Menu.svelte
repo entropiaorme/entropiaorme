@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { portal } from '$lib/utils/portal';
 
 	interface MenuItem {
 		label: string;
@@ -31,7 +32,8 @@
 		trigger?: Snippet<[{ open: boolean; toggle: () => void; keydown: (event: KeyboardEvent) => void }]>;
 		/**
 		 * Custom panel content, rendered after `items`. Elements marked
-		 * `role="menuitem"` participate in the keyboard roving focus.
+		 * `role="menuitem"`, `role="menuitemradio"`, or
+		 * `role="menuitemcheckbox"` participate in the keyboard roving focus.
 		 */
 		children?: Snippet<[{ close: () => void }]>;
 		class?: string;
@@ -77,19 +79,6 @@
 	const VIEWPORT_MARGIN = 8;
 	const TRIGGER_GAP = 4;
 
-	/** Overlay panels belong to the document layer, not the trigger's
-	 * stacking context. Moving the node to body is what makes `fixed`
-	 * genuinely viewport-relative even inside transformed dashboard
-	 * ancestors. */
-	function portal(node: HTMLElement, enabled: boolean) {
-		if (enabled) document.body.appendChild(node);
-		return {
-			destroy() {
-				if (enabled) node.remove();
-			}
-		};
-	}
-
 	function positionPanel() {
 		if (!overlay || !rootEl || !panelEl) return;
 		const anchor = rootEl.getBoundingClientRect();
@@ -123,7 +112,9 @@
 		return panelEl
 			? Array.from(
 					panelEl.querySelectorAll<HTMLElement>(
-						'[role="menuitem"]:not([disabled]):not([aria-disabled="true"])',
+						['menuitem', 'menuitemradio', 'menuitemcheckbox']
+							.map((role) => `[role="${role}"]:not([disabled]):not([aria-disabled="true"])`)
+							.join(', '),
 					),
 				)
 			: [];

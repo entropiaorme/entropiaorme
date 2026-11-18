@@ -3,728 +3,832 @@
     "id": "75c4f4cd08b3",
     "name": "Alekz Precision Scope",
     "economy": {
-      "decay": 0.029
+      "decay": 0.029,
+      "efficiency": 60
     }
   },
   {
     "id": "d09535c4dd9a",
     "name": "Bjornir Precision Scope",
     "economy": {
-      "decay": 0.039
+      "decay": 0.039,
+      "efficiency": 60
     }
   },
   {
     "id": "7e2620b44274",
     "name": "Cinclar Precision Scope",
     "economy": {
-      "decay": 0.042
+      "decay": 0.042,
+      "efficiency": 60
     }
   },
   {
     "id": "9b8df8d4a4ad",
     "name": "Dacascos Precision Scope",
     "economy": {
-      "decay": 0.051
+      "decay": 0.051,
+      "efficiency": 60
     }
   },
   {
     "id": "1c63632c4365",
     "name": "Elkarr Precision Scope",
     "economy": {
-      "decay": 0.059
+      "decay": 0.059,
+      "efficiency": 60
     }
   },
   {
     "id": "2f2b4133af88",
     "name": "Grender Precision Scope",
     "economy": {
-      "decay": 0.07
+      "decay": 0.07,
+      "efficiency": 79
     }
   },
   {
     "id": "d3220578bb49",
     "name": "Headshot 1",
     "economy": {
-      "decay": 0.023
+      "decay": 0.023,
+      "efficiency": 65
     }
   },
   {
     "id": "da08c8947b21",
     "name": "Headshot 2",
     "economy": {
-      "decay": 0.032
+      "decay": 0.032,
+      "efficiency": 65
     }
   },
   {
     "id": "6ac843845744",
     "name": "Headshot 3",
     "economy": {
-      "decay": 0.041
+      "decay": 0.041,
+      "efficiency": 70
     }
   },
   {
     "id": "83abe4b527d5",
     "name": "Headshot 4",
     "economy": {
-      "decay": 0.05
+      "decay": 0.05,
+      "efficiency": 70
     }
   },
   {
     "id": "02425bec938b",
     "name": "Headshot I (L)",
     "economy": {
-      "decay": 0.023
+      "decay": 0.023,
+      "efficiency": 65
     }
   },
   {
     "id": "7f42f48e4ba1",
     "name": "Longreach 1",
     "economy": {
-      "decay": 0.058
+      "decay": 0.058,
+      "efficiency": 79
     }
   },
   {
     "id": "75426119380c",
     "name": "Longreach 2",
     "economy": {
-      "decay": 0.066
+      "decay": 0.066,
+      "efficiency": 79
     }
   },
   {
     "id": "6e04c38c00e7",
     "name": "Longreach 3",
     "economy": {
-      "decay": 0.075
+      "decay": 0.075,
+      "efficiency": 82
     }
   },
   {
     "id": "f9322e708472",
     "name": "Longreach 4",
     "economy": {
-      "decay": 0.083
+      "decay": 0.083,
+      "efficiency": 82
     }
   },
   {
     "id": "b1d67884ebfb",
     "name": "Seizzt Ranger Scope 1900RS",
     "economy": {
-      "decay": 0.026
+      "decay": 0.026,
+      "efficiency": 65
     }
   },
   {
     "id": "b474aae95a5e",
     "name": "Seizzt Ranger Scope 2500RS",
     "economy": {
-      "decay": 0.032
+      "decay": 0.032,
+      "efficiency": 75
     }
   },
   {
     "id": "0dc0f714574e",
     "name": "Seizzt Ranger Scope 3500RS",
     "economy": {
-      "decay": 0.037
+      "decay": 0.037,
+      "efficiency": 75
     }
   },
   {
     "id": "8776fca538cc",
     "name": "Sweet Scope Mk I",
     "economy": {
-      "decay": 0.029
+      "decay": 0.029,
+      "efficiency": 65
     }
   },
   {
     "id": "9e970c2ad10a",
     "name": "Sweet Scope Mk III",
     "economy": {
-      "decay": 0.042
+      "decay": 0.042,
+      "efficiency": 75
     }
   },
   {
     "id": "88937bd63858",
     "name": "Abrer Laser Sight",
     "economy": {
-      "decay": 0.046
+      "decay": 0.046,
+      "efficiency": 60
     }
   },
   {
     "id": "c050f5064ccc",
     "name": "Beacin Laser Sight",
     "economy": {
-      "decay": 0.069
+      "decay": 0.069,
+      "efficiency": 60
     }
   },
   {
     "id": "1fdaa6cfa89e",
     "name": "Bullseye 1",
     "economy": {
-      "decay": 0.04
+      "decay": 0.04,
+      "efficiency": 65
     }
   },
   {
     "id": "07b020b25f5d",
     "name": "Bullseye 2",
     "economy": {
-      "decay": 0.05
+      "decay": 0.05,
+      "efficiency": 70
     }
   },
   {
     "id": "2cc71b36b692",
     "name": "Bullseye 3",
     "economy": {
-      "decay": 0.06
+      "decay": 0.06,
+      "efficiency": 70
     }
   },
   {
     "id": "c19b657d8f56",
     "name": "Bullseye 4",
     "economy": {
-      "decay": 0.07
+      "decay": 0.07,
+      "efficiency": 75
     }
   },
   {
     "id": "9e69758872a1",
     "name": "Bullseye 5",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 75
     }
   },
   {
     "id": "df3b75da0f85",
     "name": "Bullseye 6",
     "economy": {
-      "decay": 0.09
+      "decay": 0.09,
+      "efficiency": 75
     }
   },
   {
     "id": "d0445ff52667",
     "name": "Bullseye 7",
     "economy": {
-      "decay": 0.1
+      "decay": 0.1,
+      "efficiency": 79
     }
   },
   {
     "id": "3c0340a8661e",
     "name": "Bullseye 8",
     "economy": {
-      "decay": 0.11
+      "decay": 0.11,
+      "efficiency": 82
     }
   },
   {
     "id": "0aeb6125b394",
     "name": "Bullseye I (L)",
     "economy": {
-      "decay": 0.04
+      "decay": 0.04,
+      "efficiency": 65
     }
   },
   {
     "id": "5b9f3bb232aa",
     "name": "Bullseye II (L)",
     "economy": {
-      "decay": 0.05
+      "decay": 0.05,
+      "efficiency": 70
     }
   },
   {
     "id": "6e3b105f8896",
     "name": "Bullseye VI (L)",
     "economy": {
-      "decay": 0.09
+      "decay": 0.09,
+      "efficiency": 75
     }
   },
   {
     "id": "67715c58ec0b",
     "name": "Bullseye VII (L)",
     "economy": {
-      "decay": 0.1
+      "decay": 0.1,
+      "efficiency": 79
     }
   },
   {
     "id": "a0ff64073ec4",
     "name": "Dynera Laser Sight",
     "economy": {
-      "decay": 0.096
+      "decay": 0.096,
+      "efficiency": 60
     }
   },
   {
     "id": "03fde7460e9f",
     "name": "Gargul Laser Sight",
     "economy": {
-      "decay": 0.09
+      "decay": 0.09,
+      "efficiency": 79
     }
   },
   {
     "id": "3373b6e4bc2a",
     "name": "Hunnir Laser Sight",
     "economy": {
-      "decay": 0.098
+      "decay": 0.098,
+      "efficiency": 60
     }
   },
   {
     "id": "9392d50496a2",
     "name": "I.C.U Laser Sight Mk I",
     "economy": {
-      "decay": 0.03
+      "decay": 0.03,
+      "efficiency": 65
     }
   },
   {
     "id": "d62b5d3b40cd",
     "name": "Lucky Laser Sight Mk I",
     "economy": {
-      "decay": 0.02
+      "decay": 0.02,
+      "efficiency": 65
     }
   },
   {
     "id": "9d84a67922d8",
     "name": "Omegaton Laser Sight Mk. 1",
     "economy": {
-      "decay": 0.098
+      "decay": 0.098,
+      "efficiency": 85
     }
   },
   {
     "id": "2045884160d9",
     "name": "Omegaton Ranger Scope Mk. 1",
     "economy": {
-      "decay": 0.071
+      "decay": 0.071,
+      "efficiency": 85
     }
   },
   {
     "id": "259eaf8d8eba",
     "name": "Flexur Precision Scope",
     "economy": {
-      "decay": 0.066
+      "decay": 0.066,
+      "efficiency": 75
     }
   },
   {
     "id": "0ffff95f4688",
     "name": "ZX Eagle Eye",
     "economy": {
-      "decay": 0.014
+      "decay": 0.014,
+      "efficiency": 60
     }
   },
   {
     "id": "28d4823d3a96",
     "name": "Hawk 3k (L)",
     "economy": {
-      "decay": 0.042
+      "decay": 0.042,
+      "efficiency": 65
     }
   },
   {
     "id": "f98db7e78575",
     "name": "S & B Mounted Light P1 (L)",
     "economy": {
-      "decay": 0.04
+      "decay": 0.04,
+      "efficiency": 65
     }
   },
   {
     "id": "ab38a69c0414",
     "name": "Bullseye VIII (L)",
     "economy": {
-      "decay": 0.11
+      "decay": 0.11,
+      "efficiency": 82
     }
   },
   {
     "id": "c994de4a7e29",
     "name": "Seizzt Laser Sight 2000L",
     "economy": {
-      "decay": 0.02
+      "decay": 0.02,
+      "efficiency": 65
     }
   },
   {
     "id": "c863a313a296",
     "name": "Seizzt Laser Sight 2000L+",
     "economy": {
-      "decay": 0.017
+      "decay": 0.017,
+      "efficiency": 65
     }
   },
   {
     "id": "0fd7fe620d2e",
     "name": "Terrus Laser Sight SE600",
     "economy": {
-      "decay": 0.03
+      "decay": 0.03,
+      "efficiency": 70
     }
   },
   {
     "id": "42fa4f7b8722",
     "name": "Terrus Laser Sight SE700",
     "economy": {
-      "decay": 0.036
+      "decay": 0.036,
+      "efficiency": 70
     }
   },
   {
     "id": "ec508de935b6",
     "name": "Terrus Laser Sight SE800",
     "economy": {
-      "decay": 0.037
+      "decay": 0.037,
+      "efficiency": 70
     }
   },
   {
     "id": "f89b8b5fda49",
     "name": "Enkidd Dismalites (L)",
     "economy": {
-      "decay": 0.1
+      "decay": 0.1,
+      "efficiency": 65
     }
   },
   {
     "id": "a564dfeaab47",
     "name": "Omegaton Ranger Scope Mk. 2",
     "economy": {
-      "decay": 0.071
+      "decay": 0.071,
+      "efficiency": 87
     }
   },
   {
     "id": "94b050a3ff2f",
     "name": "Salafa Laser Sight MK 3 (L)",
     "economy": {
-      "decay": 0.07
+      "decay": 0.07,
+      "efficiency": 80
     }
   },
   {
     "id": "8a4765e98002",
     "name": "Hanzor Precision Scope",
     "economy": {
-      "decay": 0.071
+      "decay": 0.071,
+      "efficiency": 79
     }
   },
   {
     "id": "8f8ef6dc4c37",
     "name": "ZX R-Dod",
     "economy": {
-      "decay": 0.02
+      "decay": 0.02,
+      "efficiency": 100
     }
   },
   {
     "id": "bb55d767b650",
     "name": "Hawk 1k (L)",
     "economy": {
-      "decay": 0.036
+      "decay": 0.036,
+      "efficiency": 65
     }
   },
   {
     "id": "689fa4e1ab56",
     "name": "Hawk 2k (L)",
     "economy": {
-      "decay": 0.04
+      "decay": 0.04,
+      "efficiency": 65
     }
   },
   {
     "id": "2d2019ad47fc",
     "name": "Headshot II (L)",
     "economy": {
-      "decay": 0.032
+      "decay": 0.032,
+      "efficiency": 65
     }
   },
   {
     "id": "d01ee781acd5",
     "name": "Headshot III (L)",
     "economy": {
-      "decay": 0.041
+      "decay": 0.041,
+      "efficiency": 70
     }
   },
   {
     "id": "4582667b0575",
     "name": "Headshot IV (L)",
     "economy": {
-      "decay": 0.05
+      "decay": 0.05,
+      "efficiency": 70
     }
   },
   {
     "id": "ce750b7f6276",
     "name": "Longreach I (L)",
     "economy": {
-      "decay": 0.058
+      "decay": 0.058,
+      "efficiency": 79
     }
   },
   {
     "id": "ef737323a5c9",
     "name": "Longreach II (L)",
     "economy": {
-      "decay": 0.066
+      "decay": 0.066,
+      "efficiency": 79
     }
   },
   {
     "id": "60f8993bc1b3",
     "name": "Longreach III (L)",
     "economy": {
-      "decay": 0.075
+      "decay": 0.075,
+      "efficiency": 82
     }
   },
   {
     "id": "b881c0c66040",
     "name": "Seizzt Ranger Scope 1800RS",
     "economy": {
-      "decay": 0.021
+      "decay": 0.021,
+      "efficiency": 65
     }
   },
   {
     "id": "9bf7cfb4583a",
     "name": "Seizzt Ranger Scope 1850RS",
     "economy": {
-      "decay": 0.023
+      "decay": 0.023,
+      "efficiency": 65
     }
   },
   {
     "id": "c785016b7990",
     "name": "Seizzt Ranger Scope 4000RS",
     "economy": {
-      "decay": 0.038
+      "decay": 0.038,
+      "efficiency": 75
     }
   },
   {
     "id": "582c23bb12df",
     "name": "Sweet Scope Mk II",
     "economy": {
-      "decay": 0.039
+      "decay": 0.039,
+      "efficiency": 70
     }
   },
   {
     "id": "264008a90624",
     "name": "Bullseye III (L)",
     "economy": {
-      "decay": 0.06
+      "decay": 0.06,
+      "efficiency": 70
     }
   },
   {
     "id": "958dc6b1d0a1",
     "name": "Bullseye IV (L)",
     "economy": {
-      "decay": 0.07
+      "decay": 0.07,
+      "efficiency": 75
     }
   },
   {
     "id": "5cb1f22aa898",
     "name": "Bullseye V (L)",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 75
     }
   },
   {
     "id": "42cd51a105ff",
     "name": "Ecivox Laser Sight",
     "economy": {
-      "decay": 0.066
+      "decay": 0.066,
+      "efficiency": 75
     }
   },
   {
     "id": "58436327a01d",
     "name": "Framur Laser Sight",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 79
     }
   },
   {
     "id": "9db7127df76f",
     "name": "Longreach IV (L)",
     "economy": {
-      "decay": 0.083
+      "decay": 0.083,
+      "efficiency": 82
     }
   },
   {
     "id": "41cfeb639eff",
     "name": "Omegaton Laser Sight Mk. 2",
     "economy": {
-      "decay": 0.1
+      "decay": 0.1,
+      "efficiency": 87
     }
   },
   {
     "id": "9460d2e58d05",
     "name": "S & B Mounted Light P2 (L)",
     "economy": {
-      "decay": 0.05
+      "decay": 0.05,
+      "efficiency": 70
     }
   },
   {
     "id": "d73d9bb1ddbc",
     "name": "S & B Mounted Light R1 (L)",
     "economy": {
-      "decay": 0.09
+      "decay": 0.09,
+      "efficiency": 75
     }
   },
   {
     "id": "e3bb5885dee3",
     "name": "S & B Mounted Light R2 (L)",
     "economy": {
-      "decay": 0.06
+      "decay": 0.06,
+      "efficiency": 70
     }
   },
   {
     "id": "c8a7e2eeb9bc",
     "name": "S & B Mounted Light R3 (L)",
     "economy": {
-      "decay": 0.07
+      "decay": 0.07,
+      "efficiency": 75
     }
   },
   {
     "id": "417828845ad5",
     "name": "S & B Mounted Light R4 (L)",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 75
     }
   },
   {
     "id": "265ce12e632e",
     "name": "Terrus Laser Sight SE900",
     "economy": {
-      "decay": 0.039
+      "decay": 0.039,
+      "efficiency": 70
     }
   },
   {
     "id": "a41b8cd8b022",
     "name": "ArMatrix Precision Scope Mk.1, TWEN Edition",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 85
     }
   },
   {
     "id": "17aa7288ada8",
     "name": "Salafa Laser Sight MK 2 (L)",
     "economy": {
-      "decay": 0.05
+      "decay": 0.05,
+      "efficiency": 77
     }
   },
   {
     "id": "96b9a08f6af4",
     "name": "ArMatrix Precision Scope Mk.2, TWEN Edition",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 85
     }
   },
   {
     "id": "83d7907d2722",
     "name": "ArMatrix Precision Scope Mk.3, TWEN Edition",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 85
     }
   },
   {
     "id": "19a5132ad276",
     "name": "Sight of Cthylla",
     "economy": {
-      "decay": 0.07
+      "decay": 0.07,
+      "efficiency": 80
     }
   },
   {
     "id": "4fbac62d57d8",
     "name": "Mayhem Precision Scope Mk.1",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 85
     }
   },
   {
     "id": "faf4f2a61ec0",
     "name": "Exceptional Mayhem Precision Scope Mk.2 (L)",
     "economy": {
-      "decay": 0.08
+      "decay": 0.08,
+      "efficiency": 85
     }
   },
   {
     "id": "f0dcfd83960b",
     "name": "Salafa Laser Sight MK 1 (L)",
     "economy": {
-      "decay": 0.04
+      "decay": 0.04,
+      "efficiency": 75
     }
   },
   {
     "id": "666cd0747f31",
     "name": "Stable Turrelion Sight",
     "economy": {
-      "decay": 0.075
+      "decay": 0.075,
+      "efficiency": 82
     }
   },
   {
     "id": "8abf92432b6b",
     "name": "Prototype Mounted Flashlight Smuggler",
     "economy": {
-      "decay": 0.001
+      "decay": 0.001,
+      "efficiency": 100
     }
   },
   {
     "id": "8f00bea78b6f",
     "name": "Ikamar Precision Scope",
     "economy": {
-      "decay": 0.082
+      "decay": 0.082,
+      "efficiency": 60
     }
   },
   {
     "id": "25b3e659d66a",
     "name": "Jzar Precision Scope",
     "economy": {
-      "decay": 0.088
+      "decay": 0.088,
+      "efficiency": 60
     }
   },
   {
     "id": "b37c935edc45",
     "name": "Seizzt Ranger Scope 1950RS",
     "economy": {
-      "decay": 0.028
+      "decay": 0.028,
+      "efficiency": 70
     }
   },
   {
     "id": "6911446e2cbf",
     "name": "ArMatrix Laser Sight Mk.1, TWEN Edition",
     "economy": {
-      "decay": 0.015
+      "decay": 0.015,
+      "efficiency": 90
     }
   },
   {
     "id": "4f0c0fa8bd81",
     "name": "ArMatrix Laser Sight Mk.2, TWEN Edition",
     "economy": {
-      "decay": 0.015
+      "decay": 0.015,
+      "efficiency": 90
     }
   },
   {
     "id": "96e8146a5d88",
     "name": "ArMatrix Laser Sight Mk.3, TWEN Edition",
     "economy": {
-      "decay": 0.02
+      "decay": 0.02,
+      "efficiency": 80
     }
   },
   {
     "id": "d4e90f342958",
     "name": "Castar Laser Sight",
     "economy": {
-      "decay": 0.088
+      "decay": 0.088,
+      "efficiency": 60
     }
   },
   {
     "id": "e3b19b18523b",
     "name": "Ignaritz Laser Sight",
     "economy": {
-      "decay": 0.109
+      "decay": 0.109,
+      "efficiency": 82
     }
   },
   {
     "id": "800caddff96f",
     "name": "Jakth Laser Sight",
     "economy": {
-      "decay": 0.126
+      "decay": 0.126,
+      "efficiency": 82
     }
   },
   {
     "id": "43e20c8908dd",
     "name": "Lucky Laser Sight Mk II",
     "economy": {
-      "decay": 0.03
+      "decay": 0.03,
+      "efficiency": 65
     }
   },
   {
     "id": "3204bf3de421",
     "name": "Mayhem Laser Sight Mk.1",
     "economy": {
-      "decay": 0.02
+      "decay": 0.02,
+      "efficiency": 85
     }
   },
   {
     "id": "a336f8711cbd",
     "name": "Exceptional Mayhem Laser Sight Mk.2 (L)",
     "economy": {
-      "decay": 0.02
+      "decay": 0.02,
+      "efficiency": 85
     }
   },
   {
     "id": "fe5fedd45aa2",
     "name": "Stable Turrelion Scope",
     "economy": {
-      "decay": 0.075
+      "decay": 0.075,
+      "efficiency": 82
     }
   }
 ]

@@ -5,8 +5,7 @@
 //! This is domain logic, extracted from the transport layer that used to
 //! host it inline: the same SQL aggregation and camelCase-ready value
 //! shaping, now behind [`AnalyticsService`] over the shared database and
-//! injected clock, so both the typed IPC facade and the guide-mode demo
-//! surface read through one implementation. Reads scale O(days), not
+//! injected clock, read by the typed IPC facade. Reads scale O(days), not
 //! O(rows): the Overview brings the daily rollups current and aggregates
 //! rollup rows plus bounded raw edges (see [`hybrid_window`]).
 //!
@@ -26,8 +25,39 @@ use crate::clock::Clock;
 use crate::daily_rollup;
 use crate::db::{Db, DbError};
 use crate::harvest_yield::HarvestYieldTier;
+use crate::session_costs::{self, Bucket};
+use crate::session_scope::{self, StatsScope};
 use crate::stock_allocation;
 use crate::time::{naive_to_epoch, to_iso_utc};
+
+mod asset_positions;
+mod conversion;
+mod from_account;
+mod realised;
+mod reconciliation;
+mod strongbox_opening;
+
+pub use asset_positions::{AssetPurchaseRow, PurchaseFigures};
+
+pub use conversion::{
+    ConversionAcquisition, ConversionHolding, ConversionInput, ConversionLineRow,
+    ConversionLineSide, ConversionOutput, ItemConversion,
+};
+pub use from_account::{
+    AccountRecord, AccountStep, FromAccount, ListingFromAccount, RecentFromAccount,
+    RecordedFromAccount, TakenBack, UnknownOriginRecorded, UnknownOriginUndo,
+    RECENT_FROM_ACCOUNT_SECONDS,
+};
+pub(crate) use realised::realised_markup_by_quest;
+pub use reconciliation::{
+    reconciliation_key, ApplyOutcome, Caution, Disposition, ExcludedItem, Exclusion, GroupFigures,
+    LineChoice, LineRefusal, Observation, ObservedStack, ReconciliationDraft, ReconciliationLine,
+    ReconciliationSource, ReconciliationUndo, Revised, Revision, UnitTt, HELD_BY_RECONCILIATION,
+    SESSION_TRACKED,
+};
+pub use strongbox_opening::{
+    BoxSource, OpenedItem, OpenedItemRow, OpeningIntake, StrongboxOpening, StrongboxOpeningRow,
+};
 
 /// The analytics domain service over the shared database and injected
 /// clock: the Overview / Activity aggregates and the ledger / preset /
@@ -57,6 +87,8 @@ pub struct LedgerRow {
     pub description: String,
     pub amount: f64,
     pub tag: String,
+    /// The session this entry is pegged to as a whole, by name.
+    pub session_name: Option<String>,
 }
 
 /// One ledger preset, in wire shape.
@@ -81,6 +113,35 @@ pub struct InventoryRow {
     pub markup_paid: f64,
     pub notes: Option<String>,
     pub acquired_at: String,
+    /// How many units are held; `tt_value` and `markup_paid` are their totals.
+    pub quantity: f64,
+    /// Whether part of it can be sold, listed, or converted, rather than only
+    /// the whole. Not for an asset carrying activity origins.
+    pub divisible: bool,
+    /// The acquisitions that built it, oldest first.
+    pub purchases: Vec<AssetPurchaseRow>,
+    /// The activities a sale of this asset would credit. Empty for an asset
+    /// that did not come out of a conversion.
+    pub origins: Vec<HoldingOriginRow>,
+    /// What a conversion made this asset from.
+    pub derived_from: Vec<DerivedSourceRow>,
+}
+
+/// One activity a held item traces back to, for saying where a sale's gain
+/// would go.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HoldingOriginRow {
+    pub label: String,
+    pub quantity: f64,
+}
+
+/// One root item a converted holding, or a sale of it, descends from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivedSourceRow {
+    pub item_name: String,
+    pub quantity: f64,
 }
 
 /// One holding candidate for a manually typed or OCR-observed item name.
@@ -109,6 +170,14 @@ pub struct StockPositionRow {
     /// out of `quantity`: it has left the player's inventory and may still
     /// come back, so it is reported rather than silently absent.
     pub listed_quantity: f64,
+    /// TT per unit, known even when nothing is currently held.
+    pub unit_tt: f64,
+    /// Markup paid for bought inputs that this stock still has to recover.
+    pub paid_markup: f64,
+    /// The activities a sale of this stock would credit.
+    pub origins: Vec<HoldingOriginRow>,
+    /// What conversions made this stock from.
+    pub derived_from: Vec<DerivedSourceRow>,
 }
 
 /// One auction listing across its whole lifecycle.
@@ -157,6 +226,10 @@ pub struct AuctionListingRow {
     pub activity_net_markup: Option<f64>,
     /// Gross sale proceeds above the listing's TT, before fees.
     pub gross_markup: Option<f64>,
+    /// When the account readings settled its outcome on their own: the
+    /// step they saw it in. `None` for one the player resolved, and while
+    /// it waits on the auction.
+    pub from_account: Option<RecordedFromAccount>,
 }
 
 /// One thing this activity did to its stock: an auction listing across its
@@ -175,11 +248,12 @@ pub struct ActivityHistoryRow {
     pub id: String,
     /// The holding family this outcome acted on: `loot` or `equipment`.
     pub subject_kind: String,
-    /// The operational path: `auction`, `trade`, `conversion`, or `removal`.
+    /// The operational path: `auction`, `trade`, `conversion`, `removal`,
+    /// or `unknownOrigin` (stock held without knowing where it came from).
     pub channel: String,
-    /// `listing`, `trade`, `conversion`, or `removal`.
+    /// `listing`, `trade`, `conversion`, `removal`, or `unknownOrigin`.
     pub kind: String,
-    /// `pending`, `sold`, `expired`, `converted`, or `removed`.
+    /// `pending`, `sold`, `expired`, `converted`, `removed`, or `held`.
     pub status: String,
     pub item_name: String,
     /// What a conversion produced. `None` for other outcomes.
@@ -201,6 +275,21 @@ pub struct ActivityHistoryRow {
     /// Already undone: kept on the list as the record of a correction, with
     /// every effect it had reversed and no action left on it.
     pub undone: bool,
+    /// A conversion's lines as the player recorded them. Empty for other
+    /// outcomes and for conversions older than itemised recording.
+    pub conversion_lines: Vec<ConversionLineRow>,
+    /// A conversion that came out as PED: the amount.
+    pub ped_amount: Option<f64>,
+    /// Whether this was an itemised conversion, as opposed to recycling.
+    pub itemised: bool,
+    /// What the sold stock descends from, when a conversion produced it.
+    pub derived_from: Vec<DerivedSourceRow>,
+    /// Recorded on its own from the account readings, between these two
+    /// instants; `None` for an entry the player made.
+    pub from_account: Option<RecordedFromAccount>,
+    /// The standing stock reconciliation that recorded it, which undoes it
+    /// as a whole; `None` otherwise.
+    pub reconciliation_id: Option<String>,
 }
 
 /// One yield tier's realised markup from confirmed stock outcomes, for the Tree
@@ -210,6 +299,15 @@ pub struct ActivityHistoryRow {
 pub struct RealisedTierMarkup {
     pub yield_tier: HarvestYieldTier,
     pub net_markup: f64,
+}
+
+/// The sessions' overhead as Activity reads it, PED: a cost beside the
+/// realised markup, never part of it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ActivityOverhead {
+    /// By yield tier, as stored (`HarvestYieldTier::from_db` reads it).
+    pub tiers: BTreeMap<String, f64>,
+    pub definitions: BTreeMap<i64, f64>,
 }
 
 /// One mob species' realised markup from confirmed stock outcomes, for the Hunting
@@ -230,6 +328,19 @@ pub struct RealisedSpeciesMarkup {
 #[serde(rename_all = "camelCase")]
 pub struct RealisedDefinitionMarkup {
     pub definition_id: i64,
+    pub net_markup: f64,
+}
+
+/// The part of a session definition's realised markup that arrived through
+/// conversions, named by the item it descends from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RealisedDerivedMarkup {
+    pub definition_id: i64,
+    pub origin_item: String,
+    /// How many of `origin_item` have been realised so far. Partial while
+    /// some of what a conversion produced is still unsold.
+    pub quantity: f64,
     pub net_markup: f64,
 }
 
@@ -293,14 +404,31 @@ pub struct ReturnsData {
     pub ledger: std::collections::BTreeMap<String, f64>,
 }
 
-/// The losses breakdown: tracking cost, its cycled split, and the
-/// ledger expenses.
+/// The losses breakdown: tracking cost, its cycled split, the sessions'
+/// overhead, and the ledger expenses.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LossesData {
     pub tracking_cost: f64,
     pub cycled_breakdown: CycledData,
+    /// What the sessions cost beyond performing their activities: in the
+    /// losses, never in `tracking_cost` (Cycled).
+    pub overhead: OverheadData,
     pub ledger: std::collections::BTreeMap<String, f64>,
+}
+
+/// The sessions' overhead by category; its categories sum to `total`
+/// before rounding.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverheadData {
+    pub total: f64,
+    /// Of the total, what the readings billed between sessions: credited
+    /// to no activity, and left out of every rate.
+    pub between_sessions: f64,
+    pub travel: f64,
+    pub field_logistics: f64,
+    pub unclassified: f64,
 }
 
 /// The per-family cycled-cost split, engine-typed.
@@ -314,6 +442,8 @@ pub struct CycledData {
     pub dangling: SqlNumber,
     /// Harvesting (tree cutting) swing decay.
     pub harvest: SqlNumber,
+    /// Consumed doses of cost-tracked items.
+    pub consumables: SqlNumber,
 }
 
 /// One day or month of the Overview timeline; the caller labels the
@@ -329,6 +459,13 @@ pub struct TimelinePoint {
     pub quest_pes: f64,
     pub ledger_gains: std::collections::BTreeMap<String, f64>,
     pub tracking_cost: f64,
+    /// The overhead of the sessions started in the bucket, and what was
+    /// billed between sessions on its days: in its losses, never in
+    /// `tracking_cost` (Cycled).
+    pub overhead_cost: f64,
+    /// Of `overhead_cost`, what was billed between sessions: credited to no
+    /// activity, and left out of every rate.
+    pub between_sessions_cost: f64,
     pub ledger_losses: std::collections::BTreeMap<String, f64>,
 }
 
@@ -347,6 +484,13 @@ pub struct HuntingData {
 #[serde(rename_all = "camelCase")]
 pub struct HarvestData {
     pub tier_comparisons: Vec<HarvestTierRow>,
+    /// The overhead of the sessions that swung in the period, shared to
+    /// their harvesting: a cost beside Cycled, never in it. The tiers'
+    /// overhead and `unassigned_overhead` add up to it.
+    pub overhead: f64,
+    /// The part of `overhead` on no tier the period shows: a session that
+    /// swung but cycled nothing to share it by.
+    pub unassigned_overhead: f64,
 }
 
 /// One effective yield activity and its item composition.
@@ -358,6 +502,9 @@ pub struct HarvestTierRow {
     pub cycled: f64,
     pub returns: f64,
     pub loot_rate: f64,
+    /// The overhead shared to this tier by what it cycled: a cost beside
+    /// Cycled, never in it.
+    pub overhead: f64,
     pub loot_items: Vec<HarvestLootItemRow>,
 }
 
@@ -424,6 +571,9 @@ pub struct HuntingOverall {
     pub pes: f64,
     pub pes_per100_ped: f64,
     pub expected: Option<ExpectedHuntingAggregate>,
+    /// The overhead of these same sessions shared to their hunting: a cost
+    /// beside Cycled, never in it.
+    pub overhead: f64,
 }
 
 /// Offensive-only community-model aggregate over immutable tool phases.
@@ -466,6 +616,10 @@ pub struct HuntingDefinitionRow {
     pub pes: f64,
     pub pes_per100_ped: f64,
     pub expected: Option<ExpectedHuntingAggregate>,
+    /// The overhead of these same instances shared to their hunting (for
+    /// the unassigned bucket, that of sessions recorded outside any
+    /// definition): a cost beside Cycled, never in it.
+    pub overhead: f64,
     pub activities: Vec<HuntingSignatureRow>,
     pub mobs: Vec<HuntingMobShareRow>,
     pub instance_rows: Vec<HuntingInstanceRow>,
@@ -498,6 +652,10 @@ pub struct HuntingSignatureRow {
     /// existing realised-return total, not a separate public statistic.
     #[serde(skip)]
     pub realised_loot_markup: f64,
+    /// The sessions' overhead shared to this activity by what it cycled: a
+    /// cost beside Cycled, taken off its Realised Net and added to its
+    /// Realised Rate's denominator.
+    pub overhead: f64,
     /// Actual reward items observed at completion. Their current market
     /// projection is resolved outside the accounting service.
     pub reward_items: Vec<HarvestLootItemRow>,
@@ -777,7 +935,7 @@ fn hybrid_window(start: Option<f64>, end: Option<f64>, watermark: &str) -> Hybri
 /// the merged result reproduces the raw engine typing: an all-empty
 /// window leaves the wire as an integer zero, exactly as
 /// `COALESCE(SUM(...), 0)` does.
-type FamilySums = [Option<f64>; 12];
+type FamilySums = [Option<f64>; 17];
 
 fn merge_family_sums(into: &mut FamilySums, from: FamilySums) {
     for (slot, value) in into.iter_mut().zip(from) {
@@ -789,8 +947,10 @@ fn merge_family_sums(into: &mut FamilySums, from: FamilySums) {
 
 /// The `daily_rollups` family-sum columns, position-matched to
 /// [`FamilySums`] (loot, weapon, enhancer, armour, heal, dangling, skill,
-/// codex, quest).
-const ROLLUP_FAMILY_COLS: [&str; 12] = [
+/// codex, quest, harvest loot, harvest cost, quest items, consumed doses,
+/// the overhead by category: travel, field logistics, unclassified, and the
+/// part of it billed between sessions, credited to none).
+const ROLLUP_FAMILY_COLS: [&str; 17] = [
     "loot_tt",
     "weapon_cost",
     "enhancer_cost",
@@ -803,13 +963,18 @@ const ROLLUP_FAMILY_COLS: [&str; 12] = [
     "harvest_loot_tt",
     "harvest_cost",
     "quest_item_tt",
+    "consumable_cost",
+    "overhead_travel",
+    "overhead_field_logistics",
+    "overhead_unclassified",
+    "overhead_between_sessions",
 ];
 
 /// The rollup-side family sums for several windows in ONE conditional-
 /// aggregation pass over `daily_rollups`, so the Overview reads the rollup
 /// range once however many windows it reports (the period window plus the
 /// two fixed trend windows), rather than re-scanning the rollups per
-/// window. Each returned slot holds the same nine verbatim sums a
+/// window. Each returned slot holds the same verbatim family sums a
 /// single-range [`rollup_family_sums`] would (NULL preserved as `None`), so
 /// the per-window merge with the raw edges is unchanged and the response is
 /// byte-identical. A window with no full rollup days contributes an
@@ -824,7 +989,7 @@ fn rollup_family_sums_multi(
     conn: &rusqlite::Connection,
     windows: &[HybridWindow],
 ) -> Result<Vec<FamilySums>, DbError> {
-    let mut out: Vec<FamilySums> = vec![[None; 12]; windows.len()];
+    let mut out: Vec<FamilySums> = vec![[None; 17]; windows.len()];
 
     // The windows that actually cover full rollup days, paired with their
     // index back into `out`.
@@ -845,7 +1010,7 @@ fn rollup_family_sums_multi(
     // One CASE-guarded SUM per (window, family): the conditional-aggregation
     // pass. Columns are emitted window-major, family-minor, matching the
     // read-back below.
-    let mut cols: Vec<String> = Vec::with_capacity(active.len() * 12);
+    let mut cols: Vec<String> = Vec::with_capacity(active.len() * ROLLUP_FAMILY_COLS.len());
     for (_, lo, hi) in &active {
         for col in ROLLUP_FAMILY_COLS {
             let guard = match lo {
@@ -876,9 +1041,9 @@ fn rollup_family_sums_multi(
         cols.join(", ")
     );
     let per_slot = conn.query_row(&sql, [], |row| {
-        let mut per_slot: Vec<FamilySums> = vec![[None; 12]; active.len()];
+        let mut per_slot: Vec<FamilySums> = vec![[None; 17]; active.len()];
         for (slot, sums) in per_slot.iter_mut().enumerate() {
-            let base = slot * 12;
+            let base = slot * ROLLUP_FAMILY_COLS.len();
             for (family, value) in sums.iter_mut().enumerate() {
                 *value = row.get::<_, Option<f64>>(base + family)?;
             }
@@ -913,11 +1078,19 @@ fn raw_family_sums(
     }
 
     let (start, end) = range;
-    let mut sums: FamilySums = [None; 12];
+    let mut sums: FamilySums = [None; 17];
+    // The same scope filters as `daily_rollup::recompute_day`: the raw
+    // edges and the rollup rows must agree on which sessions count.
+    let economy = |session: &str| session_scope::counts(StatsScope::Economy, session);
     let (w, p) = where_epoch("timestamp", start, end);
     let kills = fetch(
         conn,
-        format!("SELECT SUM(loot_total_ped), SUM(enhancer_cost) FROM kills WHERE {w}"),
+        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
+        format!(
+            "SELECT SUM(loot_total_ped), SUM({}) FROM kills WHERE {w} AND {}",
+            session_costs::scaled("enhancer_cost", Bucket::Enhancer, "kills.session_id"),
+            economy("kills.session_id")
+        ),
         &p,
         2,
     )?;
@@ -927,9 +1100,16 @@ fn raw_family_sums(
     let (w, p) = where_epoch("k.timestamp", start, end);
     let weapon = fetch(
         conn,
+        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         format!(
-            "SELECT SUM(ts.cost_per_shot * ts.shots_fired) \
-             FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {w}"
+            "SELECT SUM({}) \
+             FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {w} AND {}",
+            session_costs::scaled(
+                "ts.cost_per_shot * ts.shots_fired",
+                Bucket::Weapon,
+                "k.session_id"
+            ),
+            economy("k.session_id")
         ),
         &p,
         1,
@@ -940,20 +1120,49 @@ fn raw_family_sums(
     let sessions = fetch(
         conn,
         format!(
-            "SELECT SUM(armour_cost), SUM(heal_cost), SUM(dangling_cost) \
-             FROM tracking_sessions WHERE {w}"
+            "SELECT {}, {} FROM tracking_sessions WHERE {w} AND {}",
+            session_costs::session_sums_sql("tracking_sessions"),
+            session_costs::overhead_sums_sql("tracking_sessions"),
+            session_scope::counts_on(StatsScope::Economy, "tracking_sessions")
         ),
         &p,
-        3,
+        10,
     )?;
     sums[3] = sessions[0];
     sums[4] = sessions[1];
     sums[5] = sessions[2];
+    sums[12] = sessions[3];
+    // A session's overhead sits on its start, as the day rollup places it;
+    // what the readings billed between sessions, on the day each step ended,
+    // joins it by category and is kept apart as well, credited to none.
+    let (w, p) = where_epoch("b.seen_to", start, end);
+    let between = fetch(
+        conn,
+        format!(
+            "SELECT SUM(b.travel_ped), SUM(b.field_logistics_ped), SUM(b.unclassified_ped), \
+                    SUM(b.travel_ped + b.field_logistics_ped + b.unclassified_ped) \
+             FROM {} b WHERE {w}",
+            session_costs::BETWEEN_SESSIONS_STEPS
+        ),
+        &p,
+        4,
+    )?;
+    let plus = |a: Option<f64>, b: Option<f64>| match (a, b) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0.0) + b.unwrap_or(0.0)),
+    };
+    sums[13] = plus(sessions[7], between[0]);
+    sums[14] = plus(sessions[8], between[1]);
+    sums[15] = plus(sessions[9], between[2]);
+    sums[16] = between[3];
 
     let (w, p) = where_epoch("timestamp", start, end);
     sums[6] = fetch(
         conn,
-        format!("SELECT SUM(ped_value) FROM skill_gains WHERE {w}"),
+        format!(
+            "SELECT SUM(ped_value) FROM skill_gains WHERE {w} AND {}",
+            session_scope::counts(StatsScope::Progression, "skill_gains.session_id")
+        ),
         &p,
         1,
     )?[0];
@@ -974,12 +1183,21 @@ fn raw_family_sums(
     let (w, p) = where_epoch("timestamp", start, end);
     let harvest = fetch(
         conn,
-        format!("SELECT SUM(loot_total_ped), SUM(cost_ped) FROM harvest_events WHERE {w}"),
+        format!(
+            "SELECT SUM(loot_total_ped), SUM({}) FROM harvest_events WHERE {w} AND {}",
+            session_costs::scaled("cost_ped", Bucket::Harvesting, "harvest_events.session_id"),
+            economy("harvest_events.session_id")
+        ),
         &p,
         2,
     )?;
     sums[9] = harvest[0];
     sums[10] = harvest[1];
+    // A measured bucket no tracked event carries sits on its session's
+    // start, as the day rollup places it.
+    sums[1] = session_costs::with_session_grain(sums[1], sessions[4]);
+    sums[2] = session_costs::with_session_grain(sums[2], sessions[5]);
+    sums[10] = session_costs::with_session_grain(sums[10], sessions[6]);
     let (w, p) = where_epoch("c.completed_at", start, end);
     sums[11] = fetch(
         conn,
@@ -1034,9 +1252,30 @@ struct Metrics {
     armour: SqlNumber,
     dangling: SqlNumber,
     harvest: SqlNumber,
+    consumables: SqlNumber,
     tracking_cost: SqlNumber,
+    /// The overhead by category: travel, field logistics, unclassified,
+    /// the sessions' and what was billed between them. In Costs and Net,
+    /// never in Cycled.
+    overhead: [SqlNumber; 3],
+    /// Of the overhead, what was billed between sessions: credited to no
+    /// activity, and never in a rate.
+    between_sessions: SqlNumber,
     ledger_gains: std::collections::BTreeMap<String, f64>,
     ledger_losses: std::collections::BTreeMap<String, f64>,
+}
+
+impl Metrics {
+    /// The overhead, every category added up: the sessions' and what was
+    /// billed between them.
+    fn overhead_total(&self) -> f64 {
+        self.overhead.iter().map(|part| part.as_f64()).sum()
+    }
+
+    /// The sessions' own overhead: what a rate may hold.
+    fn session_overhead(&self) -> f64 {
+        self.overhead_total() - self.between_sessions.as_f64()
+    }
 }
 
 /// Per-tag ledger totals for a window, rounded to two places and
@@ -1093,7 +1332,8 @@ fn ledger_by_tag(
     let (extra, params) = bounds("le.date");
     let sql = format!(
         "SELECT le.tag, SUM(le.amount) FROM ledger_entries le \
-         WHERE le.type = ? AND le.date > ?{extra} GROUP BY le.tag"
+         WHERE le.type = ? AND le.date > ?{extra} AND {} GROUP BY le.tag",
+        session_scope::counts(StatsScope::Economy, "le.source_session_id")
     );
     let mut p: Vec<String> = vec![entry_type.to_string(), watermark.to_string()];
     p.extend(params);
@@ -1142,19 +1382,26 @@ fn assemble_metrics(
     let harvest_loot = SqlNumber::from_family(sums[9]);
     let harvest = SqlNumber::from_family(sums[10]);
     let quest_item_tt = SqlNumber::from_family(sums[11]);
+    let consumables = SqlNumber::from_family(sums[12]);
+    let overhead = [
+        SqlNumber::from_family(sums[13]),
+        SqlNumber::from_family(sums[14]),
+        SqlNumber::from_family(sums[15]),
+    ];
 
     // Wood TT is liquid loot; the headline Loot TT carries both
     // activities.
     let loot_tt = kill_loot.sum(harvest_loot);
 
     // weapon + heal + enhancer + armour + dangling (the pinned order),
-    // then harvest swing decay.
+    // then harvest swing decay and consumed doses.
     let tracking_cost = weapon
         .sum(healing)
         .sum(enhancer)
         .sum(armour)
         .sum(dangling)
-        .sum(harvest);
+        .sum(harvest)
+        .sum(consumables);
 
     let ledger_gains = ledger_by_tag(conn, "markup", epoch_start, epoch_end, watermark)?;
     let ledger_losses = ledger_by_tag(conn, "expense", epoch_start, epoch_end, watermark)?;
@@ -1171,7 +1418,10 @@ fn assemble_metrics(
         armour,
         dangling,
         harvest,
+        consumables,
         tracking_cost,
+        overhead,
+        between_sessions: SqlNumber::from_family(sums[16]),
         ledger_gains,
         ledger_losses,
     })
@@ -1186,7 +1436,10 @@ fn sum_values(map: &std::collections::BTreeMap<String, f64>) -> f64 {
 /// excluded), 0.0 when losses are non-positive.
 fn rate_from_metrics(m: &Metrics) -> f64 {
     let total_gains = m.loot_tt.as_f64() + m.quest_item_tt.as_f64() + sum_values(&m.ledger_gains);
-    let total_losses = m.tracking_cost.as_f64() + sum_values(&m.ledger_losses);
+    // The overhead billed between sessions is a cost of no play: never in
+    // a rate.
+    let total_losses =
+        m.tracking_cost.as_f64() + m.session_overhead() + sum_values(&m.ledger_losses);
     if total_losses > 0.0 {
         total_gains / total_losses
     } else {
@@ -1259,7 +1512,8 @@ fn ledger_buckets(
     };
     let sql = format!(
         "SELECT {bucket_expr} AS bucket, le.tag, SUM(le.amount) FROM ledger_entries le \
-         WHERE le.type = ? AND le.date > ?{extra} GROUP BY bucket, le.tag"
+         WHERE le.type = ? AND le.date > ?{extra} AND {} GROUP BY bucket, le.tag",
+        session_scope::counts(StatsScope::Economy, "le.source_session_id")
     );
     let mut p: Vec<String> = vec![entry_type.to_string(), watermark.to_string()];
     if let Some(start) = &start_iso {
@@ -1339,9 +1593,13 @@ fn overview_read(
     let total_ledger_gains = sum_values(&m.ledger_gains);
     let total_ledger_losses = sum_values(&m.ledger_losses);
     let total_gains = m.loot_tt.as_f64() + m.quest_item_tt.as_f64() + total_ledger_gains;
-    let total_losses = m.tracking_cost.as_f64() + total_ledger_losses;
-    let return_rate = if total_losses > 0.0 {
-        total_gains / total_losses
+    let overhead_total = m.overhead_total();
+    let total_losses = m.tracking_cost.as_f64() + overhead_total + total_ledger_losses;
+    // The rate leaves out what was billed between sessions: a cost of no
+    // play, in Costs and Net only.
+    let rate_losses = total_losses - m.between_sessions.as_f64();
+    let return_rate = if rate_losses > 0.0 {
+        total_gains / rate_losses
     } else {
         0.0
     };
@@ -1384,6 +1642,14 @@ fn overview_read(
                 armour: m.armour.rounded(2),
                 dangling: m.dangling.rounded(2),
                 harvest: m.harvest.rounded(2),
+                consumables: m.consumables.rounded(2),
+            },
+            overhead: OverheadData {
+                total: eo_wire::normalizer::round_half_even(overhead_total, 2),
+                between_sessions: m.between_sessions.rounded(2).as_f64(),
+                travel: m.overhead[0].rounded(2).as_f64(),
+                field_logistics: m.overhead[1].rounded(2).as_f64(),
+                unclassified: m.overhead[2].rounded(2).as_f64(),
             },
             ledger: m.ledger_losses,
         },
@@ -1417,6 +1683,11 @@ struct BreakdownMaps {
     quest: std::collections::BTreeMap<String, SqlNumber>,
     /// Harvest swing decay (wood loot merges into `loot`).
     harvest_cost: std::collections::BTreeMap<String, SqlNumber>,
+    /// The sessions' overhead, on their start, and what was billed between
+    /// sessions, on the day each step ended.
+    overhead: std::collections::BTreeMap<String, SqlNumber>,
+    /// Of the overhead, what was billed between sessions.
+    between: std::collections::BTreeMap<String, SqlNumber>,
     members: BTreeSet<String>,
 }
 
@@ -1455,14 +1726,18 @@ fn rollup_breakdown(
         BucketKind::Day => format!(
             "SELECT day AS bucket, has_rows, loot_tt, weapon_cost, enhancer_cost, \
              armour_cost, heal_cost, dangling_cost, skill_tt, codex_pes, quest_pes, \
-             harvest_loot_tt, harvest_cost, quest_item_tt \
+             harvest_loot_tt, harvest_cost, quest_item_tt, consumable_cost, \
+             overhead_travel, overhead_field_logistics, overhead_unclassified, \
+             overhead_between_sessions \
              FROM daily_rollups WHERE day <= ?{extra} ORDER BY bucket"
         ),
         BucketKind::Month => format!(
             "SELECT strftime('%Y-%m', day) AS bucket, MAX(has_rows), SUM(loot_tt), \
              SUM(weapon_cost), SUM(enhancer_cost), SUM(armour_cost), SUM(heal_cost), \
              SUM(dangling_cost), SUM(skill_tt), SUM(codex_pes), SUM(quest_pes), \
-             SUM(harvest_loot_tt), SUM(harvest_cost), SUM(quest_item_tt) \
+             SUM(harvest_loot_tt), SUM(harvest_cost), SUM(quest_item_tt), SUM(consumable_cost), \
+             SUM(overhead_travel), SUM(overhead_field_logistics), SUM(overhead_unclassified), \
+             SUM(overhead_between_sessions) \
              FROM daily_rollups WHERE day <= ?{extra} GROUP BY bucket ORDER BY bucket"
         ),
     };
@@ -1499,17 +1774,31 @@ fn rollup_breakdown(
         }
         // The session-cost leg mirrors the raw query's
         // COALESCE(SUM(armour),0) + COALESCE(SUM(heal),0) +
-        // COALESCE(SUM(dangling),0): integer zeros for NULL legs, a
-        // bucket only when any session existed (subsumed by has_rows
-        // membership; an absent key emits the same integer zero).
+        // COALESCE(SUM(dangling),0) + COALESCE(SUM(consumable),0): integer
+        // zeros for NULL legs, a bucket only when any session existed
+        // (subsumed by has_rows membership; an absent key emits the same
+        // integer zero).
         let armour = family(5)?;
         let heal = family(6)?;
         let dangling = family(7)?;
-        if armour.is_some() || heal.is_some() || dangling.is_some() {
+        let consumable = family(14)?;
+        if armour.is_some() || heal.is_some() || dangling.is_some() || consumable.is_some() {
             let total = SqlNumber::from_family(armour)
                 .sum(SqlNumber::from_family(heal))
-                .sum(SqlNumber::from_family(dangling));
+                .sum(SqlNumber::from_family(dangling))
+                .sum(SqlNumber::from_family(consumable));
             BreakdownMaps::merge(&mut maps.sess, &bucket, total);
+        }
+        let overhead = [family(15)?, family(16)?, family(17)?];
+        if overhead.iter().any(Option::is_some) {
+            let total = overhead
+                .into_iter()
+                .map(SqlNumber::from_family)
+                .fold(SqlNumber::Int(0), SqlNumber::sum);
+            BreakdownMaps::merge(&mut maps.overhead, &bucket, total);
+        }
+        if let Some(value) = family(18)? {
+            BreakdownMaps::merge(&mut maps.between, &bucket, SqlNumber::Float(value));
         }
     }
     Ok(())
@@ -1528,12 +1817,35 @@ fn raw_breakdown(
         BucketKind::Day => format!("date({col}, 'unixepoch')"),
         BucketKind::Month => format!("strftime('%Y-%m', {col}, 'unixepoch')"),
     };
-    let (enc_w, enc_p) = where_epoch("k.timestamp", start, end);
-    let (sg_w, sg_p) = where_epoch("sg.timestamp", start, end);
+    // The same scope filters as `daily_rollup::recompute_day`.
+    let scoped = |(w, p): (String, Vec<f64>), scope: StatsScope, session: &str| {
+        (
+            format!("{w} AND {}", session_scope::counts(scope, session)),
+            p,
+        )
+    };
+    let (enc_w, enc_p) = scoped(
+        where_epoch("k.timestamp", start, end),
+        StatsScope::Economy,
+        "k.session_id",
+    );
+    let (sg_w, sg_p) = scoped(
+        where_epoch("sg.timestamp", start, end),
+        StatsScope::Progression,
+        "sg.session_id",
+    );
     let (cc_w, cc_p) = where_epoch("cc.claimed_at", start, end);
     let (qc_w, qc_p) = where_epoch("qc.claimed_at", start, end);
     let (sess_w, sess_p) = where_epoch("s.started_at", start, end);
-    let (hv_w, hv_p) = where_epoch("h.timestamp", start, end);
+    let sess_w = format!(
+        "{sess_w} AND {}",
+        session_scope::counts_on(StatsScope::Economy, "s")
+    );
+    let (hv_w, hv_p) = scoped(
+        where_epoch("h.timestamp", start, end),
+        StatsScope::Economy,
+        "h.session_id",
+    );
     let (qri_w, qri_p) = where_epoch("c.completed_at", start, end);
 
     let sources: [(
@@ -1541,6 +1853,7 @@ fn raw_breakdown(
         String,
         &Vec<f64>,
     ); 9] = [
+        // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
         (
             &mut maps.loot,
             format!(
@@ -1552,26 +1865,33 @@ fn raw_breakdown(
         (
             &mut maps.weapon,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0) \
+                "SELECT {} as bucket, COALESCE(SUM({}), 0) \
                  FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE {enc_w} GROUP BY bucket",
-                ts_bucket("k.timestamp")
+                ts_bucket("k.timestamp"),
+                session_costs::scaled(
+                    "ts.cost_per_shot * ts.shots_fired",
+                    Bucket::Weapon,
+                    "k.session_id"
+                ),
             ),
             &enc_p,
         ),
+        // every-kill: spend (enhancer spend, every row's).
         (
             &mut maps.enhancer,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(k.enhancer_cost), 0) FROM kills k WHERE {enc_w} GROUP BY bucket",
-                ts_bucket("k.timestamp")
+                "SELECT {} as bucket, COALESCE(SUM({}), 0) FROM kills k WHERE {enc_w} GROUP BY bucket",
+                ts_bucket("k.timestamp"),
+                session_costs::scaled("k.enhancer_cost", Bucket::Enhancer, "k.session_id"),
             ),
             &enc_p,
         ),
         (
             &mut maps.sess,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(s.armour_cost), 0) + COALESCE(SUM(s.heal_cost), 0) \
-                 + COALESCE(SUM(s.dangling_cost), 0) FROM tracking_sessions s WHERE {sess_w} GROUP BY bucket",
-                ts_bucket("s.started_at")
+                "SELECT {} as bucket, {} FROM tracking_sessions s WHERE {sess_w} GROUP BY bucket",
+                ts_bucket("s.started_at"),
+                session_costs::session_total_sql("s"),
             ),
             &sess_p,
         ),
@@ -1602,8 +1922,9 @@ fn raw_breakdown(
         (
             &mut maps.harvest_cost,
             format!(
-                "SELECT {} as bucket, COALESCE(SUM(h.cost_ped), 0) FROM harvest_events h WHERE {hv_w} GROUP BY bucket",
-                ts_bucket("h.timestamp")
+                "SELECT {} as bucket, COALESCE(SUM({}), 0) FROM harvest_events h WHERE {hv_w} GROUP BY bucket",
+                ts_bucket("h.timestamp"),
+                session_costs::scaled("h.cost_ped", Bucket::Harvesting, "h.session_id"),
             ),
             &hv_p,
         ),
@@ -1647,6 +1968,41 @@ fn raw_breakdown(
     for (bucket, value) in wood {
         maps.members.insert(bucket.clone());
         BreakdownMaps::merge(&mut maps.loot, &bucket, value);
+    }
+    // The sessions' overhead lands on their start, beside their own-grain
+    // costs (a second source over the sessions, outside the array).
+    let overhead = bucketed_epoch(
+        conn,
+        format!(
+            "SELECT {} as bucket, COALESCE(SUM({}), 0) FROM tracking_sessions s \
+             WHERE {sess_w} GROUP BY bucket",
+            ts_bucket("s.started_at"),
+            session_costs::overhead_total_sql("s.id"),
+        ),
+        &sess_p,
+    )?;
+    for (bucket, value) in overhead {
+        maps.members.insert(bucket.clone());
+        BreakdownMaps::merge(&mut maps.overhead, &bucket, value);
+    }
+    // What was billed between sessions lands on the day each step ended,
+    // credited to none.
+    let (between_w, between_p) = where_epoch("b.seen_to", start, end);
+    let between = bucketed_epoch(
+        conn,
+        format!(
+            "SELECT {} as bucket, \
+                    SUM(b.travel_ped + b.field_logistics_ped + b.unclassified_ped) \
+             FROM {} b WHERE {between_w} GROUP BY bucket",
+            ts_bucket("b.seen_to"),
+            session_costs::BETWEEN_SESSIONS_STEPS,
+        ),
+        &between_p,
+    )?;
+    for (bucket, value) in between {
+        maps.members.insert(bucket.clone());
+        BreakdownMaps::merge(&mut maps.overhead, &bucket, value);
+        BreakdownMaps::merge(&mut maps.between, &bucket, value);
     }
     Ok(())
 }
@@ -1718,6 +2074,8 @@ fn breakdown_points(
             quest_pes: family(&maps.quest, bucket),
             ledger_gains: gains.get(bucket).cloned().unwrap_or_default(),
             tracking_cost: family(&cost, bucket),
+            overhead_cost: family(&maps.overhead, bucket),
+            between_sessions_cost: family(&maps.between, bucket),
             ledger_losses: losses.get(bucket).cloned().unwrap_or_default(),
         });
     }
@@ -1730,11 +2088,6 @@ fn breakdown_points(
 #[derive(Default)]
 struct SessionAgg {
     duration_hours: f64,
-    armour_cost: f64,
-    heal_cost: f64,
-    dangling_cost: f64,
-    weapon_cost: f64,
-    enhancer_cost: f64,
     weapon_shots: f64,
     kills: i64,
     loot_tt: f64,
@@ -1745,6 +2098,11 @@ struct SessionAgg {
     /// session reads its migrated name here).
     session_name: Option<String>,
     cycled_ped: f64,
+    /// Whether the session's skill gains count (`session_scope`). A
+    /// session excluded from the economy never reaches the slice builders;
+    /// one excluded from progression keeps its economy figures but leaves
+    /// the PES rate's numerator and denominator alike.
+    progression_counts: bool,
 }
 
 async fn load_activity_sessions(db: &Db) -> Result<Vec<SessionAgg>, DbError> {
@@ -1773,8 +2131,7 @@ fn activity_sessions_read(conn: &mut rusqlite::Connection) -> Result<Vec<Session
     // aggregates prepare their own statements on the same connection.
     let divergent: Vec<DivergentSession> = {
         let mut stmt = conn.prepare(
-            "SELECT s.id, s.started_at, s.ended_at, COALESCE(s.armour_cost, 0), \
-             COALESCE(s.heal_cost, 0), COALESCE(s.dangling_cost, 0), s.session_name \
+            "SELECT s.id, s.started_at, s.ended_at, s.session_name \
              FROM tracking_sessions s \
              LEFT JOIN session_summaries ss ON ss.session_id = s.id \
              WHERE s.ended_at IS NOT NULL AND ss.session_id IS NULL",
@@ -1786,17 +2143,32 @@ fn activity_sessions_read(conn: &mut rusqlite::Connection) -> Result<Vec<Session
                 row.get::<_, String>(0)?,
                 row.get::<_, f64>(1).unwrap_or(0.0),
                 row.get::<_, f64>(2).unwrap_or(0.0),
-                as_float(row, 3),
-                as_float(row, 4),
-                as_float(row, 5),
-                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(3)?,
             ));
         }
         out
     };
-    for (id, started, ended, armour, heal, dangling, name) in divergent {
-        let agg = raw_session_agg(conn, &id, started, ended, armour, heal, dangling, name)?;
+    let ids: Vec<&str> = divergent.iter().map(|(id, ..)| id.as_str()).collect();
+    let mut costs = session_costs::resolve_many(conn, &ids)?;
+    for (id, started, ended, name) in divergent {
+        let resolved = costs
+            .remove(&id)
+            .map(|costs| costs.resolved)
+            .unwrap_or_default();
+        let agg = raw_session_agg(conn, &id, started, ended, name, &resolved)?;
         sessions.insert(id, agg);
+    }
+
+    // Stats exclusion: an economy-excluded session leaves Activity whole
+    // (every figure it carries is economy evidence); a progression-excluded
+    // one stays, flagged so the PES rate skips it.
+    for id in session_scope::excluded_ids(conn, StatsScope::Economy)? {
+        sessions.remove(&id);
+    }
+    for id in session_scope::excluded_ids(conn, StatsScope::Progression)? {
+        if let Some(agg) = sessions.get_mut(&id) {
+            agg.progression_counts = false;
+        }
     }
 
     // Activity's own qualifying filter. Order-independent: the slice builders
@@ -1835,6 +2207,7 @@ fn read_summary_activity_aggs(
                 dominant_mob: row.get::<_, Option<String>>(6)?,
                 dominant_mob_kills: row.get::<_, i64>(7).unwrap_or(0),
                 session_name: row.get::<_, Option<String>>(8)?,
+                progression_counts: true,
                 ..SessionAgg::default()
             },
         );
@@ -1843,55 +2216,49 @@ fn read_summary_activity_aggs(
 }
 
 /// One ended session with no summary row, as the reconciliation read
-/// returns it: id, start, end, armour, heal, dangling, and the session
-/// name facet.
-type DivergentSession = (String, f64, f64, f64, f64, f64, Option<String>);
+/// returns it: id, start, end, and the session name facet.
+type DivergentSession = (String, f64, f64, Option<String>);
 
 /// Compute one session's Activity aggregate directly from the raw tables, for
 /// the reconciliation path (an ended session with no summary row). Mirrors the
 /// summary's own per-session computation query for query, so an included
 /// no-gains session carries the same numbers a summary would if it held one.
-#[allow(clippy::too_many_arguments)]
 fn raw_session_agg(
     conn: &rusqlite::Connection,
     session_id: &str,
     started_at: f64,
     ended_at: f64,
-    armour_cost: f64,
-    heal_cost: f64,
-    dangling_cost: f64,
     session_name: Option<String>,
+    costs: &session_costs::BucketCosts,
 ) -> Result<SessionAgg, DbError> {
     let mut agg = SessionAgg {
         duration_hours: (ended_at - started_at).max(0.0) / 3600.0,
-        armour_cost,
-        heal_cost,
-        dangling_cost,
         // Carried from the caller's own read of the session row rather
         // than re-queried per session.
         session_name: session_name.filter(|name| !name.is_empty()),
+        progression_counts: true,
         ..SessionAgg::default()
     };
 
-    let (kills, loot_tt, enhancer_cost) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
+    let (kills, loot_tt) = conn.query_row(
+        // every-kill: spend (loot sums every row; the count takes only the
+        // rows still counted as kills).
+        "SELECT COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
+         COALESCE(SUM(loot_total_ped), 0) \
          FROM kills WHERE session_id = ?",
         rusqlite::params![session_id],
-        |row| Ok((row.get::<_, i64>(0)?, as_float(row, 1), as_float(row, 2))),
+        |row| Ok((row.get::<_, i64>(0)?, as_float(row, 1))),
     )?;
     agg.kills = kills;
     agg.loot_tt = loot_tt;
-    agg.enhancer_cost = enhancer_cost;
 
-    let (weapon_cost, weapon_shots) = conn.query_row(
-        "SELECT COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0), \
-         COALESCE(SUM(ts.shots_fired), 0) FROM kill_tool_stats ts \
+    agg.weapon_shots = conn.query_row(
+        // every-kill: spend (every shot fired).
+        "SELECT COALESCE(SUM(ts.shots_fired), 0) FROM kill_tool_stats ts \
          JOIN kills k ON k.id = ts.kill_id WHERE k.session_id = ?",
         rusqlite::params![session_id],
-        |row| Ok((as_float(row, 0), as_float(row, 1))),
+        |row| Ok(as_float(row, 0)),
     )?;
-    agg.weapon_cost = weapon_cost;
-    agg.weapon_shots = weapon_shots;
 
     agg.skill_tt = conn.query_row(
         "SELECT COALESCE(SUM(ped_value), 0) FROM skill_gains \
@@ -1905,7 +2272,8 @@ fn raw_session_agg(
     let mob_rows: Vec<(String, i64)> = {
         let mut stmt = conn.prepare(
             "SELECT mob_name, COUNT(*) \
-             FROM kills WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
+             FROM counted_kills WHERE session_id = ? AND mob_name IS NOT NULL \
+               AND mob_name != 'Unknown' \
                AND COALESCE(mob_species, '') != '' \
              GROUP BY mob_name ORDER BY COUNT(*) DESC, mob_name ASC",
         )?;
@@ -1925,10 +2293,7 @@ fn raw_session_agg(
         }
     }
 
-    agg.cycled_ped = eo_wire::normalizer::round_half_even(
-        agg.weapon_cost + agg.enhancer_cost + agg.armour_cost + agg.heal_cost + agg.dangling_cost,
-        4,
-    );
+    agg.cycled_ped = eo_wire::normalizer::round_half_even(costs.cycled(), 4);
     Ok(agg)
 }
 
@@ -1963,11 +2328,15 @@ fn build_activity_slice_rows(
         let hours: f64 = matched.iter().map(|s| s.duration_hours).sum();
         let cycled: f64 = matched.iter().map(|s| s.cycled_ped).sum();
         let loot_tt: f64 = matched.iter().map(|s| s.loot_tt).sum();
-        let skill_tt: f64 = matched.iter().map(|s| s.skill_tt).sum();
+        // The PES rate spans both scopes, so it reads only the sessions
+        // whose progression counts (every session here counts economically).
+        let pes_sessions = || matched.iter().filter(|s| s.progression_counts);
+        let skill_tt: f64 = pes_sessions().map(|s| s.skill_tt).sum();
+        let pes_cycled: f64 = pes_sessions().map(|s| s.cycled_ped).sum();
         let hours_r = eo_wire::normalizer::round_half_even(hours, 2);
         let cycled_r = eo_wire::normalizer::round_half_even(cycled, 2);
-        let pes_per_100 = if cycled > 0.0 {
-            eo_wire::normalizer::round_half_even((skill_tt / cycled) * 100.0, 2)
+        let pes_per_100 = if pes_cycled > 0.0 {
+            eo_wire::normalizer::round_half_even((skill_tt / pes_cycled) * 100.0, 2)
         } else {
             0.0
         };
@@ -2029,15 +2398,22 @@ type HarvestTierItemTotals = (String, String, i64, f64);
 /// its principal effect is which tier a swing reaches, which grouping inside
 /// a tier holds constant. Comparing tools belongs with equipment, on cost.
 async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, DbError> {
-    let (raw, composition): (Vec<HarvestTierTotals>, Vec<HarvestTierItemTotals>) = db
+    type TierOverhead = Vec<(Option<String>, f64)>;
+    let (raw, composition, overhead_parts): (
+        Vec<HarvestTierTotals>,
+        Vec<HarvestTierItemTotals>,
+        TierOverhead,
+    ) = db
         .with_reader(move |conn| {
-            let mut stmt = conn.prepare(
+            let economy = session_scope::counts(StatsScope::Economy, "h.session_id");
+            let mut stmt = conn.prepare(&format!(
                 "SELECT yield_tier, COUNT(*), \
-                 COALESCE(SUM(cost_ped), 0), \
+                 COALESCE(SUM({}), 0), \
                  COALESCE(SUM(loot_total_ped), 0) FROM harvest_events h \
-                 WHERE (?1 IS NULL OR h.timestamp >= ?1) \
+                 WHERE (?1 IS NULL OR h.timestamp >= ?1) AND {economy} \
                  GROUP BY yield_tier",
-            )?;
+                session_costs::scaled("h.cost_ped", Bucket::Harvesting, "h.session_id")
+            ))?;
             let raw = stmt
                 .query_map([epoch_start], |row| {
                     Ok((
@@ -2052,15 +2428,15 @@ async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, 
             // Active item composition follows the durable tier. Deactivated
             // rows stay evidence for migration but never enter the accounting
             // totals served here.
-            let mut comp_stmt = conn.prepare(
+            let mut comp_stmt = conn.prepare(&format!(
                 "SELECT h.yield_tier, l.item_name, \
                  SUM(l.quantity), \
                  COALESCE(SUM(l.value_ped), 0) \
                  FROM harvest_loot_items l JOIN harvest_events h ON h.id = l.harvest_id \
                  WHERE (?1 IS NULL OR h.timestamp >= ?1) \
-                   AND l.deactivated_at IS NULL \
-                 GROUP BY h.yield_tier, l.item_name",
-            )?;
+                   AND l.deactivated_at IS NULL AND {economy} \
+                 GROUP BY h.yield_tier, l.item_name"
+            ))?;
             let composition = comp_stmt
                 .query_map([epoch_start], |row| {
                     Ok((
@@ -2071,9 +2447,38 @@ async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, 
                     ))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok((raw, composition))
+            // The overhead of the sessions that swung in the period, shared
+            // to their harvesting.
+            let mut swung = conn.prepare(&format!(
+                "SELECT DISTINCT h.session_id FROM harvest_events h \
+                 WHERE (?1 IS NULL OR h.timestamp >= ?1) AND {economy}"
+            ))?;
+            let swung: std::collections::HashSet<String> = swung
+                .query_map([epoch_start], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let overhead: Vec<(Option<String>, f64)> = realised::overhead_parts(conn)?
+                .into_iter()
+                .filter(|part| part.source_kind == "harvest" && swung.contains(&part.session_id))
+                .map(|part| (part.yield_tier, part.amount))
+                .collect();
+            Ok((raw, composition, overhead))
         })
         .await?;
+    let mut tier_overhead: std::collections::HashMap<HarvestYieldTier, f64> =
+        std::collections::HashMap::new();
+    let mut unassigned_overhead = 0.0;
+    let mut overhead = 0.0;
+    for (tier, amount) in overhead_parts {
+        overhead += amount;
+        match tier {
+            Some(tier) => {
+                *tier_overhead
+                    .entry(HarvestYieldTier::from_db(&tier))
+                    .or_default() += amount
+            }
+            None => unassigned_overhead += amount,
+        }
+    }
 
     let mut items_by_tier: std::collections::HashMap<HarvestYieldTier, Vec<HarvestLootItemRow>> =
         std::collections::HashMap::new();
@@ -2111,12 +2516,23 @@ async fn harvest_impl(db: &Db, epoch_start: Option<f64>) -> Result<HarvestData, 
                 } else {
                     0.0
                 },
+                overhead: eo_wire::normalizer::round_half_even(
+                    tier_overhead.remove(&tier).unwrap_or(0.0),
+                    2,
+                ),
                 loot_items: items_by_tier.remove(&tier).unwrap_or_default(),
             }
         })
         .collect();
     tier_comparisons.sort_by_key(|row| row.yield_tier.sort_rank());
-    Ok(HarvestData { tier_comparisons })
+    // Overhead on a tier the period shows no swing of has no row to sit
+    // on: it is unassigned.
+    unassigned_overhead += tier_overhead.values().sum::<f64>();
+    Ok(HarvestData {
+        tier_comparisons,
+        overhead: eo_wire::normalizer::round_half_even(overhead, 2),
+        unassigned_overhead: eo_wire::normalizer::round_half_even(unassigned_overhead, 2),
+    })
 }
 
 // ── hunting_activity_impl ──
@@ -2144,6 +2560,20 @@ struct HuntingSessionAgg {
     cycled: f64,
     loot_tt: f64,
     pes: f64,
+    /// Whether the session's skill gains count (`session_scope`); when
+    /// they do not, `pes` stays zero and its cycled leaves the PES rate.
+    progression_counts: bool,
+}
+
+impl HuntingSessionAgg {
+    /// The cycled PED this session contributes to a PES rate's denominator.
+    fn pes_cycled(&self) -> f64 {
+        if self.progression_counts {
+            self.cycled
+        } else {
+            0.0
+        }
+    }
 }
 
 /// One activity signature's accumulating totals, keyed by its member set.
@@ -2153,10 +2583,16 @@ struct SignatureAgg {
     cycled: f64,
     loot_tt: f64,
     pes: f64,
+    /// The cycled PED of the contexts whose session's skill gains count:
+    /// the PES rate's denominator, paired with `pes`.
+    pes_cycled: f64,
     duration_hours: f64,
     confirmed_reward_ped: f64,
     realised_reward_markup: f64,
     realised_loot_markup: f64,
+    /// The sessions' overhead shared to these contexts: a cost, never in
+    /// Cycled.
+    overhead: f64,
     reward_kinds: std::collections::BTreeSet<String>,
     reward_items: std::collections::BTreeMap<String, (i64, f64)>,
     loot_items: std::collections::BTreeMap<String, (i64, f64)>,
@@ -2236,13 +2672,20 @@ fn hunting_sessions(
 > {
     // Session facts first, so the grain fold can stamp each session's
     // definition without re-joining per consumer.
-    let mut meta: std::collections::HashMap<String, (Option<i64>, f64, Option<f64>)> =
+    //
+    // This is the one scope gate for the whole Hunting view: a session
+    // excluded from the economy never enters `meta`, so no kill cell,
+    // context, reward, or expected-return fold can reach it; one excluded
+    // from progression stays, its PES cells dropped below.
+    let mut meta: std::collections::HashMap<String, (Option<i64>, f64, Option<f64>, bool)> =
         std::collections::HashMap::new();
     {
-        let mut stmt = conn.prepare(
-            "SELECT id, definition_id, started_at, ended_at FROM tracking_sessions \
-             WHERE (?1 IS NULL OR started_at >= ?1)",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, definition_id, started_at, ended_at, {} FROM tracking_sessions \
+             WHERE (?1 IS NULL OR started_at >= ?1) AND {}",
+            session_scope::counts_on(StatsScope::Progression, "tracking_sessions"),
+            session_scope::counts_on(StatsScope::Economy, "tracking_sessions"),
+        ))?;
         let mut rows = stmt.query(rusqlite::params![epoch_start])?;
         while let Some(row) = rows.next()? {
             meta.insert(
@@ -2251,6 +2694,7 @@ fn hunting_sessions(
                     row.get(1)?,
                     row.get::<_, f64>(2).unwrap_or(0.0),
                     row.get(3)?,
+                    row.get::<_, bool>(4)?,
                 ),
             );
         }
@@ -2283,8 +2727,12 @@ fn hunting_sessions(
             crate::session_rollup::ROLLUP_VERSION
         ])?;
         while let Some(row) = rows.next()? {
+            let session_id: String = row.get(0)?;
+            if !meta.contains_key(&session_id) {
+                continue;
+            }
             grain.push(HuntingKillGrainRow {
-                session_id: row.get(0)?,
+                session_id,
                 context_id: row.get(1)?,
                 mob_species: row.get(2)?,
                 mob_maturity: row.get(3)?,
@@ -2296,14 +2744,22 @@ fn hunting_sessions(
     }
     if !unsettled.is_empty() {
         let mut stmt = conn.prepare(
-            "SELECT k.context_id, \
-                    COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
-                    COUNT(*), \
-                    COALESCE(SUM(k.cost_ped + k.enhancer_cost), 0), \
-                    COALESCE(SUM(k.loot_total_ped), 0) \
-             FROM kills k \
-             WHERE k.session_id = ?1 \
-             GROUP BY 1, 2, 3",
+            // every-kill: spend (cycled and loot sum every row; the count
+            // takes only the rows still counted as kills, and a claimed
+            // reward that spent nothing makes no cell, as the projection's).
+            &format!(
+                "SELECT k.context_id, \
+                        COALESCE(k.mob_species, ''), COALESCE(k.mob_maturity, ''), \
+                        COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END), \
+                        COALESCE(SUM({}), 0), \
+                        COALESCE(SUM(k.loot_total_ped), 0) \
+                 FROM kills k \
+                 WHERE k.session_id = ?1 \
+                 GROUP BY 1, 2, 3 \
+                 HAVING COUNT(CASE WHEN k.reward_claimed_at IS NULL THEN 1 END) > 0 \
+                     OR SUM(k.cost_ped + k.enhancer_cost) > 0",
+                session_costs::kill_cycled_sql("k")
+            ),
         )?;
         for session_id in &unsettled {
             let mut rows = stmt.query(rusqlite::params![session_id])?;
@@ -2324,7 +2780,9 @@ fn hunting_sessions(
     let mut sessions: std::collections::HashMap<String, HuntingSessionAgg> =
         std::collections::HashMap::new();
     for cell in &grain {
-        let Some((definition_id, started_at, ended_at)) = meta.get(&cell.session_id) else {
+        let Some((definition_id, started_at, ended_at, progression_counts)) =
+            meta.get(&cell.session_id)
+        else {
             continue;
         };
         let agg = sessions
@@ -2333,6 +2791,7 @@ fn hunting_sessions(
                 definition_id: *definition_id,
                 started_at: *started_at,
                 ended_at: *ended_at,
+                progression_counts: *progression_counts,
                 ..HuntingSessionAgg::default()
             });
         agg.kills += cell.kills;
@@ -2396,6 +2855,12 @@ fn hunting_sessions(
             }
         }
     }
+    // A session excluded from progression contributes no PES cell at all,
+    // so every downstream fold (definition, signature, ambient) agrees.
+    pes_grain.retain(|cell| {
+        meta.get(&cell.session_id)
+            .is_none_or(|(_, _, _, progression_counts)| *progression_counts)
+    });
     for cell in &pes_grain {
         if let Some(agg) = sessions.get_mut(&cell.session_id) {
             agg.pes += cell.pes;
@@ -2584,12 +3049,25 @@ fn hunting_activity_read(
         }
     };
 
+    // The sessions' overhead shared to their hunting, by session: over
+    // exactly the sessions the figures below cover.
+    let overhead_parts = realised::overhead_parts(conn)?;
+    let mut session_overhead: HashMap<String, f64> = HashMap::new();
+    for part in overhead_parts
+        .iter()
+        .filter(|part| part.source_kind == "hunt" && sessions.contains_key(&part.session_id))
+    {
+        *session_overhead.entry(part.session_id.clone()).or_default() += part.amount;
+    }
+    let overhead_of = |id: &String| session_overhead.get(id).copied().unwrap_or(0.0);
+
     // ── Overall ──
     let overall = {
         let kills: i64 = sessions.values().map(|s| s.kills).sum();
         let cycled: f64 = sessions.values().map(|s| s.cycled).sum();
         let loot_tt: f64 = sessions.values().map(|s| s.loot_tt).sum();
         let pes: f64 = sessions.values().map(|s| s.pes).sum();
+        let pes_cycled: f64 = sessions.values().map(HuntingSessionAgg::pes_cycled).sum();
         let duration: f64 = sessions.values().map(|s| s.duration_hours).sum();
         HuntingOverall {
             sessions: sessions.len() as i64,
@@ -2599,8 +3077,9 @@ fn hunting_activity_read(
             returns: round2(loot_tt),
             loot_rate: rate(loot_tt, cycled),
             pes: round4(pes),
-            pes_per100_ped: pes_per100(pes, cycled),
+            pes_per100_ped: pes_per100(pes, pes_cycled),
             expected: overall_expected,
+            overhead: round2(sessions.keys().map(overhead_of).sum()),
         }
     };
 
@@ -2727,6 +3206,11 @@ fn hunting_activity_read(
         let Some(agg) = sessions.get(&session_id) else {
             continue;
         };
+        // The species PES columns are progression evidence: a session whose
+        // skill gains are excluded is not a PES session.
+        if !agg.progression_counts {
+            continue;
+        }
         counts.retain(|(species, _)| !species.is_empty());
         let total: i64 = counts.iter().map(|(_, kills)| kills).sum();
         if total == 0 {
@@ -2955,6 +3439,7 @@ fn hunting_activity_read(
     }
     if !unsettled.is_empty() {
         let mut stmt = conn.prepare(
+            // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
             "SELECT k.context_id, li.item_name, SUM(li.quantity), \
                     COALESCE(SUM(li.value_ped), 0) \
              FROM kill_loot_items li \
@@ -3077,45 +3562,27 @@ fn hunting_activity_read(
     // basis so a zero-TT reward voucher remains attributable.
     let mut context_realised_reward_markup: HashMap<i64, f64> = HashMap::new();
     let mut context_realised_loot_markup: HashMap<i64, f64> = HashMap::new();
-    for realised in realised_stock_outcomes(conn)? {
-        if realised.outcome.activity_net_markup.abs() <= STOCK_EPSILON {
+    for credit in realised::realised_contributions(conn)? {
+        let Some(context_id) = credit.activity_context_id else {
             continue;
-        }
-        let contributions: Vec<(String, Option<i64>, f64)> = {
-            let mut stmt = conn.prepare(
-                "SELECT source_kind, activity_context_id, SUM(-quantity) \
-                 FROM stock_movements WHERE ref_id = ? AND movement_kind = ? \
-                   AND source_kind IN ('hunt', 'harvest', 'quest') \
-                 GROUP BY source_kind, activity_context_id",
-            )?;
-            let mapped = stmt.query_map(
-                rusqlite::params![realised.id, realised.movement_kind],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-            mapped.collect::<rusqlite::Result<Vec<_>>>()?
         };
-        let attributed_quantity: f64 = contributions.iter().map(|(_, _, qty)| qty).sum();
-        if attributed_quantity <= STOCK_EPSILON {
-            continue;
-        }
-        for (source_kind, context_id, quantity) in contributions {
-            let Some(context_id) = context_id else {
-                continue;
-            };
-            let attributed_markup =
-                realised.outcome.activity_net_markup * quantity / attributed_quantity;
-            match source_kind.as_str() {
-                "hunt" => {
-                    *context_realised_loot_markup.entry(context_id).or_default() +=
-                        attributed_markup;
-                }
-                "quest" => {
-                    *context_realised_reward_markup
-                        .entry(context_id)
-                        .or_default() += attributed_markup;
-                }
-                _ => {}
+        match credit.source_kind.as_str() {
+            "hunt" => {
+                *context_realised_loot_markup.entry(context_id).or_default() += credit.amount;
             }
+            "quest" => {
+                *context_realised_reward_markup
+                    .entry(context_id)
+                    .or_default() += credit.amount;
+            }
+            _ => {}
+        }
+    }
+    // The sessions' overhead, shared to each context by what it cycled.
+    let mut context_overhead: HashMap<i64, f64> = HashMap::new();
+    for part in &overhead_parts {
+        if let (Some(context_id), "hunt") = (part.activity_context_id, part.source_kind) {
+            *context_overhead.entry(context_id).or_default() += part.amount;
         }
     }
 
@@ -3168,6 +3635,9 @@ fn hunting_activity_read(
                 agg.kills += kills;
                 agg.cycled += cycled;
                 agg.loot_tt += loot;
+                if session.progression_counts {
+                    agg.pes_cycled += cycled;
+                }
             }
             if let Some(pes) = context_pes.get(context_id) {
                 agg.pes += pes;
@@ -3184,6 +3654,7 @@ fn hunting_activity_read(
                 .get(context_id)
                 .copied()
                 .unwrap_or(0.0);
+            agg.overhead += context_overhead.get(context_id).copied().unwrap_or(0.0);
             if let Some(items) = context_reward_items.get(context_id) {
                 for (name, (quantity, value)) in items {
                     let item = agg.reward_items.entry(name.clone()).or_insert((0, 0.0));
@@ -3227,6 +3698,9 @@ fn hunting_activity_read(
             ambient.kills += kills;
             ambient.cycled += cycled;
             ambient.loot_tt += loot;
+            if agg.progression_counts {
+                ambient.pes_cycled += cycled;
+            }
         }
         if let Some(pes) = pes {
             ambient.pes += pes;
@@ -3266,6 +3740,7 @@ fn hunting_activity_read(
             let cycled: f64 = group.iter().map(|(_, s)| s.cycled).sum();
             let loot_tt: f64 = group.iter().map(|(_, s)| s.loot_tt).sum();
             let pes: f64 = group.iter().map(|(_, s)| s.pes).sum();
+            let pes_cycled: f64 = group.iter().map(|(_, s)| s.pes_cycled()).sum();
             let duration: f64 = group.iter().map(|(_, s)| s.duration_hours).sum();
 
             let mut instance_rows: Vec<HuntingInstanceRow> = group
@@ -3336,8 +3811,9 @@ fn hunting_activity_read(
                 returns: round2(loot_tt),
                 loot_rate: rate(loot_tt, cycled),
                 pes: round4(pes),
-                pes_per100_ped: pes_per100(pes, cycled),
+                pes_per100_ped: pes_per100(pes, pes_cycled),
                 expected: definition_expected.remove(&definition_id),
+                overhead: round2(group.iter().map(|(id, _)| overhead_of(id)).sum()),
                 activities,
                 mobs,
                 instance_rows,
@@ -3435,8 +3911,8 @@ fn assemble_signatures(
             cycled: round2(agg.cycled),
             returns: round2(agg.loot_tt),
             pes: round4(agg.pes),
-            pes_per100_ped: if agg.cycled > 0.0 {
-                round2((agg.pes / agg.cycled) * 100.0)
+            pes_per100_ped: if agg.pes_cycled > 0.0 {
+                round2((agg.pes / agg.pes_cycled) * 100.0)
             } else {
                 0.0
             },
@@ -3444,6 +3920,7 @@ fn assemble_signatures(
             confirmed_reward_ped: round2(agg.confirmed_reward_ped),
             realised_reward_markup: round2(agg.realised_reward_markup),
             realised_loot_markup: round2(agg.realised_loot_markup),
+            overhead: round2(agg.overhead),
             reward_items: loot_rows(&agg.reward_items),
             reward_status: status,
             loot_items: loot_rows(&agg.loot_items),
@@ -3572,6 +4049,7 @@ fn assemble_signatures(
             confirmed_reward_ped: round2(variants.iter().map(|v| v.confirmed_reward_ped).sum()),
             realised_reward_markup: round2(variants.iter().map(|v| v.realised_reward_markup).sum()),
             realised_loot_markup: round2(variants.iter().map(|v| v.realised_loot_markup).sum()),
+            overhead: round2(variants.iter().map(|v| v.overhead).sum()),
             reward_items: loot_rows(&family_reward_items),
             reward_status: family_reward_status,
             loot_items: loot_rows(&family_items),
@@ -3695,6 +4173,7 @@ fn ledger_item(row: &rusqlite::Row) -> LedgerRow {
         description: row.get_unwrap::<_, String>(3),
         amount: row.get_unwrap::<_, f64>(4),
         tag: row.get_unwrap::<_, String>(5),
+        session_name: row.get_unwrap::<_, Option<String>>(6),
     }
 }
 
@@ -3737,6 +4216,11 @@ fn inventory_item(row: &rusqlite::Row) -> InventoryRow {
         markup_paid: row.get_unwrap::<_, f64>(3),
         notes: row.get_unwrap::<_, Option<String>>(4),
         acquired_at: row.get_unwrap::<_, String>(5),
+        quantity: row.get_unwrap::<_, f64>(6),
+        divisible: true,
+        purchases: Vec::new(),
+        origins: Vec::new(),
+        derived_from: Vec::new(),
     }
 }
 
@@ -3764,6 +4248,249 @@ const LISTING_COLUMNS: &str = "id, item_name, quantity, attributed_qty, unattrib
 fn listing_expiry(listed_instant: Option<f64>, auction_days: Option<i64>) -> Option<String> {
     let (instant, days) = (listed_instant?, auction_days?);
     Some(to_iso_utc(instant + (days as f64) * 86_400.0))
+}
+
+/// The fields of an asset a patch changes; `None` leaves one as it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct InventoryItemPatch<'a> {
+    pub name: Option<&'a str>,
+    pub quantity: Option<f64>,
+    pub tt_value: Option<f64>,
+    pub markup_paid: Option<f64>,
+    pub notes: Option<&'a str>,
+}
+
+/// What a listing is posted on: its prices, its fee, when and for how
+/// long, and where each figure came from.
+#[derive(Debug, Clone, Copy)]
+pub struct ListingTerms<'a> {
+    pub starting_bid: f64,
+    pub buyout: Option<f64>,
+    pub listing_fee: f64,
+    /// A full local timestamp or a bare date; `None` means now.
+    pub listed_at: Option<&'a str>,
+    pub auction_days: Option<i64>,
+    /// Where each figure came from, for a listing drafted from a read of
+    /// the game's sell window; empty for one entered by hand.
+    pub sources: &'a [ListingFieldSource],
+}
+
+/// A figure of a listing whose source is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListingField {
+    ItemName,
+    /// The queued stack's TT value as the window printed it.
+    TtValue,
+    Quantity,
+    StartingBid,
+    Buyout,
+    ListingFee,
+    AuctionDays,
+}
+
+impl ListingField {
+    fn as_str(self) -> &'static str {
+        match self {
+            ListingField::ItemName => "item_name",
+            ListingField::TtValue => "tt_value",
+            ListingField::Quantity => "quantity",
+            ListingField::StartingBid => "starting_bid",
+            ListingField::Buyout => "buyout",
+            ListingField::ListingFee => "listing_fee",
+            ListingField::AuctionDays => "auction_days",
+        }
+    }
+}
+
+/// Whether a figure read off the window was checked by another figure the
+/// window prints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadAssurance {
+    /// The window's own figures fix it: a misread digit would have been
+    /// caught.
+    Checked,
+    /// Nothing on screen fully confirms it: only bounds held it, or nothing
+    /// did, or (for a name) the application's item data does not name it.
+    Unchecked,
+}
+
+/// Where a listing figure came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldSource {
+    /// Read off the game's sell window and kept as read: its text exactly
+    /// as the window printed it, and whether the window's other figures
+    /// checked it. The text is `None` only for a buyout the window showed
+    /// switched off, kept as no buyout.
+    Read {
+        text: Option<String>,
+        assurance: ReadAssurance,
+    },
+    /// The name read, which the application matched to a holding recorded
+    /// under another name: the text is the name as the window printed it.
+    Matched { text: String },
+    /// Typed, or changed from what was read, by the player.
+    Typed,
+}
+
+impl FieldSource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            FieldSource::Read {
+                assurance: ReadAssurance::Checked,
+                ..
+            } => "read_checked",
+            FieldSource::Read {
+                assurance: ReadAssurance::Unchecked,
+                ..
+            } => "read_unchecked",
+            FieldSource::Matched { .. } => "matched",
+            FieldSource::Typed => "typed",
+        }
+    }
+
+    fn text(&self) -> Option<&str> {
+        match self {
+            FieldSource::Read { text, .. } => text.as_deref(),
+            FieldSource::Matched { text } => Some(text),
+            FieldSource::Typed => None,
+        }
+    }
+}
+
+/// One figure's source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingFieldSource {
+    pub field: ListingField,
+    pub source: FieldSource,
+}
+
+/// The figures a listing records, which a read figure's text must be.
+struct RecordedFigures {
+    quantity: f64,
+    starting_bid: f64,
+    buyout: Option<f64>,
+    listing_fee: f64,
+    auction_days: Option<i64>,
+}
+
+/// A figure as the window prints it, as a number: digits with an optional
+/// fraction, and commas between thousands.
+fn printed_number(text: &str) -> Option<f64> {
+    let digits = text.replace(',', "");
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    digits.parse().ok().filter(|value: &f64| value.is_finite())
+}
+
+/// Refuse sources that cannot be true of the figures recorded: a figure
+/// named twice; a TT value typed, which the listing would not keep; a read
+/// without its text, unless it is a buyout switched off and recorded as
+/// none; an empty text; a read number that is not the number recorded; a
+/// match for anything but the name. The name's sources
+/// are checked by [`check_name_sources`], once the name is known.
+fn check_sources(
+    sources: &[ListingFieldSource],
+    figures: &RecordedFigures,
+) -> Result<(), AnalyticsError> {
+    let refuse = |message| Err(AnalyticsError::InvalidInput(message));
+    for (index, entry) in sources.iter().enumerate() {
+        if sources[..index]
+            .iter()
+            .any(|other| other.field == entry.field)
+        {
+            return refuse("a listing figure's source is given twice");
+        }
+        if matches!(entry.source, FieldSource::Matched { .. })
+            && entry.field != ListingField::ItemName
+        {
+            return refuse("only the item's name can be matched to a holding");
+        }
+        let text = match &entry.source {
+            // The listing keeps no TT value from the form, so a typed one
+            // would record nothing.
+            FieldSource::Typed if entry.field == ListingField::TtValue => {
+                return refuse("a TT value is recorded only as read");
+            }
+            FieldSource::Typed => continue,
+            FieldSource::Read { text: None, .. } => {
+                if entry.field == ListingField::Buyout && figures.buyout.is_none() {
+                    continue;
+                }
+                return refuse("only a buyout switched off is read without its text");
+            }
+            FieldSource::Read {
+                text: Some(text), ..
+            }
+            | FieldSource::Matched { text } => text,
+        };
+        if text.trim().is_empty() {
+            return refuse("a figure read off the screen keeps its text");
+        }
+        let recorded = match entry.field {
+            ListingField::ItemName => continue,
+            ListingField::TtValue => None,
+            ListingField::Quantity => Some(figures.quantity),
+            ListingField::StartingBid => Some(figures.starting_bid),
+            ListingField::ListingFee => Some(figures.listing_fee),
+            ListingField::Buyout => match figures.buyout {
+                Some(buyout) => Some(buyout),
+                None => return refuse("a read figure's text is not the figure recorded"),
+            },
+            ListingField::AuctionDays => match figures.auction_days {
+                Some(days) => Some(days as f64),
+                None => return refuse("a read figure's text is not the figure recorded"),
+            },
+        };
+        match (printed_number(text), recorded) {
+            (Some(_), None) => {}
+            (Some(read), Some(recorded)) if (read - recorded).abs() < 1e-9 => {}
+            _ => return refuse("a read figure's text is not the figure recorded"),
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a name's source that cannot be true of the name recorded: a name
+/// read and kept is the name recorded, and a name matched to a holding is
+/// recorded under that holding's other name.
+fn check_name_sources(sources: &[ListingFieldSource], name: &str) -> Result<(), &'static str> {
+    for entry in sources.iter().filter(|e| e.field == ListingField::ItemName) {
+        match &entry.source {
+            FieldSource::Read {
+                text: Some(text), ..
+            } if text.trim() != name.trim() => {
+                return Err("a name read and kept is the name recorded");
+            }
+            FieldSource::Matched { text } if text.trim() == name.trim() => {
+                return Err("a name matched to a holding is recorded under the holding's name");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Record where each figure of listing `listing_id` came from, the sources
+/// having passed [`check_sources`] and [`check_name_sources`].
+fn insert_field_sources(
+    tx: &rusqlite::Transaction<'_>,
+    listing_id: &str,
+    sources: &[ListingFieldSource],
+) -> rusqlite::Result<()> {
+    for entry in sources {
+        tx.execute(
+            "INSERT INTO auction_listing_field_sources (listing_id, field, source, read_text) \
+             VALUES (?, ?, ?, ?)",
+            rusqlite::params![
+                listing_id,
+                entry.field.as_str(),
+                entry.source.as_str(),
+                entry.source.text()
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 /// Split a caller's listing moment into the calendar date the ledger is keyed
@@ -3806,11 +4533,13 @@ fn listing_from_row(row: &rusqlite::Row) -> AuctionListingRow {
     let expires_at = listing_expiry(row.get_unwrap::<_, Option<f64>>(20), auction_days);
     let sold = status == "sold";
 
-    let loot_outcome = (sold && subject_kind == "loot").then(|| {
+    let attributed_qty = row.get_unwrap::<_, f64>(3);
+    let loot_outcome = (sold && (subject_kind == "loot" || attributed_qty > 0.0)).then(|| {
         stock_allocation::resolve_sale(
             row.get_unwrap::<_, f64>(2),
-            row.get_unwrap::<_, f64>(3),
+            attributed_qty,
             tt_value,
+            cost_basis.map_or(0.0, |basis| basis - tt_value),
             final_price.unwrap_or(0.0),
             listing_fee,
             sale_fee.unwrap_or(0.0),
@@ -3849,7 +4578,165 @@ fn listing_from_row(row: &rusqlite::Row) -> AuctionListingRow {
         } else {
             None
         },
+        from_account: None,
     }
+}
+
+/// Confirm a pending listing sold, inside the caller's transaction: the
+/// listing's status, the markup and the point-of-sale fee in the ledger,
+/// and the day's rollup. `None` (nothing written) when the listing does not
+/// stand or is not pending.
+pub(crate) fn confirm_listing_within(
+    tx: &rusqlite::Transaction<'_>,
+    listing_id: &str,
+    final_price: f64,
+    sale_fee: f64,
+    resolved_at: &str,
+) -> Result<Option<AuctionListingRow>, DbError> {
+    let Some(listing) = read_listing(tx, listing_id)? else {
+        return Ok(None);
+    };
+    if listing.status != "pending" {
+        return Ok(None);
+    }
+
+    let gross_result = if listing.subject_kind == "equipment" {
+        final_price - listing.cost_basis.unwrap_or(listing.tt_value)
+    } else {
+        stock_allocation::resolve_sale(
+            listing.quantity,
+            listing.attributed_qty,
+            listing.tt_value,
+            listing
+                .cost_basis
+                .map_or(0.0, |basis| basis - listing.tt_value),
+            final_price,
+            listing.listing_fee,
+            sale_fee,
+        )
+        .gross_markup
+    };
+
+    tx.execute(
+        "UPDATE auction_listings SET status = 'sold', final_price = ?, \
+                 sale_fee = ?, resolved_at = ? WHERE id = ?",
+        rusqlite::params![final_price, sale_fee, resolved_at, listing_id],
+    )?;
+
+    // Markup only. Selling at TT converts a position rather than
+    // creating income, for untracked stock as much as for tracked:
+    // the player held that value either way, and the app simply
+    // has no record of where the untracked part came from.
+    if gross_result.abs() > STOCK_EPSILON {
+        let entry_id = Uuid::new_v4().to_string();
+        let kind = if gross_result > 0.0 {
+            "markup"
+        } else {
+            "expense"
+        };
+        let tag = if listing.subject_kind == "equipment" {
+            INVENTORY_SALE_TAG
+        } else {
+            "market"
+        };
+        tx.execute(
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            rusqlite::params![
+                entry_id,
+                resolved_at,
+                kind,
+                format!("Auction Sale: {}", listing.item_name),
+                gross_result.abs(),
+                tag,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE auction_listings SET sale_entry_id = ? WHERE id = ?",
+            rusqlite::params![entry_id, listing_id],
+        )?;
+    }
+
+    if sale_fee > 0.0 {
+        let entry_id = Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+                 VALUES (?, ?, 'expense', ?, ?, 'market')",
+            rusqlite::params![
+                entry_id,
+                resolved_at,
+                format!("Auction Fee: {}", listing.item_name),
+                sale_fee,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE auction_listings SET sale_fee_entry_id = ? WHERE id = ?",
+            rusqlite::params![entry_id, listing_id],
+        )?;
+    }
+
+    if listing.subject_kind == "equipment" {
+        if let Some(item_id) = &listing.inventory_item_id {
+            tx.execute(
+                "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
+                         updated_at = unixepoch('now') WHERE id = ?",
+                rusqlite::params![resolved_at, item_id],
+            )?;
+        }
+    }
+
+    daily_rollup::refresh_days(tx, [resolved_at])?;
+    Ok(read_listing(tx, listing_id)?)
+}
+
+/// Mark a pending listing expired inside the caller's transaction: its
+/// stock comes back exactly as it left, the fee stays spent. `None`
+/// (nothing written) when the listing does not stand or is not pending.
+pub(crate) fn expire_listing_within(
+    tx: &rusqlite::Transaction<'_>,
+    listing_id: &str,
+    resolved_at: &str,
+    now: f64,
+) -> Result<Option<AuctionListingRow>, DbError> {
+    let Some(listing) = read_listing(tx, listing_id)? else {
+        return Ok(None);
+    };
+    if listing.status != "pending" {
+        return Ok(None);
+    }
+
+    if listing.subject_kind == "equipment" {
+        if let Some(item_id) = &listing.inventory_item_id {
+            asset_positions::restore(tx, item_id, now)?;
+        }
+    } else {
+        // Each original movement goes back in reverse, carrying
+        // whatever its stock was carrying: an expiry returns the
+        // units exactly as they left.
+        for row in conversion::movement_rows(tx, listing_id, "listing")? {
+            insert_movement(
+                tx,
+                &listing.item_name,
+                "listing_return",
+                Some(listing_id),
+                row.provenance(),
+                row.session_definition_id,
+                row.activity_context_id,
+                row.tool_name.as_deref(),
+                -row.quantity,
+                -row.tt_value,
+                resolved_at,
+                now,
+                row.derived().outflow(),
+            )?;
+        }
+    }
+
+    tx.execute(
+        "UPDATE auction_listings SET status = 'expired', resolved_at = ? WHERE id = ?",
+        rusqlite::params![resolved_at, listing_id],
+    )?;
+    Ok(read_listing(tx, listing_id)?)
 }
 
 /// Read one listing by id, or `None` when it does not exist.
@@ -3885,6 +4772,7 @@ fn insert_movement(
     tt_value: f64,
     occurred_at: &str,
     created_at: f64,
+    derived: stock_allocation::DerivedFacts<'_>,
 ) -> rusqlite::Result<()> {
     use stock_allocation::StockProvenance;
     // A movement with no provenance is stock whose origin is genuinely
@@ -3924,8 +4812,9 @@ fn insert_movement(
              item_name, movement_kind, ref_id, source_kind, source_event_id, \
              yield_tier, mob_species, session_definition_id, quantity, tt_value, occurred_at, \
              created_at, tool_name, quest_reward_item_id, quest_run_id, quest_id, \
-             activity_context_id) \
-         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             activity_context_id, paid_markup, declared_markup, source_line_id, origin_item, \
+             origin_quantity, inventory_item_id) \
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             item_name,
             movement_kind,
@@ -3943,6 +4832,12 @@ fn insert_movement(
             quest_run_id,
             quest_id,
             activity_context_id,
+            derived.paid_markup,
+            derived.declared_markup,
+            derived.source_line_id,
+            derived.origin_item,
+            derived.origin_quantity,
+            derived.inventory_item_id,
         ],
     )?;
     Ok(())
@@ -3989,6 +4884,7 @@ fn record_opening_balance(
         plan.excess_tt,
         occurred_at,
         created_at,
+        stock_allocation::DerivedFacts::default(),
     )
 }
 
@@ -4007,53 +4903,358 @@ fn produced_unit_tt(item_name: &str) -> Option<f64> {
     }
 }
 
-struct RealisedStockOutcome {
-    id: String,
-    movement_kind: String,
-    outcome: stock_allocation::SaleOutcome,
+/// A conversion at a fixed TT ratio: held stock in, one item out, or PED
+/// for Universal Ammo, which is liquid and never stock. Recycling into
+/// Nanocubes is 1:1; Shrapnel into Universal Ammo is 100:101.
+struct RatioConversion<'a> {
+    /// What went in: each item and the quantity of it.
+    inputs: &'a [(String, f64)],
+    target: &'a str,
+    value_ratio: f64,
 }
 
-/// Every stock outcome that has crossed a recognition boundary. Auction
-/// sales, private trades, and Shrapnel conversion differ operationally, but
-/// their activity attribution is the same calculation over the immutable
-/// source movements that funded them.
-fn realised_stock_outcomes(
-    conn: &rusqlite::Connection,
-) -> rusqlite::Result<Vec<RealisedStockOutcome>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, 'listing', quantity, attributed_qty, tt_value, COALESCE(final_price, 0), \
-                listing_fee, COALESCE(sale_fee, 0) \
-         FROM auction_listings \
-         WHERE status = 'sold' AND undone_at IS NULL AND subject_kind = 'loot' \
-         UNION ALL \
-         SELECT id, 'trade', quantity, attributed_qty, tt_value, final_price, 0, 0 \
-         FROM private_sales WHERE undone_at IS NULL \
-         UNION ALL \
-         SELECT id, 'conversion_out', quantity, \
-                CASE WHEN tt_value > 0 \
-                     THEN quantity * COALESCE(attributed_tt, tt_value) / tt_value \
-                     ELSE 0 END, \
-                tt_value, COALESCE(output_tt_value, tt_value), 0, 0 \
-         FROM stock_conversions \
-         WHERE undone_at IS NULL AND gain_entry_id IS NOT NULL",
-    )?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(RealisedStockOutcome {
-                id: row.get(0)?,
-                movement_kind: row.get(1)?,
-                outcome: stock_allocation::resolve_sale(
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                    row.get(7)?,
-                ),
+/// Record a conversion at a fixed ratio inside the caller's transaction,
+/// as [`conversion::write_conversion`] records any other. A refusal in terms
+/// of the state found comes back as the inner `Err`.
+fn write_ratio_conversion(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    profession: Profession,
+    conversion: &RatioConversion<'_>,
+    converted_at: &str,
+    now: f64,
+) -> Result<Result<(), String>, DbError> {
+    let mut converted_tt = 0.0_f64;
+    for (item, quantity) in conversion.inputs {
+        let (_, unit_tt) = item_positions(tx, item)?;
+        converted_tt += quantity * unit_tt;
+    }
+    // What the produced item is worth per unit, so the conversion records a
+    // count rather than a value wearing a count's label. Falling back to the
+    // target's own recorded loot covers a future target this table has not
+    // learned yet. No conversion the app offers reaches the last fallback;
+    // if one ever does, the count carries the source's PED magnitude rather
+    // than a scale nothing supports.
+    let (_, target_loot_unit_tt) = item_positions(tx, conversion.target)?;
+    let target_unit_tt = produced_unit_tt(conversion.target)
+        .or_else(|| (target_loot_unit_tt > STOCK_EPSILON).then_some(target_loot_unit_tt))
+        .unwrap_or(1.0);
+    let gain =
+        eo_wire::normalizer::round_half_even(converted_tt * (conversion.value_ratio - 1.0), 4);
+    let output_tt = converted_tt + gain;
+
+    // Universal Ammo is liquid value and never becomes stock, so converting
+    // into it is an outcome in PED. Anything else is a single stock output.
+    let (outputs, ped_amount) = if is_universal_ammo(conversion.target) {
+        (Vec::new(), Some(output_tt))
+    } else if output_tt > STOCK_EPSILON {
+        (
+            vec![ConversionOutput {
+                item_name: conversion.target.to_string(),
+                quantity: output_tt / target_unit_tt,
+                tt_value: output_tt,
+                holding: ConversionHolding::Loot,
+            }],
+            None,
+        )
+    } else {
+        (Vec::new(), None)
+    };
+    let request = ItemConversion {
+        inputs: conversion
+            .inputs
+            .iter()
+            .map(|(item_name, quantity)| ConversionInput::Held {
+                item_name: item_name.clone(),
+                quantity: *quantity,
+                worth: None,
             })
-        })?
-        .collect();
-    rows
+            .collect(),
+        outputs,
+        ped_amount,
+        converted_at: Some(converted_at.to_string()),
+    };
+    let terms = conversion::ConversionTerms {
+        itemised: false,
+        target_label: Some(conversion.target.to_string()),
+        gain_description: "Shrapnel Conversion".to_string(),
+    };
+    conversion::write_conversion(tx, id, profession, &request, converted_at, now, &terms)
+}
+
+/// A sale of held stock with no listing: to another player at the price
+/// agreed, or to the Trade Terminal at its TT.
+struct PrivateSale<'a> {
+    id: &'a str,
+    profession: Profession,
+    item: &'a str,
+    quantity: f64,
+    /// What it sold for; `None` for its TT, which is what the Trade
+    /// Terminal pays.
+    price: Option<f64>,
+    sold_at: &'a str,
+}
+
+/// Record a private sale inside the caller's transaction: the stock leaves
+/// by the weighted allocation, and what it fetched above or below its TT and
+/// any markup paid for it is realised on the day.
+fn write_private_sale(
+    tx: &rusqlite::Transaction<'_>,
+    sale: &PrivateSale<'_>,
+    now: f64,
+) -> Result<(), DbError> {
+    let PrivateSale {
+        id,
+        profession,
+        item,
+        quantity,
+        price,
+        sold_at,
+    } = *sale;
+    let (positions, unit_tt) = item_positions(tx, item)?;
+    let plan = stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
+    let tt_value = quantity * unit_tt;
+    let final_price = price.unwrap_or(tt_value);
+    tx.execute(
+        "INSERT INTO private_sales (id, item_name, profession, quantity, \
+             attributed_qty, unattributed_qty, tt_value, attributed_tt, final_price, \
+             sold_at, created_at, paid_markup) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rusqlite::params![
+            id,
+            item,
+            profession.as_str(),
+            quantity,
+            plan.attributed_qty,
+            plan.unattributed_qty,
+            tt_value,
+            plan.attributed_tt,
+            final_price,
+            sold_at,
+            now,
+            plan.paid_markup,
+        ],
+    )?;
+    record_opening_balance(tx, item, id, &plan, sold_at, now)?;
+    for allocation in &plan.allocations {
+        insert_movement(
+            tx,
+            item,
+            "trade",
+            Some(id),
+            allocation.provenance,
+            allocation.session_definition_id,
+            allocation.activity_context_id,
+            allocation.tool_name,
+            -allocation.quantity,
+            -allocation.tt_value,
+            sold_at,
+            now,
+            allocation.derived.outflow(),
+        )?;
+    }
+    let markup = final_price - tt_value - plan.paid_markup;
+    if markup.abs() > STOCK_EPSILON {
+        let entry_id = Uuid::new_v4().to_string();
+        let kind = if markup > 0.0 { "markup" } else { "expense" };
+        tx.execute(
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+             VALUES (?, ?, ?, ?, ?, 'market')",
+            rusqlite::params![
+                entry_id,
+                sold_at,
+                kind,
+                format!("Private Sale: {item}"),
+                markup.abs(),
+            ],
+        )?;
+        tx.execute(
+            "UPDATE private_sales SET sale_entry_id = ? WHERE id = ?",
+            rusqlite::params![entry_id, id],
+        )?;
+    }
+    daily_rollup::refresh_days(tx, [sold_at])?;
+    Ok(())
+}
+
+/// A removal of held stock whose ultimate outcome is unknown.
+struct StockRemoval<'a> {
+    id: &'a str,
+    profession: Profession,
+    item: &'a str,
+    quantity: f64,
+    removed_at: &'a str,
+}
+
+/// Record a removal inside the caller's transaction: the stock leaves the
+/// open positions by the weighted allocation, and no ledger row is written.
+/// A removal beyond what the app holds is refused, as the inner `Err`.
+fn write_removal(
+    tx: &rusqlite::Transaction<'_>,
+    removal: &StockRemoval<'_>,
+    now: f64,
+) -> Result<Result<(), String>, DbError> {
+    let StockRemoval {
+        id,
+        profession,
+        item,
+        quantity,
+        removed_at,
+    } = *removal;
+    let (positions, unit_tt) = item_positions(tx, item)?;
+    let plan = stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
+    if plan.excess_qty > STOCK_EPSILON {
+        return Ok(Err(
+            "you cannot remove more than the current stock".to_string()
+        ));
+    }
+    tx.execute(
+        "INSERT INTO stock_removals \
+             (id, item_name, profession, quantity, tt_value, removed_at, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rusqlite::params![
+            id,
+            item,
+            profession.as_str(),
+            quantity,
+            quantity * unit_tt,
+            removed_at,
+            now,
+        ],
+    )?;
+    for allocation in &plan.allocations {
+        insert_movement(
+            tx,
+            item,
+            "removal",
+            Some(id),
+            allocation.provenance,
+            allocation.session_definition_id,
+            allocation.activity_context_id,
+            allocation.tool_name,
+            -allocation.quantity,
+            -allocation.tt_value,
+            removed_at,
+            now,
+            allocation.derived.outflow(),
+        )?;
+    }
+    Ok(Ok(()))
+}
+
+/// Undo one removal inside the caller's transaction: its stock comes back.
+/// `false` when no standing removal has that id.
+fn undo_removal_within(
+    tx: &rusqlite::Transaction<'_>,
+    removal_id: &str,
+    undone_at: &str,
+) -> rusqlite::Result<bool> {
+    use rusqlite::OptionalExtension as _;
+    let exists: Option<i64> = tx
+        .query_row(
+            "SELECT 1 FROM stock_removals WHERE id = ? AND undone_at IS NULL",
+            rusqlite::params![removal_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    tx.execute(
+        "DELETE FROM stock_movements WHERE ref_id = ?",
+        rusqlite::params![removal_id],
+    )?;
+    tx.execute(
+        "UPDATE stock_removals SET undone_at = ? WHERE id = ?",
+        rusqlite::params![undone_at, removal_id],
+    )?;
+    Ok(true)
+}
+
+/// Undo one private sale inside the caller's transaction: its stock comes
+/// back and the markup row it owned goes. `false` when no standing sale
+/// has that id.
+fn undo_private_sale_within(
+    tx: &rusqlite::Transaction<'_>,
+    sale_id: &str,
+    undone_at: &str,
+) -> Result<bool, DbError> {
+    use rusqlite::OptionalExtension as _;
+    let sale: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT sold_at, sale_entry_id FROM private_sales \
+             WHERE id = ? AND undone_at IS NULL",
+            rusqlite::params![sale_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((sold_at, entry_id)) = sale else {
+        return Ok(false);
+    };
+    tx.execute(
+        "DELETE FROM stock_movements WHERE ref_id = ?",
+        rusqlite::params![sale_id],
+    )?;
+    if let Some(entry_id) = entry_id {
+        tx.execute(
+            "DELETE FROM ledger_entries WHERE id = ?",
+            rusqlite::params![entry_id],
+        )?;
+    }
+    tx.execute(
+        "UPDATE private_sales SET undone_at = ?, sale_entry_id = NULL WHERE id = ?",
+        rusqlite::params![undone_at, sale_id],
+    )?;
+    daily_rollup::refresh_days(tx, [sold_at])?;
+    Ok(true)
+}
+
+/// Undo one conversion inside the caller's transaction: what it consumed
+/// comes back and what it produced is unmade. `Ok(false)` when there is no
+/// standing conversion by that id; the refusal reason when what it produced
+/// has since left. Nothing is committed here, so a caller undoing several
+/// conversions takes them all back or none.
+fn undo_conversion_within(
+    tx: &rusqlite::Transaction<'_>,
+    conversion_id: &str,
+    undone_at: &str,
+    now: f64,
+) -> Result<Result<bool, String>, DbError> {
+    use rusqlite::OptionalExtension as _;
+    let conversion: Option<(String, Option<String>)> = tx
+        .query_row(
+            "SELECT converted_at, gain_entry_id FROM stock_conversions \
+             WHERE id = ? AND undone_at IS NULL",
+            rusqlite::params![conversion_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((converted_at, gain_entry_id)) = conversion else {
+        return Ok(Ok(false));
+    };
+    if let Some((item, short)) = conversion::conversion_blocker(tx, conversion_id)? {
+        return Ok(Err(blocked_reason(&item, short)));
+    }
+
+    tx.execute(
+        "DELETE FROM stock_movements WHERE ref_id = ?",
+        rusqlite::params![conversion_id],
+    )?;
+    conversion::unwind_assets_and_credits(tx, conversion_id, now)?;
+    if let Some(entry_id) = gain_entry_id {
+        tx.execute(
+            "DELETE FROM ledger_entries WHERE id = ?",
+            rusqlite::params![entry_id],
+        )?;
+    }
+    tx.execute(
+        "UPDATE stock_conversions SET undone_at = ?, gain_entry_id = NULL WHERE id = ?",
+        rusqlite::params![undone_at, conversion_id],
+    )?;
+    // A conversion writes no money, but its day is refreshed all the same:
+    // cheap, and it keeps every undo path the same shape.
+    daily_rollup::refresh_days(tx, [converted_at])?;
+    Ok(Ok(true))
 }
 
 /// Why a reversal cannot go ahead, in terms of the stock rather than the
@@ -4133,7 +5334,7 @@ fn raw_position(conn: &rusqlite::Connection, item_name: &str) -> rusqlite::Resul
                             c.reward_outcome) = 'confirmed'), 0) \
          + COALESCE(( \
              SELECT SUM(m.quantity) FROM stock_movements AS m \
-             WHERE m.item_name = ?1), 0)",
+             WHERE m.item_name = ?1 AND m.inventory_item_id IS NULL), 0)",
         rusqlite::params![item_name],
         |row| row.get(0),
     )
@@ -4154,7 +5355,7 @@ fn reversal_blocker(
     let deltas: Vec<(String, f64)> = {
         let mut stmt = conn.prepare(
             "SELECT item_name, SUM(quantity) FROM stock_movements \
-             WHERE ref_id = ? GROUP BY item_name",
+             WHERE ref_id = ? AND inventory_item_id IS NULL GROUP BY item_name",
         )?;
         let rows = stmt
             .query_map(rusqlite::params![ref_id], |row| {
@@ -4212,6 +5413,57 @@ struct PositionKey {
     tool: String,
     /// Present only for confirmed quest-reward stock.
     quest: Option<QuestPositionKey>,
+    /// The conversion input this stock descends from. Part of the key so one
+    /// conversion's paid markup and declared worth never blend into another's.
+    source_line_id: Option<i64>,
+    /// The root item; empty for stock no itemised conversion touched.
+    origin_item: String,
+}
+
+/// What each unit of a position carries beyond its quantity.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+struct LotFacts {
+    paid_per_unit: f64,
+    declared_per_unit: Option<f64>,
+    origin_per_unit: Option<f64>,
+}
+
+/// One open position of an item: its source, how much is left, and the terms
+/// any conversion attached to it.
+#[derive(Debug, Clone, PartialEq)]
+struct OpenPosition {
+    key: PositionKey,
+    quantity: f64,
+    lot: LotFacts,
+}
+
+/// Read a lot's per-unit facts from a movement group's signed totals. Outflows
+/// consume a lot in proportion, so the ratio holds for the group's whole life.
+fn lot_facts(quantity: f64, paid: f64, declared: Option<f64>, origin: Option<f64>) -> LotFacts {
+    if quantity.abs() <= STOCK_EPSILON {
+        return LotFacts::default();
+    }
+    LotFacts {
+        paid_per_unit: paid / quantity,
+        declared_per_unit: declared.map(|value| value / quantity),
+        origin_per_unit: origin.map(|value| value / quantity),
+    }
+}
+
+/// The open positions left once outflows are netted, each with its lot facts.
+fn open_positions(
+    by_source: std::collections::BTreeMap<PositionKey, f64>,
+    lots: &std::collections::BTreeMap<PositionKey, LotFacts>,
+) -> Vec<OpenPosition> {
+    by_source
+        .into_iter()
+        .filter(|(_, quantity)| *quantity > STOCK_EPSILON)
+        .map(|(key, quantity)| OpenPosition {
+            lot: lots.get(&key).copied().unwrap_or_default(),
+            key,
+            quantity,
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -4244,28 +5496,6 @@ fn movement_activity_kind(source_kind: &str, tier: Option<&str>, species: Option
 /// species total stays exact while no historical definition claim is invented
 /// for the realised sale itself.
 fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<PositionKey, f64>) {
-    fn absorb(
-        by_source: &mut std::collections::BTreeMap<PositionKey, f64>,
-        broad_key: &PositionKey,
-        candidates: Vec<PositionKey>,
-    ) {
-        let broad = by_source.get(broad_key).copied().unwrap_or(0.0);
-        if broad >= -STOCK_EPSILON {
-            return;
-        }
-        let available: f64 = candidates.iter().filter_map(|key| by_source.get(key)).sum();
-        if available <= STOCK_EPSILON {
-            return;
-        }
-        let remaining = (available + broad).max(0.0);
-        for key in candidates {
-            if let Some(quantity) = by_source.get_mut(&key) {
-                *quantity *= remaining / available;
-            }
-        }
-        by_source.insert(broad_key.clone(), 0.0);
-    }
-
     // Rows written before exact activity provenance can already carry a
     // session definition. Consume any residual at that broader grain across
     // the context-specific stock in the same definition.
@@ -4281,7 +5511,7 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
         .map(|(key, _)| key.clone())
         .collect();
     for broad_key in definition_keys {
-        let candidates = by_source
+        let candidates: Vec<PositionKey> = by_source
             .iter()
             .filter(|(key, quantity)| {
                 key.source_kind == "hunt"
@@ -4292,7 +5522,7 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
             })
             .map(|(key, _)| key.clone())
             .collect();
-        absorb(by_source, &broad_key, candidates);
+        absorb_outflow(by_source, &broad_key, &candidates);
     }
 
     // Older rows may have neither definition nor context. Spread only their
@@ -4310,7 +5540,7 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
         .map(|(key, _)| key.clone())
         .collect();
     for broad_key in unattributed_keys {
-        let candidates = by_source
+        let candidates: Vec<PositionKey> = by_source
             .iter()
             .filter(|(key, quantity)| {
                 key.source_kind == "hunt"
@@ -4320,17 +5550,94 @@ fn absorb_legacy_hunt_outflows(by_source: &mut std::collections::BTreeMap<Positi
             })
             .map(|(key, _)| key.clone())
             .collect();
-        absorb(by_source, &broad_key, candidates);
+        absorb_outflow(by_source, &broad_key, &candidates);
+    }
+}
+
+/// Consume a negative bucket from `candidates`, proportionally to what each
+/// still holds. Only what the candidates can cover is consumed; any shortfall
+/// stays on the broad key, so a later, wider pass can still net it and the
+/// item's total is never silently inflated by a dropped outflow.
+fn absorb_outflow(
+    by_source: &mut std::collections::BTreeMap<PositionKey, f64>,
+    broad_key: &PositionKey,
+    candidates: &[PositionKey],
+) {
+    let broad = by_source.get(broad_key).copied().unwrap_or(0.0);
+    if broad >= -STOCK_EPSILON {
+        return;
+    }
+    let available: f64 = candidates
+        .iter()
+        .filter_map(|key| by_source.get(key))
+        .filter(|quantity| **quantity > STOCK_EPSILON)
+        .sum();
+    if available <= STOCK_EPSILON {
+        return;
+    }
+    let consumed = available.min(-broad);
+    let scale = (available - consumed) / available;
+    for key in candidates {
+        if let Some(quantity) = by_source.get_mut(key) {
+            if *quantity > STOCK_EPSILON {
+                *quantity *= scale;
+            }
+        }
+    }
+    by_source.insert(broad_key.clone(), broad + consumed);
+}
+
+/// Net every outflow still below zero against the item's open stock, so the
+/// open buckets always sum to the item's true position.
+///
+/// An outflow's bucket is fixed when its movement is written, but the loot it
+/// drew on can later move bucket: a session reassigned to another definition
+/// or context carries its loot with it and leaves the outflow behind. The
+/// outflow then sits negative under its old key while the units it physically
+/// consumed stay positive under the new one. Keeping only the positive buckets
+/// reports stock the player no longer holds, and an outflow sized from that
+/// figure (converting "all" of it) leaves a phantom remainder behind.
+///
+/// The position is whole-inventory arithmetic, so the residual is consumed
+/// from the same activity and definition first, which keeps attribution as
+/// local as the evidence allows, and then from the whole item.
+fn net_stranded_outflows(by_source: &mut std::collections::BTreeMap<PositionKey, f64>) {
+    let stranded: Vec<PositionKey> = by_source
+        .iter()
+        .filter(|(_, quantity)| **quantity < -STOCK_EPSILON)
+        .map(|(key, _)| key.clone())
+        .collect();
+    for broad_key in &stranded {
+        let local: Vec<PositionKey> = by_source
+            .iter()
+            .filter(|(key, quantity)| {
+                **quantity > STOCK_EPSILON
+                    && key.source_kind == broad_key.source_kind
+                    && key.definition_id == broad_key.definition_id
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        absorb_outflow(by_source, broad_key, &local);
+    }
+    for broad_key in &stranded {
+        let open: Vec<PositionKey> = by_source
+            .iter()
+            .filter(|(_, quantity)| **quantity > STOCK_EPSILON)
+            .map(|(key, _)| key.clone())
+            .collect();
+        absorb_outflow(by_source, broad_key, &open);
     }
 }
 
 fn item_positions(
     conn: &rusqlite::Connection,
     item_name: &str,
-) -> rusqlite::Result<(Vec<(PositionKey, f64)>, f64)> {
+) -> rusqlite::Result<(Vec<OpenPosition>, f64)> {
     // Keyed on the durable database spellings, with the empty string standing
     // for "not known", so the merge is ordered and total.
     let mut by_source: std::collections::BTreeMap<PositionKey, f64> =
+        std::collections::BTreeMap::new();
+    let mut lots: std::collections::BTreeMap<PositionKey, LotFacts> =
         std::collections::BTreeMap::new();
     let mut base_qty = 0.0_f64;
     let mut base_tt = 0.0_f64;
@@ -4365,6 +5672,8 @@ fn item_positions(
                     activity_context_id: None,
                     tool: tool.unwrap_or_default(),
                     quest: None,
+                    source_line_id: None,
+                    origin_item: String::new(),
                 })
                 .or_insert(0.0) += quantity;
         }
@@ -4375,6 +5684,7 @@ fn item_positions(
         // tool (a kill's loot is not one tool's produce). Enhancer shrapnel
         // joins the physical pile as explicitly unattributed stock.
         let mut stmt = conn.prepare(
+            // every-kill: spend (sums of spend and loot; a claimed arrival's loot is zeroed).
             "SELECT CASE WHEN li.is_enhancer_shrapnel = 0 THEN COALESCE(k.mob_species, '') \
                     ELSE '' END AS species, \
                     li.is_enhancer_shrapnel, s.definition_id, k.context_id, \
@@ -4409,6 +5719,8 @@ fn item_positions(
                     activity_context_id: (!is_shrapnel).then_some(context_id).flatten(),
                     tool: String::new(),
                     quest: None,
+                    source_line_id: None,
+                    origin_item: String::new(),
                 })
                 .or_insert(0.0) += quantity;
         }
@@ -4471,6 +5783,8 @@ fn item_positions(
                         quest_id,
                         activity_context_id: context_id,
                     }),
+                    source_line_id: None,
+                    origin_item: String::new(),
                 })
                 .or_insert(0.0) += quantity;
         }
@@ -4482,10 +5796,12 @@ fn item_positions(
         let mut stmt = conn.prepare(
             "SELECT source_kind, yield_tier, mob_species, session_definition_id, tool_name, \
                     quest_reward_item_id, quest_run_id, quest_id, activity_context_id, \
-                    SUM(quantity), SUM(tt_value) \
-             FROM stock_movements WHERE item_name = ? \
+                    SUM(quantity), SUM(tt_value), source_line_id, origin_item, \
+                    SUM(paid_markup), SUM(declared_markup), SUM(origin_quantity) \
+             FROM stock_movements WHERE item_name = ? AND inventory_item_id IS NULL \
              GROUP BY source_kind, yield_tier, mob_species, session_definition_id, tool_name, \
-                      quest_reward_item_id, quest_run_id, quest_id, activity_context_id",
+                      quest_reward_item_id, quest_run_id, quest_id, activity_context_id, \
+                      source_line_id, origin_item",
         )?;
         let rows = stmt
             .query_map(rusqlite::params![item_name], |row| {
@@ -4501,6 +5817,11 @@ fn item_positions(
                     row.get::<_, Option<i64>>(8)?,
                     row.get::<_, f64>(9)?,
                     row.get::<_, f64>(10)?,
+                    row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, f64>(13)?,
+                    row.get::<_, Option<f64>>(14)?,
+                    row.get::<_, Option<f64>>(15)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -4516,41 +5837,48 @@ fn item_positions(
             context_id,
             quantity,
             tt_value,
+            source_line_id,
+            origin_item,
+            paid,
+            declared,
+            origin,
         ) in rows
         {
             if quantity > 0.0 {
                 produced_qty += quantity;
                 produced_tt += tt_value;
             }
-            *by_source
-                .entry(PositionKey {
-                    source_kind: movement_activity_kind(
-                        &source_kind,
-                        tier.as_deref(),
-                        species.as_deref(),
-                    ),
-                    tier: tier.unwrap_or_default(),
-                    species: species.unwrap_or_default(),
-                    definition_id,
-                    activity_context_id: if source_kind == "hunt" {
-                        context_id
-                    } else {
-                        None
-                    },
-                    tool: tool.unwrap_or_default(),
-                    quest: match (reward_item_id, run_id, quest_id) {
-                        (Some(reward_item_id), Some(quest_run_id), Some(quest_id)) => {
-                            Some(QuestPositionKey {
-                                reward_item_id,
-                                quest_run_id,
-                                quest_id,
-                                activity_context_id: context_id,
-                            })
-                        }
-                        _ => None,
-                    },
-                })
-                .or_insert(0.0) += quantity;
+            let key = PositionKey {
+                source_kind: movement_activity_kind(
+                    &source_kind,
+                    tier.as_deref(),
+                    species.as_deref(),
+                ),
+                tier: tier.unwrap_or_default(),
+                species: species.unwrap_or_default(),
+                definition_id,
+                activity_context_id: if source_kind == "hunt" {
+                    context_id
+                } else {
+                    None
+                },
+                tool: tool.unwrap_or_default(),
+                quest: match (reward_item_id, run_id, quest_id) {
+                    (Some(reward_item_id), Some(quest_run_id), Some(quest_id)) => {
+                        Some(QuestPositionKey {
+                            reward_item_id,
+                            quest_run_id,
+                            quest_id,
+                            activity_context_id: context_id,
+                        })
+                    }
+                    _ => None,
+                },
+                source_line_id,
+                origin_item: origin_item.unwrap_or_default(),
+            };
+            lots.insert(key.clone(), lot_facts(quantity, paid, declared, origin));
+            *by_source.entry(key).or_insert(0.0) += quantity;
         }
     }
 
@@ -4563,15 +5891,12 @@ fn item_positions(
     };
 
     absorb_legacy_hunt_outflows(&mut by_source);
-    let positions = by_source
-        .into_iter()
-        .filter(|(_, quantity)| *quantity > STOCK_EPSILON)
-        .collect();
-    Ok((positions, unit_tt))
+    net_stranded_outflows(&mut by_source);
+    Ok((open_positions(by_source, &lots), unit_tt))
 }
 
 /// One item's open positions per (provenance, tool) key, with its unit TT.
-type ItemPosition = (Vec<(PositionKey, f64)>, f64);
+type ItemPosition = (Vec<OpenPosition>, f64);
 
 /// Every item's open positions and unit TT in three whole-table passes:
 /// the batch sibling of [`item_positions`], byte-for-byte the same
@@ -4588,6 +5913,7 @@ fn all_item_positions(
     #[derive(Default)]
     struct ItemAcc {
         by_source: BTreeMap<PositionKey, f64>,
+        lots: BTreeMap<PositionKey, LotFacts>,
         base_qty: f64,
         base_tt: f64,
         produced_qty: f64,
@@ -4622,6 +5948,8 @@ fn all_item_positions(
                     activity_context_id: None,
                     tool: tool.unwrap_or_default(),
                     quest: None,
+                    source_line_id: None,
+                    origin_item: String::new(),
                 })
                 .or_insert(0.0) += quantity;
         }
@@ -4649,6 +5977,8 @@ fn all_item_positions(
                     activity_context_id: None,
                     tool: String::new(),
                     quest: None,
+                    source_line_id: None,
+                    origin_item: String::new(),
                 })
                 .or_insert(0.0) += quantity;
         };
@@ -4708,6 +6038,8 @@ fn all_item_positions(
                         quest_id,
                         activity_context_id: context_id,
                     }),
+                    source_line_id: None,
+                    origin_item: String::new(),
                 })
                 .or_insert(0.0) += quantity;
         }
@@ -4717,10 +6049,13 @@ fn all_item_positions(
         let mut stmt = conn.prepare(
             "SELECT item_name, source_kind, yield_tier, mob_species, session_definition_id, tool_name, \
                     quest_reward_item_id, quest_run_id, quest_id, activity_context_id, \
-                    SUM(quantity), SUM(tt_value) \
+                    SUM(quantity), SUM(tt_value), source_line_id, origin_item, \
+                    SUM(paid_markup), SUM(declared_markup), SUM(origin_quantity) \
              FROM stock_movements \
+             WHERE inventory_item_id IS NULL \
              GROUP BY item_name, source_kind, yield_tier, mob_species, session_definition_id, tool_name, \
-                      quest_reward_item_id, quest_run_id, quest_id, activity_context_id",
+                      quest_reward_item_id, quest_run_id, quest_id, activity_context_id, \
+                      source_line_id, origin_item",
         )?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
@@ -4736,40 +6071,48 @@ fn all_item_positions(
             let context_id: Option<i64> = row.get(9)?;
             let quantity: f64 = row.get(10)?;
             let tt_value: f64 = row.get(11)?;
+            let source_line_id: Option<i64> = row.get(12)?;
+            let origin_item: Option<String> = row.get(13)?;
+            let paid: f64 = row.get(14)?;
+            let declared: Option<f64> = row.get(15)?;
+            let origin: Option<f64> = row.get(16)?;
             let acc = items.entry(item).or_default();
             if quantity > 0.0 {
                 acc.produced_qty += quantity;
                 acc.produced_tt += tt_value;
             }
-            *acc.by_source
-                .entry(PositionKey {
-                    source_kind: movement_activity_kind(
-                        &source_kind,
-                        tier.as_deref(),
-                        species.as_deref(),
-                    ),
-                    tier: tier.unwrap_or_default(),
-                    species: species.unwrap_or_default(),
-                    definition_id,
-                    // The batch inventory read uses session-grain projected
-                    // loot, so collapse hunted movement contexts back to that
-                    // same grain. Write paths use `item_positions`, which
-                    // retains the exact context for future attribution.
-                    activity_context_id: None,
-                    tool: tool.unwrap_or_default(),
-                    quest: match (reward_item_id, run_id, quest_id) {
-                        (Some(reward_item_id), Some(quest_run_id), Some(quest_id)) => {
-                            Some(QuestPositionKey {
-                                reward_item_id,
-                                quest_run_id,
-                                quest_id,
-                                activity_context_id: context_id,
-                            })
-                        }
-                        _ => None,
-                    },
-                })
-                .or_insert(0.0) += quantity;
+            let key = PositionKey {
+                source_kind: movement_activity_kind(
+                    &source_kind,
+                    tier.as_deref(),
+                    species.as_deref(),
+                ),
+                tier: tier.unwrap_or_default(),
+                species: species.unwrap_or_default(),
+                definition_id,
+                // The batch inventory read uses session-grain projected
+                // loot, so collapse hunted movement contexts back to that
+                // same grain. Write paths use `item_positions`, which
+                // retains the exact context for future attribution.
+                activity_context_id: None,
+                tool: tool.unwrap_or_default(),
+                quest: match (reward_item_id, run_id, quest_id) {
+                    (Some(reward_item_id), Some(quest_run_id), Some(quest_id)) => {
+                        Some(QuestPositionKey {
+                            reward_item_id,
+                            quest_run_id,
+                            quest_id,
+                            activity_context_id: context_id,
+                        })
+                    }
+                    _ => None,
+                },
+                source_line_id,
+                origin_item: origin_item.unwrap_or_default(),
+            };
+            acc.lots
+                .insert(key.clone(), lot_facts(quantity, paid, declared, origin));
+            *acc.by_source.entry(key).or_insert(0.0) += quantity;
         }
     }
 
@@ -4785,11 +6128,8 @@ fn all_item_positions(
             };
             let mut by_source = acc.by_source;
             absorb_legacy_hunt_outflows(&mut by_source);
-            let positions: Vec<(PositionKey, f64)> = by_source
-                .into_iter()
-                .filter(|(_, quantity)| *quantity > STOCK_EPSILON)
-                .collect();
-            (item, (positions, unit_tt))
+            net_stranded_outflows(&mut by_source);
+            (item, (open_positions(by_source, &acc.lots), unit_tt))
         })
         .collect())
 }
@@ -4797,37 +6137,45 @@ fn all_item_positions(
 /// Borrow a position list into the allocation module's shape. Activity
 /// provenance is independent of the optional target facet: an unclassified
 /// hunt remains Hunting, while a key with no source is an unattributed pile.
-fn as_source_positions(
-    positions: &[(PositionKey, f64)],
-) -> Vec<stock_allocation::SourcePosition<'_>> {
+fn as_source_positions(positions: &[OpenPosition]) -> Vec<stock_allocation::SourcePosition<'_>> {
     positions
         .iter()
-        .map(|(key, quantity)| stock_allocation::SourcePosition {
-            provenance: if key.source_kind == "harvest" {
-                Some(stock_allocation::StockProvenance::Harvest(
-                    HarvestYieldTier::from_db(&key.tier),
-                ))
-            } else if key.source_kind == "hunt" {
-                Some(stock_allocation::StockProvenance::Hunt(
-                    (!key.species.is_empty()).then_some(key.species.as_str()),
-                ))
-            } else {
-                key.quest
-                    .as_ref()
-                    .map(|quest| stock_allocation::StockProvenance::Quest {
-                        reward_item_id: quest.reward_item_id,
-                        quest_run_id: quest.quest_run_id,
-                        quest_id: quest.quest_id,
-                        activity_context_id: quest.activity_context_id,
-                    })
+        .map(
+            |OpenPosition { key, quantity, lot }| stock_allocation::SourcePosition {
+                provenance: if key.source_kind == "harvest" {
+                    Some(stock_allocation::StockProvenance::Harvest(
+                        HarvestYieldTier::from_db(&key.tier),
+                    ))
+                } else if key.source_kind == "hunt" {
+                    Some(stock_allocation::StockProvenance::Hunt(
+                        (!key.species.is_empty()).then_some(key.species.as_str()),
+                    ))
+                } else {
+                    key.quest
+                        .as_ref()
+                        .map(|quest| stock_allocation::StockProvenance::Quest {
+                            reward_item_id: quest.reward_item_id,
+                            quest_run_id: quest.quest_run_id,
+                            quest_id: quest.quest_id,
+                            activity_context_id: quest.activity_context_id,
+                        })
+                },
+                // Keep the session-definition key on every Hunting position;
+                // optional target evidence never gates the deliberate axis.
+                session_definition_id: key.definition_id,
+                activity_context_id: key.activity_context_id,
+                tool_name: (!key.tool.is_empty()).then_some(key.tool.as_str()),
+                quantity: *quantity,
+                derived: stock_allocation::DerivedFacts {
+                    source_line_id: key.source_line_id,
+                    origin_item: (!key.origin_item.is_empty()).then_some(key.origin_item.as_str()),
+                    paid_markup: lot.paid_per_unit,
+                    declared_markup: lot.declared_per_unit,
+                    origin_quantity: lot.origin_per_unit,
+                    inventory_item_id: None,
+                },
             },
-            // Keep the session-definition key on every Hunting position;
-            // optional target evidence never gates the deliberate axis.
-            session_definition_id: key.definition_id,
-            activity_context_id: key.activity_context_id,
-            tool_name: (!key.tool.is_empty()).then_some(key.tool.as_str()),
-            quantity: *quantity,
-        })
+        )
         .collect()
 }
 
@@ -4863,8 +6211,13 @@ impl AnalyticsService {
 
         // The seek predicate reproduces the (date DESC, id DESC) order past
         // the cursor row; one extra row is fetched to detect a further page.
-        let mut sql =
-            String::from("SELECT id, date, type, description, amount, tag FROM ledger_entries");
+        // id-order: tiebreak (the seek is by date; id splits equal dates).
+        let mut sql = String::from(
+            "SELECT id, date, type, description, amount, tag, \
+             (SELECT d.name FROM session_definitions d \
+              WHERE d.id = ledger_entries.session_definition_id) \
+             FROM ledger_entries",
+        );
         if seek.is_some() {
             sql.push_str(" WHERE date < ? OR (date = ? AND id < ?)");
         }
@@ -4921,6 +6274,10 @@ impl AnalyticsService {
     /// Create a ledger entry, relanding its (possibly backdated) day's
     /// rollup in the same transaction. Returns the created entry's wire
     /// shape (the input echoed with its generated id).
+    ///
+    /// `session_definition_id` pegs the entry to a session as a whole: it
+    /// stays a global ledger row and also counts in that session's realised
+    /// figures (`realised::realised_contributions`).
     pub async fn create_ledger_entry(
         &self,
         date: &str,
@@ -4928,7 +6285,29 @@ impl AnalyticsService {
         description: &str,
         amount: f64,
         tag: &str,
+        session_definition_id: Option<i64>,
     ) -> Result<LedgerRow, AnalyticsError> {
+        let session_name = match session_definition_id {
+            None => None,
+            Some(definition_id) => {
+                let name: Option<String> = self
+                    .db
+                    .with_reader(move |conn| {
+                        use rusqlite::OptionalExtension as _;
+                        Ok(conn
+                            .query_row(
+                                "SELECT name FROM session_definitions WHERE id = ?",
+                                rusqlite::params![definition_id],
+                                |row| row.get(0),
+                            )
+                            .optional()?)
+                    })
+                    .await?;
+                Some(name.ok_or(AnalyticsError::InvalidInput(
+                    "That session no longer exists",
+                ))?)
+            }
+        };
         let id = Uuid::new_v4().to_string();
         // One transaction over the insert and the rollup refresh: a
         // backdated entry relands its day's rollup with the write.
@@ -4943,9 +6322,18 @@ impl AnalyticsService {
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
                 tx.execute(
-                    "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![id_c, date_c, kind_c, desc_c, amount, tag_c],
+                    "INSERT INTO ledger_entries \
+                     (id, date, type, description, amount, tag, session_definition_id) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        id_c,
+                        date_c,
+                        kind_c,
+                        desc_c,
+                        amount,
+                        tag_c,
+                        session_definition_id
+                    ],
                 )?;
                 daily_rollup::refresh_days(&tx, [date_c.as_str()])?;
                 tx.commit()?;
@@ -4959,6 +6347,7 @@ impl AnalyticsService {
             description: description.to_string(),
             amount,
             tag: tag.to_string(),
+            session_name,
         })
     }
 
@@ -5077,13 +6466,15 @@ impl AnalyticsService {
             .db
             .with_reader(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at \
+                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at, quantity \
                      FROM inventory_items WHERE state = 'held' \
                      ORDER BY acquired_at DESC, id DESC",
                 )?;
-                let rows = stmt
+                let mut rows = stmt
                     .query_map([], |row| Ok(inventory_item(row)))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
+                conversion::attach_asset_origins(conn, &mut rows)?;
+                asset_positions::attach_purchases(conn, &mut rows)?;
                 Ok(rows)
             })
             .await?)
@@ -5230,8 +6621,12 @@ impl AnalyticsService {
                     }
                     Profession::Inventory => "WHERE ?1 = 'inventory'",
                 };
-                let sql =
-                    format!("SELECT DISTINCT m.item_name FROM stock_movements m {movement_scope}");
+                // Provenance rows of a whole asset describe where it came
+                // from; the asset itself is listed under Assets.
+                let sql = format!(
+                    "SELECT DISTINCT m.item_name FROM (SELECT * FROM stock_movements \
+                     WHERE inventory_item_id IS NULL) m {movement_scope}"
+                );
                 let mut stmt = conn.prepare(&sql)?;
                 let movement_names = stmt
                     .query_map(rusqlite::params![profession.as_str()], |row| {
@@ -5245,6 +6640,7 @@ impl AnalyticsService {
                 // item, which is the O(items x rows) shape this list used to
                 // take its load time from.
                 let all_positions = all_item_positions(conn, &hunting_loot)?;
+                let definition_names = conversion::definition_names(conn)?;
                 let listed_by_item: std::collections::HashMap<String, f64> = {
                     let mut stmt = conn.prepare(
                         "SELECT item_name, COALESCE(SUM(quantity), 0) FROM auction_listings \
@@ -5265,24 +6661,31 @@ impl AnalyticsService {
                     }
                     // A universe item with no open position stays listed at
                     // zero, exactly as the per-item read reported it.
-                    let (quantity, unit_tt) = all_positions
+                    let open: &[OpenPosition] = all_positions
                         .get(&item_name)
-                        .map(|(positions, unit_tt)| {
-                            let quantity: f64 = positions
-                                .iter()
-                                .map(|(_, quantity)| quantity)
-                                .sum::<f64>()
-                                .max(0.0);
-                            (quantity, *unit_tt)
-                        })
-                        .unwrap_or((0.0, 0.0));
+                        .map_or(&[], |(positions, _)| positions.as_slice());
+                    let unit_tt = all_positions
+                        .get(&item_name)
+                        .map_or(0.0, |(_, unit_tt)| *unit_tt);
+                    let quantity = open
+                        .iter()
+                        .map(|position| position.quantity)
+                        .sum::<f64>()
+                        .max(0.0);
                     let tt_value = quantity * unit_tt;
                     let listed_quantity = listed_by_item.get(&item_name).copied().unwrap_or(0.0);
                     rows.push(StockPositionRow {
+                        paid_markup: open
+                            .iter()
+                            .map(|position| position.quantity * position.lot.paid_per_unit)
+                            .sum(),
+                        origins: conversion::position_origins(open, &definition_names),
+                        derived_from: conversion::position_derived_from(open),
                         item_name,
                         quantity,
                         tt_value,
                         listed_quantity,
+                        unit_tt,
                     });
                 }
                 rows.sort_by(|a, b| {
@@ -5321,11 +6724,15 @@ impl AnalyticsService {
                      ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, \
                               listed_at DESC, id DESC"
                 ))?;
-                let rows = stmt
+                let mut rows = stmt
                     .query_map(rusqlite::params![profession.as_str()], |row| {
                         Ok(listing_from_row(row))
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
+                let sources = from_account::listing_sources(conn)?;
+                for row in &mut rows {
+                    row.from_account = sources.get(&row.id).copied();
+                }
                 Ok(rows)
             })
             .await?)
@@ -5350,6 +6757,51 @@ impl AnalyticsService {
         listed_at: Option<&str>,
         auction_days: Option<i64>,
     ) -> Result<AuctionListingRow, AnalyticsError> {
+        self.create_auction_listing_with_terms(
+            profession,
+            item_name,
+            quantity,
+            ListingTerms {
+                starting_bid,
+                buyout,
+                listing_fee,
+                listed_at,
+                auction_days,
+                sources: &[],
+            },
+        )
+        .await
+    }
+
+    /// List stock on the auction on `terms`, recording where each of its
+    /// figures came from when the terms say. Otherwise exactly
+    /// [`create_auction_listing`](Self::create_auction_listing).
+    pub async fn create_auction_listing_with_terms(
+        &self,
+        profession: Profession,
+        item_name: &str,
+        quantity: f64,
+        terms: ListingTerms<'_>,
+    ) -> Result<AuctionListingRow, AnalyticsError> {
+        let ListingTerms {
+            starting_bid,
+            buyout,
+            listing_fee,
+            listed_at,
+            auction_days,
+            sources,
+        } = terms;
+        check_sources(
+            sources,
+            &RecordedFigures {
+                quantity,
+                starting_bid,
+                buyout,
+                listing_fee,
+                auction_days,
+            },
+        )?;
+        check_name_sources(sources, item_name).map_err(AnalyticsError::InvalidInput)?;
         if is_universal_ammo(item_name) {
             return Err(AnalyticsError::InvalidInput(
                 "Universal Ammo is liquid PED and cannot be listed",
@@ -5376,6 +6828,7 @@ impl AnalyticsService {
         let now = naive_to_epoch(self.clock.now());
         let (id_c, item_c, listed_c) = (id.clone(), item_name.to_string(), listed_at.clone());
         let instant_c = listed_instant;
+        let sources = sources.to_vec();
 
         self.db
             .with_writer(move |conn| {
@@ -5383,13 +6836,17 @@ impl AnalyticsService {
                 let (positions, unit_tt) = item_positions(&tx, &item_c)?;
                 let plan =
                     stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
+                // Stock a conversion produced may still have paid markup to
+                // recover, which is what a basis on a listing has always meant.
+                let cost_basis = (plan.paid_markup > STOCK_EPSILON)
+                    .then_some(quantity * unit_tt + plan.paid_markup);
 
                 tx.execute(
                     "INSERT INTO auction_listings ( \
                          id, item_name, profession, quantity, attributed_qty, unattributed_qty, \
                          tt_value, attributed_tt, starting_bid, buyout, listing_fee, listed_at, \
-                         auction_days, listed_instant, status, created_at, updated_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)",
+                         auction_days, listed_instant, status, created_at, updated_at, cost_basis) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
                     rusqlite::params![
                         id_c,
                         item_c,
@@ -5407,9 +6864,11 @@ impl AnalyticsService {
                         instant_c,
                         now,
                         now,
+                        cost_basis,
                     ],
                 )?;
 
+                insert_field_sources(&tx, &id_c, &sources)?;
                 record_opening_balance(&tx, &item_c, &id_c, &plan, &listed_c, now)?;
 
                 for allocation in &plan.allocations {
@@ -5426,6 +6885,7 @@ impl AnalyticsService {
                         -allocation.tt_value,
                         &listed_c,
                         now,
+                        allocation.derived.outflow(),
                     )?;
                 }
 
@@ -5456,12 +6916,11 @@ impl AnalyticsService {
             .map_err(AnalyticsError::from)
     }
 
-    /// List one whole capital-equipment holding on the auction.
+    /// List every unit of an asset on the auction.
     ///
-    /// Equipment is indivisible in this first model: the stable inventory row
-    /// is the position and its TT plus paid markup is the acquisition basis.
-    /// The row moves to `listed` rather than being deleted, so expiry, sale
-    /// reversal, history, and undo all retain the original fact.
+    /// The asset's TT plus paid markup is the acquisition basis. The row moves
+    /// to `listed` rather than being deleted, so expiry, sale reversal,
+    /// history, and undo all retain the original fact.
     pub async fn create_equipment_listing(
         &self,
         item_id: &str,
@@ -5471,6 +6930,53 @@ impl AnalyticsService {
         listed_at: Option<&str>,
         auction_days: Option<i64>,
     ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
+        self.create_equipment_listing_with_terms(
+            item_id,
+            None,
+            ListingTerms {
+                starting_bid,
+                buyout,
+                listing_fee,
+                listed_at,
+                auction_days,
+                sources: &[],
+            },
+        )
+        .await
+    }
+
+    /// List one whole equipment holding on `terms`, recording where each
+    /// of its figures came from when the terms say. Otherwise exactly
+    /// [`create_equipment_listing`](Self::create_equipment_listing).
+    ///
+    /// `quantity` lists that many of the asset's units (all of them when
+    /// `None`); part is carved out at the asset's average cost.
+    pub async fn create_equipment_listing_with_terms(
+        &self,
+        item_id: &str,
+        quantity: Option<f64>,
+        terms: ListingTerms<'_>,
+    ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
+        let ListingTerms {
+            starting_bid,
+            buyout,
+            listing_fee,
+            listed_at,
+            auction_days,
+            sources,
+        } = terms;
+        // The name is checked once the asset is read.
+        check_sources(
+            sources,
+            &RecordedFigures {
+                quantity: quantity.unwrap_or(1.0),
+                starting_bid,
+                buyout,
+                listing_fee,
+                auction_days,
+            },
+        )?;
+        let sources = sources.to_vec();
         if starting_bid < 0.0 || listing_fee < 0.0 {
             return Err(AnalyticsError::InvalidInput(
                 "auction prices and fees cannot be negative",
@@ -5487,32 +6993,42 @@ impl AnalyticsService {
         let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let item: Option<(String, f64, f64)> = tx
-                    .query_row(
-                        "SELECT name, tt_value, markup_paid FROM inventory_items \
-                         WHERE id = ? AND state = 'held'",
-                        rusqlite::params![item_id],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    )
-                    .optional()?;
-                let Some((name, tt_value, markup_paid)) = item else {
-                    return Ok(None);
+                let taken = match asset_positions::take_units(&tx, &item_id, quantity, now)? {
+                    asset_positions::Take::Taken(taken) => taken,
+                    asset_positions::Take::Missing => return Ok(Ok(None)),
+                    asset_positions::Take::Refused(reason) => {
+                        return Ok(Err(AnalyticsError::Rejected(reason)))
+                    }
                 };
+                let asset_positions::TakenUnits {
+                    id: item_id,
+                    name,
+                    quantity,
+                    tt_value,
+                    markup_paid,
+                } = taken;
+                if let Err(refusal) = check_name_sources(&sources, &name) {
+                    return Ok(Err(AnalyticsError::InvalidInput(refusal)));
+                }
                 let cost_basis = tt_value + markup_paid;
+                let attributed = conversion::asset_attributed_share(&tx, &item_id)?;
                 tx.execute(
                     "INSERT INTO auction_listings ( \
                          id, item_name, profession, quantity, attributed_qty, unattributed_qty, \
                          tt_value, attributed_tt, starting_bid, buyout, listing_fee, listed_at, \
                          auction_days, listed_instant, status, created_at, updated_at, \
                          subject_kind, inventory_item_id, cost_basis, channel) \
-                     VALUES (?, ?, 'inventory', 1, 0, 1, ?, 0, ?, ?, ?, ?, ?, ?, \
+                     VALUES (?, ?, 'inventory', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
                              'pending', ?, ?, 'equipment', ?, ?, 'auction')",
                     rusqlite::params![
                         id,
                         name,
+                        quantity,
+                        quantity * attributed,
+                        quantity * (1.0 - attributed),
                         tt_value,
+                        tt_value * attributed,
                         starting_bid,
                         buyout,
                         listing_fee,
@@ -5525,6 +7041,7 @@ impl AnalyticsService {
                         cost_basis,
                     ],
                 )?;
+                insert_field_sources(&tx, &id, &sources)?;
                 tx.execute(
                     "UPDATE inventory_items SET state = 'listed', updated_at = ? WHERE id = ?",
                     rusqlite::params![now, item_id],
@@ -5549,19 +7066,23 @@ impl AnalyticsService {
                 }
                 let row = read_listing(&tx, &id)?;
                 tx.commit()?;
-                Ok(row)
+                Ok(Ok(row))
             })
             .await
-            .map_err(AnalyticsError::from)
+            .map_err(AnalyticsError::from)?
     }
 
     /// Record an immediate fee-free player trade for one whole equipment
     /// holding. It uses the listing record as the canonical market lifecycle,
     /// resolved in the same transaction, with `channel = trade` distinguishing
     /// it from an auction that happened to sell immediately.
+    ///
+    /// `quantity` trades that many of the asset's units (all of them when
+    /// `None`); part is carved out at the asset's average cost.
     pub async fn trade_equipment(
         &self,
         item_id: &str,
+        quantity: Option<f64>,
         final_price: f64,
         sold_at: Option<&str>,
     ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
@@ -5579,32 +7100,39 @@ impl AnalyticsService {
         let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let item: Option<(String, f64, f64)> = tx
-                    .query_row(
-                        "SELECT name, tt_value, markup_paid FROM inventory_items \
-                         WHERE id = ? AND state = 'held'",
-                        rusqlite::params![item_id],
-                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                    )
-                    .optional()?;
-                let Some((name, tt_value, markup_paid)) = item else {
-                    return Ok(None);
+                let taken = match asset_positions::take_units(&tx, &item_id, quantity, now)? {
+                    asset_positions::Take::Taken(taken) => taken,
+                    asset_positions::Take::Missing => return Ok(Ok(None)),
+                    asset_positions::Take::Refused(reason) => {
+                        return Ok(Err(AnalyticsError::Rejected(reason)))
+                    }
                 };
+                let asset_positions::TakenUnits {
+                    id: item_id,
+                    name,
+                    quantity,
+                    tt_value,
+                    markup_paid,
+                } = taken;
                 let cost_basis = tt_value + markup_paid;
+                let attributed = conversion::asset_attributed_share(&tx, &item_id)?;
                 tx.execute(
                     "INSERT INTO auction_listings ( \
                          id, item_name, profession, quantity, attributed_qty, unattributed_qty, \
                          tt_value, attributed_tt, starting_bid, buyout, listing_fee, listed_at, \
                          status, final_price, sale_fee, resolved_at, created_at, updated_at, \
                          subject_kind, inventory_item_id, cost_basis, channel) \
-                     VALUES (?, ?, 'inventory', 1, 0, 1, ?, 0, ?, NULL, 0, ?, \
+                     VALUES (?, ?, 'inventory', ?, ?, ?, ?, ?, ?, NULL, 0, ?, \
                              'sold', ?, 0, ?, ?, ?, 'equipment', ?, ?, 'trade')",
                     rusqlite::params![
                         id,
                         name,
+                        quantity,
+                        quantity * attributed,
+                        quantity * (1.0 - attributed),
                         tt_value,
+                        tt_value * attributed,
                         final_price,
                         sold_at,
                         final_price,
@@ -5644,10 +7172,10 @@ impl AnalyticsService {
                 daily_rollup::refresh_days(&tx, [sold_at.as_str()])?;
                 let row = read_listing(&tx, &id)?;
                 tx.commit()?;
-                Ok(row)
+                Ok(Ok(row))
             })
             .await
-            .map_err(AnalyticsError::from)
+            .map_err(AnalyticsError::from)?
     }
 
     /// Confirm a listing sold, at the price it actually fetched.
@@ -5677,98 +7205,11 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let Some(listing) = read_listing(&tx, &listing_id)? else {
-                    return Ok(None);
-                };
-                if listing.status != "pending" {
-                    return Ok(None);
+                let row =
+                    confirm_listing_within(&tx, &listing_id, final_price, sale_fee, &resolved_at)?;
+                if row.is_some() {
+                    tx.commit()?;
                 }
-
-                let gross_result = if listing.subject_kind == "equipment" {
-                    final_price - listing.cost_basis.unwrap_or(listing.tt_value)
-                } else {
-                    stock_allocation::resolve_sale(
-                        listing.quantity,
-                        listing.attributed_qty,
-                        listing.tt_value,
-                        final_price,
-                        listing.listing_fee,
-                        sale_fee,
-                    )
-                    .gross_markup
-                };
-
-                tx.execute(
-                    "UPDATE auction_listings SET status = 'sold', final_price = ?, \
-                         sale_fee = ?, resolved_at = ? WHERE id = ?",
-                    rusqlite::params![final_price, sale_fee, resolved_at, listing_id],
-                )?;
-
-                // Markup only. Selling at TT converts a position rather than
-                // creating income, for untracked stock as much as for tracked:
-                // the player held that value either way, and the app simply
-                // has no record of where the untracked part came from.
-                if gross_result.abs() > STOCK_EPSILON {
-                    let entry_id = Uuid::new_v4().to_string();
-                    let kind = if gross_result > 0.0 {
-                        "markup"
-                    } else {
-                        "expense"
-                    };
-                    let tag = if listing.subject_kind == "equipment" {
-                        INVENTORY_SALE_TAG
-                    } else {
-                        "market"
-                    };
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![
-                            entry_id,
-                            resolved_at,
-                            kind,
-                            format!("Auction Sale: {}", listing.item_name),
-                            gross_result.abs(),
-                            tag,
-                        ],
-                    )?;
-                    tx.execute(
-                        "UPDATE auction_listings SET sale_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, listing_id],
-                    )?;
-                }
-
-                if sale_fee > 0.0 {
-                    let entry_id = Uuid::new_v4().to_string();
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, 'expense', ?, ?, 'market')",
-                        rusqlite::params![
-                            entry_id,
-                            resolved_at,
-                            format!("Auction Fee: {}", listing.item_name),
-                            sale_fee,
-                        ],
-                    )?;
-                    tx.execute(
-                        "UPDATE auction_listings SET sale_fee_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, listing_id],
-                    )?;
-                }
-
-                if listing.subject_kind == "equipment" {
-                    if let Some(item_id) = &listing.inventory_item_id {
-                        tx.execute(
-                            "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
-                                 updated_at = unixepoch('now') WHERE id = ?",
-                            rusqlite::params![resolved_at, item_id],
-                        )?;
-                    }
-                }
-
-                daily_rollup::refresh_days(&tx, [resolved_at.as_str()])?;
-                let row = read_listing(&tx, &listing_id)?;
-                tx.commit()?;
                 Ok(row)
             })
             .await
@@ -5797,126 +7238,10 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let Some(listing) = read_listing(&tx, &listing_id)? else {
-                    return Ok(None);
-                };
-                if listing.status != "pending" {
-                    return Ok(None);
+                let row = expire_listing_within(&tx, &listing_id, &resolved_at, now)?;
+                if row.is_some() {
+                    tx.commit()?;
                 }
-
-                if listing.subject_kind == "equipment" {
-                    if let Some(item_id) = &listing.inventory_item_id {
-                        tx.execute(
-                            "UPDATE inventory_items SET state = 'held', disposed_at = NULL, \
-                                 updated_at = ? WHERE id = ?",
-                            rusqlite::params![now, item_id],
-                        )?;
-                    }
-                } else {
-                    // (source, tier, species, definition, tool, quantity, tt)
-                    // of each original listing movement, to be written back
-                    // in reverse without requiring an optional target label.
-                    type ReturningRow = (
-                        String,
-                        Option<String>,
-                        Option<String>,
-                        Option<i64>,
-                        Option<String>,
-                        Option<i64>,
-                        Option<i64>,
-                        Option<i64>,
-                        Option<i64>,
-                        f64,
-                        f64,
-                    );
-                    let returning: Vec<ReturningRow> = {
-                        let mut stmt = tx.prepare(
-                            "SELECT source_kind, yield_tier, mob_species, \
-                                    session_definition_id, tool_name, \
-                                    quest_reward_item_id, quest_run_id, quest_id, \
-                                    activity_context_id, \
-                                    quantity, tt_value \
-                             FROM stock_movements \
-                             WHERE ref_id = ? AND movement_kind = 'listing'",
-                        )?;
-                        let rows = stmt
-                            .query_map(rusqlite::params![listing_id], |row| {
-                                Ok((
-                                    row.get(0)?,
-                                    row.get(1)?,
-                                    row.get(2)?,
-                                    row.get(3)?,
-                                    row.get(4)?,
-                                    row.get(5)?,
-                                    row.get(6)?,
-                                    row.get(7)?,
-                                    row.get(8)?,
-                                    row.get(9)?,
-                                    row.get(10)?,
-                                ))
-                            })?
-                            .collect::<rusqlite::Result<Vec<_>>>()?;
-                        rows
-                    };
-                    for (
-                        source_kind,
-                        tier,
-                        species,
-                        definition_id,
-                        tool,
-                        reward_item_id,
-                        run_id,
-                        quest_id,
-                        context_id,
-                        quantity,
-                        tt_value,
-                    ) in returning
-                    {
-                        let provenance = match source_kind.as_str() {
-                            "harvest" => tier.as_deref().map(|tier| {
-                                stock_allocation::StockProvenance::Harvest(
-                                    HarvestYieldTier::from_db(tier),
-                                )
-                            }),
-                            "hunt" => {
-                                Some(stock_allocation::StockProvenance::Hunt(species.as_deref()))
-                            }
-                            "quest" => match (reward_item_id, run_id, quest_id) {
-                                (Some(reward_item_id), Some(quest_run_id), Some(quest_id)) => {
-                                    Some(stock_allocation::StockProvenance::Quest {
-                                        reward_item_id,
-                                        quest_run_id,
-                                        quest_id,
-                                        activity_context_id: context_id,
-                                    })
-                                }
-                                _ => None,
-                            },
-                            _ => None,
-                        };
-                        insert_movement(
-                            &tx,
-                            &listing.item_name,
-                            "listing_return",
-                            Some(&listing_id),
-                            provenance,
-                            definition_id,
-                            context_id,
-                            tool.as_deref(),
-                            -quantity,
-                            -tt_value,
-                            &resolved_at,
-                            now,
-                        )?;
-                    }
-                }
-
-                tx.execute(
-                    "UPDATE auction_listings SET status = 'expired', resolved_at = ? WHERE id = ?",
-                    rusqlite::params![resolved_at, listing_id],
-                )?;
-                let row = read_listing(&tx, &listing_id)?;
-                tx.commit()?;
                 Ok(row)
             })
             .await
@@ -5954,8 +7279,9 @@ impl AnalyticsService {
     }
 
     /// Convert held Shrapnel into Universal Ammo at the game's fixed 100:101
-    /// ratio. The 1% increase becomes realised only here, when the player says
-    /// the conversion happened.
+    /// ratio. The 1% increase becomes realised only by a recorded conversion:
+    /// this one, when the player says the conversion happened, or one the
+    /// account readings recorded on seeing it (see [`Self::record_from_account`]).
     pub async fn convert_shrapnel(
         &self,
         profession: Profession,
@@ -5989,7 +7315,8 @@ impl AnalyticsService {
             ));
         }
         let id = Uuid::new_v4().to_string();
-        let (source_c, target_c) = (source_item.to_string(), target_item.to_string());
+        let inputs = vec![(source_item.to_string(), quantity)];
+        let target = target_item.to_string();
         let converted_at = converted_at
             .filter(|value| !value.is_empty())
             .map(str::to_string)
@@ -5999,20 +7326,6 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let (positions, unit_tt) = item_positions(&tx, &source_c)?;
-                // What the produced item is worth per unit, so the conversion
-                // records a count rather than a value wearing a count's label.
-                // Falling back to the target's own recorded loot covers a
-                // future target this table has not learned yet. No conversion
-                // the app offers reaches the last fallback; if one ever does,
-                // the count carries the source's PED magnitude rather than a
-                // scale nothing supports.
-                let (_, target_loot_unit_tt) = item_positions(&tx, &target_c)?;
-                let target_unit_tt = produced_unit_tt(&target_c)
-                    .or_else(|| {
-                        (target_loot_unit_tt > STOCK_EPSILON).then_some(target_loot_unit_tt)
-                    })
-                    .unwrap_or(1.0);
                 // The service tolerates converting past tracked stock for the
                 // same reason it tolerates selling past it: the player may
                 // hold stock from before tracking began, and the excess rides
@@ -6021,93 +7334,25 @@ impl AnalyticsService {
                 // because what a conversion produces carries the source's
                 // activity composition forward and crediting activities with
                 // output they did not grow is the thing to avoid.
-                let plan =
-                    stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
-                let converted_tt = quantity * unit_tt;
-                let gain =
-                    eo_wire::normalizer::round_half_even(converted_tt * (value_ratio - 1.0), 4);
-                let output_tt = converted_tt + gain;
-                let realised_output_tt = (gain > STOCK_EPSILON).then_some(output_tt);
-                let realised_attributed_tt = (gain > STOCK_EPSILON).then_some(plan.attributed_tt);
-
-                tx.execute(
-                    "INSERT INTO stock_conversions \
-                         (id, source_item, target_item, profession, quantity, tt_value, \
-                          output_tt_value, attributed_tt, converted_at, created_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
-                        id,
-                        source_c,
-                        target_c,
-                        profession.as_str(),
-                        quantity,
-                        converted_tt,
-                        realised_output_tt,
-                        realised_attributed_tt,
-                        converted_at,
-                        now
-                    ],
+                let written = write_ratio_conversion(
+                    &tx,
+                    &id,
+                    profession,
+                    &RatioConversion {
+                        inputs: &inputs,
+                        target: &target,
+                        value_ratio,
+                    },
+                    &converted_at,
+                    now,
                 )?;
-
-                record_opening_balance(&tx, &source_c, &id, &plan, &converted_at, now)?;
-
-                for allocation in &plan.allocations {
-                    insert_movement(
-                        &tx,
-                        &source_c,
-                        "conversion_out",
-                        Some(&id),
-                        allocation.provenance,
-                        allocation.session_definition_id,
-                        allocation.activity_context_id,
-                        allocation.tool_name,
-                        -allocation.quantity,
-                        -allocation.tt_value,
-                        &converted_at,
-                        now,
-                    )?;
-                    if !is_universal_ammo(&target_c) {
-                        let allocation_output_tt = if converted_tt > STOCK_EPSILON {
-                            allocation.tt_value + gain * (allocation.tt_value / converted_tt)
-                        } else {
-                            allocation.tt_value
-                        };
-                        insert_movement(
-                            &tx,
-                            &target_c,
-                            "conversion_in",
-                            Some(&id),
-                            allocation.provenance,
-                            allocation.session_definition_id,
-                            allocation.activity_context_id,
-                            allocation.tool_name,
-                            allocation_output_tt / target_unit_tt,
-                            allocation_output_tt,
-                            &converted_at,
-                            now,
-                        )?;
-                    }
+                if written.is_ok() {
+                    tx.commit()?;
                 }
-
-                if gain > STOCK_EPSILON {
-                    let entry_id = Uuid::new_v4().to_string();
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, 'markup', ?, ?, 'convert')",
-                        rusqlite::params![entry_id, converted_at, "Shrapnel Conversion", gain,],
-                    )?;
-                    tx.execute(
-                        "UPDATE stock_conversions SET gain_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, id],
-                    )?;
-                    daily_rollup::refresh_days(&tx, [converted_at.as_str()])?;
-                }
-
-                tx.commit()?;
-                Ok(())
+                Ok(written)
             })
-            .await?;
-        Ok(())
+            .await?
+            .map_err(AnalyticsError::Rejected)
     }
 
     /// Record a private player-to-player sale. There is no listing lifecycle
@@ -6141,66 +7386,18 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let (positions, unit_tt) = item_positions(&tx, &item)?;
-                let plan =
-                    stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
-                let tt_value = quantity * unit_tt;
-                tx.execute(
-                    "INSERT INTO private_sales (id, item_name, profession, quantity, \
-                         attributed_qty, unattributed_qty, tt_value, attributed_tt, final_price, \
-                         sold_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
-                        id,
-                        item,
-                        profession.as_str(),
+                write_private_sale(
+                    &tx,
+                    &PrivateSale {
+                        id: &id,
+                        profession,
+                        item: &item,
                         quantity,
-                        plan.attributed_qty,
-                        plan.unattributed_qty,
-                        tt_value,
-                        plan.attributed_tt,
-                        final_price,
-                        sold_at,
-                        now,
-                    ],
+                        price: Some(final_price),
+                        sold_at: &sold_at,
+                    },
+                    now,
                 )?;
-                record_opening_balance(&tx, &item, &id, &plan, &sold_at, now)?;
-                for allocation in &plan.allocations {
-                    insert_movement(
-                        &tx,
-                        &item,
-                        "trade",
-                        Some(&id),
-                        allocation.provenance,
-                        allocation.session_definition_id,
-                        allocation.activity_context_id,
-                        allocation.tool_name,
-                        -allocation.quantity,
-                        -allocation.tt_value,
-                        &sold_at,
-                        now,
-                    )?;
-                }
-                let markup = final_price - tt_value;
-                if markup.abs() > STOCK_EPSILON {
-                    let entry_id = Uuid::new_v4().to_string();
-                    let kind = if markup > 0.0 { "markup" } else { "expense" };
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, ?, ?, ?, 'market')",
-                        rusqlite::params![
-                            entry_id,
-                            sold_at,
-                            kind,
-                            format!("Private Sale: {item}"),
-                            markup.abs(),
-                        ],
-                    )?;
-                    tx.execute(
-                        "UPDATE private_sales SET sale_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, id],
-                    )?;
-                }
-                daily_rollup::refresh_days(&tx, [sold_at.as_str()])?;
                 tx.commit()?;
                 Ok(())
             })
@@ -6238,46 +7435,21 @@ impl AnalyticsService {
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let (positions, unit_tt) = item_positions(&tx, &item)?;
-                let plan =
-                    stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
-                if plan.excess_qty > STOCK_EPSILON {
-                    return Ok(Err(
-                        "you cannot remove more than the current stock".to_string()
-                    ));
-                }
-                tx.execute(
-                    "INSERT INTO stock_removals \
-                         (id, item_name, profession, quantity, tt_value, removed_at, created_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![
-                        id,
-                        item,
-                        profession.as_str(),
+                let written = write_removal(
+                    &tx,
+                    &StockRemoval {
+                        id: &id,
+                        profession,
+                        item: &item,
                         quantity,
-                        quantity * unit_tt,
-                        removed_at,
-                        now,
-                    ],
+                        removed_at: &removed_at,
+                    },
+                    now,
                 )?;
-                for allocation in &plan.allocations {
-                    insert_movement(
-                        &tx,
-                        &item,
-                        "removal",
-                        Some(&id),
-                        allocation.provenance,
-                        allocation.session_definition_id,
-                        allocation.activity_context_id,
-                        allocation.tool_name,
-                        -allocation.quantity,
-                        -allocation.tt_value,
-                        &removed_at,
-                        now,
-                    )?;
+                if written.is_ok() {
+                    tx.commit()?;
                 }
-                tx.commit()?;
-                Ok(Ok(()))
+                Ok(written)
             })
             .await?
             .map_err(AnalyticsError::Rejected)
@@ -6285,7 +7457,8 @@ impl AnalyticsService {
 
     /// Everything this activity has done to its stock, newest first.
     ///
-    /// Listings, trades, conversions, and removals in one list, each carrying whether it can be
+    /// Listings, trades, conversions, and removals in one list (and, for the
+    /// Inventory, stock held as of unknown origin), each carrying whether it can be
     /// taken back. The verdict is computed here because it depends on what the
     /// rest of the ledger has since done with the stock, which the caller
     /// cannot see.
@@ -6327,7 +7500,19 @@ impl AnalyticsService {
                         } else {
                             reversal_blocker(conn, &listing.id)?
                         };
+                        let derived_from = conversion::sale_derived_from(
+                            conn,
+                            &listing.id,
+                            "listing",
+                            listing.inventory_item_id.as_deref(),
+                        )?;
                         rows.push(ActivityHistoryRow {
+                            conversion_lines: Vec::new(),
+                            ped_amount: None,
+                            itemised: false,
+                            derived_from,
+                            from_account: None,
+                            reconciliation_id: None,
                             occurred_at: listing
                                 .resolved_at
                                 .clone()
@@ -6358,87 +7543,13 @@ impl AnalyticsService {
                     }
                 }
 
-                {
-                    let mut stmt = conn.prepare(
-                        "SELECT id, source_item, target_item, quantity, tt_value, converted_at, \
-                                undone_at, output_tt_value, attributed_tt \
-                         FROM stock_conversions WHERE profession = ?",
-                    )?;
-                    let conversions = stmt
-                        .query_map(rusqlite::params![profession.as_str()], |row| {
-                            Ok((
-                                row.get::<_, String>(0)?,
-                                row.get::<_, String>(1)?,
-                                row.get::<_, String>(2)?,
-                                row.get::<_, f64>(3)?,
-                                row.get::<_, f64>(4)?,
-                                row.get::<_, String>(5)?,
-                                row.get::<_, Option<String>>(6)?,
-                                row.get::<_, Option<f64>>(7)?,
-                                row.get::<_, Option<f64>>(8)?,
-                            ))
-                        })?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    for (
-                        id,
-                        source,
-                        target,
-                        quantity,
-                        tt_value,
-                        converted_at,
-                        undone_at,
-                        output_tt,
-                        attributed_tt,
-                    ) in conversions
-                    {
-                        let undone = undone_at.is_some();
-                        let blocker = if undone {
-                            None
-                        } else {
-                            reversal_blocker(conn, &id)?
-                        };
-                        rows.push(ActivityHistoryRow {
-                            id,
-                            kind: "conversion".to_string(),
-                            subject_kind: "loot".to_string(),
-                            channel: "conversion".to_string(),
-                            status: "converted".to_string(),
-                            item_name: source,
-                            target_item: Some(target),
-                            occurred_at: converted_at,
-                            quantity,
-                            tt_value,
-                            net_markup: output_tt.map(|output| output - tt_value),
-                            activity_net_markup: output_tt.zip(attributed_tt).map(
-                                |(output, attributed)| {
-                                    stock_allocation::resolve_sale(
-                                        quantity,
-                                        if tt_value > STOCK_EPSILON {
-                                            quantity * attributed / tt_value
-                                        } else {
-                                            0.0
-                                        },
-                                        tt_value,
-                                        output,
-                                        0.0,
-                                        0.0,
-                                    )
-                                    .activity_net_markup
-                                },
-                            ),
-                            can_revert_sale: false,
-                            can_delete: !undone && blocker.is_none(),
-                            undo_blocked_reason: blocker
-                                .map(|(item, short)| blocked_reason(&item, short)),
-                            undone,
-                        });
-                    }
-                }
+                conversion::push_history_rows(conn, profession, &mut rows)?;
 
                 {
                     let mut stmt = conn.prepare(
                         "SELECT id, item_name, quantity, attributed_qty, tt_value, final_price, \
-                                sold_at, undone_at FROM private_sales WHERE profession = ?",
+                                sold_at, undone_at, paid_markup \
+                         FROM private_sales WHERE profession = ?",
                     )?;
                     let sales = stmt
                         .query_map(rusqlite::params![profession.as_str()], |row| {
@@ -6451,20 +7562,30 @@ impl AnalyticsService {
                                 row.get::<_, f64>(5)?,
                                 row.get::<_, String>(6)?,
                                 row.get::<_, Option<String>>(7)?,
+                                row.get::<_, f64>(8)?,
                             ))
                         })?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
-                    for (id, item, quantity, attributed_qty, tt, price, sold_at, undone_at) in sales
+                    for (id, item, quantity, attributed_qty, tt, price, sold_at, undone_at, paid) in
+                        sales
                     {
                         let outcome = stock_allocation::resolve_sale(
                             quantity,
                             attributed_qty,
                             tt,
+                            paid,
                             price,
                             0.0,
                             0.0,
                         );
+                        let derived_from = conversion::sale_derived_from(conn, &id, "trade", None)?;
                         rows.push(ActivityHistoryRow {
+                            conversion_lines: Vec::new(),
+                            ped_amount: None,
+                            itemised: false,
+                            derived_from,
+                            from_account: None,
+                            reconciliation_id: None,
                             id,
                             kind: "trade".to_string(),
                             subject_kind: "loot".to_string(),
@@ -6504,6 +7625,12 @@ impl AnalyticsService {
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     for (id, item, quantity, tt, removed_at, undone_at) in removals {
                         rows.push(ActivityHistoryRow {
+                            conversion_lines: Vec::new(),
+                            ped_amount: None,
+                            itemised: false,
+                            derived_from: Vec::new(),
+                            from_account: None,
+                            reconciliation_id: None,
                             id,
                             kind: "removal".to_string(),
                             subject_kind: "loot".to_string(),
@@ -6523,6 +7650,10 @@ impl AnalyticsService {
                         });
                     }
                 }
+
+                from_account::push_unknown_origin_rows(conn, profession, &mut rows)?;
+                from_account::attach_sources(conn, &mut rows)?;
+                reconciliation::attach_reconciliations(conn, &mut rows)?;
 
                 // Newest first, and stable on the id so a day with several
                 // entries does not reshuffle between reads.
@@ -6593,6 +7724,69 @@ impl AnalyticsService {
             .map_err(AnalyticsError::from)
     }
 
+    /// Take back an expiry, leaving the listing on the auction again: the
+    /// stock that came back goes out once more, exactly as it returned.
+    /// `Ok(None)` when no expired auction listing stands under that id;
+    /// refused when the stock that came back has since left, and for
+    /// equipment, whose return merged it back into the holding it came
+    /// from.
+    pub async fn reopen_expired_listing(
+        &self,
+        listing_id: &str,
+    ) -> Result<Option<AuctionListingRow>, AnalyticsError> {
+        let listing_id = listing_id.to_string();
+        self.db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                let Some(listing) = read_listing(&tx, &listing_id)? else {
+                    return Ok(Ok(None));
+                };
+                if listing.status != "expired" || listing.channel != "auction" {
+                    return Ok(Ok(None));
+                }
+                if listing.subject_kind == "equipment" {
+                    return Ok(Err(
+                        "An equipment listing that came back is held again; list it anew instead"
+                            .to_string(),
+                    ));
+                }
+                let returned: Vec<(String, f64)> = {
+                    let mut stmt = tx.prepare(
+                        "SELECT item_name, SUM(quantity) FROM stock_movements \
+                         WHERE ref_id = ?1 AND movement_kind = 'listing_return' \
+                           AND inventory_item_id IS NULL GROUP BY item_name",
+                    )?;
+                    let rows = stmt
+                        .query_map(rusqlite::params![listing_id], |row| {
+                            Ok((row.get(0)?, row.get(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    rows
+                };
+                for (item_name, came_back) in &returned {
+                    let remaining = raw_position(&tx, item_name)? - came_back;
+                    if remaining < -STOCK_EPSILON {
+                        return Ok(Err(blocked_reason(item_name, -remaining)));
+                    }
+                }
+                tx.execute(
+                    "DELETE FROM stock_movements \
+                     WHERE ref_id = ?1 AND movement_kind = 'listing_return'",
+                    rusqlite::params![listing_id],
+                )?;
+                tx.execute(
+                    "UPDATE auction_listings SET status = 'pending', resolved_at = NULL \
+                     WHERE id = ?1",
+                    rusqlite::params![listing_id],
+                )?;
+                let row = read_listing(&tx, &listing_id)?;
+                tx.commit()?;
+                Ok(Ok(row))
+            })
+            .await?
+            .map_err(AnalyticsError::Rejected)
+    }
+
     /// Undo a listing: the stock it took comes back, and every ledger row it
     /// wrote goes with it.
     ///
@@ -6606,6 +7800,7 @@ impl AnalyticsService {
     pub async fn undo_auction_listing(&self, listing_id: &str) -> Result<bool, AnalyticsError> {
         let listing_id = listing_id.to_string();
         let undone_at = self.default_date();
+        let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
@@ -6634,11 +7829,7 @@ impl AnalyticsService {
                 )?;
                 if listing.subject_kind == "equipment" {
                     if let Some(item_id) = &listing.inventory_item_id {
-                        tx.execute(
-                            "UPDATE inventory_items SET state = 'held', disposed_at = NULL, \
-                                 updated_at = unixepoch('now') WHERE id = ?",
-                            rusqlite::params![item_id],
-                        )?;
+                        asset_positions::restore(&tx, item_id, now)?;
                     }
                 }
                 // The entry stands as a record; its pointers do not, so a
@@ -6665,44 +7856,18 @@ impl AnalyticsService {
     pub async fn undo_stock_conversion(&self, conversion_id: &str) -> Result<bool, AnalyticsError> {
         let conversion_id = conversion_id.to_string();
         let undone_at = self.default_date();
+        let now = naive_to_epoch(self.clock.now());
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let conversion: Option<(String, Option<String>)> = tx
-                    .query_row(
-                        "SELECT converted_at, gain_entry_id FROM stock_conversions \
-                         WHERE id = ? AND undone_at IS NULL",
-                        rusqlite::params![conversion_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .optional()?;
-                let Some((converted_at, gain_entry_id)) = conversion else {
-                    return Ok(Ok(false));
-                };
-                if let Some((item, short)) = reversal_blocker(&tx, &conversion_id)? {
-                    return Ok(Err(blocked_reason(&item, short)));
+                if reconciliation::standing_reconciliation_of(&tx, &conversion_id)?.is_some() {
+                    return Ok(Err(reconciliation::HELD_BY_RECONCILIATION.to_string()));
                 }
-
-                tx.execute(
-                    "DELETE FROM stock_movements WHERE ref_id = ?",
-                    rusqlite::params![conversion_id],
-                )?;
-                if let Some(entry_id) = gain_entry_id {
-                    tx.execute(
-                        "DELETE FROM ledger_entries WHERE id = ?",
-                        rusqlite::params![entry_id],
-                    )?;
+                let undone = undo_conversion_within(&tx, &conversion_id, &undone_at, now)?;
+                if matches!(undone, Ok(true)) {
+                    tx.commit()?;
                 }
-                tx.execute(
-                    "UPDATE stock_conversions SET undone_at = ?, gain_entry_id = NULL WHERE id = ?",
-                    rusqlite::params![undone_at, conversion_id],
-                )?;
-                // A conversion writes no money, but its day is refreshed all
-                // the same: cheap, and it keeps every undo path the same shape.
-                daily_rollup::refresh_days(&tx, [converted_at])?;
-                tx.commit()?;
-                Ok(Ok(true))
+                Ok(undone)
             })
             .await?
             .map_err(AnalyticsError::Rejected)
@@ -6716,39 +7881,18 @@ impl AnalyticsService {
         let undone_at = self.default_date();
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let sale: Option<(String, Option<String>)> = tx
-                    .query_row(
-                        "SELECT sold_at, sale_entry_id FROM private_sales \
-                         WHERE id = ? AND undone_at IS NULL",
-                        rusqlite::params![sale_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .optional()?;
-                let Some((sold_at, entry_id)) = sale else {
-                    return Ok(false);
-                };
-                tx.execute(
-                    "DELETE FROM stock_movements WHERE ref_id = ?",
-                    rusqlite::params![sale_id],
-                )?;
-                if let Some(entry_id) = entry_id {
-                    tx.execute(
-                        "DELETE FROM ledger_entries WHERE id = ?",
-                        rusqlite::params![entry_id],
-                    )?;
+                if reconciliation::standing_reconciliation_of(&tx, &sale_id)?.is_some() {
+                    return Ok(Err(reconciliation::HELD_BY_RECONCILIATION.to_string()));
                 }
-                tx.execute(
-                    "UPDATE private_sales SET undone_at = ?, sale_entry_id = NULL WHERE id = ?",
-                    rusqlite::params![undone_at, sale_id],
-                )?;
-                daily_rollup::refresh_days(&tx, [sold_at])?;
-                tx.commit()?;
-                Ok(true)
+                let undone = undo_private_sale_within(&tx, &sale_id, &undone_at)?;
+                if undone {
+                    tx.commit()?;
+                }
+                Ok(Ok(undone))
             })
-            .await
-            .map_err(AnalyticsError::from)
+            .await?
+            .map_err(AnalyticsError::Rejected)
     }
 
     /// Undo an uncertain removal recorded in error. No ledger row exists;
@@ -6758,219 +7902,18 @@ impl AnalyticsService {
         let undone_at = self.default_date();
         self.db
             .with_writer(move |conn| {
-                use rusqlite::OptionalExtension as _;
                 let tx = conn.transaction()?;
-                let exists: Option<i64> = tx
-                    .query_row(
-                        "SELECT 1 FROM stock_removals WHERE id = ? AND undone_at IS NULL",
-                        rusqlite::params![removal_id],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                if exists.is_none() {
-                    return Ok(false);
+                if reconciliation::standing_reconciliation_of(&tx, &removal_id)?.is_some() {
+                    return Ok(Err(reconciliation::HELD_BY_RECONCILIATION.to_string()));
                 }
-                tx.execute(
-                    "DELETE FROM stock_movements WHERE ref_id = ?",
-                    rusqlite::params![removal_id],
-                )?;
-                tx.execute(
-                    "UPDATE stock_removals SET undone_at = ? WHERE id = ?",
-                    rusqlite::params![undone_at, removal_id],
-                )?;
-                tx.commit()?;
-                Ok(true)
-            })
-            .await
-            .map_err(AnalyticsError::from)
-    }
-
-    /// Net realised markup per yield tier, from confirmed stock outcomes.
-    ///
-    /// Each sold listing's activity-claimable markup is divided across the
-    /// sources that supplied it, in proportion to the quantity each contributed.
-    /// Pending listings realise nothing, and expired ones never realise.
-    ///
-    /// The tool that produced the stock is recorded on the movement rows but
-    /// is deliberately not reported: it is an input to the activity, not an
-    /// outcome, so it is compared on cost with equipment rather than on
-    /// returns it does not cause.
-    pub async fn realised_markup_by_tier(&self) -> Result<Vec<RealisedTierMarkup>, AnalyticsError> {
-        Ok(self
-            .db
-            .with_reader(|conn| {
-                let sold = realised_stock_outcomes(conn)?;
-
-                let mut totals: std::collections::BTreeMap<String, f64> =
-                    std::collections::BTreeMap::new();
-                for realised in sold {
-                    let id = realised.id;
-                    let outcome = realised.outcome;
-                    if outcome.activity_net_markup.abs() <= STOCK_EPSILON {
-                        continue;
-                    }
-                    // Attributed quantity spans every provenance dimension, so the
-                    // share denominator does too: a sale drawing on boards
-                    // AND hides credits each side only what it supplied.
-                    let contributions: Vec<(Option<String>, f64)> = {
-                        let mut stmt = conn.prepare(
-                            "SELECT yield_tier, SUM(-quantity) FROM stock_movements \
-                             WHERE ref_id = ? AND movement_kind = ? \
-                               AND source_kind IN ('hunt', 'harvest', 'quest') \
-                             GROUP BY yield_tier",
-                        )?;
-                        let rows = stmt
-                            .query_map(rusqlite::params![id, realised.movement_kind], |row| {
-                                Ok((row.get(0)?, row.get(1)?))
-                            })?
-                            .collect::<rusqlite::Result<Vec<_>>>()?;
-                        rows
-                    };
-                    let contributed_quantity: f64 = contributions.iter().map(|(_, qty)| qty).sum();
-                    if contributed_quantity <= STOCK_EPSILON {
-                        continue;
-                    }
-                    for (tier, quantity) in contributions {
-                        let Some(tier) = tier else { continue };
-                        let share = quantity / contributed_quantity;
-                        *totals.entry(tier).or_insert(0.0) += outcome.activity_net_markup * share;
-                    }
+                let undone = undo_removal_within(&tx, &removal_id, &undone_at)?;
+                if undone {
+                    tx.commit()?;
                 }
-
-                let mut rows: Vec<RealisedTierMarkup> = totals
-                    .into_iter()
-                    .map(|(tier, net_markup)| RealisedTierMarkup {
-                        yield_tier: HarvestYieldTier::from_db(&tier),
-                        net_markup,
-                    })
-                    .collect();
-                rows.sort_by_key(|row| row.yield_tier.sort_rank());
-                Ok(rows)
+                Ok(Ok(undone))
             })
-            .await?)
-    }
-
-    /// Net realised markup per mob species, from confirmed stock outcomes: the
-    /// Hunting sibling of [`Self::realised_markup_by_tier`], reading the
-    /// species dimension of the same movement ledger. A sold listing's
-    /// activity-claimable markup divides across every contributing source in
-    /// proportion to the TT each supplied, so a joint-provenance sale credits
-    /// tiers and species each their own share without double counting.
-    pub async fn realised_markup_by_species(
-        &self,
-    ) -> Result<Vec<RealisedSpeciesMarkup>, AnalyticsError> {
-        Ok(self
-            .db
-            .with_reader(|conn| {
-                let sold = realised_stock_outcomes(conn)?;
-
-                let mut totals: std::collections::BTreeMap<String, f64> =
-                    std::collections::BTreeMap::new();
-                for realised in sold {
-                    let id = realised.id;
-                    let outcome = realised.outcome;
-                    if outcome.activity_net_markup.abs() <= STOCK_EPSILON {
-                        continue;
-                    }
-                    // Attributed quantity spans every provenance dimension; the
-                    // share denominator has to as well, or a joint sale
-                    // would credit the species side more than it supplied.
-                    let contributions: Vec<(Option<String>, f64)> = {
-                        let mut stmt = conn.prepare(
-                            "SELECT CASE WHEN source_kind = 'hunt' OR mob_species IS NOT NULL \
-                                         THEN COALESCE(mob_species, '') ELSE NULL END, \
-                                    SUM(-quantity) FROM stock_movements \
-                             WHERE ref_id = ? AND movement_kind = ? \
-                               AND source_kind IN ('hunt', 'harvest', 'quest') \
-                             GROUP BY 1",
-                        )?;
-                        let rows = stmt
-                            .query_map(rusqlite::params![id, realised.movement_kind], |row| {
-                                Ok((row.get(0)?, row.get(1)?))
-                            })?
-                            .collect::<rusqlite::Result<Vec<_>>>()?;
-                        rows
-                    };
-                    let contributed_quantity: f64 = contributions.iter().map(|(_, qty)| qty).sum();
-                    if contributed_quantity <= STOCK_EPSILON {
-                        continue;
-                    }
-                    for (species, quantity) in contributions {
-                        let Some(species) = species else { continue };
-                        let share = quantity / contributed_quantity;
-                        *totals.entry(species).or_insert(0.0) +=
-                            outcome.activity_net_markup * share;
-                    }
-                }
-
-                Ok(totals
-                    .into_iter()
-                    .map(|(mob_species, net_markup)| RealisedSpeciesMarkup {
-                        mob_species,
-                        net_markup,
-                    })
-                    .collect())
-            })
-            .await?)
-    }
-
-    /// Net realised markup per Hunting session definition. Movements without
-    /// a definition context remain unclaimed here while retaining their
-    /// Overall economic truth. Optional observed-species evidence never gates
-    /// this deliberate activity axis.
-    pub async fn realised_markup_by_definition(
-        &self,
-    ) -> Result<Vec<RealisedDefinitionMarkup>, AnalyticsError> {
-        Ok(self
-            .db
-            .with_reader(|conn| {
-                let sold = realised_stock_outcomes(conn)?;
-
-                let mut totals: std::collections::BTreeMap<i64, f64> =
-                    std::collections::BTreeMap::new();
-                for realised in sold {
-                    let id = realised.id;
-                    let outcome = realised.outcome;
-                    if outcome.activity_net_markup.abs() <= STOCK_EPSILON {
-                        continue;
-                    }
-                    let contributions: Vec<(Option<i64>, f64)> = {
-                        let mut stmt = conn.prepare(
-                            "SELECT session_definition_id, SUM(-quantity) \
-                             FROM stock_movements \
-                             WHERE ref_id = ? AND movement_kind = ? \
-                               AND source_kind IN ('hunt', 'harvest', 'quest') \
-                             GROUP BY session_definition_id",
-                        )?;
-                        let rows = stmt
-                            .query_map(rusqlite::params![id, realised.movement_kind], |row| {
-                                Ok((row.get(0)?, row.get(1)?))
-                            })?
-                            .collect::<rusqlite::Result<Vec<_>>>()?;
-                        rows
-                    };
-                    let contributed_quantity: f64 = contributions.iter().map(|(_, qty)| qty).sum();
-                    if contributed_quantity <= STOCK_EPSILON {
-                        continue;
-                    }
-                    for (definition_id, quantity) in contributions {
-                        let Some(definition_id) = definition_id else {
-                            continue;
-                        };
-                        *totals.entry(definition_id).or_insert(0.0) +=
-                            outcome.activity_net_markup * (quantity / contributed_quantity);
-                    }
-                }
-
-                Ok(totals
-                    .into_iter()
-                    .map(|(definition_id, net_markup)| RealisedDefinitionMarkup {
-                        definition_id,
-                        net_markup,
-                    })
-                    .collect())
-            })
-            .await?)
+            .await?
+            .map_err(AnalyticsError::Rejected)
     }
 
     /// The stored inventory row re-read and shaped (the create / patch
@@ -6981,22 +7924,27 @@ impl AnalyticsService {
         Ok(self
             .db
             .with_reader(move |conn| {
-                conn.query_row(
-                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at \
+                let mut rows = vec![conn.query_row(
+                    "SELECT id, name, tt_value, markup_paid, notes, acquired_at, quantity \
                      FROM inventory_items WHERE id = ?",
                     rusqlite::params![item_id],
                     |row| Ok(inventory_item(row)),
-                )
-                .map_err(DbError::from)
+                )?];
+                conversion::attach_asset_origins(conn, &mut rows)?;
+                asset_positions::attach_purchases(conn, &mut rows)?;
+                Ok(rows.remove(0))
             })
             .await?)
     }
 
-    /// Create an inventory item; an empty / absent `acquired_at` defaults
-    /// to the clock's UTC date. Returns the stored row's wire shape.
+    /// Create an asset: `quantity` units (one when absent) bought for
+    /// `tt_value` plus `markup_paid` in total. An empty / absent
+    /// `acquired_at` defaults to the clock's UTC date. Returns the stored
+    /// row's wire shape.
     pub async fn create_inventory_item(
         &self,
         name: &str,
+        quantity: Option<f64>,
         tt_value: f64,
         markup_paid: f64,
         notes: Option<&str>,
@@ -7007,6 +7955,8 @@ impl AnalyticsService {
                 "Universal Ammo is liquid PED and is never held in Inventory",
             ));
         }
+        let quantity = quantity.unwrap_or(1.0);
+        asset_positions::check_amounts(Some(quantity), Some(tt_value), Some(markup_paid))?;
         let id = Uuid::new_v4().to_string();
         // acquired_at falls back to today's UTC date: the original's `or`
         // treats an empty string as falsy, so "" defaults to the clock date.
@@ -7014,6 +7964,7 @@ impl AnalyticsService {
             .filter(|value| !value.is_empty())
             .map(str::to_string)
             .unwrap_or_else(|| self.default_date());
+        let now = naive_to_epoch(self.clock.now());
         {
             let (id, name, notes, date) = (
                 id.clone(),
@@ -7023,12 +7974,32 @@ impl AnalyticsService {
             );
             self.db
                 .with_writer(move |conn| {
-                    conn.execute(
+                    let tx = conn.transaction()?;
+                    tx.execute(
                         "INSERT INTO inventory_items \
-                         (id, name, tt_value, markup_paid, notes, acquired_at) \
-                         VALUES (?, ?, ?, ?, ?, ?)",
-                        rusqlite::params![id, name, tt_value, markup_paid, notes, date],
+                         (id, name, tt_value, markup_paid, notes, acquired_at, quantity, \
+                          updated_at) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![
+                            id,
+                            name,
+                            tt_value,
+                            markup_paid,
+                            notes,
+                            date,
+                            quantity,
+                            now
+                        ],
                     )?;
+                    asset_positions::insert_purchase(
+                        &tx,
+                        &id,
+                        (quantity, tt_value, markup_paid),
+                        &date,
+                        None,
+                        now,
+                    )?;
+                    tx.commit()?;
                     Ok(())
                 })
                 .await?;
@@ -7039,19 +8010,29 @@ impl AnalyticsService {
     /// Update an inventory item: only provided (`Some`) fields change,
     /// bumping `updated_at`; an all-`None` patch still re-reads and returns
     /// the row. `None` (not `Some(Value::Null)`) reports a missing item.
+    ///
+    /// The figures (quantity, TT, markup paid) change here only while the
+    /// asset is still its one purchase, which they change with it; once it
+    /// has been bought more of, or units it paid for have left, they change
+    /// through its purchases (or not at all).
     pub async fn update_inventory_item(
         &self,
         item_id: &str,
-        name: Option<&str>,
-        tt_value: Option<f64>,
-        markup_paid: Option<f64>,
-        notes: Option<&str>,
+        patch: InventoryItemPatch<'_>,
     ) -> Result<Option<InventoryRow>, AnalyticsError> {
+        let InventoryItemPatch {
+            name,
+            quantity,
+            tt_value,
+            markup_paid,
+            notes,
+        } = patch;
         if name.is_some_and(is_universal_ammo) {
             return Err(AnalyticsError::InvalidInput(
                 "Universal Ammo is liquid PED and is never held in Inventory",
             ));
         }
+        asset_positions::check_amounts(quantity, tt_value, markup_paid)?;
         // The existence check and the (possibly empty) update run together on
         // the writer connection, which reads as well as writes.
         let updated = {
@@ -7061,7 +8042,8 @@ impl AnalyticsService {
             self.db
                 .with_writer(move |conn| {
                     use rusqlite::OptionalExtension as _;
-                    let exists = conn
+                    let tx = conn.transaction()?;
+                    let exists = tx
                         .query_row(
                             "SELECT 1 FROM inventory_items WHERE id = ? AND state = 'held'",
                             rusqlite::params![item_id],
@@ -7069,12 +8051,29 @@ impl AnalyticsService {
                         )
                         .optional()?;
                     if exists.is_none() {
-                        return Ok(false);
+                        return Ok(Ok(false));
+                    }
+
+                    let figures = quantity.is_some() || tt_value.is_some() || markup_paid.is_some();
+                    if figures {
+                        if !asset_positions::is_sole_open_purchase(&tx, &item_id)? {
+                            return Ok(Err(
+                                "This asset's figures come from its purchases; change a purchase instead",
+                            ));
+                        }
+                        if quantity.is_some() && conversion::is_converted_asset(&tx, &item_id)? {
+                            return Ok(Err(
+                                "This asset came out of a conversion, so its quantity is fixed",
+                            ));
+                        }
                     }
 
                     let mut sets: Vec<&str> = Vec::new();
                     if name.is_some() {
                         sets.push("name = ?");
+                    }
+                    if quantity.is_some() {
+                        sets.push("quantity = ?");
                     }
                     if tt_value.is_some() {
                         sets.push("tt_value = ?");
@@ -7095,6 +8094,9 @@ impl AnalyticsService {
                         if let Some(value) = &name {
                             params.push(value.clone().into());
                         }
+                        if let Some(value) = quantity {
+                            params.push(value.into());
+                        }
                         if let Some(value) = tt_value {
                             params.push(value.into());
                         }
@@ -7105,16 +8107,30 @@ impl AnalyticsService {
                             params.push(value.clone().into());
                         }
                         params.push(item_id.clone().into());
-                        conn.execute(&sql, rusqlite::params_from_iter(params))?;
+                        tx.execute(&sql, rusqlite::params_from_iter(params))?;
                     }
-                    Ok(true)
+                    if figures {
+                        // The one purchase is the asset, so it says the same.
+                        tx.execute(
+                            "UPDATE asset_purchases \
+                             SET quantity = i.quantity, tt_value = i.tt_value, \
+                                 markup_paid = i.markup_paid \
+                             FROM (SELECT quantity, tt_value, markup_paid \
+                                   FROM inventory_items WHERE id = ?1) AS i \
+                             WHERE position_id = ?1",
+                            rusqlite::params![item_id],
+                        )?;
+                    }
+                    tx.commit()?;
+                    Ok(Ok(true))
                 })
                 .await?
         };
-        if !updated {
-            return Ok(None);
+        match updated {
+            Ok(true) => Ok(Some(self.inventory_row(item_id).await?)),
+            Ok(false) => Ok(None),
+            Err(reason) => Err(AnalyticsError::Rejected(reason.to_string())),
         }
-        Ok(Some(self.inventory_row(item_id).await?))
     }
 
     /// Delete an inventory item. Returns whether a row existed.
@@ -7123,10 +8139,35 @@ impl AnalyticsService {
         let affected = self
             .db
             .with_writer(move |conn| {
-                Ok(conn.execute(
-                    "DELETE FROM inventory_items WHERE id = ? AND state = 'held'",
-                    rusqlite::params![item_id],
-                )?)
+                let tx = conn.transaction()?;
+                // An asset a conversion made is the only record of where that
+                // value went, and units already sold out of a position are
+                // history that still names it, so either leaves the list
+                // without leaving the books.
+                let affected = if conversion::is_converted_asset(&tx, &item_id)?
+                    || asset_positions::has_other_rows(&tx, &item_id)?
+                {
+                    tx.execute(
+                        "UPDATE inventory_items SET state = 'removed', \
+                             disposed_at = date('now'), updated_at = unixepoch('now') \
+                         WHERE id = ? AND state = 'held'",
+                        rusqlite::params![item_id],
+                    )?
+                } else {
+                    let affected = tx.execute(
+                        "DELETE FROM inventory_items WHERE id = ? AND state = 'held'",
+                        rusqlite::params![item_id],
+                    )?;
+                    if affected != 0 {
+                        tx.execute(
+                            "DELETE FROM asset_purchases WHERE position_id = ?",
+                            rusqlite::params![item_id],
+                        )?;
+                    }
+                    affected
+                };
+                tx.commit()?;
+                Ok(affected)
             })
             .await?;
         Ok(affected != 0)
@@ -7152,7 +8193,7 @@ impl AnalyticsService {
                 .with_reader(move |conn| {
                     use rusqlite::OptionalExtension as _;
                     conn.query_row(
-                        "SELECT id, name, tt_value, markup_paid, notes, acquired_at \
+                        "SELECT id, name, tt_value, markup_paid, notes, acquired_at, quantity \
                          FROM inventory_items WHERE id = ? AND state = 'held'",
                         rusqlite::params![item_id],
                         |row| {
@@ -7203,9 +8244,15 @@ impl AnalyticsService {
             .db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
+                // id-order: insertion (the sale fixes every purchase recorded
+                // before it; see `asset_positions::latest_purchase`).
                 let affected = tx.execute(
                     "UPDATE inventory_items SET state = 'sold', disposed_at = ?, \
-                         updated_at = unixepoch('now') WHERE id = ? AND state = 'held'",
+                         updated_at = unixepoch('now'), \
+                         drawn_through = (SELECT MAX(p.id) FROM asset_purchases p \
+                             WHERE p.position_id = COALESCE(inventory_items.position_id, \
+                                                            inventory_items.id)) \
+                     WHERE id = ? AND state = 'held'",
                     rusqlite::params![sold_at, item_id_owned],
                 )?;
                 if affected == 0 {
@@ -7243,6 +8290,7 @@ impl AnalyticsService {
                 description,
                 amount,
                 tag: INVENTORY_SALE_TAG.to_string(),
+                session_name: None,
             },
         );
         Ok(Some(InventorySale {
@@ -7288,7 +8336,7 @@ mod tests {
     /// An [`AnalyticsService`] over a real temp-file database, its clock frozen
     /// so the UTC default date is deterministic
     /// (2026-06-01).
-    async fn write_service() -> (tempfile::TempDir, AnalyticsService) {
+    pub(super) async fn write_service() -> (tempfile::TempDir, AnalyticsService) {
         use crate::clock::MockClock;
         let (dir, db) = open_env().await;
         let naive =
@@ -7334,7 +8382,14 @@ mod tests {
         // A backdated create lands its day's rollup with the insert.
         let body = to_json(
             service
-                .create_ledger_entry("2026-06-02", "expense", "ammo restock", 12.5, "manual")
+                .create_ledger_entry(
+                    "2026-06-02",
+                    "expense",
+                    "ammo restock",
+                    12.5,
+                    "manual",
+                    None,
+                )
                 .await
                 .unwrap(),
         );
@@ -7393,7 +8448,10 @@ mod tests {
             "{\"totalReturnRate\":0.0,\"trend\":\"stable\",\"returnsBreakdown\":{\"lootTt\":0.0,\
              \"questItemTt\":0.0,\"pes\":0.0,\"codexPes\":0.0,\"questPes\":0.0,\"ledger\":{}},\"lossesBreakdown\":\
              {\"trackingCost\":0.0,\"cycledBreakdown\":{\"weapon\":0,\"healing\":0,\"enhancer\":0,\
-             \"armour\":0,\"dangling\":0,\"harvest\":0},\"ledger\":{}},\"totalGains\":0.0,\"totalLosses\":0.0,\
+             \"armour\":0,\"dangling\":0,\"harvest\":0,\"consumables\":0},\"overhead\":\
+             {\"total\":0.0,\"betweenSessions\":0.0,\"travel\":0.0,\"fieldLogistics\":0.0,\
+             \"unclassified\":0.0},\
+             \"ledger\":{}},\"totalGains\":0.0,\"totalLosses\":0.0,\
              \"timeline\":[],\"monthlyBreakdown\":[]}"
         );
     }
@@ -7412,7 +8470,10 @@ mod tests {
     async fn empty_harvest_emits_an_empty_tier_table() {
         let (_dir, db) = open_env().await;
         let value = to_json(harvest_impl(&db, None).await.unwrap());
-        assert_eq!(to_wire_json(&value), "{\"tierComparisons\":[]}");
+        assert_eq!(
+            to_wire_json(&value),
+            "{\"tierComparisons\":[],\"overhead\":0.0,\"unassignedOverhead\":0.0}"
+        );
     }
 
     /// Tier is the source activity; tool is a nested strategy. One tool may
@@ -8070,7 +9131,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let body = to_json(
             service
-                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo")
+                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo", None)
                 .await
                 .unwrap(),
         );
@@ -8100,6 +9161,7 @@ mod tests {
                     &format!("e{day}"),
                     1.0,
                     "t",
+                    None,
                 )
                 .await
                 .unwrap();
@@ -8203,6 +9265,325 @@ mod tests {
 
     fn position(rows: &[StockPositionRow], item: &str) -> Option<StockPositionRow> {
         rows.iter().find(|row| row.item_name == item).cloned()
+    }
+
+    /// Where each figure of a listing came from, as stored.
+    async fn field_sources(
+        service: &AnalyticsService,
+        listing_id: &str,
+    ) -> Vec<(String, String, Option<String>)> {
+        let id = listing_id.to_string();
+        service
+            .db
+            .with_reader(move |conn| {
+                let mut statement = conn.prepare(
+                    "SELECT field, source, read_text FROM auction_listing_field_sources \
+                     WHERE listing_id = ? ORDER BY field",
+                )?;
+                let rows = statement
+                    .query_map(rusqlite::params![id], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .await
+            .unwrap()
+    }
+
+    fn read(text: &str, assurance: ReadAssurance) -> FieldSource {
+        FieldSource::Read {
+            text: Some(text.to_string()),
+            assurance,
+        }
+    }
+
+    fn source(field: ListingField, source: FieldSource) -> ListingFieldSource {
+        ListingFieldSource { field, source }
+    }
+
+    /// A listing drafted from a read keeps, per figure, whether the screen
+    /// gave it (checked by the window's other figures or not), the
+    /// application matched it, or the player typed it; one entered by hand
+    /// keeps nothing.
+    #[tokio::test]
+    async fn a_listing_records_where_each_figure_came_from() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let sources = [
+            source(
+                ListingField::ItemName,
+                read("Moonleaf Board", ReadAssurance::Unchecked),
+            ),
+            source(ListingField::StartingBid, read("2", ReadAssurance::Checked)),
+            source(
+                ListingField::Buyout,
+                FieldSource::Read {
+                    text: None,
+                    assurance: ReadAssurance::Checked,
+                },
+            ),
+            source(
+                ListingField::ListingFee,
+                read("0.50", ReadAssurance::Checked),
+            ),
+            source(
+                ListingField::TtValue,
+                read("1,234.50", ReadAssurance::Unchecked),
+            ),
+            source(ListingField::Quantity, FieldSource::Typed),
+        ];
+        let listing = service
+            .create_auction_listing_with_terms(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                10.0,
+                ListingTerms {
+                    starting_bid: 2.0,
+                    buyout: None,
+                    listing_fee: 0.5,
+                    listed_at: Some("2026-07-20T14:30:00"),
+                    auction_days: Some(7),
+                    sources: &sources,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            field_sources(&service, &listing.id).await,
+            vec![
+                ("buyout".into(), "read_checked".into(), None),
+                (
+                    "item_name".into(),
+                    "read_unchecked".into(),
+                    Some("Moonleaf Board".into())
+                ),
+                (
+                    "listing_fee".into(),
+                    "read_checked".into(),
+                    Some("0.50".into())
+                ),
+                ("quantity".into(), "typed".into(), None),
+                (
+                    "starting_bid".into(),
+                    "read_checked".into(),
+                    Some("2".into())
+                ),
+                (
+                    "tt_value".into(),
+                    "read_unchecked".into(),
+                    Some("1,234.50".into())
+                ),
+            ]
+        );
+
+        // A name read and matched by the application to a holding recorded
+        // under another name keeps the name as read.
+        let matched = [source(
+            ListingField::ItemName,
+            FieldSource::Matched {
+                text: "Moonleaf Bord".into(),
+            },
+        )];
+        let listing = service
+            .create_auction_listing_with_terms(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                1.0,
+                ListingTerms {
+                    starting_bid: 2.0,
+                    buyout: None,
+                    listing_fee: 0.5,
+                    listed_at: None,
+                    auction_days: None,
+                    sources: &matched,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            field_sources(&service, &listing.id).await,
+            vec![(
+                "item_name".into(),
+                "matched".into(),
+                Some("Moonleaf Bord".into())
+            )]
+        );
+
+        let by_hand = service
+            .create_auction_listing(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                5.0,
+                2.0,
+                None,
+                0.5,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(field_sources(&service, &by_hand.id).await.is_empty());
+    }
+
+    /// Each way sources can be untrue of the figures recorded is refused,
+    /// and leaves no listing, stock movement or fee behind.
+    #[tokio::test]
+    async fn sources_untrue_of_the_listing_are_refused_whole() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let checked = |text: &str| read(text, ReadAssurance::Checked);
+        let no_text = FieldSource::Read {
+            text: None,
+            assurance: ReadAssurance::Checked,
+        };
+        // The sources, the buyout and days recorded, and the refusal.
+        type Case = (
+            Vec<ListingFieldSource>,
+            Option<f64>,
+            Option<i64>,
+            &'static str,
+        );
+        let cases: Vec<Case> = vec![
+            (
+                vec![
+                    source(ListingField::Quantity, FieldSource::Typed),
+                    source(ListingField::Quantity, checked("1")),
+                ],
+                None,
+                None,
+                "a listing figure's source is given twice",
+            ),
+            // Without text: only a buyout, and only one recorded as none.
+            (
+                vec![source(ListingField::ListingFee, no_text.clone())],
+                None,
+                None,
+                "only a buyout switched off is read without its text",
+            ),
+            (
+                vec![source(ListingField::Buyout, no_text.clone())],
+                Some(3.0),
+                None,
+                "only a buyout switched off is read without its text",
+            ),
+            (
+                vec![source(ListingField::StartingBid, checked("  "))],
+                None,
+                None,
+                "a figure read off the screen keeps its text",
+            ),
+            // A read number that is not the number recorded.
+            (
+                vec![source(ListingField::StartingBid, checked("3"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::Quantity, checked("1O"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::Buyout, checked("3"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::AuctionDays, checked("7"))],
+                None,
+                None,
+                "a read figure's text is not the figure recorded",
+            ),
+            (
+                vec![source(ListingField::TtValue, FieldSource::Typed)],
+                None,
+                None,
+                "a TT value is recorded only as read",
+            ),
+            (
+                vec![source(
+                    ListingField::Quantity,
+                    FieldSource::Matched { text: "1".into() },
+                )],
+                None,
+                None,
+                "only the item's name can be matched to a holding",
+            ),
+            // The name: read and kept is the name recorded; matched is not.
+            (
+                vec![source(
+                    ListingField::ItemName,
+                    read("Moonleaf Bord", ReadAssurance::Unchecked),
+                )],
+                None,
+                None,
+                "a name read and kept is the name recorded",
+            ),
+            (
+                vec![source(
+                    ListingField::ItemName,
+                    FieldSource::Matched {
+                        text: "Moonleaf Board".into(),
+                    },
+                )],
+                None,
+                None,
+                "a name matched to a holding is recorded under the holding's name",
+            ),
+        ];
+        let ledger_before = ledger_descriptions(&service).await;
+        for (sources, buyout, days, message) in cases {
+            assert_eq!(
+                service
+                    .create_auction_listing_with_terms(
+                        Profession::Harvesting,
+                        "Moonleaf Board",
+                        1.0,
+                        ListingTerms {
+                            starting_bid: 2.0,
+                            buyout,
+                            listing_fee: 0.5,
+                            listed_at: None,
+                            auction_days: days,
+                            sources: &sources,
+                        },
+                    )
+                    .await
+                    .err()
+                    .map(|error| error.to_string()),
+                Some(AnalyticsError::InvalidInput(message).to_string()),
+                "{sources:?}"
+            );
+        }
+        assert!(service
+            .auction_listings(Profession::Harvesting)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(ledger_descriptions(&service).await, ledger_before);
+
+        // Thousands separators are the window's own, and read as such.
+        let grouped = [source(ListingField::StartingBid, checked("1,250"))];
+        assert!(service
+            .create_auction_listing_with_terms(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                1.0,
+                ListingTerms {
+                    starting_bid: 1250.0,
+                    buyout: None,
+                    listing_fee: 0.5,
+                    listed_at: None,
+                    auction_days: None,
+                    sources: &grouped,
+                },
+            )
+            .await
+            .is_ok());
     }
 
     /// A recorded duration survives the round trip and reports the day the
@@ -8911,6 +10292,123 @@ mod tests {
         assert!((resold.gross_markup.unwrap() - 1.5).abs() < 1e-9);
     }
 
+    /// A listing's outcome the readings settled is recorded once from its
+    /// step, through the same writes as the player's own; a listing the
+    /// player resolved meanwhile is left as they resolved it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_listing_outcome_from_the_account_is_recorded_once_and_never_over_the_player_s() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let list = |quantity| {
+            service.create_auction_listing(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                quantity,
+                4.0,
+                None,
+                0.5,
+                None,
+                None,
+            )
+        };
+        let sold_one = list(50.0).await.unwrap();
+        let expired_by_hand = list(50.0).await.unwrap();
+        let step = AccountStep {
+            reading_id: 9,
+            prev_reading_id: 8,
+            seen_from: 1_780_000_000.0,
+            seen_to: 1_780_000_060.0,
+            hand_entries_since: 1_779_999_700.0,
+            stock_settles_by: 1_780_000_600.0,
+            card_change_pec: None,
+        };
+        let record = |outcome: ListingFromAccount| {
+            tokio::task::block_in_place(|| {
+                service
+                    .record_listing_from_account_blocking(step, outcome, "2026-06-01".to_string())
+                    .unwrap()
+            })
+        };
+        let sold = ListingFromAccount::Sold {
+            listing_id: sold_one.id.clone(),
+            final_price: 4.0,
+            sale_fee: 0.0,
+        };
+        assert!(matches!(
+            record(sold.clone()),
+            FromAccount::Recorded { record_id, .. } if record_id == sold_one.id
+        ));
+        let ledger = ledger_descriptions(&service).await;
+        assert!(ledger.iter().any(|d| d == "Auction Sale: Moonleaf Board"));
+        // The same step again records nothing.
+        assert_eq!(record(sold), FromAccount::AlreadyRecorded);
+
+        // The player marked the other expired before the readings did.
+        service
+            .expire_auction_listing(&expired_by_hand.id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            record(ListingFromAccount::Returned {
+                listing_id: expired_by_hand.id.clone(),
+            }),
+            FromAccount::RecordedByHand
+        );
+    }
+
+    /// A listing that came back can be put back on the auction, the stock
+    /// that returned going out once more; only an expired listing can.
+    #[tokio::test]
+    async fn a_listing_that_came_back_is_put_back_on_the_auction() {
+        let (_dir, service) = write_service().await;
+        seed_board_stock(&service).await;
+        let listing = service
+            .create_auction_listing(
+                Profession::Harvesting,
+                "Moonleaf Board",
+                100.0,
+                4.0,
+                None,
+                0.5,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(service
+            .reopen_expired_listing(&listing.id)
+            .await
+            .unwrap()
+            .is_none());
+        service
+            .expire_auction_listing(&listing.id, None)
+            .await
+            .unwrap()
+            .unwrap();
+        let back = service
+            .stock_positions(Profession::Harvesting)
+            .await
+            .unwrap();
+        let board = position(&back, "Moonleaf Board").unwrap();
+        assert!((board.quantity - 100.0).abs() < 1e-9);
+
+        let reopened = service
+            .reopen_expired_listing(&listing.id)
+            .await
+            .unwrap()
+            .expect("an expired listing");
+        assert_eq!(reopened.status, "pending");
+        assert_eq!(reopened.resolved_at, None);
+        let out = service
+            .stock_positions(Profession::Harvesting)
+            .await
+            .unwrap();
+        let board = position(&out, "Moonleaf Board").unwrap();
+        assert!(board.quantity.abs() < 1e-9);
+        assert!((board.listed_quantity - 100.0).abs() < 1e-9);
+    }
+
     /// A sale can only be taken back while it is a sale.
     #[tokio::test]
     async fn reverting_reports_not_found_unless_the_listing_is_sold() {
@@ -9433,6 +10931,93 @@ mod tests {
         );
     }
 
+    /// An outflow keeps the definition it was recorded under, while its
+    /// session can later be reassigned and carry its loot elsewhere. The
+    /// inventory still shows the true net, and converting all of it leaves
+    /// nothing behind rather than a phantom remainder.
+    #[tokio::test]
+    async fn converting_all_after_a_session_moves_definition_leaves_nothing_held() {
+        let (_dir, service) = write_service().await;
+        service
+            .db
+            .with_writer(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO session_definitions(id, name, ad_hoc_segments, is_active) \
+                         VALUES(901, 'Robots', 0, 1), (902, 'Robots, renamed', 0, 1); \
+                     INSERT INTO tracking_sessions(id, started_at, ended_at, is_active, \
+                         definition_id) VALUES('hunt-r', 1780300000.0, 1780303600.0, 0, 901); \
+                     INSERT INTO kills(id, session_id, mob_name, mob_species, mob_maturity, \
+                         timestamp, cost_ped, enhancer_cost, loot_total_ped) \
+                         VALUES('kr', 'hunt-r', 'Old Tag', '', '', 1780300100.0, 5.0, 0.0, 3.6); \
+                     INSERT INTO kill_loot_items(kill_id, item_name, quantity, value_ped, \
+                         is_enhancer_shrapnel) VALUES('kr', 'Robot Filter', 100, 3.6, 0);",
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        service
+            .remove_stock(Profession::Inventory, "Robot Filter", 40.0, None)
+            .await
+            .unwrap();
+        service
+            .db
+            .with_writer(|conn| {
+                conn.execute(
+                    "UPDATE tracking_sessions SET definition_id = 902 WHERE id = 'hunt-r'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let rows = service
+            .stock_positions(Profession::Inventory)
+            .await
+            .unwrap();
+        let held = position(&rows, "Robot Filter").expect("the line stays");
+        assert!(
+            (held.quantity - 60.0).abs() < 1e-9,
+            "the removal still nets: {}",
+            held.quantity
+        );
+
+        service
+            .convert_stock(
+                Profession::Inventory,
+                "Robot Filter",
+                "Nanocube",
+                held.quantity,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let rows = service
+            .stock_positions(Profession::Inventory)
+            .await
+            .unwrap();
+        let held = position(&rows, "Robot Filter").expect("the line stays");
+        assert!(held.quantity.abs() < 1e-9, "{}", held.quantity);
+        assert!(held.tt_value.abs() < 1e-9, "{}", held.tt_value);
+        let opening: f64 = service
+            .db
+            .with_reader(|conn| {
+                conn.query_row(
+                    "SELECT COALESCE(SUM(quantity), 0) FROM stock_movements \
+                     WHERE movement_kind = 'opening_balance'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(Into::into)
+            })
+            .await
+            .unwrap();
+        assert_eq!(opening, 0.0, "every converted unit was tracked stock");
+    }
+
     /// Create with the optional fields absent: notes is null and acquired_at
     /// defaults to the (frozen) clock's UTC date.
     #[tokio::test]
@@ -9440,7 +11025,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let body = to_json(
             service
-                .create_inventory_item("Imk2", 50.0, 5.0, None, None)
+                .create_inventory_item("Imk2", None, 50.0, 5.0, None, None)
                 .await
                 .unwrap(),
         );
@@ -9453,7 +11038,7 @@ mod tests {
         // An explicit acquired_at / notes are honoured.
         let body = to_json(
             service
-                .create_inventory_item("X", 1.0, 0.0, Some("spare"), Some("2026-01-02"))
+                .create_inventory_item("X", None, 1.0, 0.0, Some("spare"), Some("2026-01-02"))
                 .await
                 .unwrap(),
         );
@@ -9469,7 +11054,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let created = to_json(
             service
-                .create_inventory_item("Orig", 20.0, 3.0, Some("keep"), Some("2026-03-01"))
+                .create_inventory_item("Orig", None, 20.0, 3.0, Some("keep"), Some("2026-03-01"))
                 .await
                 .unwrap(),
         );
@@ -9478,7 +11063,16 @@ mod tests {
         // Provide name + tt_value only: markup_paid and notes stay.
         let patched = to_json(
             service
-                .update_inventory_item(&id, Some("Renamed"), Some(25.0), None, None)
+                .update_inventory_item(
+                    &id,
+                    InventoryItemPatch {
+                        name: Some("Renamed"),
+                        tt_value: Some(25.0),
+                        markup_paid: None,
+                        notes: None,
+                        ..Default::default()
+                    },
+                )
                 .await
                 .unwrap()
                 .expect("the item exists"),
@@ -9489,7 +11083,16 @@ mod tests {
         assert_eq!(patched["notes"], json!("keep"), "untouched");
 
         let error = service
-            .update_inventory_item(&id, Some("  universal AMMO "), Some(99.0), None, None)
+            .update_inventory_item(
+                &id,
+                InventoryItemPatch {
+                    name: Some("  universal AMMO "),
+                    tt_value: Some(99.0),
+                    markup_paid: None,
+                    notes: None,
+                    ..Default::default()
+                },
+            )
             .await
             .unwrap_err();
         assert!(matches!(
@@ -9504,7 +11107,16 @@ mod tests {
         // An all-None patch re-reads and returns the row unchanged.
         let same = to_json(
             service
-                .update_inventory_item(&id, None, None, None, None)
+                .update_inventory_item(
+                    &id,
+                    InventoryItemPatch {
+                        name: None,
+                        tt_value: None,
+                        markup_paid: None,
+                        notes: None,
+                        ..Default::default()
+                    },
+                )
                 .await
                 .unwrap()
                 .expect("the item exists"),
@@ -9513,7 +11125,16 @@ mod tests {
 
         // Patch a missing id -> not found.
         assert!(service
-            .update_inventory_item("no-such", Some("Z"), None, None, None)
+            .update_inventory_item(
+                "no-such",
+                InventoryItemPatch {
+                    name: Some("Z"),
+                    tt_value: None,
+                    markup_paid: None,
+                    notes: None,
+                    ..Default::default()
+                }
+            )
             .await
             .unwrap()
             .is_none());
@@ -9527,7 +11148,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let item = to_json(
             service
-                .create_inventory_item("Sword", 10.0, 2.0, None, Some("2026-02-01"))
+                .create_inventory_item("Sword", None, 10.0, 2.0, None, Some("2026-02-01"))
                 .await
                 .unwrap(),
         );
@@ -9576,7 +11197,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let item = to_json(
             service
-                .create_inventory_item("Shield", 10.0, 2.0, None, Some("2026-02-01"))
+                .create_inventory_item("Shield", None, 10.0, 2.0, None, Some("2026-02-01"))
                 .await
                 .unwrap(),
         );
@@ -9599,7 +11220,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let item = to_json(
             service
-                .create_inventory_item("Even", 8.0, 2.0, None, Some("2026-02-01"))
+                .create_inventory_item("Even", None, 8.0, 2.0, None, Some("2026-02-01"))
                 .await
                 .unwrap(),
         );
@@ -9638,7 +11259,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let created = to_json(
             service
-                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo")
+                .create_ledger_entry("2026-05-01", "expense", "Ammo", 12.5, "ammo", None)
                 .await
                 .unwrap(),
         );
@@ -9674,7 +11295,7 @@ mod tests {
         let (_dir, service) = write_service().await;
         let created = to_json(
             service
-                .create_inventory_item("Sword", 10.0, 2.0, None, None)
+                .create_inventory_item("Sword", None, 10.0, 2.0, None, None)
                 .await
                 .unwrap(),
         );
@@ -9688,11 +11309,11 @@ mod tests {
     async fn list_inventory_returns_created_rows_newest_first() {
         let (_dir, service) = write_service().await;
         service
-            .create_inventory_item("Old", 1.0, 0.0, None, Some("2026-01-01"))
+            .create_inventory_item("Old", None, 1.0, 0.0, None, Some("2026-01-01"))
             .await
             .unwrap();
         service
-            .create_inventory_item("New", 2.0, 0.0, None, Some("2026-02-01"))
+            .create_inventory_item("New", None, 2.0, 0.0, None, Some("2026-02-01"))
             .await
             .unwrap();
         let rows = service.list_inventory().await.unwrap();
@@ -9705,7 +11326,7 @@ mod tests {
     async fn equipment_auction_preserves_basis_across_expiry_and_undo() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Ares Ring, Improved", 25.0, 75.0, None, None)
+            .create_inventory_item("Ares Ring, Improved", None, 25.0, 75.0, None, None)
             .await
             .unwrap();
         let listing = service
@@ -9745,11 +11366,11 @@ mod tests {
     async fn equipment_trade_realises_whole_position_result_and_can_be_undone() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Modified Restoration Chip", 50.0, 20.0, None, None)
+            .create_inventory_item("Modified Restoration Chip", None, 50.0, 20.0, None, None)
             .await
             .unwrap();
         let sale = service
-            .trade_equipment(&item.id, 85.0, Some("2026-06-04"))
+            .trade_equipment(&item.id, None, 85.0, Some("2026-06-04"))
             .await
             .unwrap()
             .expect("held equipment");
@@ -9782,7 +11403,7 @@ mod tests {
     async fn equipment_auction_sale_reverts_but_an_immediate_trade_cannot() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Ares Ring", 25.0, 75.0, None, None)
+            .create_inventory_item("Ares Ring", None, 25.0, 75.0, None, None)
             .await
             .unwrap();
         let listing = service
@@ -9844,11 +11465,11 @@ mod tests {
         assert_eq!(ledger.entries[0].amount, 0.5);
 
         let traded = service
-            .create_inventory_item("Restoration Chip", 50.0, 20.0, None, None)
+            .create_inventory_item("Restoration Chip", None, 50.0, 20.0, None, None)
             .await
             .unwrap();
         let trade = service
-            .trade_equipment(&traded.id, 85.0, Some("2026-06-05"))
+            .trade_equipment(&traded.id, None, 85.0, Some("2026-06-05"))
             .await
             .unwrap()
             .expect("held equipment");
@@ -9870,7 +11491,7 @@ mod tests {
     async fn inventory_name_resolution_returns_stable_holding_identity() {
         let (_dir, service) = write_service().await;
         let item = service
-            .create_inventory_item("Ares Ring, Improved", 25.0, 75.0, None, None)
+            .create_inventory_item("Ares Ring, Improved", None, 25.0, 75.0, None, None)
             .await
             .unwrap();
 
@@ -9890,7 +11511,7 @@ mod tests {
     async fn ledger_page_exactly_at_the_limit_has_no_next_cursor() {
         let (_dir, service) = write_service().await;
         service
-            .create_ledger_entry("2026-05-01", "expense", "only", 1.0, "t")
+            .create_ledger_entry("2026-05-01", "expense", "only", 1.0, "t", None)
             .await
             .unwrap();
         let page = service.list_ledger(None, Some(1)).await.unwrap();
@@ -9955,12 +11576,22 @@ mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
         ];
         merge_family_sums(
             &mut into,
             [
                 Some(3.0),
                 Some(4.0),
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -10003,7 +11634,10 @@ mod tests {
             armour: SqlNumber::Int(0),
             dangling: SqlNumber::Int(0),
             harvest: SqlNumber::Int(0),
+            consumables: SqlNumber::Int(0),
             tracking_cost: SqlNumber::Float(cost),
+            overhead: [SqlNumber::Int(0); 3],
+            between_sessions: SqlNumber::Int(0),
             ledger_gains: map(gains),
             ledger_losses: map(losses),
         }
@@ -10014,6 +11648,12 @@ mod tests {
         // (loot 10 + markup 5) / (cost 4 + expense 1) = 3.0.
         let m = make_metrics(10.0, &[("markup", 5.0)], 4.0, &[("expense", 1.0)]);
         assert_eq!(rate_from_metrics(&m), 3.0);
+        // Overhead billed between sessions is a cost of the day, never of
+        // the rate: 2 PED of it leaves the rate where it was.
+        let mut between = make_metrics(10.0, &[("markup", 5.0)], 4.0, &[("expense", 1.0)]);
+        between.overhead = [SqlNumber::Float(2.0), SqlNumber::Int(0), SqlNumber::Int(0)];
+        between.between_sessions = SqlNumber::Float(2.0);
+        assert_eq!(rate_from_metrics(&between), 3.0);
         // Non-positive losses short-circuit to 0.0 (no division).
         let zero = make_metrics(10.0, &[("markup", 5.0)], 0.0, &[]);
         assert_eq!(rate_from_metrics(&zero), 0.0);
@@ -10169,6 +11809,12 @@ mod tests {
     async fn raw_session_agg_computes_every_field() {
         let (_dir, db) = open_env().await;
         db.with_writer(|conn| {
+            conn.execute(
+                "INSERT INTO tracking_sessions \
+                 (id, started_at, ended_at, armour_cost, heal_cost, dangling_cost) \
+                 VALUES ('rs', 1000.0, 8200.0, 0.07, 0.11, 0.13)",
+                [],
+            )?;
             for (kill, mob, species, maturity, loot, enhancer) in [
                 ("k1", "Young Atrox", "Atrox", "Young", 2.0, 0.1),
                 ("k2", "Young Atrox", "Atrox", "Young", 3.0, 0.0),
@@ -10200,23 +11846,22 @@ mod tests {
         .unwrap();
 
         let agg = db
-            .with_reader(|conn| raw_session_agg(conn, "rs", 1000.0, 8200.0, 0.07, 0.11, 0.13, None))
+            .with_reader(|conn| {
+                let costs = session_costs::resolve(conn, "rs")?.resolved;
+                raw_session_agg(conn, "rs", 1000.0, 8200.0, None, &costs)
+            })
             .await
             .unwrap();
         assert_eq!(agg.duration_hours, 2.0); // (8200 - 1000) / 3600
-        assert_eq!(agg.armour_cost, 0.07);
-        assert_eq!(agg.heal_cost, 0.11);
-        assert_eq!(agg.dangling_cost, 0.13);
         assert_eq!(agg.kills, 5);
         assert_eq!(agg.loot_tt, 10.5);
-        assert_eq!(agg.enhancer_cost, 0.1);
-        assert_eq!(agg.weapon_cost, 1.6); // 30 @ 0.05 + 10 @ 0.01
         assert_eq!(agg.weapon_shots, 40.0);
         assert_eq!(agg.skill_tt, 0.75); // 0.5 + 0.25 (NULL excluded)
                                         // Atrox 3 of 4 known kills = 0.75, species present -> dominant mob.
         assert_eq!(agg.dominant_mob, Some("Young Atrox".to_string()));
         assert_eq!(agg.dominant_mob_kills, 3);
-        // weapon 1.6 + enhancer 0.1 + armour 0.07 + heal 0.11 + dangling 0.13.
+        // weapon 1.6 (30 @ 0.05 + 10 @ 0.01) + enhancer 0.1 + armour 0.07 +
+        // heal 0.11 + dangling 0.13.
         assert_eq!(agg.cycled_ped, 2.01);
     }
 
@@ -10241,15 +11886,14 @@ mod tests {
         .unwrap();
         let agg = db
             .with_reader(|conn| {
+                let costs = session_costs::resolve(conn, "tg")?.resolved;
                 raw_session_agg(
                     conn,
                     "tg",
                     1000.0,
                     4600.0,
-                    0.0,
-                    0.0,
-                    0.0,
                     Some("Thing".to_string()),
+                    &costs,
                 )
             })
             .await
@@ -10632,6 +12276,7 @@ mod tests {
                 robot: 90.0,
             },
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let encoded = serde_json::to_string(&evidence).unwrap();
         service
@@ -10726,6 +12371,7 @@ mod tests {
                     robot: 50.0,
                 },
                 looter_source: LooterSource::ThreeLooterMean,
+                transferred_tt_per_use: 0.0,
             };
         let mut aggregate = ExpectedHuntingAccumulator::default();
         aggregate.add(&evidence("High-efficiency rifle", 90.0, 0.03, 0.0), 10);
@@ -10765,6 +12411,7 @@ mod tests {
                 robot: 50.0,
             },
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let mut aggregate = ExpectedHuntingAccumulator::default();
         aggregate.add(&evidence, 5);
@@ -10784,6 +12431,8 @@ mod tests {
             activity_context_id,
             tool: String::new(),
             quest: None,
+            source_line_id: None,
+            origin_item: String::new(),
         };
         let legacy = key(Some(7), None);
         let context_a = key(Some(7), Some(70));
@@ -10799,6 +12448,69 @@ mod tests {
         assert_eq!(positions[&legacy], 0.0);
         assert!((positions[&context_a] - 20.0).abs() < 1e-9);
         assert!((positions[&context_b] - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn stranded_outflows_net_locally_first_then_across_the_item() {
+        let key = |source_kind: &str, definition_id, activity_context_id| PositionKey {
+            source_kind: source_kind.to_string(),
+            tier: String::new(),
+            species: String::new(),
+            definition_id,
+            activity_context_id,
+            tool: String::new(),
+            quest: None,
+            source_line_id: None,
+            origin_item: String::new(),
+        };
+        // An outflow recorded under definition 2 before its session moved to
+        // definition 3, plus some context-specific definition 2 stock left.
+        let stranded = key("hunt", Some(2), None);
+        let same_definition = key("hunt", Some(2), Some(20));
+        let moved = key("hunt", Some(3), Some(30));
+        let harvested = key("harvest", None, None);
+        let mut positions = std::collections::BTreeMap::from([
+            (stranded.clone(), -70.0),
+            (same_definition.clone(), 20.0),
+            (moved.clone(), 60.0),
+            (harvested.clone(), 40.0),
+        ]);
+
+        net_stranded_outflows(&mut positions);
+
+        // Definition 2's own stock goes first; the shortfall of 50 is spread
+        // across the rest of the pile in proportion to what each holds.
+        assert!(positions[&stranded].abs() < 1e-9);
+        assert!(positions[&same_definition].abs() < 1e-9);
+        assert!((positions[&moved] - 60.0 * 50.0 / 100.0).abs() < 1e-9);
+        assert!((positions[&harvested] - 40.0 * 50.0 / 100.0).abs() < 1e-9);
+        let open: f64 = positions.values().filter(|q| **q > STOCK_EPSILON).sum();
+        assert!(
+            (open - 50.0).abs() < 1e-9,
+            "open stock equals the net: {open}"
+        );
+    }
+
+    #[test]
+    fn stranded_outflows_beyond_the_pile_leave_nothing_open() {
+        let key = |definition_id| PositionKey {
+            source_kind: "hunt".to_string(),
+            tier: String::new(),
+            species: String::new(),
+            definition_id,
+            activity_context_id: None,
+            tool: String::new(),
+            quest: None,
+            source_line_id: None,
+            origin_item: String::new(),
+        };
+        let mut positions =
+            std::collections::BTreeMap::from([(key(Some(1)), -90.0), (key(Some(2)), 60.0)]);
+
+        net_stranded_outflows(&mut positions);
+
+        assert!(positions.values().all(|q| *q <= STOCK_EPSILON));
+        assert!((positions.values().sum::<f64>() + 30.0).abs() < 1e-9);
     }
 
     #[tokio::test]
@@ -10922,7 +12634,7 @@ mod tests {
                 .map(|(item, (positions, unit_tt))| {
                     let keys = positions
                         .into_iter()
-                        .map(|(key, quantity)| {
+                        .map(|OpenPosition { key, quantity, .. }| {
                             (key.tier, key.species, key.tool, key.definition_id, quantity)
                         })
                         .collect();
@@ -10940,6 +12652,96 @@ mod tests {
     /// base keyed by species, a hunting listing consumes it in proportion,
     /// a confirmed sale realises markup back onto the species, and every
     /// read stays scoped to its own activity.
+    /// A ledger entry pegged to a session reaches every realised read, shared
+    /// by what each part of the session cycled, and stays a global ledger row.
+    #[tokio::test]
+    async fn a_ledger_entry_pegged_to_a_session_is_shared_by_cycled() {
+        let (_dir, service) = write_service().await;
+        service
+            .db
+            .with_writer(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO session_definitions(id, name, ad_hoc_segments, is_active) \
+                       VALUES(7, 'Mayhem', 0, 1); \
+                     INSERT INTO tracking_sessions(id, started_at, ended_at, is_active, \
+                       definition_id) VALUES('run', 1780300000.0, 1780303600.0, 0, 7); \
+                     INSERT INTO tracking_sessions(id, started_at, ended_at, is_active, \
+                       definition_id, economy_excluded_at) \
+                       VALUES('left-out', 1780200000.0, 1780203600.0, 0, 7, 1780400000.0); \
+                     INSERT INTO session_contexts(id, session_id, created_at) \
+                       VALUES(31, 'run', 1780300000.0), (32, 'run', 1780301800.0), \
+                             (33, 'left-out', 1780200000.0); \
+                     INSERT INTO kills(id, session_id, context_id, timestamp, cost_ped, \
+                       enhancer_cost, loot_total_ped) \
+                       VALUES('k1', 'run', 31, 1780300100.0, 30.0, 0.0, 0.0), \
+                             ('k2', 'run', 32, 1780301900.0, 50.0, 0.0, 0.0), \
+                             ('k3', 'left-out', 33, 1780200100.0, 900.0, 0.0, 0.0); \
+                     INSERT INTO harvest_events(id, session_id, context_id, timestamp, success, \
+                       tool_name, cost_ped, loot_total_ped, yield_tier) \
+                       VALUES('h1', 'run', 32, 1780302000.0, 1, 'Axe', 20.0, 0.0, 'long');",
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let entry = service
+            .create_ledger_entry("2026-06-01", "expense", "Fuel", 10.0, "Operating", Some(7))
+            .await
+            .unwrap();
+        assert_eq!(entry.session_name.as_deref(), Some("Mayhem"));
+        service
+            .create_ledger_entry("2026-06-01", "markup", "Refund", 5.0, "Operating", Some(7))
+            .await
+            .unwrap();
+        assert!(matches!(
+            service
+                .create_ledger_entry("2026-06-01", "expense", "Fuel", 1.0, "t", Some(99))
+                .await,
+            Err(AnalyticsError::InvalidInput(_))
+        ));
+
+        // Net -5.00 over 100 PED cycled by the counted run: the excluded run
+        // reads as never recorded, so it takes no share of the spread.
+        let credit = service
+            .db
+            .with_reader(|conn| Ok(realised::realised_contributions(conn)?))
+            .await
+            .unwrap();
+        let share = |context: i64, kind: &str| -> f64 {
+            credit
+                .iter()
+                .filter(|c| c.activity_context_id == Some(context) && c.source_kind == kind)
+                .map(|c| c.amount)
+                .sum()
+        };
+        assert!((share(31, "hunt") + 1.5).abs() < 1e-9);
+        assert!((share(32, "hunt") + 2.5).abs() < 1e-9);
+        assert!((share(32, "harvest") + 1.0).abs() < 1e-9);
+        assert_eq!(share(33, "hunt"), 0.0);
+
+        // The hunted share reaches the session; the swung share its yield tier.
+        let definitions = service.realised_markup_by_definition().await.unwrap();
+        assert_eq!(definitions.len(), 1);
+        assert!((definitions[0].net_markup + 4.0).abs() < 1e-9);
+        let species: f64 = service
+            .realised_markup_by_species()
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.net_markup)
+            .sum();
+        assert!((species + 4.0).abs() < 1e-9);
+        let tiers = service.realised_markup_by_tier().await.unwrap();
+        assert_eq!(tiers.len(), 1);
+        assert!((tiers[0].net_markup + 1.0).abs() < 1e-9);
+
+        // Still ordinary ledger rows, named for the table.
+        let page = service.list_ledger(None, None).await.unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.entries[0].session_name.as_deref(), Some("Mayhem"));
+    }
+
     #[tokio::test]
     async fn hunting_listing_attributes_realised_markup_to_species() {
         let (_dir, service) = write_service().await;

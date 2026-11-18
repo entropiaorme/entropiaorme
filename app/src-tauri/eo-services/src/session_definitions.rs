@@ -20,8 +20,12 @@
 
 use std::sync::Arc;
 
+use rusqlite::OptionalExtension as _;
+
 use crate::clock::Clock;
 use crate::db::{Db, DbError};
+use crate::session_expectation::{ExpectedSpan, SessionExpectation};
+use crate::session_scope::{self, StatsScope};
 
 /// The service's error surface: `Invalid` is a caller error carrying
 /// the rejection message verbatim, `Conflict` protects live state, and
@@ -108,7 +112,9 @@ pub struct SessionDefinition {
     pub name: String,
     pub ad_hoc_segments: bool,
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
+    /// The planet whose quests this session offers, in place of the quest
+    /// entries of its roster. `None` keeps the authored roster.
+    pub quest_planet: Option<String>,
     pub is_active: bool,
     /// A definition that must not be archived: tracking always has one
     /// to be an instance of, and this is the one that guarantees it.
@@ -167,12 +173,109 @@ pub struct DefinitionLifetimeStats {
     /// picked those up yet, so the family total is legitimately the
     /// more complete of the two.
     pub cycled: f64,
+    /// Summed overhead: what the instances cost beyond performing their
+    /// activity, measured from the account readings. In the family's Net,
+    /// never in its Cycled.
+    pub overhead: f64,
     pub loot_tt: f64,
     /// Summed skill TT on the raw `SUM(ped_value)` basis, matching the
     /// live readout's own PES figure rather than the summary's
     /// positive-only per-skill total.
     pub pes: f64,
+    /// The PES and the cycled spend over only the instances both scopes
+    /// still count: the two halves of the PES rate have to describe the
+    /// same sessions, which `pes` and `cycled` alone do not once a session
+    /// is excluded from just one scope.
+    pub ratio_pes: f64,
+    pub ratio_cycled: f64,
     pub duration_seconds: f64,
+    pub kills: i64,
+    pub weapon_cost: f64,
+    pub damage_total: f64,
+    /// The damage the weapon cost above bought. Equal to `damage_total`
+    /// for ended instances; a running one adds the shots still waiting for
+    /// their kill, as its own weapon cost does.
+    pub weapon_damage: f64,
+    /// The most damage dealt on any one kill.
+    pub damage_max: f64,
+    pub shots: i64,
+    pub crits: i64,
+    pub globals: i64,
+    pub hofs: i64,
+    pub harvest_swings: i64,
+    /// The per-kill multipliers summed and counted, so the average is the
+    /// mean over every kill rather than the mean of each session's mean.
+    pub multiplier_sum: f64,
+    pub multiplier_count: i64,
+    pub multiplier_max: Option<f64>,
+    /// The family's most recent kill: `None` before there is one.
+    pub last_kill_loot: Option<f64>,
+    /// `None` also when that kill has no recorded weapon cost.
+    pub last_kill_multiplier: Option<f64>,
+    /// Expected loot over the instances that recorded weapon evidence;
+    /// `None` when none of them did.
+    pub expected: Option<FamilyExpectation>,
+}
+
+/// A family's expected loot, summed over the instances that have one. Each
+/// instance is read at its own session-start looter levels.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FamilyExpectation {
+    /// How many instances these figures span.
+    pub sessions: i64,
+    /// Those instances' Cycled: the denominator the expected loot answers
+    /// to, which is narrower than the family's whole Cycled.
+    pub cycled: f64,
+    pub spans: SessionExpectation,
+}
+
+impl DefinitionLifetimeStats {
+    /// Fold the running instance into the family, for the caller that has
+    /// established it belongs to this definition. The summaries cover
+    /// ended sessions only, so nothing counts twice.
+    pub fn fold_live(&mut self, live: &crate::tracking_models::ActiveSessionView) {
+        self.instance_count += 1;
+        self.cycled += live.cost;
+        self.loot_tt += live.returns;
+        self.pes += live.pes;
+        self.ratio_pes += live.pes;
+        self.ratio_cycled += live.cost;
+        self.duration_seconds += live.elapsed as f64;
+        self.kills += live.kill_count;
+        self.weapon_cost += live.weapon_cost;
+        self.damage_total += live.damage_dealt_total;
+        self.weapon_damage += live.weapon_damage_dealt;
+        self.damage_max = self.damage_max.max(live.max_damage);
+        self.shots += live.shots_fired_total;
+        self.crits += live.critical_hits_total;
+        self.globals += live.globals_count;
+        self.hofs += live.hofs_count;
+        self.harvest_swings += live.harvest_swings;
+        self.multiplier_sum += live.multiplier_sum;
+        self.multiplier_count += live.multiplier_count;
+        self.multiplier_max = match (self.multiplier_max, live.multiplier_max) {
+            (Some(stored), Some(running)) => Some(stored.max(running)),
+            (stored, running) => stored.or(running),
+        };
+        // The running instance's kill is the newest there is, even when
+        // it has no multiplier of its own to show.
+        if live.kill_count > 0 {
+            self.last_kill_loot = live.latest_kill_loot;
+            self.last_kill_multiplier = live.multiplier_last;
+        }
+        if let Some(cycle) = &live.expected_cycle {
+            let expected = self.expected.get_or_insert_with(Default::default);
+            expected.sessions += 1;
+            expected.cycled += cycle.split.cycled;
+            expected
+                .spans
+                .three_looter_mean
+                .add((&cycle.three_looter_mean).into());
+            expected.spans.animal.add((&cycle.animal).into());
+            expected.spans.mutant.add((&cycle.mutant).into());
+            expected.spans.robot.add((&cycle.robot).into());
+        }
+    }
 }
 
 /// A definition create/update payload. The roster always binds in
@@ -182,7 +285,8 @@ pub struct SessionDefinitionInput {
     pub name: String,
     pub ad_hoc_segments: bool,
     pub track_protection_costs: bool,
-    pub track_protection_by_segment: bool,
+    /// Blank reads as none.
+    pub quest_planet: Option<String>,
     pub roster: Vec<RosterEntryInput>,
 }
 
@@ -200,8 +304,7 @@ pub struct SessionDefinitionService {
 
 const DEFINITION_SELECT: &str = "\
     SELECT d.id, d.name, d.ad_hoc_segments, d.track_protection_costs, \
-           d.track_protection_by_segment, \
-           d.is_active, d.is_protected, \
+           d.quest_planet, d.is_active, d.is_protected, \
            d.created_at, d.updated_at, \
            (SELECT COUNT(*) FROM tracking_sessions s \
             WHERE s.definition_id = d.id) AS instance_count \
@@ -335,31 +438,206 @@ impl SessionDefinitionService {
             self.db
                 .with_writer(|conn| crate::session_summary::heal_summaries(conn))
                 .await?;
+            // One writer turn each, so tracking keeps its turn between them.
+            let missing = self
+                .db
+                .with_reader(|conn| crate::session_summary::sessions_missing_expectation(conn))
+                .await?;
+            for session_id in missing {
+                self.db
+                    .with_writer(move |conn| {
+                        crate::session_summary::write_session_expectation(conn, &session_id)
+                    })
+                    .await?;
+            }
             self.summaries_healed.store(true, Ordering::SeqCst);
         }
         Ok(self
             .db
             .with_reader(move |conn| {
-                Ok(conn.query_row(
-                    "SELECT COUNT(*), \
-                            COALESCE(SUM(ss.cycled_ped), 0), \
-                            COALESCE(SUM(ss.loot_tt), 0), \
-                            COALESCE(SUM(ss.activity_skill_tt), 0), \
-                            COALESCE(SUM(ss.duration_hours), 0) \
-                     FROM session_summaries ss \
-                     JOIN tracking_sessions s ON s.id = ss.session_id \
-                     WHERE s.definition_id = ?",
+                // Stats exclusion: the instance count, spend, loot, and time
+                // are economy evidence; the PES is progression. Each figure
+                // sums only the instances its scope still counts.
+                let economy = session_scope::counts_on(StatsScope::Economy, "s");
+                let progression = session_scope::counts_on(StatsScope::Progression, "s");
+                let both = format!("{economy} AND {progression}");
+                let covered = format!("{economy} AND ss.expected_tt_mean IS NOT NULL");
+                let sum = |scope: &str, column: &str| {
+                    format!("COALESCE(SUM(CASE WHEN {scope} THEN ss.{column} END), 0)")
+                };
+                let mut stats = conn.query_row(
+                    &format!(
+                        "SELECT COUNT(CASE WHEN {economy} THEN 1 END), {cycled}, {loot}, {pes}, \
+                                {ratio_pes}, {ratio_cycled}, {hours}, {kills}, {weapon_cost}, \
+                                {damage}, \
+                                COALESCE(MAX(CASE WHEN {economy} THEN ss.kill_damage_max END), 0), \
+                                {shots}, {crits}, {globals}, {hofs}, \
+                                {swings}, {multiplier_sum}, {multiplier_count}, \
+                                MAX(CASE WHEN {economy} THEN ss.multiplier_max END), \
+                                COUNT(CASE WHEN {covered} THEN 1 END), {covered_cycled}, \
+                                {mean}, {mean_low}, {mean_high}, \
+                                {animal}, {animal_low}, {animal_high}, \
+                                {mutant}, {mutant_low}, {mutant_high}, \
+                                {robot}, {robot_low}, {robot_high}, {overhead} \
+                         FROM session_summaries ss \
+                         JOIN tracking_sessions s ON s.id = ss.session_id \
+                         WHERE s.definition_id = ?",
+                        cycled = sum(&economy, "cycled_ped"),
+                        loot = sum(&economy, "loot_tt"),
+                        pes = sum(&progression, "activity_skill_tt"),
+                        ratio_pes = sum(&both, "activity_skill_tt"),
+                        ratio_cycled = sum(&both, "cycled_ped"),
+                        hours = sum(&economy, "duration_hours"),
+                        kills = sum(&economy, "kills"),
+                        weapon_cost = sum(&economy, "weapon_cost"),
+                        damage = sum(&economy, "kill_damage_total"),
+                        shots = sum(&economy, "kill_shots"),
+                        crits = sum(&economy, "kill_crits"),
+                        globals = sum(&economy, "kill_globals"),
+                        hofs = sum(&economy, "kill_hofs"),
+                        swings = sum(&economy, "harvest_swings"),
+                        multiplier_sum = sum(&economy, "multiplier_sum"),
+                        multiplier_count = sum(&economy, "multiplier_count"),
+                        covered_cycled = sum(&covered, "cycled_ped"),
+                        mean = sum(&economy, "expected_tt_mean"),
+                        mean_low = sum(&economy, "expected_tt_mean_low"),
+                        mean_high = sum(&economy, "expected_tt_mean_high"),
+                        animal = sum(&economy, "expected_tt_animal"),
+                        animal_low = sum(&economy, "expected_tt_animal_low"),
+                        animal_high = sum(&economy, "expected_tt_animal_high"),
+                        mutant = sum(&economy, "expected_tt_mutant"),
+                        mutant_low = sum(&economy, "expected_tt_mutant_low"),
+                        mutant_high = sum(&economy, "expected_tt_mutant_high"),
+                        robot = sum(&economy, "expected_tt_robot"),
+                        robot_low = sum(&economy, "expected_tt_robot_low"),
+                        robot_high = sum(&economy, "expected_tt_robot_high"),
+                        overhead = sum(&economy, "overhead_cost"),
+                    ),
                     rusqlite::params![definition_id],
                     |row| {
+                        let damage_total: f64 = row.get(9)?;
+                        let span = |from: usize| -> rusqlite::Result<ExpectedSpan> {
+                            Ok(ExpectedSpan {
+                                expected: row.get(from)?,
+                                low: row.get(from + 1)?,
+                                high: row.get(from + 2)?,
+                            })
+                        };
+                        let expected_sessions: i64 = row.get(19)?;
+                        let expected = (expected_sessions > 0)
+                            .then(|| -> rusqlite::Result<FamilyExpectation> {
+                                Ok(FamilyExpectation {
+                                    sessions: expected_sessions,
+                                    cycled: row.get(20)?,
+                                    spans: SessionExpectation {
+                                        three_looter_mean: span(21)?,
+                                        animal: span(24)?,
+                                        mutant: span(27)?,
+                                        robot: span(30)?,
+                                    },
+                                })
+                            })
+                            .transpose()?;
                         Ok(DefinitionLifetimeStats {
                             instance_count: row.get(0)?,
                             cycled: row.get(1)?,
+                            overhead: row.get(33)?,
                             loot_tt: row.get(2)?,
                             pes: row.get(3)?,
-                            duration_seconds: row.get::<_, f64>(4)? * 3600.0,
+                            ratio_pes: row.get(4)?,
+                            ratio_cycled: row.get(5)?,
+                            duration_seconds: row.get::<_, f64>(6)? * 3600.0,
+                            kills: row.get(7)?,
+                            weapon_cost: row.get(8)?,
+                            damage_total,
+                            weapon_damage: damage_total,
+                            damage_max: row.get(10)?,
+                            shots: row.get(11)?,
+                            crits: row.get(12)?,
+                            globals: row.get(13)?,
+                            hofs: row.get(14)?,
+                            harvest_swings: row.get(15)?,
+                            multiplier_sum: row.get(16)?,
+                            multiplier_count: row.get(17)?,
+                            multiplier_max: row.get(18)?,
+                            last_kill_loot: None,
+                            last_kill_multiplier: None,
+                            expected,
                         })
                     },
-                )?)
+                )?;
+                let last_kill = conn
+                    .query_row(
+                        &format!(
+                            "SELECT ss.last_kill_loot, ss.last_kill_multiplier \
+                             FROM session_summaries ss \
+                             JOIN tracking_sessions s ON s.id = ss.session_id \
+                             WHERE s.definition_id = ? AND ss.last_kill_at IS NOT NULL \
+                               AND {economy} \
+                             ORDER BY ss.last_kill_at DESC LIMIT 1"
+                        ),
+                        rusqlite::params![definition_id],
+                        |row| Ok((row.get::<_, Option<f64>>(0)?, row.get::<_, Option<f64>>(1)?)),
+                    )
+                    .optional()?;
+                if let Some((loot, multiplier)) = last_kill {
+                    stats.last_kill_loot = loot;
+                    stats.last_kill_multiplier = multiplier;
+                }
+                Ok(stats)
+            })
+            .await?)
+    }
+
+    /// What the definition's ended instances looted, by item name, over
+    /// the same instances [`Self::lifetime_stats`] sums. The running
+    /// instance is the caller's to add: it already follows that loot live.
+    pub async fn lifetime_loot(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<(String, i64, f64)>, SessionDefinitionError> {
+        Ok(self
+            .db
+            .with_reader(move |conn| crate::session_rollup::definition_loot(conn, definition_id))
+            .await?)
+    }
+
+    /// The quest rewards confirmed on the family's ended instances, line
+    /// by item and accounting kind: (item, quantity, TT, `liquid` or
+    /// `stock`). The same sessions as [`Self::lifetime_loot`] (ended, with
+    /// a summary, counted in the economy scope), so a family's reward and
+    /// its Cycled describe the same play. An undone reward, or one whose
+    /// latest review is not a confirmation, is left out.
+    pub async fn lifetime_rewards(
+        &self,
+        definition_id: i64,
+    ) -> Result<Vec<(String, i64, f64, String)>, SessionDefinitionError> {
+        Ok(self
+            .db
+            .with_reader(move |conn| {
+                let economy =
+                    crate::session_scope::counts_on(crate::session_scope::StatsScope::Economy, "s");
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT ri.item_name, SUM(ri.quantity), COALESCE(SUM(ri.value_ped), 0), \
+                            ri.accounting_kind \
+                     FROM tracking_sessions s \
+                     JOIN session_summaries ss ON ss.session_id = s.id \
+                     JOIN session_quest_completions c ON c.session_id = s.id \
+                     JOIN session_quest_completion_reward_items ri ON ri.completion_id = c.id \
+                     WHERE s.definition_id = ?1 AND {economy} \
+                       AND COALESCE((SELECT r.outcome FROM quest_reward_reviews r \
+                                     WHERE r.completion_id = c.id \
+                                     ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1), \
+                                    c.reward_outcome) = 'confirmed' \
+                       AND NOT EXISTS (SELECT 1 FROM quest_reward_reversals rr \
+                                       WHERE rr.completion_id = c.id) \
+                     GROUP BY ri.item_name, ri.accounting_kind \
+                     ORDER BY ri.item_name, ri.accounting_kind"
+                ))?;
+                let rows = stmt.query_map(rusqlite::params![definition_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })?;
+                Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
             })
             .await?)
     }
@@ -375,21 +653,23 @@ impl SessionDefinitionService {
 
         let ad_hoc = input.ad_hoc_segments;
         let track_protection_costs = input.track_protection_costs;
-        let track_protection_by_segment =
-            track_protection_costs && input.track_protection_by_segment;
+        let quest_planet = normalized_planet(input.quest_planet.as_deref());
         let definition_id = self
             .db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
                 tx.execute(
+                    // The per-segment armour flag is retired; see the
+                    // protection service for why costs no longer need it.
                     "INSERT INTO session_definitions \
-                     (name, ad_hoc_segments, track_protection_costs, track_protection_by_segment) \
-                     VALUES (?, ?, ?, ?)",
+                     (name, ad_hoc_segments, track_protection_costs, track_protection_by_segment, \
+                      quest_planet) \
+                     VALUES (?, ?, ?, 0, ?)",
                     rusqlite::params![
                         name,
                         ad_hoc as i64,
                         track_protection_costs as i64,
-                        track_protection_by_segment as i64
+                        quest_planet
                     ],
                 )?;
                 let definition_id = tx.last_insert_rowid();
@@ -422,8 +702,7 @@ impl SessionDefinitionService {
 
         let ad_hoc = input.ad_hoc_segments;
         let track_protection_costs = input.track_protection_costs;
-        let track_protection_by_segment =
-            track_protection_costs && input.track_protection_by_segment;
+        let quest_planet = normalized_planet(input.quest_planet.as_deref());
         let now = self.now_epoch();
         self.db
             .with_writer(move |conn| {
@@ -431,13 +710,13 @@ impl SessionDefinitionService {
                 tx.execute(
                     "UPDATE session_definitions \
                      SET name = ?, ad_hoc_segments = ?, track_protection_costs = ?, \
-                         track_protection_by_segment = ?, updated_at = ? \
+                         quest_planet = ?, updated_at = ? \
                      WHERE id = ?",
                     rusqlite::params![
                         name,
                         ad_hoc as i64,
                         track_protection_costs as i64,
-                        track_protection_by_segment as i64,
+                        quest_planet,
                         now,
                         definition_id
                     ],
@@ -567,6 +846,8 @@ impl SessionDefinitionService {
                      WHERE id = ?",
                     rusqlite::params![now, definition_id],
                 )?;
+                // id-order: insertion (the first seeded protected
+                // definition is the fallback).
                 let fallback = tx
                     .query_row(
                         "SELECT id, name FROM session_definitions \
@@ -791,13 +1072,13 @@ impl SessionDefinitionService {
 pub async fn resolve_selection(
     db: &Db,
     configured: Option<i64>,
-) -> Result<Option<(i64, String, bool, bool)>, DbError> {
+) -> Result<Option<(i64, String, bool)>, DbError> {
     db.with_reader(move |conn| {
         use rusqlite::OptionalExtension as _;
         if let Some(id) = configured {
             let selected = conn
                 .query_row(
-                    "SELECT id, name, track_protection_costs, track_protection_by_segment \
+                    "SELECT id, name, track_protection_costs \
                      FROM session_definitions \
                      WHERE id = ? AND is_active = 1",
                     rusqlite::params![id],
@@ -806,7 +1087,6 @@ pub async fn resolve_selection(
                             row.get::<_, i64>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, i64>(2)? != 0,
-                            row.get::<_, i64>(3)? != 0,
                         ))
                     },
                 )
@@ -815,9 +1095,10 @@ pub async fn resolve_selection(
                 return Ok(selected);
             }
         }
+        // id-order: insertion (the first seeded protected definition).
         Ok(conn
             .query_row(
-                "SELECT id, name, track_protection_costs, track_protection_by_segment \
+                "SELECT id, name, track_protection_costs \
                  FROM session_definitions \
                  WHERE is_active = 1 AND is_protected = 1 \
                  ORDER BY id ASC LIMIT 1",
@@ -827,7 +1108,6 @@ pub async fn resolve_selection(
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, i64>(2)? != 0,
-                        row.get::<_, i64>(3)? != 0,
                     ))
                 },
             )
@@ -843,7 +1123,7 @@ fn row_to_definition(row: &rusqlite::Row) -> Result<SessionDefinition, rusqlite:
         name: row.get("name")?,
         ad_hoc_segments: row.get::<_, i64>("ad_hoc_segments")? != 0,
         track_protection_costs: row.get::<_, i64>("track_protection_costs")? != 0,
-        track_protection_by_segment: row.get::<_, i64>("track_protection_by_segment")? != 0,
+        quest_planet: row.get("quest_planet")?,
         is_active: row.get::<_, i64>("is_active")? != 0,
         is_protected: row.get::<_, i64>("is_protected")? != 0,
         created_at: row.get("created_at")?,
@@ -900,6 +1180,14 @@ fn write_roster(
         )?;
     }
     Ok(())
+}
+
+/// A quest planet, trimmed; blank means none.
+fn normalized_planet(planet: Option<&str>) -> Option<String> {
+    planet
+        .map(str::trim)
+        .filter(|planet| !planet.is_empty())
+        .map(str::to_string)
 }
 
 /// A definition's name, trimmed and required non-empty.

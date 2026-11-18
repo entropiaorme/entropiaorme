@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MarketCommitResult, MarketPastePreview } from '$lib/api';
-import { createImportModel } from './importModel.svelte';
+import { createImportModel, PREVIEW_DEBOUNCE_MS } from './importModel.svelte';
 
 vi.mock('$lib/api', () => ({
 	previewMarketPaste: vi.fn(),
@@ -41,18 +41,25 @@ function commitResult(overrides: Partial<MarketCommitResult> = {}): MarketCommit
 	};
 }
 
+// Fake timers throughout: every edit arms the debounced parse, and a
+// real timer left pending would fire into a later test.
 beforeEach(() => {
 	vi.clearAllMocks();
+	vi.useFakeTimers();
+});
+
+afterEach(() => {
+	vi.clearAllTimers();
+	vi.useRealTimers();
 });
 
 describe('createImportModel', () => {
 	it('previews the pasted text and enables the commit', async () => {
 		mocked.previewMarketPaste.mockResolvedValue(preview());
 		const model = createImportModel();
-		expect(model.canPreview).toBe(false);
+		expect(model.canCommit).toBe(false);
 
 		model.setText('Carabok Hide\t0\t...');
-		expect(model.canPreview).toBe(true);
 		expect(model.canCommit).toBe(false);
 
 		await model.runPreview();
@@ -131,6 +138,31 @@ describe('createImportModel', () => {
 		// The stale response must not leave the model wedged: the flag
 		// clears and a new preview is immediately possible.
 		expect(model.previewing).toBe(false);
-		expect(model.canPreview).toBe(true);
+	});
+
+	it('parses the text once it settles, without a separate preview action', async () => {
+		mocked.previewMarketPaste.mockResolvedValue(preview());
+		const model = createImportModel();
+
+		model.setText('Carabok');
+		model.setText('Carabok Hide\t0\t...');
+		await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS - 1);
+		expect(mocked.previewMarketPaste).not.toHaveBeenCalled();
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(mocked.previewMarketPaste).toHaveBeenCalledTimes(1);
+		expect(mocked.previewMarketPaste).toHaveBeenCalledWith('Carabok Hide\t0\t...');
+		expect(model.canCommit).toBe(true);
+	});
+
+	it('clearing the box cancels a pending parse', async () => {
+		mocked.previewMarketPaste.mockResolvedValue(preview());
+		const model = createImportModel();
+
+		model.setText('the paste');
+		model.setText('   ');
+		await vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS * 2);
+		expect(mocked.previewMarketPaste).not.toHaveBeenCalled();
+		expect(model.preview).toBeNull();
 	});
 });

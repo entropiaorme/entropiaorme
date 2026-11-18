@@ -42,6 +42,7 @@ pub const CATALOGUE: &[TableSpec] = &[
                 FROM tracking_sessions",
         order_by: &["rowid"],
     },
+    // every-kill: write (a dump of the stored rows, every one).
     TableSpec {
         name: "kills",
         query: "SELECT id, session_id, mob_name, mob_species, mob_maturity, \
@@ -51,6 +52,7 @@ pub const CATALOGUE: &[TableSpec] = &[
                 FROM kills",
         order_by: &["timestamp", "rowid"],
     },
+    // every-kill: write (a dump of the stored rows, every one).
     TableSpec {
         name: "kill_loot_items",
         query: "SELECT kli.kill_id, kli.item_name, kli.quantity, \
@@ -59,6 +61,7 @@ pub const CATALOGUE: &[TableSpec] = &[
                 JOIN kills k ON kli.kill_id = k.id",
         order_by: &["k.timestamp", "kli.rowid"],
     },
+    // every-kill: write (a dump of the stored rows, every one).
     TableSpec {
         name: "kill_tool_stats",
         query: "SELECT kts.kill_id, kts.tool_name, kts.shots_fired, \
@@ -167,6 +170,87 @@ pub const CATALOGUE: &[TableSpec] = &[
         name: "skill_calibrations",
         query: "SELECT skill_name, level, source, scanned_at FROM skill_calibrations",
         order_by: &["scanned_at", "rowid"],
+    },
+    // Healing evidence: a post-port extension of the catalogue (no Python
+    // reference existed), pinned by the healing replay scenario. Appended
+    // last so no earlier table's symbol assignment moves.
+    TableSpec {
+        name: "healing_activations",
+        query: "SELECT id, session_id, equipment_id, tool_name, intent_at, observed_at, \
+                context_id, cost_ped, provenance, confirming_output_id, superseded_at \
+                FROM healing_activations",
+        order_by: &["observed_at", "rowid"],
+    },
+    TableSpec {
+        name: "healing_effect_windows",
+        query: "SELECT id, activation_id, session_id, started_at, expires_at, context_id, \
+                superseded_at \
+                FROM healing_effect_windows",
+        order_by: &["started_at", "rowid"],
+    },
+    TableSpec {
+        name: "healing_outputs",
+        query: "SELECT id, session_id, activation_id, effect_window_id, context_id, \
+                observed_at, amount, classification, reason \
+                FROM healing_outputs",
+        order_by: &["observed_at", "rowid"],
+    },
+    // Weapon attribution evidence: the shots kept one by one (evidence that
+    // overrode the hotbar, unpriced shots, effect ticks), the live decisions
+    // on a mismatch, and each session's final tallies. Appended last, like
+    // the healing tables, so no earlier table's symbol assignment moves.
+    TableSpec {
+        name: "weapon_attribution_reviews",
+        query: "SELECT id, session_id, decision, hotbar_tool, evidence_tool, mismatch_since, \
+                decided_at, repriced_shots, cost_delta_ped \
+                FROM weapon_attribution_reviews",
+        order_by: &["decided_at", "rowid"],
+    },
+    TableSpec {
+        name: "weapon_shot_evidence",
+        // The effect candidates carry window ids inside a JSON string, where
+        // the normaliser cannot reach them: the snapshot pins how many there
+        // were, and the one a tick belongs to through `effect_window_id`.
+        query: "SELECT id, session_id, kill_id, context_id, observed_at, amount, critical, \
+                attribution, hotbar_tool, tool_name, cost_per_shot, candidates_json, reason, \
+                effect_window_id, review_id, correction_id, \
+                json_array_length(effect_candidates_json) AS effect_candidates \
+                FROM weapon_shot_evidence",
+        order_by: &["observed_at", "rowid"],
+    },
+    TableSpec {
+        name: "weapon_attribution_tallies",
+        query: "SELECT id AS session_id, weapon_shots_agreed, weapon_shots_evidenced \
+                FROM tracking_sessions",
+        order_by: &["rowid"],
+    },
+    // Damage-over-time effect windows: each paid hit of a weapon with a
+    // declared effect, the profile it was opened under, and the decision that
+    // took it back, if any. Appended last so no earlier table's symbol
+    // assignment moves.
+    TableSpec {
+        name: "weapon_effect_windows",
+        query: "SELECT id, session_id, equipment_id, tool_name, context_id, started_at, \
+                expires_at, hit_amount, critical, cost_per_shot, tick_min, tick_max, profile_json, \
+                withdrawn_at, withdrawn_by_review_id \
+                FROM weapon_effect_windows",
+        order_by: &["started_at", "rowid"],
+    },
+    // Tools read off the screen as the tool in hand that the library does
+    // not hold, and names the player dismissed. Appended last so no earlier
+    // table's symbol assignment moves.
+    TableSpec {
+        name: "tool_sightings",
+        query: "SELECT id, session_id, kind, endpoint, item_id, item_name, text_key, text_read, \
+                first_seen, last_seen, shots, cost_per_shot, settled_kind, settled_at, \
+                equipment_id \
+                FROM tool_sightings",
+        order_by: &["first_seen", "rowid"],
+    },
+    TableSpec {
+        name: "dismissed_tool_names",
+        query: "SELECT name, dismissed_at FROM dismissed_tool_names",
+        order_by: &["name"],
     },
 ];
 

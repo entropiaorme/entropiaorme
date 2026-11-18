@@ -86,7 +86,7 @@ pub(super) fn open_configured(path: &Path) -> Result<Connection, DbError> {
 /// production path supplies no denylist; facade integration tests use this
 /// seam to prove settled requests never prepare protected raw-fact reads.
 fn apply_reader_denylist(
-    connection: &Connection,
+    connection: &mut Connection,
     denied_tables: Option<Arc<HashSet<String>>>,
 ) -> Result<(), DbError> {
     let Some(denied_tables) = denied_tables else {
@@ -180,8 +180,8 @@ impl SyncCore {
                 .expect("spawn the database writer thread"),
         );
         for index in 0..READER_POOL_SIZE {
-            let connection = open_configured(path)?;
-            apply_reader_denylist(&connection, denied_reader_tables.clone())?;
+            let mut connection = open_configured(path)?;
+            apply_reader_denylist(&mut connection, denied_reader_tables.clone())?;
             let queue = reader_rx.clone();
             threads.push(
                 std::thread::Builder::new()

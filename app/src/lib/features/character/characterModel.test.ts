@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CalibrationStatus, ComputedCharacterStats } from '$lib/api/commands.gen';
-import { characterDemoProspectOptions, characterDemoSkills } from '$lib/guide/fixtures/character';
 import type { ProfessionLevel, SkillLevel } from '$lib/types/analytics';
 import { createCharacterModel, PAGE_SIZE } from './characterModel.svelte';
 
@@ -9,12 +8,9 @@ vi.mock('$lib/api', () => ({
 	getCharacterStats: vi.fn(),
 	getCharacterSkills: vi.fn(),
 	getCharacterProfessions: vi.fn(),
-	getCharacterProspectOptions: vi.fn(),
 	showScanOverlay: vi.fn(),
-	getProfessionOptimizer: vi.fn(),
 	getHpOptimizer: vi.fn(),
 	getProfessionPathOptimizer: vi.fn(),
-	getCharacterProspect: vi.fn(),
 }));
 
 import * as api from '$lib/api';
@@ -59,7 +55,6 @@ function seedLiveMocks() {
 	mocked.getCharacterStats.mockResolvedValue(stats());
 	mocked.getCharacterSkills.mockResolvedValue([skill()]);
 	mocked.getCharacterProfessions.mockResolvedValue([profession()]);
-	mocked.getCharacterProspectOptions.mockResolvedValue({ tags: [], mobs: [], weapons: [] });
 }
 
 beforeEach(() => {
@@ -67,46 +62,24 @@ beforeEach(() => {
 });
 
 describe('loadCharacterData', () => {
-	it('loads calibration, stats, skills, professions and prospect options', async () => {
+	it('loads calibration, stats, skills and professions', async () => {
 		seedLiveMocks();
 		const model = createCharacterModel();
-		await model.loadCharacterData(false);
+		await model.loadCharacterData();
 
 		expect(model.calibration.calibrated).toBe(true);
 		expect(model.stats.hp).toBe(92);
 		expect(model.skills.map((s) => s.name)).toEqual(['Rifle']);
 		expect(model.professions.map((p) => p.name)).toEqual(['Laser Sniper (Hit)']);
-		expect(model.prospect.options).toEqual({ tags: [], mobs: [], weapons: [] });
 		expect(model.loading).toBe(false);
 		expect(model.error).toBeNull();
-	});
-
-	it('seeds the guide fixtures without touching the API in guide mode', async () => {
-		const model = createCharacterModel();
-		await model.loadCharacterData(true);
-
-		expect(mocked.getCalibrationStatus).not.toHaveBeenCalled();
-		expect(mocked.getCharacterSkills).not.toHaveBeenCalled();
-		expect(model.skills.length).toBeGreaterThan(0);
-		expect(model.professions.length).toBeGreaterThan(0);
-		expect(model.prospect.options).toEqual(characterDemoProspectOptions);
-		expect(model.loading).toBe(false);
-	});
-
-	it('copies the guide skills per object so mutations cannot corrupt the fixtures', async () => {
-		const model = createCharacterModel();
-		await model.loadCharacterData(true);
-
-		const original = characterDemoSkills[0].level;
-		model.skills[0].level = original + 999;
-		expect(characterDemoSkills[0].level).toBe(original);
 	});
 
 	it('surfaces a load failure and keeps the defaults', async () => {
 		seedLiveMocks();
 		mocked.getCharacterSkills.mockRejectedValue(new Error('backend unreachable'));
 		const model = createCharacterModel();
-		await model.loadCharacterData(false);
+		await model.loadCharacterData();
 
 		expect(model.error).toBe('backend unreachable');
 		expect(model.skills).toEqual([]);
@@ -118,7 +91,7 @@ describe('loadCharacterData', () => {
 		seedLiveMocks();
 		const model = createCharacterModel();
 		model.error = 'stale failure';
-		await model.loadCharacterData(false);
+		await model.loadCharacterData();
 		expect(model.error).toBeNull();
 	});
 });
@@ -131,7 +104,7 @@ describe('skills split and tables', () => {
 			skill({ name: 'Strength', isAttribute: true }),
 		]);
 		const model = createCharacterModel();
-		await model.loadCharacterData(false);
+		await model.loadCharacterData();
 
 		expect(model.attributes.map((s) => s.name)).toEqual(['Strength']);
 		expect(model.regularSkills.map((s) => s.name)).toEqual(['Rifle']);
@@ -146,7 +119,7 @@ describe('skills split and tables', () => {
 			skill({ name: 'Unanchored', level: 500, anchorLevel: null }),
 		]);
 		const model = createCharacterModel();
-		await model.loadCharacterData(false);
+		await model.loadCharacterData();
 
 		expect(model.skillsTable.sortKey).toBe('level');
 		expect(model.skillsTable.sortDir).toBe('desc');
@@ -163,7 +136,7 @@ describe('skills split and tables', () => {
 			skill({ name: 'Sweat Gatherer', category: 'General', level: 999 }),
 		]);
 		const model = createCharacterModel();
-		await model.loadCharacterData(false);
+		await model.loadCharacterData();
 
 		expect(PAGE_SIZE).toBe(12);
 		expect(model.skillsTable.totalPages).toBe(2);
@@ -183,7 +156,7 @@ describe('skills split and tables', () => {
 			profession({ name: 'Sniper', level: 55 }),
 		]);
 		const model = createCharacterModel();
-		await model.loadCharacterData(false);
+		await model.loadCharacterData();
 
 		expect(model.professionsTable.filtered.map((p) => p.name)).toEqual(['Sniper', 'Miner']);
 		model.professionsTable.search = 'min';
@@ -206,19 +179,6 @@ describe('openScanOverlay', () => {
 		const model = createCharacterModel();
 		model.error = 'stale failure';
 		model.openScanOverlay();
-		expect(model.error).toBeNull();
-	});
-});
-
-describe('shared error slot', () => {
-	it('exposes a sub-model failure at page level and clears it on the next load', async () => {
-		seedLiveMocks();
-		mocked.getHpOptimizer.mockRejectedValue(new Error('no data'));
-		const model = createCharacterModel();
-		await model.optimizer.loadHpOptimizer();
-		expect(model.error).toBe('no data');
-
-		await model.loadCharacterData(false);
 		expect(model.error).toBeNull();
 	});
 });

@@ -12,28 +12,51 @@ import {
 	getEquipmentLibrary,
 	getSettings,
 	hotbarFromSettings,
+	hotbarPresetFromSettings,
+	hotbarPresetsFromSettings,
 	removeFromLibrary,
+	type SettingsPatch,
 	searchEquipmentItems,
+	setLibraryEnabled,
 	updateLibrary,
+	updateSettings,
 } from '$lib/api';
 import {
-	equipmentDemoDetails,
-	equipmentDemoHotbar,
-	equipmentDemoLibrary,
-	equipmentDemoTrifecta,
-} from '$lib/guide/fixtures/equipment';
+	blankDoseFields,
+	type DoseFormFields,
+	doseFieldsError,
+	doseFieldsFrom,
+	doseRequest,
+	previewDose,
+} from '$lib/features/consumables/doseForm';
 import type { Equipment, EquipmentDetail, HealingMode, HealingTool } from '$lib/types';
 import type {
+	AppSettings,
 	HarvestGuardrailSettings,
 	Hotbar,
+	HotbarPreset,
 	PassiveEffectSourceView,
-	TrifectaSettings,
+	ReloadSpeedInEffect,
 } from '$lib/types/settings';
 import { describeError } from '$lib/view/errorState';
 import { createTypeahead } from '$lib/view/typeahead.svelte';
+import { attackRateFactor } from './attackRate';
 import { previewCostPerUse } from './costPreview';
+import {
+	effectFields,
+	effectFormProblem,
+	effectRequest,
+	type WeaponEffectForm,
+} from './weaponEffect';
 
 export type EquipmentFormType = 'weapon' | 'healing' | 'consumable' | 'tool';
+
+function cloneSources(sources: PassiveEffectSourceView[]): PassiveEffectSourceView[] {
+	return sources.map((source) => ({
+		...source,
+		effects: source.effects.map((effect) => ({ ...effect })),
+	}));
+}
 
 export function createLibraryModel() {
 	// ── Data ──
@@ -42,15 +65,32 @@ export function createLibraryModel() {
 	let healingTools = $state<HealingTool[]>([]);
 	let consumables = $state<Equipment[]>([]);
 	let harvestingTools = $state<Equipment[]>([]);
+	// The live preset's slots, and every preset's (empty until settings load).
 	let hotbar = $state<Hotbar>({});
+	let hotbarPresets = $state<Hotbar[]>([]);
+	let activeHotbarPreset = $state<HotbarPreset>(1);
+	// Each hotbar write takes a ticket, and only the latest write's reply is
+	// applied, so a slower reply to an earlier switch never overwrites a
+	// later one.
+	let hotbarWrite = 0;
 	let hotbarHooksEnabled = $state(true);
-	let trifecta = $state<TrifectaSettings>({
-		activePresetId: null,
-		activePresetName: null,
-		presets: [],
-		ready: false,
-		message: null,
-	});
+	// This machine cannot read keys: the overlay declares the weapon instead.
+	let keyless = $state(false);
+	let carriedWeaponIds = $state<number[]>([]);
+	// The tool in hand is read off the game screen: holdable entries are
+	// switched on and off, and the hotbar keys start consumables only.
+	let toolReading = $state(false);
+	// The groups of entries the held-tool bar cannot tell apart, by id.
+	let indistinguishable = $state<string[][]>([]);
+	// How the player tells apart the members of those groups, by id.
+	let lookalikeLabels = $state<Record<string, string>>({});
+	// Each entry's switch writes run one after another (each waits for the
+	// one before it), so they reach the database in the order made; a
+	// failure puts back the last value stored, and only the latest write
+	// for the entry speaks for it.
+	const enabledChains = new Map<string, Promise<void>>();
+	const enabledLatest = new Map<string, number>();
+	const enabledStored = new Map<string, boolean>();
 	let harvestGuardrail = $state<HarvestGuardrailSettings>({
 		enabled: false,
 		shortToolId: null,
@@ -58,6 +98,12 @@ export function createLibraryModel() {
 		hugeToolId: null,
 	});
 	let passiveEffectSources = $state<PassiveEffectSourceView[]>([]);
+	// The reload speed those sources put in force: it sets every weapon's
+	// attack rate, so the form's preview prices with it.
+	let reloadSpeed = $state<ReloadSpeedInEffect | null>(null);
+	// True until the first load settles: an empty library before then means
+	// "not read yet", not "nothing added", so the views hold their empty states.
+	let loading = $state(true);
 	let error = $state<string | null>(null);
 
 	// ── Rows ──
@@ -83,6 +129,14 @@ export function createLibraryModel() {
 	let tickMax = $state<number | null>(null);
 	let tickSeconds = $state<number | null>(null);
 	let seededHealerId = $state<string | null>(null);
+	// A weapon's damage-over-time effect shares the over-time fields above
+	// (duration and ticks) with a healing tool's; only one form shows.
+	let weaponEffectMode = $state<WeaponEffectForm>('direct');
+	let hitMin = $state<number | null>(null);
+	let hitMax = $state<number | null>(null);
+	// A consumable's dose: the markup, whether it books, and the figures a
+	// custom item declares (a catalogue item's come from the catalogue).
+	let dose = $state<DoseFormFields>(blankDoseFields());
 
 	// ── Catalogue pickers ──
 	const label = (item: EquipmentSearchResult) => item.name;
@@ -149,6 +203,17 @@ export function createLibraryModel() {
 	// ── Computed ──
 	const sortedEquipment = $derived([...equipmentList].sort((a, b) => a.name.localeCompare(b.name)));
 
+	const weaponEffectFields = $derived({
+		mode: weaponEffectMode,
+		hitMin,
+		hitMax,
+		durationSeconds: effectDurationSeconds,
+		tickMin,
+		tickMax,
+		tickSeconds,
+	});
+	const weaponEffectProblem = $derived(effectFormProblem(weaponEffectFields));
+
 	const liveCostPreview = $derived(
 		previewCostPerUse({
 			weapon: weaponPicker.selected,
@@ -162,7 +227,11 @@ export function createLibraryModel() {
 			absorberMarkupPercent,
 			implantMarkupPercent,
 			damageEnhancers,
+			reloadSpeedPercent: reloadSpeed?.effectivePercent ?? 0,
 		}),
+	);
+	const liveAttackRateFactor = $derived(
+		attackRateFactor(weaponPicker.selected?.usesPerMinute, reloadSpeed?.effectivePercent ?? 0),
 	);
 
 	// Split the flat library into the per-kind lists the view renders. Weapons
@@ -174,6 +243,7 @@ export function createLibraryModel() {
 			.map((e) => ({
 				id: e.id,
 				name: e.name,
+				enabled: e.enabled,
 				costPerHeal: e.costPerUse,
 				isLimited: e.isLimited,
 				reloadSeconds: e.reloadSeconds,
@@ -188,39 +258,87 @@ export function createLibraryModel() {
 			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 
-	async function loadData(guideMode: boolean): Promise<void> {
+	async function loadData(): Promise<void> {
 		try {
-			if (guideMode) {
-				const library = equipmentDemoLibrary.map((e) => ({ ...e }));
-				allEquipment = library;
-				splitByKind(library);
-				hotbar = { ...equipmentDemoHotbar };
-				hotbarHooksEnabled = true;
-				trifecta = {
-					...equipmentDemoTrifecta,
-					presets: equipmentDemoTrifecta.presets.map((p) => ({ ...p })),
-				};
-				passiveEffectSources = [];
-				detailCache = Object.fromEntries(
-					Object.entries(equipmentDemoDetails).map(([k, v]) => [k, { ...v }]),
-				);
-			} else {
-				const [library, settings] = await Promise.all([getEquipmentLibrary(), getSettings()]);
-				allEquipment = library;
-				splitByKind(library);
-				hotbar = hotbarFromSettings(settings);
-				hotbarHooksEnabled = settings.hotbarHooksEnabled;
-				trifecta = settings.trifecta;
-				harvestGuardrail = settings.harvestGuardrail;
-				passiveEffectSources = (settings.passiveEffectSources ?? []).map((source) => ({
-					...source,
-					effects: source.effects.map((effect) => ({ ...effect })),
-				}));
-				detailCache = {};
-			}
+			const [{ entries: library, indistinguishable: groups, lookalikeLabels: labels }, settings] =
+				await Promise.all([getEquipmentLibrary(), getSettings()]);
+			allEquipment = library;
+			indistinguishable = groups;
+			lookalikeLabels = labels;
+			splitByKind(library);
+			applyHotbar(settings);
+			hotbarHooksEnabled = settings.hotbarHooksEnabled;
+			toolReading = settings.toolReadingEnabled;
+			keyless = settings.keyboard.keyless;
+			carriedWeaponIds = [...settings.carriedWeaponIds];
+			harvestGuardrail = settings.harvestGuardrail;
+			passiveEffectSources = cloneSources(settings.passiveEffectSources ?? []);
+			reloadSpeed = settings.reloadSpeed;
+			detailCache = {};
 		} catch (e) {
 			error = describeError(e, 'Failed to load equipment');
+		} finally {
+			loading = false;
 		}
+	}
+
+	function applyHotbar(settings: AppSettings) {
+		hotbar = hotbarFromSettings(settings);
+		hotbarPresets = hotbarPresetsFromSettings(settings);
+		activeHotbarPreset = hotbarPresetFromSettings(settings);
+	}
+
+	/** Show a hotbar change at once, persist it, and settle on what was
+	 * stored. A failed latest write restores the view, then re-reads the
+	 * stored hotbar, since an earlier write may have landed meanwhile. */
+	async function writeHotbar(patch: SettingsPatch, show: () => void, failure: string) {
+		const ticket = ++hotbarWrite;
+		const before = { hotbar, hotbarPresets, activeHotbarPreset };
+		show();
+		try {
+			const settings = await updateSettings(patch);
+			if (ticket === hotbarWrite) applyHotbar(settings);
+		} catch (e) {
+			if (ticket !== hotbarWrite) return;
+			({ hotbar, hotbarPresets, activeHotbarPreset } = before);
+			error = describeError(e, failure);
+			try {
+				const settings = await getSettings();
+				if (ticket === hotbarWrite) applyHotbar(settings);
+			} catch {
+				// The restored view stands until the next load.
+			}
+		}
+	}
+
+	/** Bring a preset live, as the game's preset switch does. */
+	function switchHotbarPreset(preset: HotbarPreset): Promise<void> {
+		if (preset === activeHotbarPreset || hotbarPresets.length === 0) return Promise.resolve();
+		return writeHotbar(
+			{ active_hotbar_preset: preset },
+			() => {
+				const leaving = activeHotbarPreset;
+				hotbarPresets = hotbarPresets.map((slots, i) => (i === leaving - 1 ? hotbar : slots));
+				activeHotbarPreset = preset;
+				hotbar = { ...hotbarPresets[preset - 1] };
+			},
+			'Could not switch the hotbar preset',
+		);
+	}
+
+	/** Bind a slot on the live preset, or empty it. The write names the
+	 * preset, so it lands there even behind a switch still in flight. */
+	function assignHotbarSlot(slot: string, equipmentId: number | null): Promise<void> {
+		const live = activeHotbarPreset;
+		const next = { ...hotbar, [slot]: equipmentId };
+		return writeHotbar(
+			{ active_hotbar_preset: live, hotbar: next },
+			() => {
+				hotbar = next;
+				hotbarPresets = hotbarPresets.map((slots, i) => (i === live - 1 ? next : slots));
+			},
+			'Failed to save hotbar',
+		);
 	}
 
 	function replaceEquipment(updated: Equipment) {
@@ -228,6 +346,56 @@ export function createLibraryModel() {
 			? allEquipment.map((item) => (item.id === updated.id ? updated : item))
 			: [...allEquipment, updated];
 		splitByKind(allEquipment);
+	}
+
+	/** Re-read which entries the held-tool bar cannot tell apart, and how
+	 * they are told apart: an entry saved, added, removed or switched may
+	 * have made or ended a group. Only while the reading is shown. */
+	async function refreshLookalikes() {
+		if (!toolReading) return;
+		try {
+			const read = await getEquipmentLibrary();
+			indistinguishable = read.indistinguishable;
+			lookalikeLabels = read.lookalikeLabels;
+		} catch {
+			// The flags stand until the next load.
+		}
+	}
+
+	/** Show an entry on or off at once and persist it, after any write for
+	 * the entry still in flight. A failure of the latest write puts back the
+	 * value last stored. */
+	function setEnabled(id: string, enabled: boolean): Promise<void> {
+		const entry = allEquipment.find((item) => item.id === id);
+		if (!entry || entry.enabled === enabled) return Promise.resolve();
+		if (!enabledStored.has(id)) enabledStored.set(id, entry.enabled);
+		const ticket = (enabledLatest.get(id) ?? 0) + 1;
+		enabledLatest.set(id, ticket);
+		const show = (value: boolean) => {
+			const current = allEquipment.find((item) => item.id === id);
+			if (current && current.enabled !== value) replaceEquipment({ ...current, enabled: value });
+		};
+		show(enabled);
+		const write = async () => {
+			try {
+				const stored = await setLibraryEnabled(id, enabled);
+				enabledStored.set(id, stored.enabled);
+				if (enabledLatest.get(id) === ticket) {
+					replaceEquipment(stored);
+					await refreshLookalikes();
+				}
+			} catch (e) {
+				if (enabledLatest.get(id) !== ticket) return;
+				show(enabledStored.get(id) ?? !enabled);
+				error = describeError(
+					e,
+					enabled ? `Could not turn ${entry.name} on` : `Could not turn ${entry.name} off`,
+				);
+			}
+		};
+		const next = (enabledChains.get(id) ?? Promise.resolve()).then(write);
+		enabledChains.set(id, next);
+		return next;
 	}
 
 	function openAddModal(prefill?: string, type: EquipmentFormType = 'weapon') {
@@ -249,6 +417,10 @@ export function createLibraryModel() {
 		tickMax = null;
 		tickSeconds = null;
 		seededHealerId = null;
+		weaponEffectMode = 'direct';
+		hitMin = null;
+		hitMax = null;
+		dose = blankDoseFields();
 		showAddModal = true;
 	}
 
@@ -278,9 +450,13 @@ export function createLibraryModel() {
 			healMax: detail.healingProfile?.directMax ?? null,
 			reloadSeconds: null,
 			lifestealPercent: detail.lifestealPercent,
+			usesPerMinute: detail.attackRate?.basePerMinute ?? null,
+			consumable: detail.consumable,
 		};
 		if (detail.type === 'healing') healerPicker.select(primary);
+		else if (detail.type === 'consumable') consumablePicker.select(primary);
 		else weaponPicker.select(primary);
+		dose = doseFieldsFrom(detail.type === 'consumable' ? detail.consumable : null);
 		if (detail.amplifier) {
 			selectCompanion(ampPicker, detail.amplifier);
 		} else {
@@ -300,6 +476,8 @@ export function createLibraryModel() {
 				healMax: null,
 				reloadSeconds: null,
 				lifestealPercent: null,
+				usesPerMinute: null,
+				consumable: null,
 			});
 		} else {
 			scopePicker.clear();
@@ -329,6 +507,16 @@ export function createLibraryModel() {
 		tickMax = detail.healingProfile?.tickMax ?? null;
 		tickSeconds = detail.healingProfile?.tickSeconds ?? null;
 		seededHealerId = detail.type === 'healing' ? detail.weapon.catalogId : null;
+		const effect = effectFields(detail.type === 'weapon' ? detail.effectProfile : null);
+		weaponEffectMode = effect.mode;
+		hitMin = effect.hitMin;
+		hitMax = effect.hitMax;
+		if (detail.type === 'weapon') {
+			effectDurationSeconds = effect.durationSeconds;
+			tickMin = effect.tickMin;
+			tickMax = effect.tickMax;
+			tickSeconds = effect.tickSeconds;
+		}
 		showAddModal = true;
 	}
 
@@ -359,11 +547,22 @@ export function createLibraryModel() {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
+			consumable: null,
 		});
 	}
 
 	function setAddType(type: EquipmentFormType) {
 		addType = type;
+		// The over-time fields are shared between a weapon's effect and a
+		// healing tool's: a change of kind starts them afresh.
+		weaponEffectMode = 'direct';
+		hitMin = null;
+		hitMax = null;
+		effectDurationSeconds = null;
+		tickMin = null;
+		tickMax = null;
+		tickSeconds = null;
 		if (type === 'weapon') {
 			healerPicker.clear();
 			toolPicker.clear();
@@ -399,7 +598,39 @@ export function createLibraryModel() {
 			healMax: null,
 			reloadSeconds: null,
 			lifestealPercent: null,
+			usesPerMinute: null,
+			consumable: null,
 		});
+	}
+
+	/** Adopt saved passive effects. The reload speed they put in force
+	 * reprices every weapon past the attack-rate limit, so the library and
+	 * the open detail re-read. */
+	async function effectsSaved(settings: AppSettings) {
+		passiveEffectSources = cloneSources(settings.passiveEffectSources);
+		reloadSpeed = settings.reloadSpeed;
+		await refreshPricing();
+	}
+
+	/** Re-read the library and the open detail: the reload speed in effect
+	 * moved (saved passive effects, or a dose starting or ending), so every
+	 * weapon's attack rate and every healer's reload may have. */
+	async function refreshPricing() {
+		try {
+			const {
+				entries: library,
+				indistinguishable: groups,
+				lookalikeLabels: labels,
+			} = await getEquipmentLibrary();
+			allEquipment = library;
+			indistinguishable = groups;
+			lookalikeLabels = labels;
+			splitByKind(library);
+			detailCache = {};
+			if (expandedId) detailCache[expandedId] = await getEquipmentDetail(expandedId);
+		} catch (e) {
+			error = describeError(e, 'Failed to refresh equipment');
+		}
 	}
 
 	async function toggleExpand(id: string) {
@@ -437,6 +668,7 @@ export function createLibraryModel() {
 					damage_enhancers: damageEnhancers,
 					implant_catalog_id: implantPicker.selected?.catalogId ?? null,
 					implant_markup: implantPicker.selected?.isLimited ? implantMarkupPercent : 100,
+					weapon_effect: effectRequest(weaponEffectFields),
 				};
 				const item = editingEquipmentId
 					? await updateLibrary(editingEquipmentId, payload)
@@ -486,13 +718,24 @@ export function createLibraryModel() {
 			} else {
 				const consumable = consumablePicker.selected;
 				if (!consumable) return;
-				const item = await addToLibrary({
+				const invalid = doseFieldsError(dose);
+				if (invalid) {
+					error = invalid;
+					return;
+				}
+				const payload = {
 					type: 'consumable',
 					catalog_id: consumable.catalogId ?? null,
 					name: consumable.catalogId ? null : consumable.name,
-				});
+					dose: doseRequest(dose),
+				} as const;
+				const item = editingEquipmentId
+					? await updateLibrary(editingEquipmentId, payload)
+					: await addToLibrary(payload);
 				replaceEquipment(item);
+				delete detailCache[item.id];
 			}
+			void refreshLookalikes();
 			showAddModal = false;
 			editingEquipmentId = null;
 		} catch (e) {
@@ -518,6 +761,7 @@ export function createLibraryModel() {
 			}
 			if (expandedId === id) expandedId = null;
 			delete detailCache[id];
+			void refreshLookalikes();
 		} catch (e) {
 			error = describeError(e, 'Failed to remove equipment');
 		}
@@ -529,6 +773,9 @@ export function createLibraryModel() {
 
 	return {
 		// ── Data ──
+		get loading() {
+			return loading;
+		},
 		get allEquipment() {
 			return allEquipment;
 		},
@@ -547,17 +794,35 @@ export function createLibraryModel() {
 		get hotbar() {
 			return hotbar;
 		},
-		set hotbar(value: Hotbar) {
-			hotbar = value;
+		get hotbarPresets() {
+			return hotbarPresets;
+		},
+		get activeHotbarPreset() {
+			return activeHotbarPreset;
+		},
+		switchHotbarPreset,
+		assignHotbarSlot,
+		get keyless() {
+			return keyless;
 		},
 		get hotbarHooksEnabled() {
 			return hotbarHooksEnabled;
 		},
-		get trifecta() {
-			return trifecta;
+		get carriedWeaponIds() {
+			return carriedWeaponIds;
 		},
-		set trifecta(value: TrifectaSettings) {
-			trifecta = value;
+		get toolReading() {
+			return toolReading;
+		},
+		get indistinguishable() {
+			return indistinguishable;
+		},
+		get lookalikeLabels() {
+			return lookalikeLabels;
+		},
+		setEnabled,
+		set carriedWeaponIds(value: number[]) {
+			carriedWeaponIds = value;
 		},
 		get harvestGuardrail() {
 			return harvestGuardrail;
@@ -568,9 +833,11 @@ export function createLibraryModel() {
 		get passiveEffectSources() {
 			return passiveEffectSources;
 		},
-		set passiveEffectSources(value: PassiveEffectSourceView[]) {
-			passiveEffectSources = value;
+		get reloadSpeed() {
+			return reloadSpeed;
 		},
+		effectsSaved,
+		refreshPricing,
 		get error() {
 			return error;
 		},
@@ -607,6 +874,14 @@ export function createLibraryModel() {
 		get saving() {
 			return saving;
 		},
+		/** The consumable form's dose fields (bindable in place). */
+		get dose() {
+			return dose;
+		},
+		/** What one dose of the selected consumable will be. */
+		get dosePreview() {
+			return previewDose(consumablePicker.selected?.consumable ?? null, dose);
+		},
 		get markupPercent() {
 			return markupPercent;
 		},
@@ -640,11 +915,36 @@ export function createLibraryModel() {
 		get liveCostPreview() {
 			return liveCostPreview;
 		},
+		get liveAttackRateFactor() {
+			return liveAttackRateFactor;
+		},
 		get implantMarkupPercent() {
 			return implantMarkupPercent;
 		},
 		set implantMarkupPercent(value: number) {
 			implantMarkupPercent = value;
+		},
+		get weaponEffectMode() {
+			return weaponEffectMode;
+		},
+		set weaponEffectMode(value: WeaponEffectForm) {
+			weaponEffectMode = value;
+		},
+		get hitMin() {
+			return hitMin;
+		},
+		set hitMin(value: number | null) {
+			hitMin = value;
+		},
+		get hitMax() {
+			return hitMax;
+		},
+		set hitMax(value: number | null) {
+			hitMax = value;
+		},
+		/** Why the weapon's declared effect cannot be saved yet, or null. */
+		get weaponEffectProblem() {
+			return weaponEffectProblem;
 		},
 		get healingMode() {
 			return healingMode;

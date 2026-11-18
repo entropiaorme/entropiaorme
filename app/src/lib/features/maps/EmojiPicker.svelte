@@ -1,5 +1,6 @@
 <script lang="ts">
 	import emojiData from 'emojibase-data/en/compact.json';
+	import { createSearchIndex, isSearchQuery } from '$lib/view/search';
 	import Button from '$lib/components/Button.svelte';
 	import Input from '$lib/components/Input.svelte';
 	import { pinGlyph } from './pinIcons';
@@ -27,18 +28,12 @@
 	const defaultChoices = defaults
 		.map((unicode) => choices.find((emoji) => emoji.unicode === unicode))
 		.filter((emoji): emoji is EmojiEntry => emoji !== undefined);
-	const results = $derived.by(() => {
-		const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-		if (terms.length === 0) return defaultChoices;
-		return choices
-			.filter((emoji) => {
-				const haystack = [emoji.label, ...(emoji.tags ?? []), ...(emoji.shortcodes ?? [])]
-					.join(' ')
-					.toLowerCase();
-				return terms.every((term) => haystack.includes(term));
-			})
-			.slice(0, 9);
-	});
+	const index = createSearchIndex(choices, (emoji) => [
+		emoji.label,
+		...(emoji.tags ?? []),
+		...(emoji.shortcodes ?? []),
+	]);
+	const results = $derived(isSearchQuery(query) ? index.rank(query, 9) : defaultChoices);
 
 	function openPicker(event: MouseEvent) {
 		const trigger = event.currentTarget as HTMLElement;

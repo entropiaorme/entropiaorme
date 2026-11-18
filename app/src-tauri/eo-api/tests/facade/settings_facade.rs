@@ -1,0 +1,730 @@
+//! Behavioural pins for the settings family over the typed facade: the
+//! assembled settings read (defaults, the live db path, the version
+//! stamp, the carried weapons), the overlay-position read/write, and the
+//! partial-update validation ladder (the empty-patch refusal, the
+//! chat-log path checks, the mob-mode gate), and the setting that reads
+//! the held tool off the screen.
+
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use eo_api::settings::SettingsPatch;
+use eo_api::{Api, ApiError};
+use eo_services::clock::RealClock;
+use eo_services::config_service::load_config_readonly;
+use eo_services::db::Db;
+use eo_services::game_data_store::GameDataStore;
+use eo_services::screen_watch::WatchEnded;
+use eo_services::tool_catalogue::ToolCatalogues;
+use eo_services::tool_watch::{ToolDetector, ToolPulseSink};
+use eo_services::tracker::{HuntTracker, Providers, TrackingConfig};
+use serde_json::Value;
+
+use crate::common;
+
+/// The composed facade over a fresh migrated database, an empty catalogue
+/// snapshot (so a default preset validates not-ready, catalogue-free), and
+/// the live config writer.
+async fn settings_api(dir: &Path) -> Api {
+    let snapshot = dir.join("snapshot");
+    std::fs::create_dir_all(&snapshot).unwrap();
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Db::open(&data_dir.join("entropia_orme.db"))
+        .await
+        .expect("migrated database");
+    let game_data = Arc::new(GameDataStore::new(&snapshot).expect("empty game-data store"));
+    let clock = Arc::new(RealClock::new());
+    let handles = common::producer_handles(&db, &data_dir, tokio::runtime::Handle::current()).await;
+    Api::new(
+        db,
+        game_data,
+        clock,
+        data_dir,
+        handles.config_service,
+        handles.tracker,
+        handles.hotbar,
+        handles.watcher,
+        handles.skill_tracker,
+        handles.skill_scan,
+        handles.spacebar,
+        handles.repair_ocr,
+        handles.sale_capture,
+        handles.quests.clone(),
+        None,
+        None,
+        None,
+    )
+}
+
+/// The persisted `settings.json` as JSON, for storage assertions.
+fn read_settings(data_dir: &Path) -> Value {
+    let raw = std::fs::read_to_string(data_dir.join("settings.json")).expect("settings.json reads");
+    serde_json::from_str(&raw).expect("settings.json parses")
+}
+
+fn keys(value: &Value) -> Vec<&str> {
+    value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_settings_assembly_shapes_the_default_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+
+    let settings = api.settings().await.unwrap();
+    let body = serde_json::to_value(&settings).unwrap();
+
+    // The wire order the frontend contract carries.
+    assert_eq!(
+        keys(&body),
+        [
+            "gameConnection",
+            "hotbarHooksEnabled",
+            "keyboard",
+            "repairOcrEnabled",
+            "mobDetectionEnabled",
+            "mobDetectionCapture",
+            "toolReadingEnabled",
+            "toolReadingCapture",
+            "keepUnreadPlates",
+            "sessionName",
+            "declaredSkillBoostPercent",
+            "hotbar",
+            "activeHotbarPreset",
+            "hotbarPresets",
+            "carriedWeaponIds",
+            "passiveEffectSources",
+            "reloadSpeed",
+            "harvestGuardrail",
+            "lootFilterBlacklist",
+            "dbPath",
+            "appVersion",
+        ]
+    );
+    // A facade with no input access attached cannot identify its machine,
+    // so keyless tracking is unavailable and no observer is reported.
+    assert_eq!(
+        body["keyboard"],
+        serde_json::json!({
+            "observer": "unavailable",
+            "keyless": false,
+            "keylessAvailable": false,
+        })
+    );
+    assert_eq!(
+        body["reloadSpeed"],
+        serde_json::json!({
+            "declaredPercent": 0.0,
+            "effectivePercent": 0.0,
+            "itemLimitPercent": 15.0,
+        }),
+        "no declared effects put no reload speed in force"
+    );
+    assert_eq!(
+        body["harvestGuardrail"],
+        serde_json::json!({
+            "enabled": false,
+            "shortToolId": null,
+            "longToolId": null,
+            "hugeToolId": null,
+        }),
+        "the guardrail defaults disabled with no intended tools"
+    );
+    // The default values: both facets undeclared. The boost's undeclared
+    // state is null, NOT 0: a stored 0 is the distinct declaration that
+    // play is deliberately unboosted.
+    assert_eq!(body["sessionName"], "");
+    assert_eq!(body["declaredSkillBoostPercent"], serde_json::Value::Null);
+    assert_eq!(
+        body["lootFilterBlacklist"],
+        serde_json::json!(["Universal Ammo"])
+    );
+    assert_eq!(body["carriedWeaponIds"], serde_json::json!([]));
+    assert_eq!(body["activeHotbarPreset"], 1);
+    assert_eq!(body["hotbarPresets"].as_array().unwrap().len(), 3);
+    assert_eq!(body["hotbarPresets"][0], body["hotbar"]);
+    assert_eq!(body["passiveEffectSources"], serde_json::json!([]));
+    assert_eq!(body["appVersion"], env!("CARGO_PKG_VERSION"));
+    assert!(body["dbPath"]
+        .as_str()
+        .unwrap()
+        .ends_with("entropia_orme.db"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn keyless_tracking_is_held_to_this_machine_and_suppresses_the_keyboard() {
+    use eo_services::keystroke_source::{KeystrokeCallback, KeystrokeSource};
+    use std::sync::Mutex;
+
+    /// Records each suppression the facade applies.
+    #[derive(Default)]
+    struct Keyboard(Mutex<Vec<bool>>);
+    impl KeystrokeSource for Keyboard {
+        fn subscribe(&self, _callback: KeystrokeCallback) {}
+        fn start(&self) -> bool {
+            false
+        }
+        fn stop(&self) {}
+        fn set_suppressed(&self, suppressed: bool) {
+            self.0.lock().unwrap().push(suppressed);
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    // Without a machine identity the switch is refused and nothing is written.
+    let unidentified = settings_api(dir.path()).await;
+    let refused = unidentified
+        .settings_update(SettingsPatch {
+            keyless_input: Some(true),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(refused, ApiError::BadRequest { .. }),
+        "{refused:?}"
+    );
+
+    let keyboard = Arc::new(Keyboard::default());
+    let api = settings_api(dir.path())
+        .await
+        .with_input_access(eo_api::settings::InputAccess::new(
+            Some("machine-a".into()),
+            keyboard.clone(),
+        ));
+    let on = api
+        .settings_update(SettingsPatch {
+            keyless_input: Some(true),
+            hotbar_hooks_enabled: Some(true),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    let body = serde_json::to_value(&on).unwrap();
+    // Keyless never probes the keyboard, so no observer is reported.
+    assert_eq!(
+        body["keyboard"],
+        serde_json::json!({ "observer": null, "keyless": true, "keylessAvailable": true })
+    );
+    // The stored toggle is kept for when keyless is turned off again.
+    assert_eq!(body["hotbarHooksEnabled"], true);
+    let stored = read_settings(&dir.path().join("data"));
+    assert_eq!(stored["keyless_input_host"], "machine-a");
+    // The narrow read the route HUD uses carries the same block.
+    assert_eq!(
+        serde_json::to_value(api.input_status().unwrap()).unwrap(),
+        body["keyboard"]
+    );
+    let snapshot = serde_json::to_value(api.tracking_snapshot().await.unwrap()).unwrap();
+    assert_eq!(snapshot["keylessInput"], true);
+    assert_eq!(snapshot["hotbarKeysEnabled"], false);
+
+    // The same settings on another machine leave keyless off there.
+    let elsewhere =
+        settings_api(dir.path())
+            .await
+            .with_input_access(eo_api::settings::InputAccess::new(
+                Some("machine-b".into()),
+                Arc::new(Keyboard::default()),
+            ));
+    let body = serde_json::to_value(elsewhere.settings().await.unwrap()).unwrap();
+    assert_eq!(body["keyboard"]["keyless"], false);
+
+    let off = api
+        .settings_update(SettingsPatch {
+            keyless_input: Some(false),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert!(!off.keyboard.keyless);
+    assert_eq!(
+        read_settings(&dir.path().join("data"))["keyless_input_host"],
+        Value::Null
+    );
+    assert_eq!(*keyboard.0.lock().unwrap(), vec![true, false]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_overlay_position_reads_and_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+
+    // Neither coordinate is set by default.
+    let position = api.settings_overlay_position().await.unwrap();
+    assert_eq!(position.x, None);
+    assert_eq!(position.y, None);
+
+    // The write persists the exact coordinates and carries no producer
+    // side effects.
+    api.settings_set_overlay_position(7, 9).await.unwrap();
+    let cfg = read_settings(&dir.path().join("data"));
+    assert_eq!(cfg["overlay_x"], 7);
+    assert_eq!(cfg["overlay_y"], 9);
+    let position = api.settings_overlay_position().await.unwrap();
+    assert_eq!(position.x, Some(7));
+    assert_eq!(position.y, Some(9));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_partial_update_writes_and_returns_the_assembly() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+
+    let updated = api
+        .settings_update(SettingsPatch {
+            player_name: Some("Mikel".into()),
+            hotbar_hooks_enabled: Some(true),
+            session_name: Some("Daily Hunt".into()),
+            declared_skill_boost_percent: Some(Some(50)),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+
+    // The reply is the full assembly reflecting the write.
+    assert_eq!(updated.game_connection.player_name, "Mikel");
+    assert!(updated.hotbar_hooks_enabled);
+    assert_eq!(updated.session_name, "Daily Hunt");
+    assert_eq!(updated.declared_skill_boost_percent, Some(50));
+    // The write reached the store.
+    let cfg = read_settings(&dir.path().join("data"));
+    assert_eq!(cfg["player_name"], "Mikel");
+    assert_eq!(cfg["hotbar_hooks_enabled"], true);
+    assert_eq!(cfg["session_name"], "Daily Hunt");
+    assert_eq!(cfg["declared_skill_boost_percent"], 50);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preset_switch_brings_its_own_slots_live() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+    let slots = |value: Value| value.as_object().unwrap().clone();
+
+    api.settings_update(SettingsPatch {
+        hotbar: Some(slots(serde_json::json!({"1": 4}))),
+        ..SettingsPatch::default()
+    })
+    .await
+    .unwrap();
+
+    // A switch and a write in one patch: the write lands on the preset the
+    // switch names, and the preset left behind keeps its slots.
+    let updated = api
+        .settings_update(SettingsPatch {
+            active_hotbar_preset: Some(2),
+            hotbar: Some(slots(serde_json::json!({"3": 9}))),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated.active_hotbar_preset, 2);
+    assert_eq!(updated.hotbar["3"], 9);
+    assert_eq!(updated.hotbar["1"], Value::Null);
+    assert_eq!(updated.hotbar_presets[1], updated.hotbar);
+    assert_eq!(updated.hotbar_presets[0]["1"], 4);
+
+    // Switching back restores the first preset's slots.
+    let back = api
+        .settings_update(SettingsPatch {
+            active_hotbar_preset: Some(1),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(back.hotbar["1"], 4);
+    assert_eq!(back.hotbar["3"], Value::Null);
+    let cfg = read_settings(&dir.path().join("data"));
+    assert_eq!(cfg["active_hotbar_preset"], 1);
+    assert_eq!(cfg["hotbar"]["1"], 4);
+    assert_eq!(cfg["hotbar_presets"][1]["3"], 9);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preset_outside_the_three_is_refused_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+    for preset in [0, 4] {
+        assert_eq!(
+            api.settings_update(SettingsPatch {
+                active_hotbar_preset: Some(preset),
+                player_name: Some("Unwritten".into()),
+                ..SettingsPatch::default()
+            })
+            .await
+            .unwrap_err(),
+            ApiError::bad_request("Hotbar preset must be 1 to 3")
+        );
+    }
+    let cfg = read_settings(&dir.path().join("data"));
+    assert_eq!(cfg["active_hotbar_preset"], 1);
+    assert_ne!(cfg["player_name"], "Unwritten");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_speed_sources_round_trip_as_typed_persistent_effects() {
+    use eo_api::settings::{PassiveEffectInput, PassiveEffectKind, PassiveEffectSourceInput};
+
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+    let updated = api
+        .settings_update(SettingsPatch {
+            passive_effect_sources: Some(vec![PassiveEffectSourceInput {
+                id: "ares-perfect".into(),
+                name: "Ares Ring, Perfected".into(),
+                enabled: true,
+                effects: vec![PassiveEffectInput {
+                    kind: PassiveEffectKind::ReloadSpeed,
+                    magnitude_percent: 14.0,
+                }],
+            }]),
+            ..SettingsPatch::default()
+        })
+        .await
+        .expect("save passive effect");
+
+    assert_eq!(updated.passive_effect_sources.len(), 1);
+    assert_eq!(
+        updated.passive_effect_sources[0].name,
+        "Ares Ring, Perfected"
+    );
+    assert_eq!(
+        updated.passive_effect_sources[0].effects[0].magnitude_percent,
+        14.0
+    );
+    let stored = read_settings(&dir.path().join("data"));
+    assert_eq!(
+        stored["passive_effect_sources"][0]["effects"][0]["kind"],
+        "reload_speed"
+    );
+    assert_eq!(
+        stored["passive_effect_sources"][0]["effects"][0]["magnitude_percent"],
+        14.0
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cumulative_reload_speed_beyond_representation_is_refused() {
+    use eo_api::settings::{PassiveEffectInput, PassiveEffectKind, PassiveEffectSourceInput};
+
+    // Each magnitude is finite and individually acceptable, so only the total
+    // catches this. Persisting it would divide the reload interval to nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+    let source = |id: &str| PassiveEffectSourceInput {
+        id: id.into(),
+        name: format!("Source {id}"),
+        enabled: true,
+        effects: vec![PassiveEffectInput {
+            kind: PassiveEffectKind::ReloadSpeed,
+            magnitude_percent: f64::MAX,
+        }],
+    };
+    let error = api
+        .settings_update(SettingsPatch {
+            passive_effect_sources: Some(vec![source("a"), source("b")]),
+            ..SettingsPatch::default()
+        })
+        .await
+        .expect_err("an unrepresentable total is refused");
+    assert!(
+        error.to_string().contains("too large to apply"),
+        "unexpected error: {error}"
+    );
+
+    let stored = read_settings(&dir.path().join("data"));
+    assert!(stored["passive_effect_sources"]
+        .as_array()
+        .is_none_or(|sources| sources.is_empty()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_update_validation_ladder_refuses_the_backend_way() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+
+    // An empty patch is nothing to update.
+    assert_eq!(
+        api.settings_update(SettingsPatch::default())
+            .await
+            .unwrap_err(),
+        ApiError::bad_request("No fields to update")
+    );
+
+    // The chat-log path chain: empty, wrong basename, non-existent.
+    assert_eq!(
+        api.settings_update(SettingsPatch {
+            chatlog_path: Some(String::new()),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap_err(),
+        ApiError::bad_request("chat.log path is required")
+    );
+    assert_eq!(
+        api.settings_update(SettingsPatch {
+            chatlog_path: Some("not_a_chatlog.txt".into()),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap_err(),
+        ApiError::bad_request("chat.log path must point to a chat.log file")
+    );
+    assert_eq!(
+        api.settings_update(SettingsPatch {
+            chatlog_path: Some("/no/such/place/chat.log".into()),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap_err(),
+        ApiError::bad_request("chat.log path does not exist")
+    );
+
+    // A negative skill boost is refused before the write.
+    assert_eq!(
+        api.settings_update(SettingsPatch {
+            declared_skill_boost_percent: Some(Some(-1)),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap_err(),
+        ApiError::bad_request("Skill boost cannot be negative")
+    );
+    // The refusals left the stored player name untouched (default empty).
+    assert_eq!(read_settings(&dir.path().join("data"))["player_name"], "");
+}
+
+/// The boost declaration is three-state end to end, and the facade is
+/// where it used to collapse: a `Some(0)` was filtered out alongside the
+/// withdrawal, so the overlay could never record the deliberately-
+/// unboosted baseline the whole boost-measurement question rests on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_session_config_facade_keeps_a_declared_zero_apart_from_a_withdrawal() {
+    let dir = tempfile::tempdir().unwrap();
+    let api = settings_api(dir.path()).await;
+    let data_dir = dir.path().join("data");
+
+    // Declared zero: a real claim, stored and echoed as 0.
+    let declared = api.tracking_session_config(None, Some(0)).await.unwrap();
+    assert_eq!(declared.skill_boost_percent, Some(0));
+    assert_eq!(read_settings(&data_dir)["declared_skill_boost_percent"], 0);
+
+    // A magnitude replaces it.
+    let boosted = api.tracking_session_config(None, Some(50)).await.unwrap();
+    assert_eq!(boosted.skill_boost_percent, Some(50));
+    assert_eq!(read_settings(&data_dir)["declared_skill_boost_percent"], 50);
+
+    // Withdrawal: claims nothing, and is stored as null rather than 0.
+    let withdrawn = api.tracking_session_config(None, None).await.unwrap();
+    assert_eq!(withdrawn.skill_boost_percent, None::<i64>);
+    assert_eq!(
+        read_settings(&data_dir)["declared_skill_boost_percent"],
+        Value::Null
+    );
+
+    // A negative is nonsense rather than a fourth state: it withdraws.
+    let negative = api.tracking_session_config(None, Some(-5)).await.unwrap();
+    assert_eq!(negative.skill_boost_percent, None::<i64>);
+}
+
+/// The tracker's configuration read through the settings file, as the
+/// app's own is: what a settings write turns on or off reaches it.
+struct FileConfig(std::path::PathBuf);
+
+impl TrackingConfig for FileConfig {
+    fn session_name(&self) -> String {
+        String::new()
+    }
+
+    fn session_definition_id(&self) -> Option<i64> {
+        None
+    }
+
+    fn declared_skill_boost_percent(&self) -> Option<i64> {
+        None
+    }
+
+    fn manual_mob(&self) -> Option<(String, String)> {
+        None
+    }
+
+    fn loot_filter_blacklist(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn tool_reading_enabled(&self) -> bool {
+        load_config_readonly(&self.0).is_ok_and(|config| config.tool_reading_on())
+    }
+}
+
+/// A held-tool watcher that records what the tracker asks of it.
+#[derive(Default)]
+struct RecordingToolWatch {
+    starts: Mutex<usize>,
+    stops: Mutex<usize>,
+    permits: Mutex<usize>,
+    watching: Mutex<Option<String>>,
+}
+
+impl ToolDetector for RecordingToolWatch {
+    fn start(&self, session_id: &str, _sink: ToolPulseSink, _ended: WatchEnded) {
+        *self.starts.lock().unwrap() += 1;
+        *self.watching.lock().unwrap() = Some(session_id.to_string());
+    }
+
+    fn stop(&self) {
+        *self.stops.lock().unwrap() += 1;
+        *self.watching.lock().unwrap() = None;
+    }
+
+    fn watches(&self, session_id: &str) -> bool {
+        self.watching.lock().unwrap().as_deref() == Some(session_id)
+    }
+
+    fn permit_capture(&self) {
+        *self.permits.lock().unwrap() += 1;
+    }
+
+    fn hint(&self) {}
+}
+
+/// The facade over a tracker whose held-tool watcher is `watch`.
+async fn tool_reading_api(dir: &Path, watch: Arc<RecordingToolWatch>) -> (Api, Arc<HuntTracker>) {
+    let snapshot = dir.join("snapshot");
+    std::fs::create_dir_all(&snapshot).unwrap();
+    let data_dir = dir.join("data");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    let db = Db::open(&data_dir.join("entropia_orme.db"))
+        .await
+        .expect("migrated database");
+    let game_data = Arc::new(GameDataStore::new(&snapshot).expect("empty game-data store"));
+    let handles = common::producer_handles_with_tracker(
+        &db,
+        &data_dir,
+        tokio::runtime::Handle::current(),
+        Providers {
+            config: Arc::new(FileConfig(data_dir.clone())),
+            tool_detector: watch,
+            ..Providers::default()
+        },
+    )
+    .await;
+    let tracker = handles.tracker.clone();
+    let catalogues = {
+        let data_dir = data_dir.clone();
+        ToolCatalogues::new(
+            db.clone(),
+            game_data.clone(),
+            Arc::new(move || load_config_readonly(&data_dir).is_ok_and(|c| c.tool_reading_on())),
+        )
+    };
+    let api = Api::new(
+        db,
+        game_data,
+        Arc::new(RealClock::new()),
+        data_dir,
+        handles.config_service,
+        handles.tracker,
+        handles.hotbar,
+        handles.watcher,
+        handles.skill_tracker,
+        handles.skill_scan,
+        handles.spacebar,
+        handles.repair_ocr,
+        handles.sale_capture,
+        handles.quests.clone(),
+        None,
+        None,
+        None,
+    )
+    .with_tool_reading(catalogues, None);
+    (api, tracker)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reading_the_held_tool_is_off_until_turned_on_and_turning_it_on_permits_capture() {
+    let dir = tempfile::tempdir().unwrap();
+    let watch = Arc::new(RecordingToolWatch::default());
+    let (api, tracker) = tool_reading_api(dir.path(), watch.clone()).await;
+
+    // Off until the player turns it on: their consent to the screen being
+    // read. A session started meanwhile never starts the watcher.
+    let settings = api.settings().await.unwrap();
+    assert!(!settings.tool_reading_enabled);
+    assert_eq!(
+        serde_json::to_value(settings.tool_reading_capture).unwrap(),
+        "unavailable",
+        "a facade with no watcher's status says the reading cannot run"
+    );
+    tracker.start_session().await.unwrap();
+    assert_eq!(*watch.starts.lock().unwrap(), 0, "never started while off");
+    assert_eq!(
+        *watch.permits.lock().unwrap(),
+        0,
+        "no capture permitted while off"
+    );
+
+    let on = api
+        .settings_update(SettingsPatch {
+            tool_reading_enabled: Some(true),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert!(on.tool_reading_enabled);
+    assert!(!on.mob_detection_enabled, "one setting is not the other");
+    assert_eq!(
+        *watch.permits.lock().unwrap(),
+        1,
+        "the player's turning it on is the gesture that may start capture"
+    );
+    assert_eq!(
+        *watch.starts.lock().unwrap(),
+        1,
+        "turned on mid-session, the tracker re-reads its config and starts the watch"
+    );
+    let data_dir = dir.path().join("data");
+    assert_eq!(read_settings(&data_dir)["tool_reading"], true);
+
+    // A patch of another setting while it is on is not the player turning
+    // it on: no capture is permitted again, and the watch runs on.
+    api.settings_update(SettingsPatch {
+        session_name: Some("Atrox run".into()),
+        ..SettingsPatch::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        *watch.permits.lock().unwrap(),
+        1,
+        "only turning it on permits capture"
+    );
+    assert_eq!(*watch.starts.lock().unwrap(), 1);
+
+    let off = api
+        .settings_update(SettingsPatch {
+            tool_reading_enabled: Some(false),
+            ..SettingsPatch::default()
+        })
+        .await
+        .unwrap();
+    assert!(!off.tool_reading_enabled);
+    assert_eq!(read_settings(&data_dir)["tool_reading"], false);
+    assert!(
+        *watch.stops.lock().unwrap() >= 1,
+        "turned off mid-session, the watch stops"
+    );
+
+    // Off: a new session never starts the watcher, and nothing more is
+    // permitted.
+    tracker.stop_session().await.unwrap();
+    tracker.start_session().await.unwrap();
+    assert_eq!(*watch.starts.lock().unwrap(), 1, "never started while off");
+    assert_eq!(*watch.permits.lock().unwrap(), 1);
+}

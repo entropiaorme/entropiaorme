@@ -1,11 +1,18 @@
 <script lang="ts">
+	import { listen } from '@tauri-apps/api/event';
+	import { onMount } from 'svelte';
 	import { ApiError } from '$lib/api';
 	import {
 		activateLootItem,
+		CONSUMABLES_TOPIC,
 		deactivateLootItem,
+		getProtectionSessionStatus,
 		getSessionDetail,
+		HEALING_TOPIC,
+		PROTECTION_TOPIC,
 		renameSessionMob,
 		restoreSessionMob,
+		WEAPONS_TOPIC,
 	} from '$lib/api';
 	import type {
 		SessionDetail,
@@ -17,10 +24,229 @@
 	import Badge from '$lib/components/Badge.svelte';
 	import Divider from '$lib/components/Divider.svelte';
 	import DataTable from '$lib/components/DataTable.svelte';
+	import SessionDoses from '$lib/features/consumables/SessionDoses.svelte';
+	import { createSessionDosesModel } from '$lib/features/consumables/sessionDosesModel.svelte';
+	import HealingEvidence from '$lib/features/healing/HealingEvidence.svelte';
+	import { createHealingReviewModel } from '$lib/features/healing/healingReviewModel.svelte';
+	import MobDetections from '$lib/features/tracking/MobDetections.svelte';
+	import { createMobDetectionModel } from '$lib/features/tracking/mobDetectionModel.svelte';
+	import ToolSightings from '$lib/features/tracking/ToolSightings.svelte';
+	import { createToolSightingModel } from '$lib/features/tracking/toolSightingModel.svelte';
+	import SessionQuestRewards from '$lib/features/quests/SessionQuestRewards.svelte';
+	import { describeCertainty } from '$lib/features/tracking/mobDetection';
+	import { TRACKING_TOPIC } from '$lib/realtime/trackingTopic';
+	import WeaponEvidence from '$lib/features/weapons/WeaponEvidence.svelte';
+	import SessionMeasure from '$lib/features/account/SessionMeasure.svelte';
+	import CostBasisNote from '$lib/features/account/CostBasisNote.svelte';
+	import SessionOverhead from '$lib/features/account/SessionOverhead.svelte';
+	import { hasOverhead } from '$lib/features/account/costLines';
+	import { createCostPlacementsModel } from '$lib/features/account/costPlacementsModel.svelte';
+	import { acrossGapNote } from '$lib/features/account/measure';
+	import { lootEntriesPrompt } from '$lib/features/tracking/lootEntries';
+	import { totalsAfterToggle } from '$lib/features/tracking/sessionTotals';
+	import ErrorNotice from '$lib/components/ErrorNotice.svelte';
+	import {
+		readingsSpeak,
+		restsOnReadings,
+		sessionBasisLine,
+		showsBucket,
+		trackedEstimate,
+	} from '$lib/features/account/costBasis';
+	import { inDevelopment } from '$lib/inDevelopment';
+	import { describeUnpriced, hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
+	import { createWeaponReviewModel } from '$lib/features/weapons/weaponReviewModel.svelte';
 
 	let {
 		detail = $bindable(),
 	}: { detail: SessionDetail } = $props();
+
+	// ── Armour standing ───────────────────────────────────────────────
+	// Armour cost is recorded when the player repairs, possibly sessions
+	// later, so a session with hits and no recording yet reads as "not
+	// recorded" rather than as a zero it has not earned.
+	let unrecordedHits = $state(0);
+	// Bumped by a protection write elsewhere, so the standing is re-read.
+	let protectionRevision = $state(0);
+	$effect(() => {
+		const sessionId = detail.sessionId;
+		void protectionRevision;
+		let current = true;
+		getProtectionSessionStatus(sessionId)
+			.then((status) => {
+				if (current) unrecordedHits = status.unrecordedHits;
+			})
+			.catch(() => {
+				if (current) unrecordedHits = 0;
+			});
+		return () => {
+			current = false;
+		};
+	});
+
+	// Healing corrections answer with the refreshed detail, applied here.
+	const healingReview = createHealingReviewModel({
+		detail: () => detail,
+		apply: (fresh) => {
+			detail = fresh;
+		},
+	});
+
+	// The session's doses, read with the session and on each doses frame.
+	const sessionDoses = createSessionDosesModel(() => detail.sessionId);
+	$effect(() => {
+		void detail.sessionId;
+		void sessionDoses.refresh();
+	});
+
+	// Weapon assignments answer with the refreshed detail too.
+	const weaponReview = createWeaponReviewModel({
+		detail: () => detail,
+		apply: (fresh) => {
+			detail = fresh;
+		},
+	});
+
+	// Which mobs the kills were detected as: settling a group restamps
+	// its kills, so the session's figures re-read.
+	const mobDetections = createMobDetectionModel({
+		sessionId: () => detail.sessionId,
+		onSettled: () => refetchSessionDetail(),
+	});
+	// What the screen read as the tool in hand that is not in the library:
+	// settling one moves no cost, so the session's figures stay as they are.
+	// A running session's are read again as the tracker moves on, so its
+	// last shots and the offer to add appear once it ends.
+	const toolSightings = createToolSightingModel({ sessionId: () => detail.sessionId });
+	$effect(() => {
+		void detail.sessionId;
+		void mobDetections.refresh();
+		void toolSightings.refresh();
+	});
+
+	// A recording or undo from the overlay moves this session's armour cost,
+	// and a healing correction or weapon assignment from another window its
+	// heal or weapon cost: re-read the detail (and the armour standing)
+	// rather than showing the old figure.
+	onMount(() => {
+		const stops: Array<() => void> = [];
+		let disposed = false;
+		function reread(after?: () => void) {
+			readSessionDetail()
+				.then((applied) => {
+					if (applied && !disposed) after?.();
+				})
+				.catch(() => {
+					// Keep the detail shown; the next write re-reads.
+				});
+		}
+		const subscriptions: Array<[string, () => void]> = [
+			[
+				PROTECTION_TOPIC,
+				() => {
+					protectionRevision += 1;
+					reread();
+				},
+			],
+			[HEALING_TOPIC, () => reread(() => void healingReview.refresh())],
+			[WEAPONS_TOPIC, () => reread(() => void weaponReview.refresh())],
+			[CONSUMABLES_TOPIC, () => reread(() => void sessionDoses.refresh())],
+			[TRACKING_TOPIC, () => void toolSightings.followRunning()],
+		];
+		for (const [topic, handler] of subscriptions) {
+			void listen(topic, handler).then((unlisten) => {
+				if (disposed) unlisten();
+				else stops.push(unlisten);
+			});
+		}
+		return () => {
+			disposed = true;
+			unmounted = true;
+			for (const stop of stops) stop();
+		};
+	});
+
+	// Every read of the session again (a write elsewhere, a loot toggle, a
+	// placement, a mob settled) is numbered: an answer lands only if no
+	// later read began meanwhile and the same session is still shown, so an
+	// older, slower read never overwrites a newer one.
+	let readEpoch = 0;
+	let unmounted = false;
+	async function readSessionDetail(): Promise<boolean> {
+		const epoch = ++readEpoch;
+		const sessionId = detail.sessionId;
+		const fresh = await getSessionDetail(sessionId);
+		if (unmounted || epoch !== readEpoch || detail.sessionId !== sessionId) return false;
+		detail = fresh;
+		return true;
+	}
+	const costBreakdown = $derived(detail.summary.costBreakdown);
+	// The overhead, and the item placements its lines and the measured
+	// lines offer: read only for a session the readings measured, and a
+	// placement re-reads the session, whose costs the backend has rebuilt
+	// by it before answering.
+	const showOverhead = $derived(!!costBreakdown && hasOverhead(costBreakdown));
+	// Focus falls back to the cost section, which outlives the overhead
+	// group an item may leave.
+	let costSection = $state<HTMLElement | null>(null);
+	const placements = createCostPlacementsModel({
+		onChanged: () => refetchSessionDetail(),
+		focusFallback: () => costSection,
+	});
+	const measuredLines = $derived(costBreakdown?.measured ?? null);
+	const readsPlacements = $derived(measuredLines !== null);
+	// Read when the session shown changes, not on every re-read of it: a
+	// placement already answers with the placements it made.
+	const shownSessionId = $derived(detail.sessionId);
+	$effect(() => {
+		void shownSessionId;
+		if (readsPlacements) void placements.refresh();
+	});
+	const acrossGapMinutes = $derived(costBreakdown?.measuredAcrossGapMinutes ?? null);
+	const unpricedShots = $derived(detail.weaponAttribution?.unpriced ?? 0);
+	// What the enhancer figure leaves out: the markup of breaks priced
+	// without one, and the breaks that have no cost at all, with why.
+	const enhancerBreaks = $derived(detail.enhancerBreaks ?? []);
+	const enhancerNote = $derived.by(() => {
+		const count = (pricing: string) => enhancerBreaks.filter((b) => b.pricing === pricing).length;
+		const breaks = (n: number) => `${n} ${n === 1 ? 'break' : 'breaks'}`;
+		const notes: string[] = [];
+		if (count('markupNotSet') > 0) notes.push('markup not set');
+		const ttUnknown = count('ttUnknown');
+		if (ttUnknown > 0) notes.push(`${breaks(ttUnknown)} unpriced: TT unknown`);
+		const returnAboveTt = count('returnAboveTt');
+		if (returnAboveTt > 0) notes.push(`${breaks(returnAboveTt)} unpriced: return above TT`);
+		return notes.join('; ');
+	});
+	// A figure stands only for what was priced: with no break priced, the
+	// slot says why instead of reading 0.00.
+	// A measured figure stands too where it differs from what was tracked,
+	// even at nothing.
+	const enhancerFigure = $derived(
+		(costBreakdown?.enhancerCost ?? 0) > 0 ||
+			(!!costBreakdown && trackedEstimate(costBreakdown, 'enhancerCost') !== null) ||
+			enhancerBreaks.some((b) => b.pricing === 'priced' || b.pricing === 'markupNotSet'),
+	);
+	// Unpriced shots qualify a tracked weapon figure only: a measured one
+	// already holds every shot, so the warning then rides the tracked
+	// estimate, and only when that is shown.
+	const weaponTracked = $derived((costBreakdown?.basis.weaponCost ?? 'tracked') === 'tracked');
+	// A session whose costs rest on the readings shows its split whatever
+	// it holds, so the player can see what each figure rests on.
+	const costBasis = $derived(detail.summary.costBasis);
+	const basisLine = $derived(sessionBasisLine(costBasis));
+	const showCostBreakdown = $derived(
+		!!costBreakdown &&
+			(restsOnReadings(costBasis) ||
+				readingsSpeak(costBreakdown) ||
+				costBreakdown.healCost > 0 ||
+				costBreakdown.consumableCost > 0 ||
+				costBreakdown.enhancerCost > 0 ||
+				enhancerBreaks.length > 0 ||
+				costBreakdown.armourCost > 0 ||
+				costBreakdown.harvestCost > 0 ||
+				unrecordedHits > 0 ||
+				unpricedShots > 0),
+	);
 
 	// ── Weapon cycle (unchanged) ──────────────────────────────────────
 	const weaponCycleRows = $derived.by(() => {
@@ -53,10 +279,6 @@
 		return 'warning';
 	}
 
-	function activationTime(epoch: number): string {
-		return new Date(epoch * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-	}
-
 	// ── Loot breakdown (aggregate-by-item with wholesale archive) ────
 	// The canonical user-facing view is the item-name aggregate. The
 	// wholesale archive affordance operates on the aggregate row:
@@ -80,6 +302,9 @@
 	// blocking same-row re-entry.
 	let pendingLootNames = $state(new Set<string>());
 	let lootError = $state<string | null>(null);
+	// Bumped by an archive or restore here, so the minute by minute view
+	// reads what arrived against the loot as it now stands.
+	let lootRevision = $state(0);
 
 	function markLootPending(name: string) {
 		pendingLootNames = new Set(pendingLootNames).add(name);
@@ -109,7 +334,8 @@
 		try {
 			const resp = await deactivateLootItem(detail.sessionId, row.name);
 			moveLootRow(row.name, 'active->deactivated');
-			applySessionTotals(resp.sessionTotalReturns);
+			lootRevision += 1;
+			await settleSessionTotals(resp.sessionTotalReturns);
 		} catch (e) {
 			lootError = errorMessage(e, 'Failed to deactivate loot.');
 		} finally {
@@ -125,7 +351,8 @@
 		try {
 			const resp = await activateLootItem(detail.sessionId, row.name);
 			moveLootRow(row.name, 'deactivated->active');
-			applySessionTotals(resp.sessionTotalReturns);
+			lootRevision += 1;
+			await settleSessionTotals(resp.sessionTotalReturns);
 		} catch (e) {
 			lootError = errorMessage(e, 'Failed to activate loot.');
 		} finally {
@@ -133,6 +360,41 @@
 			cancelLootConfirm();
 		}
 	}
+
+	// Loot the account readings never saw arrive, taken out of the session
+	// from its minute by minute view: the same correction as archiving the
+	// item here, its failure left to the view that asked.
+	async function removeLootFromMinutes(itemName: string): Promise<void> {
+		if (pendingLootNames.has(itemName)) throw new Error('This loot is already being changed.');
+		markLootPending(itemName);
+		try {
+			const resp = await deactivateLootItem(detail.sessionId, itemName);
+			moveLootRow(itemName, 'active->deactivated');
+			await settleSessionTotals(resp.sessionTotalReturns);
+		} finally {
+			clearLootPending(itemName);
+		}
+	}
+
+	// The minute by minute view points at the session's own weapon and
+	// healing reviews, where they are shown.
+	function showReview(headingId: string) {
+		const heading = document.getElementById(headingId);
+		if (!heading) return;
+		heading.setAttribute('tabindex', '-1');
+		heading.scrollIntoView({ block: 'start', behavior: 'smooth' });
+		heading.focus({ preventScroll: true });
+	}
+	const showsWeaponReview = $derived(
+		!!detail.weaponAttribution && hasWeaponEvidence(detail.weaponAttribution),
+	);
+	const showsHealingReview = $derived(
+		!!detail.healing && (detail.healing.outputCount > 0 || detail.healing.activations.length > 0),
+	);
+	const minuteReviews = $derived({
+		weapon: showsWeaponReview ? () => showReview('weapon-evidence-heading') : null,
+		healing: showsHealingReview ? () => showReview('healing-evidence-heading') : null,
+	});
 
 	function moveLootRow(itemName: string, direction: 'active->deactivated' | 'deactivated->active') {
 		// Wholesale flip means every matching row moves between the two
@@ -252,24 +514,33 @@
 	// truth.
 	async function refetchSessionDetail() {
 		try {
-			detail = await getSessionDetail(detail.sessionId);
+			await readSessionDetail();
 		} catch {
 			// Soft-fail: the next expand cycle will reconcile from the
 			// backend regardless. The mutation itself succeeded.
 		}
 	}
 
+	// A loot toggle moves the session's returns, net and rate: the session is
+	// read again so every figure is the backend's own, never one summed here
+	// from rounded parts. Only if that read fails are the figures worked out
+	// from the toggle's answer, rounded once.
+	async function settleSessionTotals(sessionTotalReturns: number) {
+		const epoch = readEpoch + 1;
+		try {
+			await readSessionDetail();
+		} catch {
+			// Only where no later read has begun: a newer answer stands.
+			if (epoch === readEpoch) applySessionTotals(sessionTotalReturns);
+		}
+	}
+
 	function applySessionTotals(sessionTotalReturns: number) {
-		const cost = detail.summary.cost;
-		const net = sessionTotalReturns - cost;
-		const returnRate = cost > 0 ? sessionTotalReturns / cost : 0;
-		detail.summary = {
-			...detail.summary,
-			returns: sessionTotalReturns,
-			net,
-			returnRate,
+		detail = {
+			...detail,
+			summary: { ...detail.summary, ...totalsAfterToggle(detail.summary, sessionTotalReturns) },
+			effectiveLoot: sessionTotalReturns,
 		};
-		detail.effectiveLoot = sessionTotalReturns;
 	}
 
 	function errorMessage(e: unknown, fallback: string): string {
@@ -322,54 +593,108 @@
 		</div>
 	</div>
 
-	<!-- 1b. Cost breakdown (shown when non-weapon costs exist) -->
-	{#if detail.summary.costBreakdown && (detail.summary.costBreakdown.healCost > 0 || detail.summary.costBreakdown.enhancerCost > 0 || detail.summary.costBreakdown.armourCost > 0 || detail.summary.costBreakdown.harvestCost > 0)}
-		<div class="mt-2 pl-1 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-secondary">
-			<span>Weapon: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.weaponCost)}</span></span>
-			{#if detail.summary.costBreakdown.healCost > 0}
-				<span>Healing: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.healCost)}</span></span>
+	<!-- 1b. Cost breakdown (shown when non-weapon costs exist, or when the
+		 costs rest on the account readings), each bucket with its basis -->
+	{#snippet unpricedNote()}{#if unpricedShots > 0}<span
+				class="text-warning"
+				title="These shots could not be priced to one weapon; assign them in Weapon attribution below"
+				data-testid="weapon-unpriced"
+			>; {describeUnpriced(unpricedShots, detail.weaponAttribution?.unpricedCostBound)}</span
+			>{/if}{/snippet}
+	{#if (showCostBreakdown || showOverhead || (readsPlacements && placements.error)) && costBreakdown}
+		<!-- The cost section: the split, the overhead, and where focus returns
+			 once a placement moves an item out of the overhead. -->
+		<div bind:this={costSection} tabindex="-1" class="space-y-5 focus:outline-none" data-testid="cost-section">
+			{#if showCostBreakdown}
+				{@const breakdown = costBreakdown}
+				<div class="mt-2 pl-1 flex flex-wrap gap-x-5 gap-y-1 text-xs text-text-secondary" data-testid="cost-breakdown">
+					<span>
+						Weapon: <span class="text-text tabular-nums">{formatPed(breakdown.weaponCost)}</span><CostBasisNote
+							{breakdown}
+							sessionBasis={costBasis}
+							bucket="weaponCost"
+							estimateNote={weaponTracked ? undefined : unpricedNote}
+						/>{#if weaponTracked}{@render unpricedNote()}{/if}
+					</span>
+					{#if showsBucket(breakdown, 'healCost')}
+						<span>Healing: <span class="text-text tabular-nums">{formatPed(breakdown.healCost)}</span><CostBasisNote {breakdown} sessionBasis={costBasis} bucket="healCost" /></span>
+					{/if}
+					{#if showsBucket(breakdown, 'consumableCost')}
+						<span>Consumables: <span class="text-text tabular-nums">{formatPed(breakdown.consumableCost)}</span><CostBasisNote {breakdown} sessionBasis={costBasis} bucket="consumableCost" /></span>
+					{/if}
+					{#if showsBucket(breakdown, 'enhancerCost') || enhancerBreaks.length > 0}
+						<span>
+							Enhancers: {#if enhancerFigure}<span class="text-text tabular-nums">{formatPed(breakdown.enhancerCost)}</span><CostBasisNote {breakdown} sessionBasis={costBasis} bucket="enhancerCost" />{/if}{#if enhancerNote}<span
+									class="text-warning"
+									title="An enhancer break costs its TT and the markup set for its tier on the Enhancers tab, less the Shrapnel it returns"
+								>{enhancerFigure ? '; ' : ''}{enhancerNote}</span
+								>{/if}
+						</span>
+					{/if}
+					{#if showsBucket(breakdown, 'armourCost')}
+						<span>Armour: <span class="text-text tabular-nums">{formatPed(breakdown.armourCost)}</span><CostBasisNote {breakdown} sessionBasis={costBasis} bucket="armourCost" /></span>
+					{:else if unrecordedHits > 0}
+						<span title={`Armour is billed from your account readings, and none were taken for this session's ${unrecordedHits} ${unrecordedHits === 1 ? 'hit' : 'hits'}`}>
+							Armour: <span class="text-warning">not measured</span>
+						</span>
+					{/if}
+					{#if showsBucket(breakdown, 'harvestCost')}
+						<span>Harvesting: <span class="text-text tabular-nums">{formatPed(breakdown.harvestCost)}</span><CostBasisNote {breakdown} sessionBasis={costBasis} bucket="harvestCost" /></span>
+					{/if}
+					{#if basisLine}
+						<span class="text-text-tertiary" data-testid="cost-basis-line">{basisLine}</span>
+					{/if}
+					{#if acrossGapMinutes !== null}
+						<span class="text-text-tertiary" data-testid="cost-gap-note">{acrossGapNote(acrossGapMinutes)}</span>
+					{/if}
+				</div>
 			{/if}
-			{#if detail.summary.costBreakdown.enhancerCost > 0}
-				<span>Enhancers: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.enhancerCost)}</span></span>
+
+			<!-- 1b0. Overhead: what the session cost beyond its activity (shown only
+				 when the session has any) -->
+			{#if showOverhead}
+				<SessionOverhead
+					breakdown={costBreakdown}
+					lootTt={detail.summary.returns}
+					cycled={detail.summary.cost}
+					net={detail.summary.net}
+					placements={readsPlacements ? placements : null}
+				/>
 			{/if}
-			{#if detail.summary.costBreakdown.armourCost > 0}
-				<span>Armour: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.armourCost)}</span></span>
-			{/if}
-			{#if detail.summary.costBreakdown.harvestCost > 0}
-				<span>Harvesting: <span class="text-text tabular-nums">{formatPed(detail.summary.costBreakdown.harvestCost)}</span></span>
+			{#if readsPlacements && placements.error}
+				<ErrorNotice message={placements.error} />
 			{/if}
 		</div>
 	{/if}
 
-	{#if detail.healing && detail.healing.outputCount > 0}
-		<Divider />
-		<div>
-			<div class="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-				<h3 class="eyebrow">Healing evidence</h3>
-				<div class="text-xs text-text-tertiary">
-					{detail.healing.activationCount} paid activation{detail.healing.activationCount === 1 ? '' : 's'} ·
-					{detail.healing.directOutputs} direct · {detail.healing.passiveOutputs} passive ·
-					{detail.healing.effectOutputs} effect ·
-					{detail.healing.unattributedOutputs} unresolved
-				</div>
-			</div>
-			{#if detail.healing.activations.length > 0}
-				<div class="divide-y divide-border/40">
-					{#each detail.healing.activations as activation (activation.id)}
-						<div class="flex items-center gap-4 py-2 text-sm">
-							<span class="w-20 shrink-0 text-xs text-text-tertiary tabular-nums">{activationTime(activation.observedAt)}</span>
-							<span class="min-w-0 flex-1 truncate text-text">{activation.toolName}</span>
-							{#if activation.effectUntil !== null}
-								<span class="text-xs text-positive">Effect window</span>
-							{/if}
-							<span class="text-xs text-text-tertiary">{activation.outputCount} output{activation.outputCount === 1 ? '' : 's'}</span>
-							<span class="tabular-nums text-text">{formatPed(activation.cost)} PED</span>
-						</div>
-					{/each}
-				</div>
-			{/if}
-		</div>
+	<!-- 1b1. Where the measured costs came from, item by item (shown only
+		 when the session has a measure) -->
+	{#if inDevelopment.visible}
+		<SessionMeasure
+			sessionId={detail.sessionId}
+			costBasis={detail.summary.costBasis}
+			ended={toolSightings.ended ? true : null}
+			costs={measuredLines}
+			{acrossGapMinutes}
+			placements={readsPlacements ? placements : null}
+			onremoveloot={removeLootFromMinutes}
+			reviews={minuteReviews}
+			minutesRefreshKey={lootRevision}
+		/>
 	{/if}
+
+	{#if showsWeaponReview}
+		<WeaponEvidence model={weaponReview} />
+	{/if}
+
+	{#if showsHealingReview}
+		<HealingEvidence {detail} model={healingReview} />
+	{/if}
+
+	<SessionDoses model={sessionDoses} />
+
+	<MobDetections model={mobDetections} />
+	<ToolSightings model={toolSightings} />
 
 	<!-- 1b2. Harvesting strip (shown only when the session harvested) -->
 	{#if detail.harvest && detail.harvest.swings > 0}
@@ -385,6 +710,9 @@
 			</div>
 		</div>
 	{/if}
+
+	<!-- 1b3. Quest rewards (shown only when a hand-in paid one) -->
+	<SessionQuestRewards rewards={detail.questRewards ?? []} />
 
 	<!-- 1c. Weapon cycle breakdown -->
 	{#if weaponCycleRows.length > 0}
@@ -419,7 +747,7 @@
 		<div>
 			<h3 class="eyebrow mb-3">{attributionHeading}</h3>
 			<div class="rounded-md border border-border/60 divide-y divide-border/40">
-				{#each mobBreakdown as row (`${row.currentName}|${row.originalName ?? ''}`)}
+				{#each mobBreakdown as row (`${row.currentName}|${row.originalName ?? ''}|${row.certainty}`)}
 					{@const isEditing = mobEditMode === 'edit' && mobEditTarget === row.currentName}
 					{@const isRestoring = mobEditMode === 'restore' && mobEditTarget === row.currentName}
 					<div class="px-3 py-2 flex flex-wrap items-center gap-3 text-sm">
@@ -478,6 +806,9 @@
 						{:else}
 							<div class="flex flex-1 items-center gap-2 min-w-[200px]">
 								<span class="text-text">{row.currentName}</span>
+								{#if describeCertainty(row.certainty)}
+									<span class="text-xs text-text-tertiary">{describeCertainty(row.certainty)}</span>
+								{/if}
 								{#if row.originalName}
 									<span class="text-xs text-text-tertiary italic">
 										{attributionOriginallyLabel} {row.originalName}
@@ -624,7 +955,7 @@
 				{#snippet rowOverlay({ row })}
 					<div class="inline-flex items-center gap-3">
 						<span class="text-xs text-text-secondary">
-							Archive all {row.quantity} "{row.name}" {row.quantity === 1 ? 'entry' : 'entries'}?
+							{lootEntriesPrompt('Archive', row.quantity, row.name)}
 						</span>
 						<button
 							type="button"
@@ -695,7 +1026,7 @@
 					{#snippet rowOverlay({ row })}
 						<div class="inline-flex items-center gap-3">
 							<span class="text-xs text-text-secondary">
-								Restore all {row.quantity} "{row.name}" {row.quantity === 1 ? 'entry' : 'entries'}?
+								{lootEntriesPrompt('Restore', row.quantity, row.name)}
 							</span>
 							<button
 								type="button"
@@ -743,4 +1074,8 @@
 			</div>
 		</div>
 	{/if}
+	<!-- What the last placement did, said once to assistive technology. -->
+	<p class="sr-only" role="status" aria-live="polite" data-testid="placement-status">
+		{placements.announcement}
+	</p>
 </div>

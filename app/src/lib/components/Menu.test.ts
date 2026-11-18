@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { fireEvent, render, screen } from '@testing-library/svelte';
+import { createRawSnippet } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import Menu from './Menu.svelte';
 
@@ -66,6 +67,21 @@ describe('keyboard navigation', () => {
 		await fireEvent.keyDown(menu, { key: 'ArrowUp' });
 		expect(document.activeElement).toBe(items[2]);
 		expect(items.map((el) => el.tabIndex)).toEqual([-1, -1, 0]);
+	});
+
+	it('roves over checkbox items in custom panel content', async () => {
+		const children = createRawSnippet(() => ({
+			render: () =>
+				'<div><button role="menuitemcheckbox" aria-checked="true">PED stats</button>' +
+				'<button role="menuitemcheckbox" aria-checked="false">Skill stats</button></div>',
+		}));
+		render(Menu, { props: { ariaLabel: 'Statistics', children } });
+		await openMenu('Statistics');
+
+		const items = screen.getAllByRole('menuitemcheckbox');
+		expect(document.activeElement).toBe(items[0]);
+		await fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowDown' });
+		expect(document.activeElement).toBe(items[1]);
 	});
 
 	it('jumps with Home and End', async () => {

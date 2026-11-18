@@ -5,10 +5,7 @@
 //! models' forbidden extras), payload keys are camelCase, `occurred_at`
 //! is a required ISO-8601 UTC string, and serialisation emits fields in
 //! the envelope's declaration order (`type`, `event_version`,
-//! `occurred_at`, `payload`) so the JSON bytes match the Python
-//! `model_dump_json()` output for the same envelope. The committed
-//! `event_schemas.snapshot.json` is asserted against these types by the
-//! schema-conformance test; the value-level wire vectors are pinned in
+//! `occurred_at`, `payload`). The value-level wire vectors are pinned in
 //! this module's tests.
 
 use serde::de::Error as _;
@@ -18,6 +15,12 @@ pub const TOPIC_TRACKING_SESSION_UPDATED: &str = "tracking.session.updated";
 pub const TOPIC_SCAN_STATUS_CHANGED: &str = "scan.status.changed";
 pub const TOPIC_HARVEST_RECORDED: &str = "harvest.recorded";
 pub const TOPIC_NAVIGATION_UPDATED: &str = "navigation.updated";
+pub const TOPIC_PROTECTION_UPDATED: &str = "protection.updated";
+pub const TOPIC_HEALING_UPDATED: &str = "healing.updated";
+pub const TOPIC_WEAPONS_UPDATED: &str = "weapons.updated";
+pub const TOPIC_CONSUMABLES_UPDATED: &str = "consumables.updated";
+pub const TOPIC_MARKET_UPDATED: &str = "market.updated";
+pub const TOPIC_ACCOUNT_UPDATED: &str = "account.updated";
 
 /// A field that serialises to exactly one topic literal and refuses any
 /// other input: the discriminator the union routes on, kept closed so a
@@ -50,6 +53,12 @@ topic_tag!(TrackingSessionUpdatedTag, "tracking.session.updated");
 topic_tag!(ScanStatusChangedTag, "scan.status.changed");
 topic_tag!(HarvestRecordedTag, "harvest.recorded");
 topic_tag!(NavigationUpdatedTag, "navigation.updated");
+topic_tag!(ProtectionUpdatedTag, "protection.updated");
+topic_tag!(HealingUpdatedTag, "healing.updated");
+topic_tag!(WeaponsUpdatedTag, "weapons.updated");
+topic_tag!(ConsumablesUpdatedTag, "consumables.updated");
+topic_tag!(MarketUpdatedTag, "market.updated");
+topic_tag!(AccountUpdatedTag, "account.updated");
 
 fn default_event_version() -> i64 {
     1
@@ -105,15 +114,15 @@ pub enum ScanPhase {
     AwaitingReview,
 }
 
-/// Push-to-pull invalidation signal for the manual skill-scan flow: the
-/// coarse phase only; the full status comes from the scan-status GET.
+/// Push-to-pull invalidation signal for the skill scan: the coarse phase
+/// only; the full status comes from the scan's status read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanStatusChangedPayload {
     pub phase: ScanPhase,
 }
 
-/// The manual skill-scan status changed.
+/// The skill scan's status changed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScanStatusChanged {
@@ -159,6 +168,115 @@ pub struct NavigationUpdated {
     pub payload: NavigationUpdatedPayload,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectionUpdatedPayload {}
+
+/// A protection cost was recorded or undone, or a limited set changed:
+/// session armour costs and the protection overview may have moved.
+/// Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectionUpdated {
+    #[serde(rename = "type")]
+    pub topic: ProtectionUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: ProtectionUpdatedPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealingUpdatedPayload {}
+
+/// A session's healing evidence was corrected, or a correction undone:
+/// session heal costs, their summaries, and the live effect windows may
+/// have moved. Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealingUpdated {
+    #[serde(rename = "type")]
+    pub topic: HealingUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: HealingUpdatedPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponsUpdatedPayload {}
+
+/// An unpriced shot of an ended session was assigned to a weapon, or the
+/// assignment undone: session weapon costs and their summaries may have
+/// moved. Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WeaponsUpdated {
+    #[serde(rename = "type")]
+    pub topic: WeaponsUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: WeaponsUpdatedPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsumablesUpdatedPayload {}
+
+/// A consumable dose started, ended, was removed, or was restored: the
+/// running doses, the reload speed in effect, and a session's dose cost may
+/// have moved. Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsumablesUpdated {
+    #[serde(rename = "type")]
+    pub topic: ConsumablesUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: ConsumablesUpdatedPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketUpdatedPayload {}
+
+/// Market data changed: a market-ledger paste, a unit-price quote, a manual
+/// markup, or a live Nanocube mark committed, so any valuation of loot at
+/// market markup may have moved. Content-free; consumers re-read what they
+/// show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketUpdated {
+    #[serde(rename = "type")]
+    pub topic: MarketUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: MarketUpdatedPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountUpdatedPayload {}
+
+/// The account connection or its readings changed: a connect, a
+/// disconnect, the session expiring, a reading stored, or a session's
+/// measure sealed. Content-free; consumers re-read what they show.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountUpdated {
+    #[serde(rename = "type")]
+    pub topic: AccountUpdatedTag,
+    #[serde(default = "default_event_version")]
+    pub event_version: i64,
+    pub occurred_at: String,
+    pub payload: AccountUpdatedPayload,
+}
+
 /// The discriminated union of every frontend-facing domain event. The
 /// untagged dispatch is made exact by the closed topic-tag fields: a
 /// frame routes to the one variant whose `type` literal it carries, and
@@ -171,6 +289,12 @@ pub enum DomainEvent {
     ScanStatusChanged(ScanStatusChanged),
     HarvestRecorded(HarvestRecorded),
     NavigationUpdated(NavigationUpdated),
+    ProtectionUpdated(ProtectionUpdated),
+    HealingUpdated(HealingUpdated),
+    WeaponsUpdated(WeaponsUpdated),
+    ConsumablesUpdated(ConsumablesUpdated),
+    MarketUpdated(MarketUpdated),
+    AccountUpdated(AccountUpdated),
 }
 
 impl DomainEvent {
@@ -181,6 +305,12 @@ impl DomainEvent {
             DomainEvent::ScanStatusChanged(_) => TOPIC_SCAN_STATUS_CHANGED,
             DomainEvent::HarvestRecorded(_) => TOPIC_HARVEST_RECORDED,
             DomainEvent::NavigationUpdated(_) => TOPIC_NAVIGATION_UPDATED,
+            DomainEvent::ProtectionUpdated(_) => TOPIC_PROTECTION_UPDATED,
+            DomainEvent::HealingUpdated(_) => TOPIC_HEALING_UPDATED,
+            DomainEvent::WeaponsUpdated(_) => TOPIC_WEAPONS_UPDATED,
+            DomainEvent::ConsumablesUpdated(_) => TOPIC_CONSUMABLES_UPDATED,
+            DomainEvent::MarketUpdated(_) => TOPIC_MARKET_UPDATED,
+            DomainEvent::AccountUpdated(_) => TOPIC_ACCOUNT_UPDATED,
         }
     }
 
@@ -261,6 +391,84 @@ mod tests {
             payload: NavigationUpdatedPayload {},
         });
         assert_eq!(event.to_wire_json(), "{\"type\":\"navigation.updated\",\"event_version\":1,\"occurred_at\":\"2026-07-19T08:00:00+00:00\",\"payload\":{}}");
+    }
+
+    #[test]
+    fn protection_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::ProtectionUpdated(ProtectionUpdated {
+            topic: ProtectionUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-09-25T08:00:00+00:00".into(),
+            payload: ProtectionUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"protection.updated\",\"event_version\":1,\"occurred_at\":\"2026-09-25T08:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_PROTECTION_UPDATED);
+    }
+
+    #[test]
+    fn healing_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::HealingUpdated(HealingUpdated {
+            topic: HealingUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-09-25T08:00:00+00:00".into(),
+            payload: HealingUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"healing.updated\",\"event_version\":1,\"occurred_at\":\"2026-09-25T08:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_HEALING_UPDATED);
+        let foreign = wire.replace("{}", "{\"sessionId\":\"s\"}");
+        assert!(serde_json::from_str::<DomainEvent>(&foreign).is_err());
+    }
+
+    #[test]
+    fn weapons_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::WeaponsUpdated(WeaponsUpdated {
+            topic: WeaponsUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-09-25T08:00:00+00:00".into(),
+            payload: WeaponsUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"weapons.updated\",\"event_version\":1,\"occurred_at\":\"2026-09-25T08:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_WEAPONS_UPDATED);
+        let foreign = wire.replace("{}", "{\"sessionId\":\"s\"}");
+        assert!(serde_json::from_str::<DomainEvent>(&foreign).is_err());
+    }
+
+    #[test]
+    fn market_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::MarketUpdated(MarketUpdated {
+            topic: MarketUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-11-07T20:00:00+00:00".into(),
+            payload: MarketUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"market.updated\",\"event_version\":1,\"occurred_at\":\"2026-11-07T20:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_MARKET_UPDATED);
+        let foreign = wire.replace("{}", "{\"itemName\":\"x\"}");
+        assert!(serde_json::from_str::<DomainEvent>(&foreign).is_err());
+    }
+
+    #[test]
+    fn account_envelope_serialises_to_the_pinned_wire_bytes() {
+        let event = DomainEvent::AccountUpdated(AccountUpdated {
+            topic: AccountUpdatedTag,
+            event_version: 1,
+            occurred_at: "2026-11-15T18:00:00+00:00".into(),
+            payload: AccountUpdatedPayload {},
+        });
+        let wire = event.to_wire_json();
+        assert_eq!(wire, "{\"type\":\"account.updated\",\"event_version\":1,\"occurred_at\":\"2026-11-15T18:00:00+00:00\",\"payload\":{}}");
+        let restored: DomainEvent = serde_json::from_str(&wire).unwrap();
+        assert_eq!(restored.topic(), TOPIC_ACCOUNT_UPDATED);
+        let foreign = wire.replace("{}", "{\"state\":\"connected\"}");
+        assert!(serde_json::from_str::<DomainEvent>(&foreign).is_err());
     }
 
     #[test]

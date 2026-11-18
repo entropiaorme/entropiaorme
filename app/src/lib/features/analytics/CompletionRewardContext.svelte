@@ -69,8 +69,8 @@
 			{#if incomplete}
 				<p class="mt-2 text-xs leading-relaxed text-text-secondary">
 					Some completions have no usable reward evidence, either unresolved or predating reward
-					capture. They contribute nothing to this figure and are never estimated. The Reward
-					Review view on the Quests tab holds any that can still be settled.
+					capture. They contribute nothing to this figure and are never estimated. Any that can
+					still be settled are marked on the dashboard's Quests board.
 				</p>
 			{/if}
 		</InfoTip>

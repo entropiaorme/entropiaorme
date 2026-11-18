@@ -33,8 +33,10 @@ use serde_json::Value;
 
 use crate::clock::Clock;
 use crate::codex_categories::{
-    build_rank_breakdown, get_category_for_rank, get_rank_cost, get_reward_ped, is_cat4_rank,
-    mastery_reward_ped, skills_for_category, RankBreakdown, CAT4_SKILLS, MASTERY_CATEGORIES,
+    build_rank_breakdown, cost_between_ranks, get_category_for_rank, get_rank_cost, get_reward_ped,
+    is_cat4_rank, mastery_reward_ped, metas_earned, next_meta_rank, skills_for_category,
+    RankBreakdown, CAT4_SKILLS, ESTIMATED_PED_PER_CODEX_COST, MASTERY_CATEGORIES, META_CAP,
+    META_INTERVAL,
 };
 use crate::db::Db;
 use crate::game_data_store::GameDataStore;
@@ -162,6 +164,73 @@ pub struct MasteryClaimEntry {
 pub struct MetaAttribute {
     pub name: &'static str,
     pub current_level: Option<f64>,
+}
+
+/// One species' next meta reward: the breakpoint it reaches next, the
+/// codex cost of the ranks left before it, and that cost as estimated
+/// PED cycled. `planets` lists every planet the species is catalogued
+/// on (sorted; empty when the catalogue names none). `following_stages`
+/// prices every later breakpoint up to rank 25, each from the one
+/// before it, so a player can weigh staying on a species past its next
+/// meta.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaTarget {
+    pub species_name: String,
+    pub planets: Vec<String>,
+    pub current_rank: i64,
+    pub target_rank: i64,
+    pub cost: f64,
+    pub estimated_ped: f64,
+    pub following_stages: Vec<MetaStage>,
+}
+
+/// One meta stage beyond a species' next meta: the five ranks from the
+/// previous breakpoint up to `target_rank`, as codex cost and estimated
+/// PED cycled.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaStage {
+    pub target_rank: i64,
+    pub cost: f64,
+    pub estimated_ped: f64,
+}
+
+/// The metas earned against the cap. `tracked` counts the breakpoints
+/// the recorded species ranks have passed; `earned` adds the player's
+/// calibration on top (clamped to `0..=cap`), so a meta the app cannot
+/// trace to a species still counts and later breakpoints still raise it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaProgress {
+    pub earned: i64,
+    pub tracked: i64,
+    pub cap: i64,
+}
+
+impl MetaProgress {
+    fn new(tracked: i64, adjustment: i64) -> Self {
+        Self {
+            earned: (tracked + adjustment).clamp(0, META_CAP),
+            tracked,
+            cap: META_CAP,
+        }
+    }
+}
+
+/// The meta-target ranking: every species short of rank 25 ordered by
+/// the cost of its next meta reward (cheapest first, then by name), plus
+/// the metas earned against the cap. Earned metas derive from ranks (and
+/// the player's calibration, see [`MetaProgress`]), not from logged meta
+/// claims, because a meta is earned at its breakpoint whether or not its
+/// claim was recorded.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaTargets {
+    pub metas_earned: i64,
+    pub meta_cap: i64,
+    pub ped_per_cost: f64,
+    pub targets: Vec<MetaTarget>,
 }
 
 /// The record a rank claim (or its reversal) reports.
@@ -349,6 +418,128 @@ impl CodexService {
                 .then_with(|| a.name.cmp(&b.name))
         });
         Ok(result)
+    }
+
+    /// Every species short of rank 25, ranked by the codex cost of its
+    /// next meta reward. A species' base cost comes from its first
+    /// catalogue entry carrying one (the listing's rule); its planets
+    /// gather across all of its entries, since one species can live on
+    /// several planets.
+    pub async fn get_meta_targets(&self) -> Result<MetaTargets, CodexError> {
+        let mut base_costs: Vec<(String, f64)> = Vec::new();
+        let mut planets: HashMap<String, Vec<String>> = HashMap::new();
+        for mob in self.game_data.get_entities("mobs") {
+            let Some(species) = species_object(mob) else {
+                continue;
+            };
+            let name = species.get("name").and_then(Value::as_str).unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let species_planets = planets.entry(name.to_string()).or_default();
+            if let Some(planet) = mob.get("planet").and_then(Value::as_str) {
+                if !species_planets.iter().any(|known| known == planet) {
+                    species_planets.push(planet.to_string());
+                }
+            }
+            if let Some(base_cost) = base_cost_of(species) {
+                if !base_costs.iter().any(|(known, _)| known == name) {
+                    base_costs.push((name.to_string(), base_cost));
+                }
+            }
+        }
+
+        let (ranks, adjustment) = self
+            .db
+            .with_reader(|conn| Ok((read_ranks(conn)?, read_meta_adjustment(conn)?)))
+            .await?;
+
+        let progress = MetaProgress::new(tracked_metas(&ranks), adjustment);
+        let mut targets: Vec<MetaTarget> = base_costs
+            .into_iter()
+            .filter_map(|(name, base_cost)| {
+                let current_rank = ranks.get(&name).copied().unwrap_or(0).clamp(0, 25);
+                let target_rank = next_meta_rank(current_rank)?;
+                let cost = cost_between_ranks(current_rank, target_rank, base_cost);
+                let following_stages = (target_rank + META_INTERVAL..=25)
+                    .step_by(META_INTERVAL as usize)
+                    .map(|stage_rank| {
+                        let cost =
+                            cost_between_ranks(stage_rank - META_INTERVAL, stage_rank, base_cost);
+                        MetaStage {
+                            target_rank: stage_rank,
+                            cost: round_half_even(cost, 2),
+                            estimated_ped: round_half_even(cost * ESTIMATED_PED_PER_CODEX_COST, 2),
+                        }
+                    })
+                    .collect();
+                let mut species_planets = planets.remove(&name).unwrap_or_default();
+                species_planets.sort();
+                Some(MetaTarget {
+                    species_name: name,
+                    planets: species_planets,
+                    current_rank,
+                    target_rank,
+                    cost: round_half_even(cost, 2),
+                    estimated_ped: round_half_even(cost * ESTIMATED_PED_PER_CODEX_COST, 2),
+                    following_stages,
+                })
+            })
+            .collect();
+        targets.sort_by(|a, b| {
+            a.cost
+                .total_cmp(&b.cost)
+                .then_with(|| a.species_name.cmp(&b.species_name))
+        });
+        Ok(MetaTargets {
+            metas_earned: progress.earned,
+            meta_cap: progress.cap,
+            ped_per_cost: ESTIMATED_PED_PER_CODEX_COST,
+            targets,
+        })
+    }
+
+    /// The metas earned against the cap: the breakpoints the recorded
+    /// ranks have passed, plus the player's calibration.
+    pub async fn get_meta_progress(&self) -> Result<MetaProgress, CodexError> {
+        Ok(self
+            .db
+            .with_reader(|conn| {
+                Ok(MetaProgress::new(
+                    tracked_metas(&read_ranks(conn)?),
+                    read_meta_adjustment(conn)?,
+                ))
+            })
+            .await?)
+    }
+
+    /// Calibrate the metas earned to the count the game shows. The
+    /// correction is stored as an adjustment over the tracked count, so
+    /// breakpoints reached afterwards keep raising the total; calibrating
+    /// back to the tracked count clears it.
+    pub async fn calibrate_meta(&self, earned: i64) -> Result<MetaProgress, CodexError> {
+        if !(0..=META_CAP).contains(&earned) {
+            return Err(CodexError::Invalid(format!(
+                "Metas earned must be 0-{META_CAP}"
+            )));
+        }
+        let now = naive_to_epoch(self.clock.now());
+        Ok(self
+            .db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                let tracked = tracked_metas(&read_ranks(&tx)?);
+                let adjustment = earned - tracked;
+                tx.execute(
+                    "INSERT INTO codex_meta_calibration (id, adjustment, updated_at) \
+                     VALUES (1, ?1, ?2) \
+                     ON CONFLICT(id) DO UPDATE SET adjustment = ?1, updated_at = ?2",
+                    rusqlite::params![adjustment, now],
+                )?;
+                tx.commit()?;
+                Ok(MetaProgress::new(tracked, adjustment))
+            })
+            .await?)
     }
 
     /// The 25-rank breakdown for a species, cross-referenced with
@@ -625,6 +816,7 @@ impl CodexService {
                 // on the instant the claim and calibration inserts share; the
                 // id-subquery removes at most one row, and an uncalibrated-skill
                 // claim (which wrote none) removes nothing here.
+                // id-order: tiebreak (rows already narrowed to one scanned_at).
                 tx.execute(
                     "DELETE FROM skill_calibrations WHERE id = ( \
                         SELECT id FROM skill_calibrations \
@@ -1058,6 +1250,7 @@ impl CodexService {
                 // matched on the instant the two inserts share; an
                 // uncalibrated-skill claim (which wrote none) removes
                 // nothing here.
+                // id-order: tiebreak (rows already narrowed to one scanned_at).
                 tx.execute(
                     "DELETE FROM skill_calibrations WHERE id = ( \
                         SELECT id FROM skill_calibrations \
@@ -1257,6 +1450,35 @@ fn base_cost_of(species: &serde_json::Map<String, Value>) -> Option<f64> {
         .map(|value| value.as_f64().expect("numeric codex base cost"))
 }
 
+/// Every recorded species rank, by species name.
+fn read_ranks(conn: &rusqlite::Connection) -> Result<HashMap<String, i64>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT species_name, current_rank FROM codex_progress")?;
+    let mut rows = stmt.query([])?;
+    let mut ranks = HashMap::new();
+    while let Some(row) = rows.next()? {
+        ranks.insert(row.get::<_, String>(0)?, row.get::<_, i64>(1)?);
+    }
+    Ok(ranks)
+}
+
+/// The metas the recorded ranks have earned: one per breakpoint passed,
+/// counting species the catalogue no longer carries.
+fn tracked_metas(ranks: &HashMap<String, i64>) -> i64 {
+    ranks.values().map(|&rank| metas_earned(rank)).sum()
+}
+
+/// The player's meta calibration over the tracked count; 0 when none.
+fn read_meta_adjustment(conn: &rusqlite::Connection) -> Result<i64, rusqlite::Error> {
+    Ok(conn
+        .query_row(
+            "SELECT adjustment FROM codex_meta_calibration WHERE id = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
 // Expected values in these tests are the original implementation's
 // outputs, computed by running the original Python implementation
 // over byte-identical catalogue fixtures and database seeds.
@@ -1287,14 +1509,15 @@ mod tests {
         std::fs::write(
             dir.join("mobs.json"),
             serde_json::to_string(&json!([
-                {"name": "Mob A", "species": {"name": "Boar", "codex_base_cost": 37.5, "codex_type": "Mob"}},
-                {"name": "Mob A Variant", "species": {"name": "Boar", "codex_base_cost": 99.0, "codex_type": "Mob"}},
-                {"name": "Looter", "species": {"name": "Looter Bird", "codex_base_cost": 10.0, "codex_type": "MobLooter"}},
+                {"name": "Mob A", "planet": "Calypso", "species": {"name": "Boar", "codex_base_cost": 37.5, "codex_type": "Mob"}},
+                {"name": "Mob A Variant", "planet": "Arkadia", "species": {"name": "Boar", "codex_base_cost": 99.0, "codex_type": "Mob"}},
+                {"name": "Mob A Twin", "planet": "Calypso", "species": {"name": "Boar", "codex_base_cost": 37.5, "codex_type": "Mob"}},
+                {"name": "Looter", "planet": "Calypso", "species": {"name": "Looter Bird", "codex_base_cost": 10.0, "codex_type": "MobLooter"}},
                 {"name": "Nameless", "species": {"name": "", "codex_base_cost": 5.0}},
                 {"name": "NoSpecies"},
                 {"name": "EmptySpecies", "species": {}},
                 {"name": "Costless First", "species": {"name": "Ghost", "codex_base_cost": null}},
-                {"name": "Costless Second", "species": {"name": "Ghost", "codex_base_cost": 7.0}},
+                {"name": "Costless Second", "planet": "Cyrene", "species": {"name": "Ghost", "codex_base_cost": 7.0}},
             ]))
             .unwrap(),
         )
@@ -1372,6 +1595,170 @@ mod tests {
             CodexError::Invalid(message) => message,
             other => panic!("expected a validation error, got: {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn meta_targets_rank_unranked_species_by_first_band_cost() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _db) = service(dir.path()).await;
+
+        // Every species is unranked, so each next meta is rank 5 at
+        // 16 x base: Ghost 112, Looter Bird 160, Boar 600 (its first
+        // costed entry). Planets gather across a species' entries. Each
+        // later stage prices its own five ranks: 60, 122, 224, and 406
+        // x base.
+        let targets = to_json(svc.get_meta_targets().await.unwrap());
+        assert_eq!(
+            targets,
+            json!({
+                "metasEarned": 0,
+                "metaCap": 750,
+                "pedPerCost": 1.5,
+                "targets": [
+                    {"speciesName": "Ghost", "planets": ["Cyrene"], "currentRank": 0,
+                     "targetRank": 5, "cost": 112.0, "estimatedPed": 168.0,
+                     "followingStages": [
+                        {"targetRank": 10, "cost": 420.0, "estimatedPed": 630.0},
+                        {"targetRank": 15, "cost": 854.0, "estimatedPed": 1281.0},
+                        {"targetRank": 20, "cost": 1568.0, "estimatedPed": 2352.0},
+                        {"targetRank": 25, "cost": 2842.0, "estimatedPed": 4263.0},
+                     ]},
+                    {"speciesName": "Looter Bird", "planets": ["Calypso"], "currentRank": 0,
+                     "targetRank": 5, "cost": 160.0, "estimatedPed": 240.0,
+                     "followingStages": [
+                        {"targetRank": 10, "cost": 600.0, "estimatedPed": 900.0},
+                        {"targetRank": 15, "cost": 1220.0, "estimatedPed": 1830.0},
+                        {"targetRank": 20, "cost": 2240.0, "estimatedPed": 3360.0},
+                        {"targetRank": 25, "cost": 4060.0, "estimatedPed": 6090.0},
+                     ]},
+                    {"speciesName": "Boar", "planets": ["Arkadia", "Calypso"], "currentRank": 0,
+                     "targetRank": 5, "cost": 600.0, "estimatedPed": 900.0,
+                     "followingStages": [
+                        {"targetRank": 10, "cost": 2250.0, "estimatedPed": 3375.0},
+                        {"targetRank": 15, "cost": 4575.0, "estimatedPed": 6862.5},
+                        {"targetRank": 20, "cost": 8400.0, "estimatedPed": 12600.0},
+                        {"targetRank": 25, "cost": 15225.0, "estimatedPed": 22837.5},
+                     ]},
+                ],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn meta_targets_follow_recorded_ranks_and_count_earned_metas() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _db) = service(dir.path()).await;
+        svc.calibrate("Boar", 25).await.unwrap();
+        svc.calibrate("Looter Bird", 5).await.unwrap();
+        svc.calibrate("Ghost", 12).await.unwrap();
+        // A ranked species the catalogue does not carry still earned
+        // its metas.
+        svc.calibrate("Retired Species", 10).await.unwrap();
+
+        let result = svc.get_meta_targets().await.unwrap();
+        // 5 (Boar) + 1 (Looter Bird) + 2 (Ghost) + 2 (Retired Species).
+        assert_eq!(result.metas_earned, 10);
+        let ranked: Vec<(&str, i64, i64, f64)> = result
+            .targets
+            .iter()
+            .map(|t| {
+                (
+                    t.species_name.as_str(),
+                    t.current_rank,
+                    t.target_rank,
+                    t.cost,
+                )
+            })
+            .collect();
+        // Boar is complete and drops out. Ghost needs ranks 13-15
+        // (24 + 28 + 32 = 84 x 7 = 588); Looter Bird, on a breakpoint,
+        // needs ranks 6-10 (60 x 10 = 600).
+        assert_eq!(
+            ranked,
+            vec![("Ghost", 12, 15, 588.0), ("Looter Bird", 5, 10, 600.0)]
+        );
+    }
+
+    #[tokio::test]
+    async fn meta_target_stages_start_after_the_next_breakpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, _db) = service(dir.path()).await;
+        svc.calibrate("Ghost", 12).await.unwrap();
+        svc.calibrate("Looter Bird", 21).await.unwrap();
+
+        let result = svc.get_meta_targets().await.unwrap();
+        let stages = |name: &str| -> Vec<(i64, f64)> {
+            result
+                .targets
+                .iter()
+                .find(|t| t.species_name == name)
+                .unwrap()
+                .following_stages
+                .iter()
+                .map(|stage| (stage.target_rank, stage.cost))
+                .collect()
+        };
+        // Ghost's next meta is the partial stage to 15; the stages after
+        // it are whole: ranks 16-20 (224 x 7) and 21-25 (406 x 7).
+        assert_eq!(stages("Ghost"), vec![(20, 1568.0), (25, 2842.0)]);
+        // Looter Bird's next meta is its last; nothing follows it.
+        assert_eq!(stages("Looter Bird"), Vec::<(i64, f64)>::new());
+    }
+
+    #[tokio::test]
+    async fn meta_calibration_adjusts_the_tracked_count_and_composes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (svc, db) = service(dir.path()).await;
+        svc.calibrate("Boar", 10).await.unwrap();
+
+        // Uncalibrated, earned is the tracked count.
+        let progress = svc.get_meta_progress().await.unwrap();
+        assert_eq!(
+            to_json(progress),
+            json!({"earned": 2, "tracked": 2, "cap": 750})
+        );
+
+        for earned in [-1, 751] {
+            let error = svc.calibrate_meta(earned).await.unwrap_err();
+            assert_eq!(invalid(error), "Metas earned must be 0-750");
+        }
+
+        // Three metas the app cannot trace to a species.
+        let calibrated = svc.calibrate_meta(5).await.unwrap();
+        assert_eq!((calibrated.earned, calibrated.tracked), (5, 2));
+
+        // A breakpoint reached afterwards still raises the total, and the
+        // ranking reports the same count.
+        svc.calibrate("Ghost", 5).await.unwrap();
+        assert_eq!(svc.get_meta_progress().await.unwrap().earned, 6);
+        assert_eq!(svc.get_meta_targets().await.unwrap().metas_earned, 6);
+
+        // Calibrating below the tracked count is allowed; recalibrating
+        // overwrites the single row in place.
+        let lowered = svc.calibrate_meta(1).await.unwrap();
+        assert_eq!((lowered.earned, lowered.tracked), (1, 3));
+        let rows: i64 = db
+            .with_reader(|conn| {
+                Ok(
+                    conn.query_row("SELECT COUNT(*) FROM codex_meta_calibration", [], |row| {
+                        row.get(0)
+                    })?,
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows, 1);
+
+        // A falling tracked count never takes the total below zero.
+        svc.calibrate("Boar", 0).await.unwrap();
+        svc.calibrate("Ghost", 0).await.unwrap();
+        assert_eq!(svc.get_meta_progress().await.unwrap().earned, 0);
+
+        // Calibrating to the tracked count clears the adjustment.
+        let cleared = svc.calibrate_meta(0).await.unwrap();
+        svc.calibrate("Ghost", 10).await.unwrap();
+        assert_eq!(cleared.earned, cleared.tracked);
+        assert_eq!(svc.get_meta_progress().await.unwrap().earned, 2);
     }
 
     #[tokio::test]

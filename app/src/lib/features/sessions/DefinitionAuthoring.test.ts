@@ -14,7 +14,7 @@ function definition(overrides: Partial<SessionDefinition> = {}): SessionDefiniti
 		name: 'Easter Mayhem 2026',
 		adHocSegments: false,
 		trackProtectionCosts: true,
-		trackProtectionBySegment: true,
+		questPlanet: null,
 		isProtected: false,
 		isActive: true,
 		instanceCount: 35,
@@ -86,14 +86,11 @@ describe('DefinitionAuthoring lifecycle', () => {
 		expect(screen.queryByRole('button', { name: 'Archive' })).toBeNull();
 	});
 
-	it('keeps segment armour costs visible but disabled under the parent opt-out', () => {
+	it('offers no armour-cost switch: armour is billed from the account readings', () => {
 		const { model } = modelFor(definition({ trackProtectionCosts: false }));
 		render(DefinitionAuthoring, { props: { model } });
 
-		expect(screen.getByText('Armour costs by segment')).toBeTruthy();
-		expect(
-			(screen.getByRole('switch', { name: 'Track armour costs by segment' }) as HTMLButtonElement)
-				.disabled,
-		).toBe(true);
+		expect(screen.queryByRole('switch', { name: 'Track armour costs' })).toBeNull();
+		expect(screen.queryByText('Armour costs by segment')).toBeNull();
 	});
 });

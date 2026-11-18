@@ -1,44 +1,29 @@
 /**
  * The analytics family: the Overview, Hunting, and Tree Cutting aggregates, the
  * ledger (entries and presets), and the inventory ledger. Thin
- * wrappers over the generated typed commands; the reads swap onto the
- * parallel `demo_*` commands while the guide is active (see `./guide`).
+ * wrappers over the generated typed commands.
  */
 
 import type { LedgerItem } from './commands.gen';
 import * as commands from './commands.gen';
-import { guideSwapped } from './guide';
-
-const readOverview = guideSwapped(commands.analyticsOverview, commands.demoAnalyticsOverview);
 
 export async function getAnalyticsOverview(period: string = 'all') {
-	return readOverview(period);
+	return commands.analyticsOverview(period);
 }
 
 /** The whole-ledger per-tag summary for a period, independent of the
  * paginated entry list: the Net Ledger Impact card's source of truth. */
-export const getLedgerSummary = guideSwapped(commands.ledgerSummary, commands.demoLedgerSummary);
+export const getLedgerSummary = commands.ledgerSummary;
 
-export const getAnalyticsHunting = guideSwapped(
-	commands.analyticsHunting,
-	commands.demoAnalyticsHunting,
-);
-const readAnalyticsHarvest = guideSwapped(commands.analyticsHarvest, commands.demoAnalyticsHarvest);
+export const getAnalyticsHunting = commands.analyticsHunting;
 export async function getAnalyticsHarvest(period: string = 'all') {
-	return readAnalyticsHarvest(period);
+	return commands.analyticsHarvest(period);
 }
-const readAnalyticsHuntingActivity = guideSwapped(
-	commands.analyticsHuntingActivity,
-	commands.demoAnalyticsHuntingActivity,
-);
 export async function getAnalyticsHuntingActivity(period: string = 'all') {
-	return readAnalyticsHuntingActivity(period);
+	return commands.analyticsHuntingActivity(period);
 }
-export const getLedgerPresets = guideSwapped(
-	commands.ledgerPresetsList,
-	commands.demoLedgerPresetsList,
-);
-export const getInventoryItems = guideSwapped(commands.inventoryList, commands.demoInventoryList);
+export const getLedgerPresets = commands.ledgerPresetsList;
+export const getInventoryItems = commands.inventoryList;
 
 export const addLedgerEntry = commands.ledgerCreate;
 export const deleteLedgerEntry = commands.ledgerDelete;
@@ -46,9 +31,8 @@ export const addLedgerPreset = commands.ledgerPresetCreate;
 export const deleteLedgerPreset = commands.ledgerPresetDelete;
 // Current holdings and the auction lifecycle over them: operational
 // position context for sale and recycling actions. It does not influence
-// holding-independent market opportunity. No demo variant; the reader
-// degrades to an empty position list in guide mode. Each read is scoped
-// to the activity family whose tab is asking.
+// holding-independent market opportunity. Each read is scoped to the
+// activity family whose tab is asking.
 export const getActivityStock = commands.activityStock;
 export const getHarvestRealisedMarkup = commands.harvestRealisedMarkup;
 export const getHuntingRealisedMarkup = commands.huntingRealisedMarkup;
@@ -83,10 +67,8 @@ export interface LedgerPage {
 	total: number;
 }
 
-const readLedgerPage = guideSwapped(commands.ledgerList, commands.demoLedgerList);
-
 export async function getLedgerEntries(cursor?: string, limit?: number): Promise<LedgerPage> {
-	const page = await readLedgerPage(cursor ?? null, limit ?? null);
+	const page = await commands.ledgerList(cursor ?? null, limit ?? null);
 	return {
 		items: page.entries,
 		nextCursor: page.nextCursor ?? null,

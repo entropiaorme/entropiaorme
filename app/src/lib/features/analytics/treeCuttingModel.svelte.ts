@@ -24,13 +24,16 @@ import {
 	type HarvestData,
 	type MarketHarvestData,
 	type MarketHarvestItem,
+	type MarketManualMarkup,
 } from '$lib/api';
+import type { DerivedSource, HoldingOrigin } from '$lib/api/commands.gen';
 import type {
 	AuctionListingInput,
 	HarvestLootItem,
 	HarvestTierComparison,
 	HarvestYieldTier,
 } from '$lib/types/analytics';
+import { isZeroTt } from '$lib/utils/format';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 import { type AnalyticsRange, analyticsPeriod, isAnalyticsRange } from './analyticsRange';
@@ -49,7 +52,18 @@ export type ActivityTradeDraft = {
 export type OpportunityKind = 'broad' | 'niche' | 'thin' | 'recycle';
 export type ConfidenceTier = 'liquid' | 'middling' | 'illiquid';
 export type ConfidenceMode = 'liquid' | 'liquidMiddling' | 'all';
-export type MarkupBasis = 'market' | 'nanocube' | 'shrapnel_conversion';
+/**
+ * Where a valuation's markup came from: the item's own market reading, the
+ * Nanocube floor (an unsupported or confidence-excluded market), Shrapnel's
+ * fixed conversion, the player's own entry (`manual`), or the player's live
+ * Nanocube mark (`nanocube_mark`, honoured by the live session figures only).
+ */
+export type MarkupBasis =
+	| 'market'
+	| 'nanocube'
+	| 'shrapnel_conversion'
+	| 'manual'
+	| 'nanocube_mark';
 
 const TIER_RANK: Record<ConfidenceTier, number> = { liquid: 3, middling: 2, illiquid: 1 };
 const MODE_THRESHOLD: Record<ConfidenceMode, number> = { liquid: 3, liquidMiddling: 2, all: 1 };
@@ -215,17 +229,63 @@ export function effectiveMarkup(
 	};
 }
 
+/** A row's value at the player's own markup entry: a percentage of its TT,
+ * or its TT plus the entered PED per unit (exact whatever the unit TT). */
+export interface ManualValuation {
+	valuePed: number;
+	/** The value as a markup of the row's TT; for a row with no TT, the
+	 * entry's own percentage, or 100 when it has none. */
+	markupPct: number;
+	entry: MarketManualMarkup;
+}
+
+/**
+ * The player's manual markup applied to one row, when it is the reading the
+ * item's valuation uses: the backend names the more recent of the manual
+ * entry and the market import as `preferred`. Null otherwise.
+ */
+export function manualValuation(
+	market: MarketHarvestItem | undefined,
+	quantity: number,
+	ttValue: number,
+): ManualValuation | null {
+	const entry = market?.manual ?? null;
+	if (!entry || market?.preferred !== 'manual') return null;
+	const valuePed =
+		entry.kind === 'percent' ? (ttValue * entry.value) / 100 : ttValue + quantity * entry.value;
+	const markupPct = ttValue > 0 ? (valuePed / ttValue) * 100 : (entry.markupPct ?? 100);
+	return { valuePed, markupPct, entry };
+}
+
+/** What the valuation route may take beyond the market reading: the
+ * player's manual entry for the row, and whether the live Nanocube mark
+ * applies (only the live session figures pass it). */
+export interface ValuationOverrides {
+	manual?: ManualValuation | null;
+	nanocubeMarked?: boolean;
+}
+
 /** Resolve the valuation route shared by activity projections and Inventory.
  * Shrapnel deliberately ignores market confidence because its ordinary exit
- * is the game's deterministic 101% ammo conversion, not a speculative sale. */
+ * is the game's deterministic 101% ammo conversion, not a speculative sale.
+ * Then the live Nanocube mark, then the player's manual entry (trusted as
+ * given, so neither the confidence filter nor the floor touches it), then
+ * the market reading under the confidence mode. */
 export function effectiveItemMarkup(
 	itemName: string,
 	opportunity: MarketOpportunity | null,
 	nanocubeMarkupPct: number,
 	mode: ConfidenceMode,
+	overrides: ValuationOverrides = {},
 ): { markupPct: number; basis: MarkupBasis } | null {
 	if (isShrapnel(itemName)) {
 		return { markupPct: SHRAPNEL_CONVERSION_MARKUP, basis: 'shrapnel_conversion' };
+	}
+	if (overrides.nanocubeMarked) {
+		return { markupPct: nanocubeMarkupPct, basis: 'nanocube_mark' };
+	}
+	if (overrides.manual) {
+		return { markupPct: overrides.manual.markupPct, basis: 'manual' };
 	}
 	if (!opportunity) return null;
 	const applied = effectiveMarkup(opportunity, nanocubeMarkupPct, mode);
@@ -258,6 +318,13 @@ export type TreeCuttingItem = {
 	floored: boolean;
 	salesPed: number | null;
 	weeklySalesPed: number | null;
+	/** The row's estimated market value at the applied markup. */
+	marketValuePed: number;
+	/** The player's standing manual entry for the item, applied or not. */
+	manual: MarketManualMarkup | null;
+	/** Whether the player marked the item for Nanocube valuation in the live
+	 * session figures (applied only where the projection is live). */
+	nanocubeMarked: boolean;
 };
 
 /** The combined stat line across every sub-activity (the "Overall" block). */
@@ -273,6 +340,12 @@ export type TreeCuttingOverall = {
 	 * until something sells, which is the recognition boundary made
 	 * visible. */
 	realisedReturns: number;
+	/** The period's overhead: the tiers' and what no tier cycled to share it
+	 * by. A cost beside Cycled, never in it, which Realised Net takes off. */
+	overhead: number;
+	/** The part of `overhead` on no board activity. */
+	unassignedOverhead: number;
+	/** Realised returns over Cycled and the overhead. */
 	realisedRate: number;
 };
 
@@ -290,6 +363,10 @@ export type TreeCuttingSection = {
 	muProjectedReturns: number | null;
 	muRate: number | null;
 	realisedReturns: number;
+	/** The overhead of the sessions that swung this tier, shared to it by
+	 * what it cycled: a cost beside Cycled, never in it. */
+	overhead: number;
+	/** Realised returns over Cycled and the overhead. */
 	realisedRate: number;
 	items: TreeCuttingItem[];
 };
@@ -317,6 +394,14 @@ export type StockHorizonReading = {
  * expiry. Holdings are operational context only. The opportunity is the
  * same holding-independent profile used by every source activity. */
 export type TreeCuttingStock = {
+	/** TT per unit, known even when none is held. Inventory only. */
+	unitTt?: number;
+	/** Markup paid to produce this stock that a sale must recover. */
+	paidMarkup?: number;
+	/** The activities a sale would credit. Inventory only. */
+	origins?: HoldingOrigin[];
+	/** What a conversion made this stock from. Inventory only. */
+	derivedFrom?: DerivedSource[];
 	itemName: string;
 	heldQty: number;
 	heldTt: number;
@@ -335,7 +420,20 @@ export type TreeCuttingStock = {
 	salesPed: number | null;
 	weeklySalesPed: number | null;
 	recommendedPacketTt: number | null;
+	/** The item's market signals, with the player's standing manual entry
+	 * (applied or not); null when the feed has no row for it. */
+	marketItem: MarketHarvestItem | null;
 };
+
+/** Whether held stock is of an item with no TT (a strongbox, a token): one
+ * worth its markup alone, so counted rather than read by its TT. The unit TT
+ * decides when it is known, since an emptied line holds no TT to read. */
+export function stockHasNoTt(
+	item: Pick<TreeCuttingStock, 'unitTt' | 'heldQty' | 'heldTt'>,
+): boolean {
+	if (item.unitTt !== undefined) return isZeroTt(item.unitTt);
+	return item.heldQty > 0 && isZeroTt(item.heldTt);
+}
 
 /** Project one activity's loot composition at current market markup. Shared
  * with the Hunting model: the projection is identical maths whichever
@@ -346,6 +444,7 @@ export function projectLoot(
 	market: MarketHarvestData | null,
 	marketByItem: Map<string, MarketHarvestItem>,
 	confidenceMode: ConfidenceMode,
+	options: { live?: boolean } = {},
 ): {
 	items: TreeCuttingItem[];
 	muProjectedReturns: number | null;
@@ -359,9 +458,18 @@ export function projectLoot(
 		const m = marketByItem.get(item.itemName);
 		const opportunity = marketOpportunity(m, nanocube);
 		const tier = opportunityTier(opportunity);
-		const applied = effectiveItemMarkup(item.itemName, opportunity, nanocube, confidenceMode);
+		const manual = manualValuation(m, item.quantity, item.valuePed);
+		const nanocubeMarked = m?.nanocubeMarked ?? false;
+		const applied = effectiveItemMarkup(item.itemName, opportunity, nanocube, confidenceMode, {
+			manual,
+			nanocubeMarked: options.live === true && nanocubeMarked,
+		});
 		if (!applied) throw new Error(`Missing valuation route for ${item.itemName}`);
-		marketProjected += (item.valuePed * applied.markupPct) / 100;
+		const marketValuePed =
+			applied.basis === 'manual' && manual
+				? manual.valuePed
+				: (item.valuePed * applied.markupPct) / 100;
+		marketProjected += marketValuePed;
 		return {
 			name: item.itemName,
 			quantity: item.quantity,
@@ -373,15 +481,29 @@ export function projectLoot(
 			tier,
 			effectiveMarkupPct: applied.markupPct,
 			markupBasis: applied.basis,
-			floored: applied.basis === 'nanocube',
+			floored: applied.basis === 'nanocube' || applied.basis === 'nanocube_mark',
 			salesPed: opportunity.salesPed,
 			weeklySalesPed: opportunity.weeklySalesPed,
+			marketValuePed,
+			manual: m?.manual ?? null,
+			nanocubeMarked,
 		};
 	});
 
 	const muProjectedReturns = market ? marketProjected : null;
 	const muRate = muProjectedReturns !== null && cycled > 0 ? muProjectedReturns / cycled : null;
 	return { items, muProjectedReturns, muRate };
+}
+
+/** Realised returns over what they cost: Cycled and the overhead beside it.
+ * Nothing spent reads as zero. */
+export function realisedRateOver(
+	realisedReturns: number,
+	cycled: number,
+	overhead: number,
+): number {
+	const costs = cycled + overhead;
+	return costs > 0 ? realisedReturns / costs : 0;
 }
 
 function toSection(
@@ -391,6 +513,7 @@ function toSection(
 	confidenceMode: ConfidenceMode,
 	realisedMarkup: number,
 ): TreeCuttingSection {
+	const realisedReturns = tier.returns + realisedMarkup;
 	const projection = projectLoot(tier.lootItems, tier.cycled, market, marketByItem, confidenceMode);
 
 	return {
@@ -401,8 +524,9 @@ function toSection(
 		lootRate: tier.lootRate,
 		muProjectedReturns: projection.muProjectedReturns,
 		muRate: projection.muRate,
-		realisedReturns: tier.returns + realisedMarkup,
-		realisedRate: tier.cycled > 0 ? (tier.returns + realisedMarkup) / tier.cycled : 0,
+		realisedReturns,
+		overhead: tier.overhead,
+		realisedRate: realisedRateOver(realisedReturns, tier.cycled, tier.overhead),
 		realisedMarkup,
 		items: projection.items,
 	};
@@ -505,6 +629,9 @@ export function createTreeCuttingModel() {
 		const muRate = muProjectedReturns !== null && cycled > 0 ? muProjectedReturns / cycled : null;
 		const realisedMarkup = sections.reduce((sum, s) => sum + s.realisedMarkup, 0);
 		const realisedReturns = returns + realisedMarkup;
+		// The period's whole overhead: the tiers' and what no tier cycled to
+		// share it by.
+		const overhead = data?.overhead ?? 0;
 		return {
 			cycled,
 			returns,
@@ -512,7 +639,9 @@ export function createTreeCuttingModel() {
 			muProjectedReturns,
 			muRate,
 			realisedReturns,
-			realisedRate: cycled > 0 ? realisedReturns / cycled : 0,
+			overhead,
+			unassignedOverhead: data?.unassignedOverhead ?? 0,
+			realisedRate: realisedRateOver(realisedReturns, cycled, overhead),
 			realisedMarkup,
 		};
 	});

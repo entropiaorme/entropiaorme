@@ -2,6 +2,8 @@
 	type Tab = {
 		id: string;
 		label: string;
+		/** Something new arrived in this tab since it was last open. */
+		attention?: boolean;
 	};
 
 	let {
@@ -32,6 +34,14 @@
 			onclick={() => onchange(tab.id)}
 		>
 			{tab.label}
+			{#if tab.attention && active !== tab.id}
+				<span class="relative ml-1 inline-flex h-2 w-2 -translate-y-1.5" data-testid="tab-attention">
+					<span aria-hidden="true" class="absolute inset-0 rounded-full bg-warning opacity-75 animate-ping"></span>
+					<span aria-hidden="true" class="relative h-2 w-2 rounded-full bg-warning
+						[box-shadow:0_0_8px_color-mix(in_oklab,var(--color-warning)_70%,transparent)]"></span>
+					<span class="sr-only">, new</span>
+				</span>
+			{/if}
 			{#if active === tab.id}
 				<span
 					aria-hidden="true"

@@ -40,14 +40,363 @@ export interface AbsorberComponent {
 }
 
 /**
- * The accept verb's result: `{ok, skills_persisted}` on success, the
- * lone `error` on a refusal (each key skipped when absent, preserving
- * the HTTP polymorphic body exactly).
+ * The accept verb's result: `{ok, skills_persisted}` on success; on a
+ * refusal, why (`refused`) and the message to show (`error`). Each key is
+ * skipped when absent.
  */
 export interface AcceptResult {
 	ok?: boolean | null;
 	skills_persisted?: number | null;
+	refused?: SkillScanRefusal | null;
 	error?: string | null;
+}
+
+/**
+ * What is new to the player in what the account did on its own.
+ */
+export interface AccountActivityMarks {
+	/** How far the player has seen: a record made, or a proposal found, after this is new. */
+	seenThrough: string;
+	/** The events the readings recorded or found since, each a step's recycling, its Shrapnel conversion, its sales together, a listing's outcome, or a proposal still open. */
+	unseen: number;
+}
+
+/**
+ * How far the player has now seen what the account did.
+ */
+export interface AccountActivitySeenInput {
+	/** The newest event the player was shown, as the wire dates it. */
+	through: string;
+}
+
+/**
+ * An arrival proposal, by its id.
+ */
+export interface AccountArrivalId {
+	id: number;
+}
+
+/**
+ * An arrival proposal to record as stock of unknown origin. `retake`
+ * takes over an earlier recording of it that was begun and never linked,
+ * once the player has checked.
+ */
+export interface AccountArrivalInput {
+	id: number;
+	retake?: boolean;
+}
+
+/**
+ * Stock of unknown origin recorded from an arrival.
+ */
+export interface AccountArrivalRecorded {
+	/** The record's own id: what taking it back names. */
+	recordId: string;
+	/** Whether the arrival was marked recorded. When not, the stock stands and the arrival shows as possibly recorded already, to take over with `retake` or take back by its undo. */
+	linked: boolean;
+}
+
+/**
+ * How confirming a kept session stands.
+ */
+export type AccountConfirming = 'checking' | 'siteUnreachable';
+
+/**
+ * The connection's state.
+ */
+export type AccountConnectionState = 'disconnected' | 'connected' | 'unconfirmed' | 'expired';
+
+/**
+ * An item in one place.
+ */
+export interface AccountHolding {
+	name: string;
+	place: AccountPlace;
+}
+
+/**
+ * The whole history of measured sessions beside the tracked figures:
+ * every session whose sealed measure covers it whole and that counts in
+ * the economy statistics.
+ */
+export interface AccountMeasuredSummary {
+	/** Tracked weapon cost beside measured ammo burned plus weapon and amplifier wear; a session whose ammo split is unsettled is left out. */
+	weapon: MeasuredSummaryPair;
+	/** Tracked healing cost beside measured healing wear. */
+	healing: MeasuredSummaryPair;
+	/** Tracked armour cost beside measured armour and plate wear; a session whose armour is not recorded yet is left out. */
+	armour: MeasuredSummaryPair;
+	/** Other equipment wear and other consumption: measured only. */
+	other: MeasuredSummaryOnly;
+	/** Tracked loot TT beside what the readings saw arrive. */
+	loot: MeasuredSummaryPair;
+	/** Sessions that went into the summary. */
+	included: number;
+	/** Sessions with readings that were left out, for every reason. */
+	leftOut: MeasuredLeftOut[];
+}
+
+/**
+ * Why an opening did not settle.
+ */
+export type AccountOpeningDoubt = 'severalKinds' | 'noKeys' | 'countsDiffer' | 'unbalanced';
+
+/**
+ * Where a holding sits.
+ */
+export type AccountPlace = {
+		kind: 'carried';
+	} | {
+		kind: 'auction';
+	} | {
+		planet: string;
+		kind: 'storage';
+	} | {
+		parent: string;
+		kind: 'attached';
+	} | {
+		name: string;
+		kind: 'other';
+	};
+
+/**
+ * A pending proposal.
+ */
+export interface AccountProposal {
+	id: number;
+	/** The reading it was seen in, and the reading before it. */
+	readingId: number;
+	previousReadingId: number;
+	/** When those two readings were taken: it happened in between. */
+	between: MeasuredSpan;
+	/** The tracked session it fell in; `null` outside one. */
+	sessionId: string | null;
+	/** Claimed for a recording that was never linked (the app closed between the two, or the link failed): it may be recorded already. */
+	possiblyRecorded: boolean;
+	/** When the readings found it: new to the player while later than what they have seen of the account's activity. */
+	detectedAt: string;
+	outcome: AccountProposalOutcome;
+}
+
+/**
+ * A proposal the player says is not what happened.
+ */
+export interface AccountProposalDismissInput {
+	id: number;
+}
+
+/**
+ * What a proposal is of.
+ */
+export type AccountProposalKind = 'opening' | 'listingSold' | 'listingReturned' | 'purchase' | 'arrival';
+
+/**
+ * What a proposal says happened.
+ */
+export type AccountProposalOutcome = {
+		/** The boxes that left, one entry for each kind. */
+		boxes: MeasuredBoxes[];
+		keysUsed: number;
+		/** The keys' TT. */
+		keys: MeasuredAmount;
+		/** The ammo it paid back; `null` unless it settled. */
+		ammo: AccountProposedAmmo | null;
+		/** What every reading of the step takes as its contents. */
+		contents: MeasuredEventItem[];
+		/** What arrived that may be its contents, and may not. */
+		possibleContents: MeasuredEventItem[];
+		settlement: MeasuredSettlement;
+		/** Why it did not settle; `null` when it did. */
+		doubt: AccountOpeningDoubt | null;
+		/** How many boxes paid ammo alone; `null` unless the ammo arrived one row a box and the rows show it exactly. */
+		paidAmmoAlone: number | null;
+		kind: 'opening';
+	} | {
+		listingId: string;
+		/** The item, as the account site names it. */
+		itemName: string;
+		units: number;
+		/** The TT the readings showed leaving. */
+		tt: MeasuredAmount;
+		/** The PED Card's rise in the same step, offered as the price only when nothing else could have moved the Card and the readings were at most three minutes apart; `null` otherwise. */
+		proceeds: MeasuredAmount | null;
+		kind: 'listingSold';
+	} | {
+		listingId: string;
+		itemName: string;
+		units: number;
+		tt: MeasuredAmount;
+		returnedTo: AccountPlace;
+		kind: 'listingReturned';
+	} | {
+		/** The item, as the account site names it. */
+		itemName: string;
+		units: number;
+		/** Its TT, as the readings show it. */
+		tt: MeasuredAmount;
+		/** The PED Card's fall. */
+		paid: MeasuredAmount;
+		/** What it cost above its TT. */
+		markup: MeasuredAmount;
+		/** Where it arrived. */
+		arrivedIn: AccountPlace;
+		kind: 'purchase';
+	} | {
+		/** The item, as the account site names it. */
+		itemName: string;
+		units: number;
+		/** Its TT, as the readings show it. */
+		tt: MeasuredAmount;
+		/** The PED Card fell by its TT in the same step: bought at the Trade Terminal, at no markup. */
+		boughtAtTt: boolean;
+		/** Where it arrived. */
+		arrivedIn: AccountPlace;
+		kind: 'arrival';
+	};
+
+/**
+ * Proposals to claim before the opening they show is recorded. `retake`
+ * names those among them whose earlier claim, never linked, the player
+ * has checked and takes over; every other must not be claimed already.
+ */
+export interface AccountProposalsClaimInput {
+	ids: number[];
+	retake?: number[];
+}
+
+/**
+ * Proposals to claim before the opening they show is recorded, or to
+ * release when it was not.
+ */
+export interface AccountProposalsInput {
+	ids: number[];
+}
+
+/**
+ * Proposals linked, as one, to the record they became: the strongbox
+ * opening's id, the listing's, or for a purchase the asset purchase's id
+ * (the highest purchase id on the asset `inventory_create` or
+ * `inventory_purchase_add` returns).
+ */
+export interface AccountProposalsLinkInput {
+	ids: number[];
+	recordId: string;
+}
+
+/**
+ * The ammo an opening paid back.
+ */
+export interface AccountProposedAmmo {
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * What a reading a strongbox run asked for came to.
+ */
+export type AccountRunReading = {
+		readingId: number;
+		takenAt: string;
+		outcome: 'read';
+	} | {
+		outcome: 'notConnected';
+	} | {
+		outcome: 'signedOut';
+	} | {
+		outcome: 'unreadable';
+	} | {
+		outcome: 'interrupted';
+	};
+
+/**
+ * What reading a run whole came to.
+ */
+export interface AccountRunWhole {
+	/** An opening read whole across the run stands among the proposals, in place of the steps it spans. */
+	readWhole: boolean;
+	/** How many of the run's box the latest reading still holds: none left means no more can have been opened. */
+	boxesLeft: number;
+}
+
+/**
+ * A strongbox run to read whole, from the reading before its boxes to
+ * its latest.
+ */
+export interface AccountRunWholeInput {
+	fromReadingId: number;
+	toReadingId: number;
+	/** The box the run opens, as the account names it. */
+	boxItem: string;
+}
+
+/**
+ * A tracked session's measured account.
+ */
+export interface AccountSessionMeasure {
+	sessionId: string;
+	/** Final: the session has ended and its closing readings are in. */
+	sealed: boolean;
+	coverage: MeasuredCoverage;
+	ammo: MeasuredAmmo[];
+	decay: MeasuredDecay[];
+	repairs: MeasuredRepair[];
+	otherConsumption: MeasuredConsumption[];
+	/** Stacks that left with nothing to explain them: never a cost. */
+	unexplainedDepartures: MeasuredConsumption[];
+	/** What arrived that no opening claimed, no purchase paid for and no move brought: the figure tracked loot compares with. */
+	gained: MeasuredGain[];
+	gainedTotal: MeasuredAmount;
+	/** Of the gained total, what may be strongbox contents. */
+	gainedPossiblyStrongbox: MeasuredAmount;
+	events: MeasuredEvent[];
+	/** The measure by category, as the measured sessions list carries it. */
+	totals: MeasuredTotals;
+}
+
+/**
+ * A measured session, minute by minute.
+ */
+export interface AccountSessionMinutes {
+	sessionId: string;
+	running: boolean;
+	coverage: MinutesCoverage;
+	steps: SessionMinute[];
+	weaponStretches: MinuteStretch[];
+	healingStretches: MinuteStretch[];
+	/** The TT of loot lines no step can confirm: timed after the last reading, or in the last step with none after it. */
+	lootUnconfirmed: number;
+}
+
+/**
+ * The connection as the player reads it at a glance: on the dashboard
+ * and on the overlay. One answer for every surface, so they never
+ * disagree.
+ */
+export type AccountSignal = 'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'failing' | 'signedOut';
+
+/**
+ * The account connection as it stands.
+ */
+export interface AccountStatus {
+	state: AccountConnectionState;
+	/** The connection at a glance; the same answer [`account_signal`] gives every window.  [`account_signal`]: crate::Api::account_signal */
+	signal: AccountSignal;
+	/** When the current connection was made. */
+	connectedAt: string | null;
+	/** When the latest reading was taken. */
+	lastReadingAt: string | null;
+	/** Whether a tracked session is being read now (running, or waiting for its closing readings). */
+	readingSession: boolean;
+	/** Whether the player has connected and not disconnected since. */
+	hasConnected: boolean;
+	/** While a kept session is being confirmed (`unconfirmed`), whether the site could be reached; `null` in every other state. */
+	confirming: AccountConfirming | null;
+	/** Whether the sign-in window is open. */
+	signingIn: boolean;
+	/** Whether any reading has ever been stored, connected or not: the measures stay reviewable after a disconnect. */
+	hasReadings: boolean;
+	/** While connected and the readings keep failing, when the first of the failures in a row came; `null` otherwise. */
+	failingSince: string | null;
 }
 
 /**
@@ -77,11 +426,11 @@ export interface ActivityHistoryEntry {
 	id: string;
 	/** The holding family this outcome acted on: `loot` or `equipment`. */
 	subjectKind: string;
-	/** The operational path: `auction`, `trade`, `conversion`, or `removal`. */
+	/** The operational path: `auction`, `trade`, `conversion`, `removal`, or `unknownOrigin` (stock held without knowing where it came from, shown in the Inventory's history only). */
 	channel: string;
-	/** `listing`, `trade`, `conversion`, or `removal`. */
+	/** `listing`, `trade`, `conversion`, `removal`, or `unknownOrigin` (undone with `account_arrival_unknown_origin_undo`). */
 	kind: string;
-	/** `pending`, `sold`, `expired`, `converted`, or `removed`. */
+	/** `pending`, `sold`, `expired`, `converted`, `removed`, or `held`. */
 	status: string;
 	itemName: string;
 	/** What a conversion produced; `null` for other outcomes. */
@@ -101,6 +450,18 @@ export interface ActivityHistoryEntry {
 	undoBlockedReason: string | null;
 	/** Already undone. Every effect it had is reversed and the entry is kept as the read-only record of a correction. */
 	undone: boolean;
+	/** A conversion's lines as the player recorded them. Empty for other outcomes and for conversions older than itemised recording. */
+	conversionLines: ConversionLine[];
+	/** A conversion that came out as PED: the amount. */
+	pedAmount: number | null;
+	/** An itemised conversion, as opposed to recycling. */
+	itemised: boolean;
+	/** What the sold stock descends from, when a conversion produced it. */
+	derivedFrom: DerivedSource[];
+	/** Recorded on its own from the account readings, and the step it was seen in; `null` for an entry the player made. */
+	recordedFromAccount: RecordedFromAccount | null;
+	/** The standing stock reconciliation that recorded it: undone only with it (`account_reconciliation_undo`), never on its own. `null` otherwise. */
+	reconciliationId: string | null;
 }
 
 /**
@@ -214,6 +575,10 @@ export interface ActivityUndoInput {
  */
 export interface AnalyticsHarvest {
 	tierComparisons: HarvestTierComparison[];
+	/** The overhead of the sessions that swung in the period, shared to their harvesting: a cost beside Cycled, never in it. The tiers' overhead and `unassignedOverhead` add up to it. */
+	overhead: number;
+	/** The part of `overhead` on no tier shown: a session that swung but cycled nothing to share it by. */
+	unassignedOverhead: number;
 }
 
 /**
@@ -261,20 +626,49 @@ export interface AnalyticsOverview {
 export interface AppSettings {
 	gameConnection: GameConnection;
 	hotbarHooksEnabled: boolean;
+	keyboard: KeyboardAccess;
 	repairOcrEnabled: boolean;
-	endOfSessionArmourReminderEnabled: boolean;
-	developerModeEnabled: boolean;
+	/** Whether the creature being fought is read off the game screen while a session runs (the player's choice, or the build's default until they make one). */
+	mobDetectionEnabled: boolean;
+	/** Whether detection can capture the game window when a session wants it: what the settings say beside the toggle when it cannot. */
+	mobDetectionCapture: ScreenCapture;
+	/** Whether the tool in hand is read off the game's own bar while a session runs, instead of from the hotbar keys (the player's choice; off until they make one). */
+	toolReadingEnabled: boolean;
+	/** Whether reading the held tool can capture the game window when a session wants it. */
+	toolReadingCapture: ScreenCapture;
+	/** Whether a locked plate whose name did not read is kept as a small picture on this computer, for finding out why. */
+	keepUnreadPlates: boolean;
 	/** The session facets the next session snapshots: the designated name (empty: not declared) and the skill boost (null: not declared; 0: declared deliberately unboosted). */
 	sessionName: string;
 	declaredSkillBoostPercent?: number | null;
-	/** The slot-to-equipment map, carried through in its stored insertion order (`serde_json`'s `preserve_order`), so slot "0" stays last. */
+	/** The slot-to-equipment map, carried through in its stored insertion order (`serde_json`'s `preserve_order`), so slot "0" stays last. This is the live preset's: what a hotbar key press resolves against. */
 	hotbar: Record<string, unknown>;
-	trifecta: TrifectaSettings;
+	/** The hotbar preset in force, 1 to 3. */
+	activeHotbarPreset: number;
+	/** Every preset's slot map in preset order; the live one equals `hotbar`. */
+	hotbarPresets: (Record<string, unknown>)[];
+	/** Weapons carried without a hotbar slot: with the slotted weapons, the candidates weapon attribution chooses among. */
+	carriedWeaponIds: number[];
 	passiveEffectSources: PassiveEffectSourceView[];
+	/** The reload speed those sources put in force. */
+	reloadSpeed: ReloadSpeedInEffect;
 	harvestGuardrail: HarvestGuardrailSettings;
 	lootFilterBlacklist: string[];
 	dbPath: string;
 	appVersion: string;
+}
+
+/**
+ * Why an item is offered first when declaring a piece.
+ */
+export type ArmourCandidateHint = 'other' | 'awaitingPlacement' | 'attached' | 'tagged';
+
+/**
+ * An item of the latest reading that may be declared a piece.
+ */
+export interface ArmourCandidateRow {
+	item: string;
+	hint: ArmourCandidateHint;
 }
 
 /**
@@ -283,6 +677,116 @@ export interface AppSettings {
 export interface ArmourCostResult {
 	sessionId: string;
 	armourCost: number;
+}
+
+/**
+ * Which list a piece is shown in: for the player's order only, since both
+ * bill alike.
+ */
+export type ArmourPieceList = 'armour' | 'plates';
+
+/**
+ * A piece's markup, set from now on.
+ */
+export interface ArmourPieceMarkupInput {
+	item: string;
+	/** In percent, from 100; `null` bills the piece at TT from now on. */
+	markupPercent?: number | null;
+}
+
+/**
+ * One limited piece.
+ */
+export interface ArmourPieceRow {
+	/** The item's exact name, as the account names it. */
+	item: string;
+	list: ArmourPieceList;
+	/** Whether the latest reading holds it. */
+	held: boolean;
+	/** Its TT in PED in the latest reading; `null` when not held. */
+	ttPed: number | null;
+	/** The markup it is billed at from now on, in percent; `null` bills it at the TT it loses. */
+	markupPercent: number | null;
+	/** When that markup was set; `null` when none was. */
+	markupSetAt: string | null;
+	/** Whether the player declared it a piece (it can be taken back off the list); otherwise its own name makes it one. */
+	declared: boolean;
+	/** When a reading showed its TT rise after its markup was set: a new piece of the same name, whose markup may differ. */
+	replacedAt: string | null;
+}
+
+/**
+ * The Armour tab.
+ */
+export interface ArmourPiecesView {
+	/** Held first, then by list and name. */
+	pieces: ArmourPieceRow[];
+	/** The likeliest first, then by name. */
+	candidates: ArmourCandidateRow[];
+	/** When the latest reading was taken; `null` before any. */
+	readAt: string | null;
+}
+
+/**
+ * What the player decided of an arrival.
+ */
+export type ArrivalDisposition = {
+		reason: ArrivalNotProposed;
+		state: 'notProposed';
+	} | {
+		proposalId: number;
+		possiblyRecorded: boolean;
+		/** Stock of unknown origin recorded from it that stands though the arrival was never marked recorded: what `account_arrival_unknown_origin_undo` takes back. A retake links it rather than recording a second. */
+		unlinkedRecordId?: string | null;
+		state: 'open';
+	} | {
+		proposalId: number;
+		recordId: string;
+		as: ArrivalRecordedAs;
+		/** For a purchase, the name of the asset it bought into. */
+		assetName?: string | null;
+		state: 'recorded';
+	} | {
+		proposalId: number;
+		state: 'ignored';
+	};
+
+/**
+ * Why an arrival carries no handle.
+ */
+export type ArrivalNotProposed = 'beforeRecognition' | 'outsideSession' | 'settling' | 'awaiting';
+
+/**
+ * What an arrival was recorded as.
+ */
+export type ArrivalRecordedAs = 'purchase' | 'unknownOrigin';
+
+/**
+ * One acquisition of an asset: a purchase, or the output of a conversion.
+ */
+export interface AssetPurchase {
+	id: number;
+	quantity: number;
+	/** Total TT of the units bought. */
+	ttValue: number;
+	/** Total markup paid for the units bought. */
+	markupPaid: number;
+	acquiredAt: string;
+	/** Made by a conversion rather than bought. */
+	fromConversion: boolean;
+	/** Whether it can still be changed or removed: not once units it paid for have been sold, listed, or converted. */
+	editable: boolean;
+}
+
+/**
+ * What a purchase of more of an asset recorded: how many, and the TT and
+ * markup paid for them in total. An empty / absent `acquiredAt` means today.
+ */
+export interface AssetPurchaseInput {
+	quantity: number;
+	ttValue: number;
+	markupPaid: number;
+	acquiredAt?: string | null;
 }
 
 /**
@@ -369,6 +873,8 @@ export interface AuctionListing {
 	activityNetMarkup: number | null;
 	/** Sale proceeds above the listing's TT, before fees. */
 	grossMarkup: number | null;
+	/** When the account readings settled its outcome on their own, the step they saw it in; `null` for one the player resolved, and while it waits on the auction. */
+	recordedFromAccount: RecordedFromAccount | null;
 }
 
 /**
@@ -386,6 +892,8 @@ export interface AuctionListingInput {
 	listedAt?: string | null;
 	/** How many days the listing runs for. Optional: a listing whose duration the player did not record simply never nudges for resolution. */
 	auctionDays?: number | null;
+	/** Where each figure came from, for a listing drafted from a capture of the game's sell queue; absent for one entered by hand. */
+	fieldSources?: ListingFieldSourceInput[] | null;
 }
 
 /**
@@ -395,37 +903,6 @@ export interface CalibrationStatus {
 	calibrated: boolean;
 	lastCalibration: string | null;
 	stale: boolean;
-}
-
-/**
- * A capture verb's result: the status the grab settled on, plus the
- * 1-indexed page and whether the frame was captured. On a refusal the
- * page/captured extras are absent (the status carries the error).
- */
-export interface CaptureResult {
-	active: boolean;
-	processing: boolean;
-	captured_pages: number;
-	expected_pages: number;
-	last_scan_time: number | null;
-	skills_count: number;
-	configured: boolean;
-	game_window_present: boolean;
-	phase: ScanPhase;
-	processing_progress: ScanProgress;
-	has_pending_result: boolean;
-	error: string | null;
-	page?: number | null;
-	captured?: boolean | null;
-}
-
-/**
- * GET prospect-options: the grouped slice options, one list per axis.
- */
-export interface CharacterProspectOptions {
-	tags: ProspectOption[];
-	mobs: ProspectOption[];
-	weapons: ProspectOption[];
 }
 
 /**
@@ -482,6 +959,56 @@ export interface CodexMetaAttribute {
 export interface CodexMetaClaimResult {
 	attributeName: string;
 	pedValue: number;
+}
+
+/**
+ * The metas earned against the cap: `tracked` is what the recorded
+ * species ranks account for, `earned` adds the player's calibration.
+ */
+export interface CodexMetaProgress {
+	earned: number;
+	tracked: number;
+	cap: number;
+}
+
+/**
+ * One meta stage past a species' next meta: the five ranks up to
+ * `targetRank`, as codex cost and estimated PED cycled.
+ */
+export interface CodexMetaStage {
+	targetRank: number;
+	cost: number;
+	estimatedPed: number;
+}
+
+/**
+ * One species' next meta reward: the breakpoint it reaches next, the
+ * codex cost of the ranks left before it, and that cost as estimated PED
+ * cycled (a planning estimate, never an accounting figure). `planets` is
+ * sorted and empty when the catalogue names none. `followingStages`
+ * prices every later breakpoint up to rank 25, in order, each from the
+ * breakpoint before it.
+ */
+export interface CodexMetaTarget {
+	speciesName: string;
+	planets: string[];
+	currentRank: number;
+	targetRank: number;
+	cost: number;
+	estimatedPed: number;
+	followingStages: CodexMetaStage[];
+}
+
+/**
+ * The meta-target ranking: every species short of rank 25, cheapest next
+ * meta first, with the metas the recorded ranks have earned against the
+ * cap and the rate the PED estimates use.
+ */
+export interface CodexMetaTargets {
+	metasEarned: number;
+	metaCap: number;
+	pedPerCost: number;
+	targets: CodexMetaTarget[];
 }
 
 /**
@@ -581,6 +1108,49 @@ export interface CompactResult {
 }
 
 /**
+ * One compared setup.
+ */
+export interface ComparedSetup {
+	/** Its position in the request. */
+	index: number;
+	/** The weapon's name. */
+	name: string;
+	components: SetupComponentView[];
+	economics: SetupEconomicsView | null;
+	unmodelled: UnmodelledReason | null;
+	/** Kill figures at each sampled HP; empty when the setup cannot be priced. */
+	curve: KillFiguresView[];
+}
+
+/**
+ * The modelling assumptions every figure is estimated under, for the
+ * disclosure beside them.
+ */
+export interface ComparisonAssumptionsView {
+	modelVersion: string;
+	looterSource: ExpectedLooterSource;
+	looterLevel: number;
+	/** The player's own three-looter mean, whatever level was compared at. */
+	ownLooterLevel: number;
+	/** The share of uses that land. */
+	hitRate: number;
+	/** The lowest roll as a share of max damage. */
+	damageFloor: number;
+	criticalChance: number;
+	/** A critical multiplies the rolled damage by this. */
+	criticalMultiplier: number;
+}
+
+/**
+ * One catalogue item in a setup.
+ */
+export interface ComponentPick {
+	catalogId: string;
+	/** The markup a limited item is bought at, percent (100 is TT; absent reads as 100). Ignored for an unlimited item, which runs at TT. */
+	markupPercent?: number | null;
+}
+
+/**
  * GET stats: current HP and the top five professions.
  */
 export interface ComputedCharacterStats {
@@ -589,19 +1159,214 @@ export interface ComputedCharacterStats {
 }
 
 /**
+ * One dose, as the readouts and review show it. Times are epoch seconds.
+ */
+export interface ConsumableDose {
+	id: string;
+	/** Null once the item was deleted from Equipment. */
+	equipmentId: number | null;
+	itemName: string;
+	source: ConsumableDoseSource;
+	/** The session the dose was taken in; null for one taken outside a session before effects were bound to one. */
+	sessionId: string | null;
+	startedAt: number;
+	/** When the effect ends (or ended): the expiry, or earlier when a re-dose of the item replaced it, it was ended, or its session stopped. Null while an untimed dose runs. */
+	endsAt: number | null;
+	/** Whether the dose was declared in force with no expiry: taken before the session, running until the player ends it. */
+	untimed: boolean;
+	/** Whether a re-dose of the item replaced it before its expiry. */
+	replaced: boolean;
+	/** What it booked to its session, PED. */
+	costPed: number;
+	/** Whether the item's dose cost was tracked when it was taken. */
+	costTracked: boolean;
+	effects: ConsumableEffect[];
+	removedAt: number | null;
+	removedBy: ConsumableDoseRemoval | null;
+}
+
+/**
+ * Who removed a dose.
+ */
+export type ConsumableDoseRemoval = 'player' | 'heal_correction';
+
+/**
+ * A consumable's dose settings as an add or update request declares them,
+ * in the request's casing. The effects, duration, and TT value are used
+ * only where the catalogue has none.
+ */
+export interface ConsumableDoseRequest {
+	/** The acquisition markup, percent of TT. */
+	markup_percent: number;
+	/** Whether taking a dose books its cost to the session. */
+	track_cost: boolean;
+	duration_seconds?: number | null;
+	reload_speed_percent?: number | null;
+	tt_value_ped?: number | null;
+}
+
+/**
+ * How a dose started.
+ */
+export type ConsumableDoseSource = 'hotbar' | 'manual' | 'on_use';
+
+/**
+ * The dose readout: the running session's doses in force and those just
+ * ended (so they can be re-dosed), the reload speed in effect, and what a
+ * dose can be started from.
+ */
+export interface ConsumableDoses {
+	/** Now, epoch seconds, as the doses were read: a countdown measures from here. */
+	now: number;
+	/** Empty while no session runs: a dose is taken, and counts, only inside one. */
+	doses: ConsumableDose[];
+	reloadSpeed: ReloadSpeedNow;
+	options: ConsumableOption[];
+}
+
+/**
+ * One effect a dose grants, as the item prints it.
+ */
+export interface ConsumableEffect {
+	name: string;
+	strength: number | null;
+	unit: string | null;
+	/** The signed reload speed it adds, percent, when it is a reload-speed effect; the only kind the app evaluates. */
+	reloadSpeedPercent: number | null;
+}
+
+/**
+ * A configured consumable a dose can be started from.
+ */
+export interface ConsumableOption {
+	equipmentId: number;
+	name: string;
+	/** How long one dose lasts, seconds; 0 for an immediate item. */
+	durationSeconds: number;
+	/** What one dose costs at its recorded markup, PED. */
+	doseCostPed: number;
+	/** Whether taking a dose books that cost to the session. */
+	costTracked: boolean;
+	/** The reload speed one dose adds, percent, as printed. */
+	reloadSpeedPercent: number;
+	/** The hotbar slot the item is bound to, when it is; its key starts a dose in game. */
+	hotbarSlot: string | null;
+}
+
+/**
+ * A consumable's dose as Equipment configures it: what the catalogue
+ * supplies and what the player declared, and what one dose costs.
+ */
+export interface ConsumableSettings {
+	/** How long one dose lasts, seconds; 0 for an immediate item. */
+	durationSeconds: number;
+	effects: ConsumableEffect[];
+	/** One dose's TT value, PED. */
+	ttValuePed: number;
+	/** The acquisition markup, percent of TT. */
+	markupPercent: number;
+	/** One dose at that markup, PED. */
+	doseCostPed: number;
+	/** Whether taking a dose books its cost to the session. */
+	trackCost: boolean;
+	/** Which figures the catalogue supplies (the rest are declared). */
+	catalogueEffects: boolean;
+	catalogueDuration: boolean;
+	catalogueValue: boolean;
+	/** What the player declared, for editing: used where the catalogue has nothing. */
+	declaredReloadSpeedPercent: number | null;
+	declaredDurationSeconds: number | null;
+	declaredTtValuePed: number | null;
+}
+
+/**
+ * How an input line was acquired.
+ */
+export type ConversionAcquisition = 'held' | 'bought' | 'asset';
+
+/**
+ * Which side of Inventory a conversion's result joins.
+ */
+export type ConversionHolding = 'loot' | 'asset';
+
+/**
+ * One thing that went into an item conversion.
+ */
+export type ConversionInputLine = {
+		itemName: string;
+		quantity: number;
+		/** What this line is worth above TT, if the player wants to say. */
+		worth?: number | null;
+		kind: 'held';
+	} | {
+		itemName: string;
+		quantity: number;
+		ttValue: number;
+		markupPaid?: number | null;
+		kind: 'bought';
+	} | {
+		itemId: string;
+		quantity?: number | null;
+		worth?: number | null;
+		kind: 'asset';
+	};
+
+/**
+ * One recorded line of a conversion.
+ */
+export interface ConversionLine {
+	side: ConversionLineSide;
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	acquisition: ConversionAcquisition | null;
+	markup: number | null;
+	holding: ConversionHolding | null;
+}
+
+/**
+ * Which side of a conversion a recorded line sits on.
+ */
+export type ConversionLineSide = 'input' | 'output';
+
+/**
+ * One thing an item conversion produced.
+ */
+export interface ConversionOutputLine {
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	holding: ConversionHolding;
+}
+
+/**
  * The calibration flow's phase, as the closed wire vocabulary.
  */
 export type CoordCalibrationPhase = 'idle' | 'awaitTopLeft' | 'awaitBottomRight';
 
 /**
- * The calibration surface's assembled state: the flow phase, the
- * persisted region (null until a calibration completed), and the
- * validation read echoed after the last completion.
+ * The hand-drawn region's calibration flow: its phase, and the region
+ * (null until one has been drawn).
  */
 export interface CoordCalibrationStatus {
 	phase: CoordCalibrationPhase;
 	region: CoordRegionDto | null;
-	lastValidation: CoordScanResult | null;
+}
+
+/**
+ * What the coordinates were read from.
+ */
+export type CoordReadSource = 'radar' | 'region';
+
+/**
+ * Why a position was not read: the reason, and for `notRead`, each
+ * refused value's own reason (null for a value that read, whose number
+ * is not kept). It carries no coordinate.
+ */
+export interface CoordRefusal {
+	reason: CoordScanRefusal;
+	lon: CoordValueRefusal | null;
+	lat: CoordValueRefusal | null;
 }
 
 /**
@@ -615,38 +1380,78 @@ export interface CoordRegionDto {
 }
 
 /**
- * One coordinate scan's answer: `status` names the outcome precisely
- * (a wrong read never masquerades as a position), and the extras ride
- * where the outcome carries them (the `CaptureResult` convention):
- * coordinates on `read` and `implausible`, the raw capture text only
- * on `unreadable` (where the UI shows it); a successful read's text is
- * its digits, so the parsed coordinates already carry everything and
- * the boundary hands the webview no more screen text than it needs.
+ * Why no position was read.
  */
-export interface CoordScanResult {
-	status: CoordScanStatus;
-	lon?: number | null;
-	lat?: number | null;
-	altitude?: number | null;
-	rawText?: string | null;
-	confidence?: number | null;
-}
+export type CoordScanRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'readerUnavailable' | 'planetUnknown' | 'captureNotAllowed' | 'radarNotFound' | 'otherPlanet' | 'regionOutsideWindow' | 'notRead';
 
 /**
- * The closed vocabulary of a coordinate scan's outcome.
+ * One coordinate scan's answer: both values exactly as the screen
+ * showed them, or why there are none. A refusal carries no coordinate,
+ * so nothing downstream can mistake it for one.
  */
-export type CoordScanStatus = 'read' | 'noRegion' | 'captureFailed' | 'engineUnavailable' | 'unreadable' | 'implausible';
+export type CoordScanResult = {
+		lon: number;
+		lat: number;
+		source: CoordReadSource;
+		kind: 'read';
+	} | {
+		refusal: CoordRefusal;
+		kind: 'refused';
+	};
 
 /**
- * The session-detail cost split.
+ * Why one value was not read.
+ */
+export type CoordValueRefusal = 'offScreen' | 'covered' | 'notFound' | 'unclear' | 'outOfBounds';
+
+/**
+ * What a cost figure rests on: the account readings' measurement, the
+ * chat log's tracking, or, for a figure summed from several, both.
+ */
+export type CostBasis = 'measured' | 'tracked' | 'mixed';
+
+/**
+ * The session-detail cost split. A bucket the account readings measured
+ * is the measured amount (the weapon's whole, shots after the last kill
+ * included); the rest are tracked. The buckets add up to Cycled; the
+ * session's overhead is beside them, in its Net and never in Cycled.
  */
 export interface CostBreakdown {
 	weaponCost: number;
 	healCost: number;
+	/** Consumed doses of cost-tracked items. */
+	consumableCost: number;
 	enhancerCost: number;
 	armourCost: number;
 	/** Harvesting (tree cutting) swing decay. */
 	harvestCost: number;
+	/** The same buckets as the chat log tracked them, whatever the readings measured: what a measured figure is compared with. */
+	tracked: TrackedCostBreakdown;
+	/** What each bucket above rests on. */
+	basis: CostBreakdownBasis;
+	/** When the measured buckets were measured across a gap in the session's readings (a sign-in dropped, the app closed), shown clean by the chat log: how long the gap was, in whole minutes (at least one). Absent for any other session. */
+	measuredAcrossGapMinutes?: number | null;
+	/** Why each bucket above is not measured. */
+	reasons: CostBreakdownReasons;
+	/** The session's overhead, every category added up. */
+	overheadCost: number;
+	overhead: SessionOverhead;
+	/** The measured lines behind the figures; `null` unless the readings measured the session. */
+	measured: MeasuredCostDetail | null;
+	/** The session has hits no armour recording covers: its tracked armour figure is not a figure to show. */
+	armourUnrecorded: boolean;
+}
+
+/**
+ * What each bucket of a session's cost split rests on.
+ */
+export interface CostBreakdownBasis {
+	weaponCost: CostBasis;
+	healCost: CostBasis;
+	consumableCost: CostBasis;
+	enhancerCost: CostBasis;
+	armourCost: CostBasis;
+	harvestCost: CostBasis;
 }
 
 /**
@@ -660,6 +1465,80 @@ export interface CostBreakdownLine {
 }
 
 /**
+ * Why each bucket of a session's cost split is not measured; `null` for a
+ * measured bucket.
+ */
+export interface CostBreakdownReasons {
+	weaponCost: CostReason | null;
+	healCost: CostReason | null;
+	consumableCost: CostReason | null;
+	enhancerCost: CostReason | null;
+	armourCost: CostReason | null;
+	harvestCost: CostReason | null;
+}
+
+/**
+ * An item the measured sessions could not place, awaiting the player's
+ * placement: one that wore, or a stack whose units left.
+ */
+export interface CostPlacementAwaiting {
+	item: string;
+	/** How many measured sessions it wore or left in. */
+	sessions: number;
+	/** The TT it lost wearing across them, billed as unclassified overhead until it is placed; `null` when it never wore. */
+	lost: MeasuredAmount | null;
+	/** The units of it that left across them, billed nothing until it is placed as used up; `null` when none left. */
+	units: number | null;
+}
+
+/**
+ * A category the player may place an item in: what its use costs as in
+ * every session.
+ */
+export type CostPlacementCategory = 'weapon' | 'amplifier' | 'mindforceImplant' | 'harvestingTool' | 'healingTool' | 'unlimitedArmour' | 'unlimitedPlate' | 'attachment' | 'healingConsumable' | 'limitedArmour' | 'limitedPlate' | 'consumable' | 'travel' | 'fieldLogistics' | 'notACost';
+
+/**
+ * An item the player placed.
+ */
+export interface CostPlacementEntry {
+	item: string;
+	category: CostPlacementCategory;
+	placedAt: string;
+}
+
+/**
+ * Place an item, by its exact name, in a category for every session.
+ */
+export interface CostPlacementInput {
+	item: string;
+	category: CostPlacementCategory;
+}
+
+/**
+ * A placement made or cleared, once the measured sessions' costs have
+ * been rebuilt by it.
+ */
+export interface CostPlacementResult {
+	placements: CostPlacements;
+	/** The sessions whose costs are still to be rebuilt (one changed meanwhile, or the rebuild failed); empty once every one follows the placement. They are rebuilt on their next read. */
+	pendingSessions: string[];
+}
+
+/**
+ * The items awaiting a placement (most TT lost first) and the placements
+ * made (the latest first).
+ */
+export interface CostPlacements {
+	awaiting: CostPlacementAwaiting[];
+	placed: CostPlacementEntry[];
+}
+
+/**
+ * Why a cost bucket's figure is not what the account readings measured.
+ */
+export type CostReason = 'noMeasuredCosts' | 'partialCoverage' | 'gap' | 'ammoUnsettled' | 'ammoToppedUp' | 'limitedSetUnconfirmed' | 'trackedOnly' | 'playInGap' | 'chatLogMissesGap' | 'chatLogUnchecked' | 'gapUnaccounted' | 'overheadInGap';
+
+/**
  * The crash-reporting opt-in state, a one-key body.
  */
 export interface CrashReportingStatus {
@@ -667,7 +1546,44 @@ export interface CrashReportingStatus {
 }
 
 /**
- * The per-family cycled-cost split.
+ * A creature the player keeps for the name reader beside the bundled list.
+ */
+export interface CreatureEntry {
+	name: string;
+	species: string | null;
+	/** The maturity as entered; a number stands for every number. */
+	maturity: string | null;
+	/** The maturity is a number: read at whatever number the plate prints. */
+	anyNumber: boolean;
+	source: CreatureEntrySource;
+}
+
+/**
+ * What keeping a typed creature would come to.
+ */
+export type CreatureEntryCheck = {
+		name: string;
+		maturity: string | null;
+		anyNumber: boolean;
+		kind: 'ready';
+	} | {
+		name: string;
+		maturity: string | null;
+		recordedAs: DetectedCreature;
+		kind: 'known';
+	} | {
+		reason: string;
+		kind: 'refused';
+	};
+
+/**
+ * Where a kept creature came from.
+ */
+export type CreatureEntrySource = 'review' | 'player';
+
+/**
+ * The per-family cycled-cost split. Its lines partition `trackingCost`:
+ * every family the Overview sums into Cycled has exactly one line here.
  */
 export interface CycledBreakdown {
 	weapon: number;
@@ -675,6 +1591,32 @@ export interface CycledBreakdown {
 	enhancer: number;
 	armour: number;
 	dangling: number;
+	/** Harvesting (tree cutting) swing decay. */
+	harvest: number;
+	/** Consumed doses of cost-tracked items. */
+	consumables: number;
+}
+
+/**
+ * The Cycled bucket a live breakdown line belongs to.
+ */
+export type CycledBucket = 'weapon' | 'enhancer' | 'healing' | 'armour' | 'consumable' | 'harvesting';
+
+/**
+ * One line of the live Cycled breakdown: what one item cost the session.
+ */
+export interface CycledLine {
+	bucket: CycledBucket;
+	label: string;
+	costPed: number;
+}
+
+/**
+ * What an overlay declaration put in hand.
+ */
+export interface DeclaredEquipment {
+	name: string;
+	kind: HeldItemKind;
 }
 
 /**
@@ -684,6 +1626,94 @@ export interface CycledBreakdown {
 export interface DefinitionSelectResult {
 	sessionDefinitionId: string | null;
 	sessionName: string | null;
+}
+
+/**
+ * One root item a converted holding, or a sale of it, descends from.
+ */
+export interface DerivedSource {
+	itemName: string;
+	quantity: number;
+}
+
+/**
+ * A creature as a kill's stamp carries it: its display name, species and
+ * maturity (both empty for a creature on no list).
+ */
+export interface DetectedCreature {
+	name: string;
+	species: string;
+	maturity: string;
+}
+
+/**
+ * A name set aside as not a tracked tool.
+ */
+export interface DismissedToolName {
+	name: string;
+	/** When it was set aside (epoch seconds). */
+	dismissedAt: number;
+}
+
+/**
+ * The buyout as read: switched off, or a price.
+ */
+export type DraftBuyout = {
+		kind: 'off';
+	} | {
+		figure: ReadFigure;
+		kind: 'price';
+	};
+
+/**
+ * A queued item's name as read.
+ */
+export interface DraftName {
+	text: string;
+	/** What bears the name out. Only the application's item data confirms it; otherwise the player should check it against the window. */
+	found: NameFound;
+}
+
+/**
+ * How far an enhancer break's cost is known.
+ */
+export type EnhancerBreakPricing = 'priced' | 'markupNotSet' | 'ttUnknown' | 'returnAboveTt';
+
+/**
+ * A kind of enhancer whose markup is set per tier.
+ */
+export type EnhancerMarkupKind = 'weaponDamage';
+
+/**
+ * Every tier of every kind whose markup is set per tier.
+ */
+export interface EnhancerMarkups {
+	/** By kind, then tier. */
+	tiers: EnhancerTierMarkup[];
+}
+
+/**
+ * One tier of one kind.
+ */
+export interface EnhancerTierMarkup {
+	kind: EnhancerMarkupKind;
+	tier: number;
+	/** The enhancer's TT in PED, from the game data; `null` when unlisted. */
+	ttPed: number | null;
+	/** The markup paid, in percent of TT, in force from now on; `null` prices its breaks at TT. */
+	markupPercent: number | null;
+	/** When it was set; `null` when it never was. */
+	setAt: string | null;
+}
+
+/**
+ * One tier's markup, set from now on.
+ */
+export interface EnhancerTierMarkupInput {
+	kind: EnhancerMarkupKind;
+	tier: number;
+	/** In percent, from 100; `null` prices the tier's breaks at TT from now on. */
+	markupPercent?: number | null;
 }
 
 /**
@@ -715,9 +1745,15 @@ export interface EquipmentDetail {
 	implant: AbsorberComponent | null;
 	costBreakdown: CostBreakdownLine[];
 	totalCostPerUse: number;
-	expectedReturn: EquipmentExpectedReturn | null;
+	expectedReturns: EquipmentExpectedReturns | null;
 	healingProfile: HealingProfileDto | null;
 	lifestealPercent: number | null;
+	/** A weapon's declared damage-over-time effect, when it has one. */
+	effectProfile: WeaponEffectProfileDto | null;
+	/** A weapon's attack rate, when its catalogue publishes a base rate. */
+	attackRate: WeaponAttackRate | null;
+	/** A consumable's dose; null for every other kind. */
+	consumable: ConsumableSettings | null;
 }
 
 export interface EquipmentEffectiveEfficiency {
@@ -748,6 +1784,20 @@ export interface EquipmentExpectedReturn {
 	consumedPremiumPerUse: number;
 	coverage: number;
 	incomplete: boolean;
+	/** PEC lost per 100 HP removed at the looter level above, a maxed weapon assumed: Effective Efficiency and damage per PEC combined. It ranks weapons for mobs several hits deep; on small mobs the smaller shot can win regardless. */
+	lossPer100HpPec: number | null;
+}
+
+/**
+ * One setup's expected return read at each looter basis the player can
+ * choose: the three-looter mean for an unknown target, or the one hunting
+ * looter that applies when the target's class is known.
+ */
+export interface EquipmentExpectedReturns {
+	threeLooterMean: EquipmentExpectedReturn;
+	animal: EquipmentExpectedReturn;
+	mutant: EquipmentExpectedReturn;
+	robot: EquipmentExpectedReturn;
 }
 
 /**
@@ -758,16 +1808,32 @@ export interface EquipmentExpectedReturn {
 export type EquipmentKind = 'weapon' | 'healing' | 'consumable' | 'tool';
 
 /**
- * An auction draft for one whole capital-equipment position.
+ * The stored library: its entries, and which of them the held-tool bar
+ * cannot tell apart.
+ */
+export interface EquipmentLibrary {
+	/** Every entry, oldest first. */
+	entries: EquipmentSummary[];
+	/** The groups of entries a player can hold (weapons, healing tools and harvesting tools) whose names read the same on the held-tool bar: one name kept in two set-ups, or long names the game client cuts short alike. Each group lists two entry ids or more, on or off alike; no entry is in two groups. Empty when every entry stands apart, or when the interface profile is unavailable. */
+	indistinguishable: string[][];
+	/** How the player tells each member of those groups apart, by entry id: its name, then its set-up, then its place (the one rule the overlay names such entries by too). */
+	lookalikeLabels: Record<string, string>;
+}
+
+/**
+ * An auction draft for an asset: `quantity` of its units, or all of them.
  */
 export interface EquipmentListingInput {
 	itemId: string;
+	quantity?: number | null;
 	startingBid: number;
 	buyout?: number | null;
 	listingFee: number;
 	listedAt?: string | null;
 	/** How many days the listing runs for, when recorded. */
 	auctionDays?: number | null;
+	/** Where each figure came from, for a listing drafted from a capture of the game's sell queue; absent for one entered by hand. */
+	fieldSources?: ListingFieldSourceInput[] | null;
 }
 
 /**
@@ -795,10 +1861,14 @@ export interface EquipmentRequest {
 	tick_min?: number | null;
 	tick_max?: number | null;
 	tick_seconds?: number | null;
+	/** A weapon's damage-over-time effect; absent for every other kind. */
+	weapon_effect?: WeaponEffectRequest | null;
+	/** A consumable's dose settings; absent for every other kind, and for a consumable that keeps its dose unbooked with no declared figures. */
+	dose?: ConsumableDoseRequest | null;
 }
 
 /**
- * A catalogue search hit.
+ * One catalogue entry, as the equipment pickers search and select it.
  */
 export interface EquipmentSearchHit {
 	catalogId: string | null;
@@ -814,6 +1884,10 @@ export interface EquipmentSearchHit {
 	healMax: number | null;
 	reloadSeconds: number | null;
 	lifestealPercent: number | null;
+	/** A weapon's catalogue attack rate, attacks a minute; null for other items and for weapons the catalogue gives no rate. */
+	usesPerMinute: number | null;
+	/** A stimulant's dose as the catalogue prints it (at 100% markup, cost tracking off until the player chooses); null for every other item. */
+	consumable: ConsumableSettings | null;
 }
 
 /**
@@ -823,6 +1897,8 @@ export interface EquipmentSummary {
 	id: string;
 	name: string;
 	type: EquipmentKind;
+	/** Whether the player has the entry in use: of entries that cannot be told apart by name, the one left on. Its set-up and cost are the same either way. */
+	enabled: boolean;
 	amplifierName: string | null;
 	costPerUse: number;
 	damageMin: number | null;
@@ -833,13 +1909,19 @@ export interface EquipmentSummary {
 	enrichmentLevel: number;
 	healingProfile: HealingProfileDto | null;
 	lifestealPercent: number | null;
+	/** A weapon's declared damage-over-time effect, when it has one. */
+	effectProfile: WeaponEffectProfileDto | null;
+	/** A consumable's dose; null for every other kind. */
+	consumable: ConsumableSettings | null;
 }
 
 /**
- * A completed fee-free player trade for one whole capital position.
+ * A completed fee-free player trade of an asset: `quantity` of its units,
+ * or all of them.
  */
 export interface EquipmentTradeInput {
 	itemId: string;
+	quantity?: number | null;
 	soldFor: number;
 	soldAt?: string | null;
 }
@@ -873,6 +1955,22 @@ export interface ExpectedHuntingEconomics {
 }
 
 export type ExpectedLooterSource = 'animal' | 'mutant' | 'robot' | 'three_looter_mean';
+
+/**
+ * Where a listing figure came from.
+ */
+export type FieldSourceInput = {
+		text?: string | null;
+		kind: 'readChecked';
+	} | {
+		text?: string | null;
+		kind: 'readUnchecked';
+	} | {
+		text: string;
+		kind: 'matched';
+	} | {
+		kind: 'typed';
+	};
 
 /**
  * The game-connection block: the configured chat-log path, whether it
@@ -950,6 +2048,8 @@ export interface HarvestTierComparison {
 	cycled: number;
 	returns: number;
 	lootRate: number;
+	/** The overhead shared to this tier by what it cycled: a cost beside `cycled`, never in it. */
+	overhead: number;
 	lootItems: HarvestLootItem[];
 }
 
@@ -958,17 +2058,93 @@ export interface HarvestTierComparison {
  */
 export type HarvestYieldTier = 'short' | 'long' | 'huge' | 'unknown';
 
+/**
+ * How a paid healing activation was established.
+ */
+export type HealingActivationProvenance = 'direct' | 'healthCapped' | 'retrospective' | 'corrected';
+
 export interface HealingActivationRow {
 	id: string;
 	toolName: string;
 	observedAt: number;
 	cost: number;
-	provenance: string;
+	provenance: HealingActivationProvenance;
 	effectUntil: number | null;
 	outputCount: number;
+	/** The heal amount that confirmed it. */
+	amount: number | null;
+	/** It was marked as not a paid use: it costs nothing and stays listed only until that correction is undone. */
+	superseded: boolean;
+	/** The live correction that minted or superseded it, which can be undone. */
+	correction: HealingCorrectionRef | null;
+}
+
+/**
+ * What a correction asserts.
+ */
+export type HealingCorrectionKind = 'notPaidUse' | 'paidUse';
+
+/**
+ * The live correction that moved an activation or output, which can be
+ * undone.
+ */
+export interface HealingCorrectionRef {
+	id: string;
+	kind: HealingCorrectionKind;
+}
+
+/**
+ * One correction to make.
+ */
+export type HealingCorrectionTarget = {
+		activationId: string;
+		kind: 'notPaidUse';
+	} | {
+		outputId: string;
+		equipmentId: number;
+		kind: 'paidUse';
+	};
+
+/**
+ * A healing item an output could be marked as a paid use of.
+ */
+export interface HealingCorrectionTool {
+	equipmentId: number;
+	name: string;
+	/** The per-use cost the correction would book, at today's pricing. */
+	costPerUsePed: number;
+	/** The item's configured interval explains the heal's amount. */
+	fits: boolean;
 }
 
 export type HealingMode = 'direct' | 'over_time' | 'compound';
+
+/**
+ * One healing output, as review lists it.
+ */
+export interface HealingOutput {
+	id: string;
+	observedAt: number;
+	amount: number;
+	classification: HealingOutputClassification;
+	reason: string;
+	/** The healing item whose activation it confirmed or ticked for. */
+	toolName: string | null;
+	correction: HealingCorrectionRef | null;
+	/** It can be marked as a paid use: nothing bills it already and no live correction moved it. */
+	correctable: boolean;
+}
+
+/**
+ * How one healing output is explained.
+ */
+export type HealingOutputClassification = 'direct' | 'effect' | 'passive' | 'unattributed';
+
+export interface HealingOutputPage {
+	outputs: HealingOutput[];
+	/** Every output of the requested classification in the session. */
+	total: number;
+}
 
 export interface HealingProfileDto {
 	mode: HealingMode;
@@ -981,6 +2157,8 @@ export interface HealingProfileDto {
 }
 
 export interface HealingSessionSummary {
+	/** The session has ended, so its healing evidence can be corrected. */
+	correctable: boolean;
 	activations: HealingActivationRow[];
 	activationCount: number;
 	outputCount: number;
@@ -1028,37 +2206,61 @@ export interface HistogramSnapshot {
 }
 
 /**
- * One attribute row of the HP optimizer.
+ * One activity a held item traces back to.
+ */
+export interface HoldingOrigin {
+	label: string;
+	quantity: number;
+}
+
+/**
+ * One allocation of the HP optimizer: a skill's share of the cheapest
+ * climb to the target HP.
+ */
+export interface HpOptimizerAllocation {
+	name: string;
+	levelsPerHp: number;
+	currentLevel: number;
+	levelsToGain: number;
+	newLevel: number;
+	hpGain: number;
+	pedCost: number;
+	codexCategory: string | null;
+	codexDivisor: number | null;
+}
+
+/**
+ * One attribute row of the HP optimizer: its HP rate if a reward offers
+ * it (attributes are never allocated).
  */
 export interface HpOptimizerAttribute {
 	name: string;
-	hpIncrease: number;
 	currentLevel: number;
 	levelsPerHp: number;
 }
 
 /**
- * GET hp-optimizer: the HP-per-PED breakdown across contributing
- * skills and attributes.
+ * An HP skill the HP optimizer left out, with the reason.
+ */
+export interface HpOptimizerExcluded {
+	name: string;
+	levelsPerHp: number;
+	reason: string;
+}
+
+/**
+ * GET hp-optimizer: the cheapest skill allocation from the current HP to
+ * `targetHp`, allocated rows first (by PED cost, descending). `endHp`
+ * falls short of the target only when every skill tops out first.
  */
 export interface HpOptimizerResult {
+	targetHp: number;
 	currentHp: number;
-	skills: HpOptimizerSkill[];
+	endHp: number;
+	totalPed: number;
+	allocations: HpOptimizerAllocation[];
 	attributes: HpOptimizerAttribute[];
-}
-
-/**
- * One skill row of the HP optimizer.
- */
-export interface HpOptimizerSkill {
-	name: string;
-	hpIncrease: number;
-	currentLevel: number;
-	levelsPerHp: number;
-	pedPerHp: number;
-	hpPerPed: number;
-	codexCategory: string | null;
-	codexDivisor: number | null;
+	excluded: HpOptimizerExcluded[];
 }
 
 /**
@@ -1079,6 +2281,9 @@ export interface HuntingActivityComparison {
 	rewardItems: HarvestLootItem[];
 	/** Historical wire name for total realised returns at this activity grain: ordinary loot TT, confirmed reward TT, and later confirmed markup from both ordinary loot and reward stock. */
 	rewardedReturns: number;
+	/** The sessions' overhead shared to this activity by what it cycled: a cost beside `cycled`, never in it. Realised Net is `rewardedReturns` less `cycled` and this. */
+	overhead: number;
+	/** `rewardedReturns` over `cycled` and `overhead`: realised returns over costs. */
 	rewardedRate: number;
 	rewardStatus: HuntingRewardStatus;
 	lootItems: HarvestLootItem[];
@@ -1095,6 +2300,8 @@ export interface HuntingActivityOverall {
 	returns: number;
 	lootRate: number;
 	expected: ExpectedHuntingEconomics | null;
+	/** The overhead of these same sessions shared to their hunting: a cost beside `cycled`, never in it. Realised Net takes it off; the Realised Rate's denominator is `cycled` and it. */
+	overhead: number;
 }
 
 /**
@@ -1109,6 +2316,8 @@ export interface HuntingDefinitionComparison {
 	returns: number;
 	lootRate: number;
 	expected: ExpectedHuntingEconomics | null;
+	/** The overhead of these same instances shared to their hunting (on the unassigned bucket, that of sessions recorded outside any definition): a cost beside `cycled`, never in it. Realised Net takes it off; the Realised Rate's denominator is `cycled` and it. */
+	overhead: number;
 	lootItems: HarvestLootItem[];
 	activities: HuntingActivityComparison[];
 }
@@ -1116,6 +2325,8 @@ export interface HuntingDefinitionComparison {
 export interface HuntingRealisedMarkup {
 	species: RealisedSpeciesMarkup[];
 	definitions: RealisedDefinitionMarkup[];
+	/** The part of each definition's markup that came through a conversion. */
+	derived: RealisedDerivedMarkup[];
 }
 
 export type HuntingRewardStatus = 'none' | 'included_in_loot' | 'fixed_liquid' | 'item' | 'skill' | 'mixed' | 'unverified';
@@ -1157,15 +2368,27 @@ export interface InventoryItem {
 	markupPaid: number;
 	notes: string | null;
 	acquiredAt: string;
+	/** How many units are held; `ttValue` and `markupPaid` are their totals. */
+	quantity: number;
+	/** Whether part of it can be sold, listed, or converted, rather than only the whole. Not for an asset carrying activity origins. */
+	divisible: boolean;
+	/** The acquisitions that built it, oldest first by date. Ids rise in the order purchases are recorded, so the purchase `inventory_create` or `inventory_purchase_add` just recorded is the one with the highest id: the id a purchase proposal is linked to. */
+	purchases: AssetPurchase[];
+	/** The activities a sale of this asset would credit. Empty for an asset that did not come out of a conversion. */
+	origins: HoldingOrigin[];
+	/** What a conversion made this asset from. */
+	derivedFrom: DerivedSource[];
 }
 
 /**
  * An inventory-item create payload (snake_case, matching the frontend
- * request shape). `notes` / `acquired_at` are optional; an empty / absent
- * `acquired_at` defaults to today's UTC date.
+ * request shape). `quantity` (one when absent), `notes` and `acquired_at`
+ * are optional; an empty / absent `acquired_at` defaults to today's UTC
+ * date. `tt_value` and `markup_paid` are totals for every unit.
  */
 export interface InventoryItemInput {
 	name: string;
+	quantity?: number | null;
 	tt_value: number;
 	markup_paid: number;
 	notes?: string | null;
@@ -1177,6 +2400,7 @@ export interface InventoryItemInput {
  */
 export interface InventoryPatch {
 	name?: string | null;
+	quantity?: number | null;
 	tt_value?: number | null;
 	markup_paid?: number | null;
 	notes?: string | null;
@@ -1224,6 +2448,46 @@ export interface InventorySellResult {
 }
 
 /**
+ * An item conversion: what went in and what came out.
+ */
+export interface ItemConversionInput {
+	inputs: ConversionInputLine[];
+	outputs: ConversionOutputLine[];
+	/** PED received outright, for an outcome already cashed. */
+	pedAmount?: number | null;
+	convertedAt?: string | null;
+}
+
+/**
+ * How this machine reads the player's keys, and whether it runs keyless.
+ */
+export interface KeyboardAccess {
+	/** The observer hotbar keys would be read through. Null while keyless: a keyless machine is never probed (nothing opens the keyboard). */
+	observer?: KeyboardObserverKind | null;
+	/** Keyless tracking is on for this machine. */
+	keyless: boolean;
+	/** Keyless tracking can be turned on: the machine can be identified, so the setting stays with it. */
+	keylessAvailable: boolean;
+}
+
+/**
+ * The global key observer this machine reads keys through, as the
+ * settings show it.
+ */
+export type KeyboardObserverKind = 'xinput' | 'evdev' | 'windows_hook' | 'unavailable';
+
+/**
+ * What a setup costs to kill a mob at one HP.
+ */
+export interface KillFiguresView {
+	hp: number;
+	uses: number;
+	lossPec: number;
+	cycledPec: number;
+	seconds: number | null;
+}
+
+/**
  * A ledger-entry create payload.
  */
 export interface LedgerEntryInput {
@@ -1232,6 +2496,8 @@ export interface LedgerEntryInput {
 	description: string;
 	amount: number;
 	tag: string;
+	/** The session this entry belongs to as a whole, when it has one. The entry stays in the global ledger and also counts in that session's realised figures, shared across its activities. */
+	sessionDefinitionId?: number | null;
 }
 
 /**
@@ -1244,6 +2510,8 @@ export interface LedgerItem {
 	description: string;
 	amount: number;
 	tag: string;
+	/** The session the entry is pegged to as a whole, by name. */
+	sessionName: string | null;
 }
 
 /**
@@ -1301,6 +2569,39 @@ export interface LedgerSummary {
 }
 
 /**
+ * One looter basis of a family's expected loot.
+ */
+export interface LifetimeExpectedAtBasis {
+	expectedLootTtPed: number;
+	/** The same with the unknown-efficiency TT at the model's 0% and 100% Efficiency returns: the range the point lies in. */
+	lowPed: number;
+	highPed: number;
+}
+
+/**
+ * A family's expected loot at every looter basis.
+ */
+export interface LifetimeExpectedBases {
+	threeLooterMean: LifetimeExpectedAtBasis;
+	animal: LifetimeExpectedAtBasis;
+	mutant: LifetimeExpectedAtBasis;
+	robot: LifetimeExpectedAtBasis;
+}
+
+/**
+ * Expected loot summed over the instances of a family that recorded weapon
+ * evidence, each at its own session-start looter levels. A planning
+ * estimate, never observed or realised.
+ */
+export interface LifetimeExpectedCycle {
+	/** How many instances this spans: the rest recorded no evidence and are in neither side of the ratio. */
+	sessions: number;
+	/** Those instances' Cycled. */
+	cycledPed: number;
+	bases: LifetimeExpectedBases;
+}
+
+/**
  * One definition's lifetime figures: the aggregate over every ended
  * instance recorded under it, plus the in-flight instance when one is
  * running under that same definition. The counterpart to the headline
@@ -1321,10 +2622,101 @@ export interface LifetimeStats {
 	instanceCount: number;
 	cycled: number;
 	lootTt: number;
+	/** Loot less Cycled and the instances' overhead. */
 	net: number;
 	returnRate: number;
 	pes: number;
 	durationSeconds: number;
+	/** Shots across these instances recorded without a price: the cycled figure (and everything derived from it) leaves them out. */
+	unpricedShots: number;
+	/** PES per 100 PED cycled over only the instances both the progression and economy statistics count, so the two halves describe the same sessions. Null with no spend behind it. */
+	pesPer100: number | null;
+	kills: number;
+	damageTotal: number;
+	/** The damage `weapon_cost` bought, for damage per PEC. */
+	weaponDamage: number;
+	weaponCost: number;
+	/** The most damage dealt on any one kill. */
+	maxDamage: number;
+	shotsFired: number;
+	criticalHits: number;
+	globals: number;
+	hofs: number;
+	harvestSwings: number;
+	/** The mean over every kill with a recorded weapon cost, never the mean of each instance's mean. */
+	multiplierAvg: number | null;
+	multiplierMax: number | null;
+	/** The family's most recent kill: the running instance's once it has one. Null also when that kill has no recorded weapon cost. */
+	multiplierLast: number | null;
+	latestKillLoot: number | null;
+	/** Expected loot over the instances that recorded weapon evidence. Null when none of them did. */
+	expectedCycle: LifetimeExpectedCycle | null;
+}
+
+/**
+ * A listing figure whose source is recorded.
+ */
+export type ListingFieldName = 'itemName' | 'quantity' | 'startingBid' | 'buyout' | 'listingFee' | 'auctionDays' | 'ttValue';
+
+/**
+ * Where one figure of a listing came from.
+ */
+export interface ListingFieldSourceInput {
+	field: ListingFieldName;
+	source: FieldSourceInput;
+}
+
+/**
+ * Expected loot over the live session's whole Cycled at one looter basis.
+ */
+export interface LiveExpectedAtBasis {
+	looterLevel: number;
+	/** Modelled offensive loot plus the unknown-efficiency TT at the session's own offensive recovery. */
+	expectedLootTtPed: number;
+	/** The same with the unknown-efficiency TT at the model's 0% and 100% Efficiency returns: the range the point lies in. */
+	lowPed: number;
+	highPed: number;
+	/** The modelled offensive streams alone. */
+	modelledExpectedLootTtPed: number;
+}
+
+/**
+ * The live expectation at every looter basis, keyed as the wire keys every
+ * per-basis figure.
+ */
+export interface LiveExpectedBases {
+	threeLooterMean: LiveExpectedAtBasis;
+	animal: LiveExpectedAtBasis;
+	mutant: LiveExpectedAtBasis;
+	robot: LiveExpectedAtBasis;
+}
+
+/**
+ * Expected loot over the live session's whole Cycled: Community Model v1
+ * for the weapon, amplifier, and scope phases fired; the model's whole
+ * Efficiency span for loot-bearing spend of unknown efficiency; nothing for
+ * lost spend (limited markup over TT, doses, enhancer breakage). A planning
+ * estimate, never observed or realised.
+ */
+export interface LiveExpectedCycle {
+	modelVersion: string;
+	cycledPed: number;
+	modelledCostPed: number;
+	unknownEfficiencyTtPed: number;
+	lostPed: number;
+	bases: LiveExpectedBases;
+}
+
+/**
+ * The comparison.
+ */
+export interface LoadoutComparison {
+	assumptions: ComparisonAssumptionsView;
+	/** The highest mob HP the curves reach. */
+	hpMax: number;
+	setups: ComparedSetup[];
+	/** The cheapest priced setup across the curve, lowest HP first; empty unless at least two setups can be priced. */
+	winners: WinnerSegmentView[];
 }
 
 /**
@@ -1348,12 +2740,15 @@ export interface LootItemEditResult {
 }
 
 /**
- * The losses breakdown: tracking cost, its cycled split, and the ledger
- * expenses.
+ * The losses breakdown: tracking cost (Cycled), its cycled split, the
+ * sessions' overhead, and the ledger expenses. The total losses are all
+ * three.
  */
 export interface LossesBreakdown {
 	trackingCost: number;
 	cycledBreakdown: CycledBreakdown;
+	/** In the losses, never in `trackingCost`. */
+	overhead: OverheadBreakdown;
 	ledger: Record<string, number>;
 }
 
@@ -1367,7 +2762,7 @@ export interface ManualMobLockResult {
 }
 
 /**
- * One manual-mob autocomplete suggestion.
+ * One catalogue mob name, as the declared-mob picker offers it.
  */
 export interface ManualMobSuggestion {
 	display: string;
@@ -1470,15 +2865,6 @@ export interface MarketAuctionPacketThreshold {
 }
 
 /**
- * The break-even readout: the player's exact three hunting-looter
- * professions and every library weapon's modelled offensive economics.
- */
-export interface MarketBreakEven {
-	looters: MarketLooterLevel[];
-	weapons: MarketWeaponBreakEven[];
-}
-
-/**
  * A committed paste: the submission it created.
  */
 export interface MarketCommitResult {
@@ -1487,31 +2873,6 @@ export interface MarketCommitResult {
 	skippedCount: number;
 	/** Epoch seconds. */
 	observedAt: number;
-}
-
-/**
- * The most recent accepted paste as a contributable batch: exactly
- * what an opted-in contributor shares, nothing more. The frontend
- * owns the send, strictly behind the contribution opt-in.
- */
-export interface MarketContributionBatch {
-	/** Epoch seconds of the submission. */
-	observedAt: number;
-	items: MarketContributionItem[];
-}
-
-/**
- * One item of a contributable batch: the pasted readings verbatim,
- * by horizon name.
- */
-export interface MarketContributionItem {
-	itemName: string;
-	tier: number;
-	day: MarketReading;
-	week: MarketReading;
-	month: MarketReading;
-	year: MarketReading;
-	decade: MarketReading;
 }
 
 /**
@@ -1548,7 +2909,16 @@ export interface MarketHarvestHorizon {
  */
 export interface MarketHarvestItem {
 	itemName: string;
+	/** The market's resolved markup, whichever source `preferred` names. */
 	markupPct: number | null;
+	/** Epoch seconds of the import the market markup came from. */
+	marketObservedAt: number | null;
+	/** The player's standing manual entry. */
+	manual: MarketManualMarkup | null;
+	/** Which of the market reading and the manual entry the item's valuation uses: the more recent. Null when neither exists. */
+	preferred: MarketMarkupSource | null;
+	/** Marked to be valued at the Nanocube markup in the live session figures; every other valuation ignores the mark. */
+	nanocubeMarked: boolean;
 	/** Absolute informational quote per item unit. This is intended for zero-TT and unit-priced items, and remains estimated market value. */
 	unitPricePed: number | null;
 	horizon: string | null;
@@ -1575,27 +2945,42 @@ export interface MarketHistoryPoint {
 export type MarketHorizon = 'day' | 'week' | 'month' | 'year' | 'decade';
 
 /**
- * One looter profession and its believed-current level.
+ * A markup the player entered for one item. Trusted as given, but a
+ * stand-in: a newer market import replaces it.
  */
-export interface MarketLooterLevel {
-	name: string;
-	level: number;
+export interface MarketManualMarkup {
+	kind: MarketManualMarkupKind;
+	value: number;
+	/** The item's TT per unit where the entry was made: what a PED-per-unit entry is a markup over. */
+	unitTtPed: number | null;
+	/** The entry as a percentage of TT; null for a PED amount on an item with no TT. */
+	markupPct: number | null;
+	/** Epoch seconds. */
+	recordedAt: number;
 }
 
 /**
- * One species' estimated-markup row: recorded loot composition
- * TT-weighted by the latest markup observations on one horizon.
- * Coverage keeps a thin sample honest: the estimate weights only the
- * covered TT, and the row says how much that is.
+ * A manual markup as the player enters it.
  */
-export interface MarketMobRankingRow {
-	mobSpecies: string;
-	lootTt: number;
-	coveredTt: number;
-	itemCount: number;
-	coveredItemCount: number;
-	estMarkupPct: number | null;
+export interface MarketManualMarkupInput {
+	itemName: string;
+	kind: MarketManualMarkupKind;
+	value: number;
+	/** The item's TT per unit, for a PED-per-unit entry. */
+	unitTtPed?: number | null;
 }
+
+/**
+ * How a manual markup was entered: a percentage of TT, or PED above TT per
+ * unit (how the auction quotes items that do not stack).
+ */
+export type MarketManualMarkupKind = 'percent' | 'ped_per_unit';
+
+/**
+ * Which reading an item's valuation uses: whichever was recorded more
+ * recently.
+ */
+export type MarketMarkupSource = 'market' | 'manual';
 
 /**
  * One overview row: an item's latest readings (from the most recent
@@ -1663,20 +3048,436 @@ export interface MarketUnitPriceResult {
 }
 
 /**
- * One configured loadout's offensive-only expected return and break-even
- * loot markup under Community Model v1.
+ * The ammo of one type a session used.
  */
-export interface MarketWeaponBreakEven {
+export interface MeasuredAmmo {
 	name: string;
-	amplifierName: string | null;
-	weightedEfficiencyPct: number | null;
-	offensiveTtRecoveryPct: number | null;
-	expectedTtReturnPct: number | null;
-	breakEvenLootMarkupPct: number | null;
-	looterLevel: number | null;
-	coverage: number | null;
-	incomplete: boolean;
-	modelVersion: string | null;
+	/** The change in units, always exact. */
+	netUnits: number;
+	net: MeasuredAmount;
+	split: MeasuredAmmoSplit;
+}
+
+/**
+ * How an ammo type's change splits into burned and paid back.
+ */
+export type MeasuredAmmoSplit = {
+		burnedUnits: number;
+		burned: MeasuredAmount;
+		strongboxUnits: number;
+		strongbox: MeasuredAmount;
+		convertedUnits: number;
+		converted: MeasuredAmount;
+		kind: 'settled';
+	} | {
+		burnedUnitsByRows: number;
+		strongboxUnitsByRows: number;
+		convertedUnits: number;
+		kind: 'unsettled';
+	};
+
+/**
+ * What the ammo across a session's types burned.
+ */
+export type MeasuredAmmoTotal = {
+		burned: MeasuredAmount;
+		kind: 'settled';
+	} | {
+		kind: 'unsettled';
+	} | {
+		burned: MeasuredAmount;
+		steps: number;
+		kind: 'toppedUp';
+	};
+
+/**
+ * An amount in PED, with how exactly it is known.
+ */
+export interface MeasuredAmount {
+	ped: number;
+	precision: MeasuredPrecision;
+}
+
+/**
+ * One part of a session's measured armour, and what it billed.
+ */
+export interface MeasuredArmourPart {
+	part: MeasuredArmourPartKind;
+	/** The limited set, for a set's part. */
+	setId: number | null;
+	setName: string | null;
+	/** The limited piece, for a piece's part. */
+	item?: string | null;
+	markupPercent: number | null;
+	/** The TT the part's pieces lost. */
+	lost: number;
+	lostPrecision: MeasuredCostPrecision;
+	/** What the part billed; `null` while unpriced. */
+	cost: number | null;
+	costPrecision: MeasuredCostPrecision | null;
+}
+
+/**
+ * One part of a session's measured armour.
+ */
+export type MeasuredArmourPartKind = 'unlimited' | 'limitedSet' | 'unconfirmed' | 'limitedPiece';
+
+/**
+ * Boxes of one kind an opening used.
+ */
+export interface MeasuredBoxes {
+	name: string;
+	count: number;
+}
+
+/**
+ * A stackable consumed that is not ammo.
+ */
+export interface MeasuredConsumption {
+	item: AccountHolding;
+	role: MeasuredRole;
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * A group of measured cost lines: one of Cycled's buckets, or one of the
+ * overhead categories.
+ */
+export type MeasuredCostBucket = 'weapon' | 'enhancer' | 'harvesting' | 'healing' | 'armour' | 'consumables' | 'travel' | 'fieldLogistics' | 'unclassified';
+
+/**
+ * A session's measured costs, item by item, as the account readings
+ * measured them.
+ */
+export interface MeasuredCostDetail {
+	/** Cycled's buckets, then the overhead categories; only those holding a line. */
+	buckets: MeasuredCostGroup[];
+	/** Unlimited first, then each limited piece by name. */
+	armourParts: MeasuredArmourPart[];
+}
+
+/**
+ * The measured lines of one bucket.
+ */
+export interface MeasuredCostGroup {
+	bucket: MeasuredCostBucket;
+	lines: MeasuredCostLine[];
+}
+
+/**
+ * One item's measured use within a bucket.
+ */
+export interface MeasuredCostLine {
+	kind: MeasuredCostLineKind;
+	item: string;
+	/** The units, for ammo burned and a consumable used up. */
+	units: number | null;
+	/** What the line measured, PED: its cost, except for a limited piece, whose amount is the TT it lost (its set's markup prices it). `null` for a line charged nothing. */
+	amount: number | null;
+	precision: MeasuredCostPrecision | null;
+	/** The markup applied, percent of TT: the acquisition markup recorded for a consumable, or a limited piece's set markup. */
+	markupPercent: number | null;
+	/** Units used up of an item bought at markup, billed at TT: the markup paid for them is not included. */
+	markupNotIncluded: boolean;
+	/** Why the line is no cost of the session's; `null` when it is one. */
+	unpriced: MeasuredCostUnpriced | null;
+	/** For an overhead line, a ledger expense pegged to the session whose description names the item: it may repeat this measured cost. Neither figure is adjusted. */
+	peggedLedgerEntryId: string | null;
+	/** That entry's description, as the player wrote it. */
+	peggedLedgerEntryDescription: string | null;
+}
+
+/**
+ * What a measured cost line measures.
+ */
+export type MeasuredCostLineKind = 'ammoBurned' | 'decay' | 'limitedDecay' | 'consumed';
+
+/**
+ * How exactly a measured amount is known.
+ */
+export type MeasuredCostPrecision = 'exact' | 'wholePec';
+
+/**
+ * Why a measured line is no cost of the session's.
+ */
+export type MeasuredCostUnpriced = 'boughtThroughLedger' | 'limitedSetUnconfirmed' | 'notPlaced';
+
+/**
+ * How well the readings cover the session.
+ */
+export interface MeasuredCoverage {
+	level: MeasuredCoverageLevel;
+	opening: MeasuredEdge;
+	closing: MeasuredEdge;
+	readingCount: number;
+	/** Intervals between consecutive readings longer than 150 seconds. */
+	gapCount: number;
+}
+
+/**
+ * Whether a measure's readings bracket the session.
+ */
+export type MeasuredCoverageLevel = 'partial' | 'complete';
+
+/**
+ * One item's wear across the session, never netted against repairs.
+ */
+export interface MeasuredDecay {
+	item: AccountHolding;
+	role: MeasuredRole;
+	decay: MeasuredAmount;
+}
+
+/**
+ * Whether one end of the session was read.
+ */
+export type MeasuredEdge = 'read' | 'unread';
+
+/**
+ * Something worth listing that is not a cost or a gain.
+ */
+export type MeasuredEvent = {
+		between: MeasuredSpan;
+		/** The boxes that left, one entry for each kind. */
+		boxes: MeasuredBoxes[];
+		keysUsed: number;
+		/** The keys' TT: the deposit the boxes pay back. */
+		keys: MeasuredAmount;
+		ammoUnits: number;
+		ammoRows: number;
+		ammoFromRows: MeasuredAmount;
+		ammoFromKeys: MeasuredAmount;
+		/** What every way of closing the keys' balance takes. */
+		contents: MeasuredEventItem[];
+		/** What some ways take: possibly the opening's. */
+		possibleContents: MeasuredEventItem[];
+		settlement: MeasuredSettlement;
+		kind: 'strongboxOpening';
+	} | {
+		between: MeasuredSpan;
+		name: string;
+		units: number;
+		amount: MeasuredAmount;
+		from: AccountPlace;
+		to: AccountPlace;
+		moveKind: MeasuredMoveKind;
+		kind: 'moved';
+	} | {
+		between: MeasuredSpan;
+		item: AccountHolding;
+		units: number;
+		value: MeasuredAmount;
+		kind: 'appeared';
+	} | {
+		between: MeasuredSpan;
+		item: AccountHolding;
+		units: number;
+		value: MeasuredAmount;
+		kind: 'left';
+	} | {
+		between: MeasuredSpan;
+		items: MeasuredEventItem[];
+		amount: MeasuredAmount;
+		kind: 'sale';
+	} | {
+		between: MeasuredSpan;
+		items: MeasuredEventItem[];
+		amount: MeasuredAmount;
+		kind: 'purchase';
+	} | {
+		between: MeasuredSpan;
+		shrapnelUnits: number;
+		shrapnel: MeasuredAmount;
+		ammoUnits: number;
+		ammo: MeasuredAmount;
+		kind: 'shrapnelConverted';
+	} | {
+		between: MeasuredSpan;
+		item: AccountHolding;
+		units: number;
+		amount: MeasuredAmount;
+		kind: 'listingSold';
+	} | {
+		between: MeasuredSpan;
+		name: string;
+		kind: 'ammoToppedUp';
+	};
+
+/**
+ * One line of an opening, a sale or a purchase.
+ */
+export interface MeasuredEventItem {
+	item: AccountHolding;
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * What arrived of one holding.
+ */
+export interface MeasuredGain {
+	item: AccountHolding;
+	role: MeasuredRole;
+	stacking: MeasuredStacking;
+	mark: MeasuredGainMark;
+	units: number;
+	amount: MeasuredAmount;
+}
+
+/**
+ * Whether something gained may be a strongbox's contents.
+ */
+export type MeasuredGainMark = 'arrived' | 'possiblyStrongbox';
+
+/**
+ * One item's share of a figure.
+ */
+export interface MeasuredItemAmount {
+	item: AccountHolding;
+	amount: MeasuredAmount;
+}
+
+/**
+ * How many sessions were left out for one reason.
+ */
+export interface MeasuredLeftOut {
+	reason: MeasuredLeftOutReason;
+	sessions: number;
+}
+
+/**
+ * Why a session with readings is left out of the summary.
+ */
+export type MeasuredLeftOutReason = 'partialCoverage' | 'excluded' | 'notSealed';
+
+/**
+ * What a move between places is.
+ */
+export type MeasuredMoveKind = 'listing' | 'listingReturned' | 'transfer';
+
+/**
+ * How an amount was derived.
+ */
+export type MeasuredPrecision = 'exact' | 'wholePec';
+
+/**
+ * A repair: what it restored, and what the PED Card shows it cost.
+ */
+export interface MeasuredRepair {
+	between: MeasuredSpan;
+	items: MeasuredItemAmount[];
+	restored: MeasuredAmount;
+	cost: MeasuredRepairCost;
+}
+
+/**
+ * What a repair cost, as far as the PED Card shows it.
+ */
+export type MeasuredRepairCost = {
+		amount: MeasuredAmount;
+		kind: 'paid';
+	} | {
+		amount: MeasuredAmount;
+		kind: 'derived';
+	} | {
+		kind: 'unknown';
+	};
+
+/**
+ * What an item is.
+ */
+export type MeasuredRole = 'ammo' | 'weapon' | 'amplifier' | 'healing' | 'armour' | 'plating' | 'otherEquipment' | 'material';
+
+/**
+ * A keyset page of measured sessions, newest first, with the cursor for
+ * the next page (`null` on the last) and how many sessions have readings.
+ */
+export interface MeasuredSessionPage {
+	sessions: MeasuredSessionRow[];
+	nextCursor: string | null;
+	total: number;
+}
+
+/**
+ * One measured session on a page, beside its tracked figures.
+ */
+export interface MeasuredSessionRow {
+	id: string;
+	name: string | null;
+	startTime: string;
+	endTime: string | null;
+	coverage: MeasuredCoverageLevel;
+	readingCount: number;
+	gapCount: number;
+	sealed: boolean;
+	/** `null` while the session counts in every stats scope; an excluded session keeps its readings and its measure. */
+	exclusion: SessionExclusion | null;
+	measured: MeasuredTotals;
+	/** `null` while the session has no summary. */
+	tracked: TrackedSessionFigures | null;
+}
+
+/**
+ * Whether an opening's ammo was read on one reading of its rows.
+ */
+export type MeasuredSettlement = 'settled' | 'unsettled';
+
+/**
+ * When something happened: after one reading, by the next.
+ */
+export interface MeasuredSpan {
+	from: string;
+	to: string;
+}
+
+/**
+ * Whether an item's rows count units or hold one item each.
+ */
+export type MeasuredStacking = 'stack' | 'single';
+
+/**
+ * A category only the readings measure, summed across sessions.
+ */
+export interface MeasuredSummaryOnly {
+	sessions: number;
+	measured: MeasuredAmount;
+}
+
+/**
+ * One category summed across sessions: the tracked figure beside the
+ * measured one, over the sessions where both are known.
+ */
+export interface MeasuredSummaryPair {
+	/** How many sessions went into this pair. */
+	sessions: number;
+	tracked: number;
+	measured: MeasuredAmount;
+}
+
+/**
+ * A session's measure, by category.
+ */
+export interface MeasuredTotals {
+	ammo: MeasuredAmmoTotal;
+	/** Weapons and their amplifiers. */
+	weaponDecay: MeasuredAmount;
+	healingDecay: MeasuredAmount;
+	/** Armour and its plates. */
+	armourDecay: MeasuredAmount;
+	/** Everything else that wore. */
+	otherEquipmentDecay: MeasuredAmount;
+	otherConsumption: MeasuredAmount;
+	/** Stacks that left with nothing to explain them: never a cost. */
+	unexplainedDepartures: MeasuredAmount;
+	/** What the repairs whose cost the PED Card's fall shows alone cost. */
+	repairCost: MeasuredAmount;
+	/** What the repairs beside a sale or a purchase cost, as what remains of the Card's change. */
+	repairCostDerived: MeasuredAmount;
+	/** Repairs whose cost could not be read, left out of `repairCost`. */
+	repairsUncosted: number;
+	gained: MeasuredAmount;
+	gainedPossiblyStrongbox: MeasuredAmount;
 }
 
 /**
@@ -1690,8 +3491,128 @@ export interface MetricsSnapshot {
 	events_published: number;
 	ocr_latency: HistogramSnapshot;
 	db_query_latency: HistogramSnapshot;
+	/** The creature watcher's cost per look: capturing the game window, searching it for the locked plate, and reading the plate found. */
+	plate_capture_latency: HistogramSnapshot;
+	plate_search_latency: HistogramSnapshot;
+	plate_read_latency: HistogramSnapshot;
+	/** The held-tool watcher's cost per look: capturing the bar's area (or the whole window while the bar is looked for), finding the bar and comparing its lettering, and reading and matching the name. */
+	tool_capture_latency: HistogramSnapshot;
+	tool_search_latency: HistogramSnapshot;
+	tool_read_latency: HistogramSnapshot;
 	rss_bytes: number;
 	handle_count: number;
+}
+
+/**
+ * Something that arrived in a step that no loot line, recorded quest
+ * reward, conversion or opening explains.
+ */
+export interface MinuteArrival {
+	itemName: string;
+	arrivedIn: AccountPlace;
+	units: number;
+	tt: MeasuredAmount;
+	/** The PED Card fell by its TT in the step: bought at the Trade Terminal, at no markup. */
+	boughtAtTt: boolean;
+	disposition: ArrivalDisposition;
+}
+
+/**
+ * A step's measured figure for a bucket.
+ */
+export type MinuteFigure = {
+		amount: MeasuredAmount;
+		kind: 'measured';
+	} | {
+		reason: MinuteUnmeasured;
+		kind: 'unmeasured';
+	};
+
+/**
+ * A bucket with a tracked counterpart, in one step.
+ */
+export interface MinuteLane {
+	measured: MinuteFigure;
+	/** What the tracked events timed in the step cost, in PED: kills by when they ended, heals by when they were seen. */
+	tracked: number;
+}
+
+/**
+ * What correcting loot that never arrived takes.
+ */
+export type MinuteLootCorrection = {
+		sessionId: string;
+		itemName: string;
+		kind: 'offered';
+	} | {
+		reason: MinuteNoCorrection;
+		kind: 'notOffered';
+	};
+
+/**
+ * One loot line, by where it was recorded and its own row.
+ */
+export interface MinuteLootLine {
+	source: MinuteLootSource;
+	id: number;
+}
+
+/**
+ * Where a loot line was recorded.
+ */
+export type MinuteLootSource = 'kill' | 'harvest';
+
+/**
+ * Loot the chat log recorded that the readings never showed arriving, a
+ * step after it was looted.
+ */
+export interface MinuteMissingLoot {
+	itemName: string;
+	units: number;
+	/** The TT of the units that never arrived, from the chat log. */
+	tt: number;
+	/** The step it was looted in. */
+	lootedIn: MeasuredSpan;
+	lines: MinuteLootLine[];
+	correction: MinuteLootCorrection;
+}
+
+/**
+ * Why the loot correction is not offered.
+ */
+export type MinuteNoCorrection = 'harvestLoot' | 'otherLinesArrived';
+
+/**
+ * A stretch of steps where a lane's measured spend moved away from the
+ * tracked spend's usual slope.
+ */
+export interface MinuteStretch {
+	/** The steps it covers, by their position in `steps`. */
+	firstStep: number;
+	lastStep: number;
+	between: MeasuredSpan;
+	measured: MeasuredAmount;
+	tracked: number;
+	/** How far the gap moved beyond the session's usual slope, in PED: positive when the readings measured more than was tracked. */
+	drift: number;
+}
+
+/**
+ * Why a step's bucket has no measured figure: the step's own reasons,
+ * then each of the session costs' reasons by its own name.
+ */
+export type MinuteUnmeasured = 'noReadings' | 'partialCoverage' | 'stillRunning' | 'trackedOnly' | 'playInGap' | 'chatLogMissesGap' | 'chatLogUnchecked' | 'gapUnaccounted' | 'overheadInGap' | 'gapCheckPending' | 'awaitingGapReading' | 'chatLogNotPastGap' | 'gap' | 'ammoToppedUp' | 'ammoUnsettled' | 'limitedSetUnconfirmed';
+
+/**
+ * How well the readings cover the session.
+ */
+export interface MinutesCoverage {
+	/** Both ends read, at least two readings, no gap. */
+	complete: boolean;
+	opening: MeasuredEdge;
+	closing: MeasuredEdge;
+	readingCount: number;
+	gapCount: number;
 }
 
 /**
@@ -1701,7 +3622,14 @@ export interface MobBreakdownRow {
 	currentName: string;
 	originalName: string | null;
 	killCount: number;
+	/** How sure the kills' creature is. */
+	certainty: MobCertainty;
 }
+
+/**
+ * How sure a kill's creature is, where its mob is shown.
+ */
+export type MobCertainty = 'recorded' | 'probable' | 'unlisted' | 'unlisted_probable';
 
 /**
  * One row of the per-mob activity comparison.
@@ -1715,6 +3643,55 @@ export interface MobComparison {
 	pesPer100Ped: number;
 	lootRate: number;
 }
+
+/**
+ * An ended session's kills by the mob detection gave them: the lines that
+ * ask for the player first, the kills the screen could not name last.
+ */
+export interface MobDetectionReview {
+	sessionId: string;
+	/** The session has ended, so its kills can be settled. */
+	ended: boolean;
+	mobs: ReviewedMob[];
+}
+
+/**
+ * What settling a group came to.
+ */
+export type MobDetectionSettleResult = {
+		settled: MobDetectionSettled;
+		review: MobDetectionReview;
+		kind: 'settled';
+	} | {
+		creature: DetectedCreature;
+		kind: 'didYouMean';
+	};
+
+/**
+ * What a group was settled as.
+ */
+export type MobDetectionSettled = {
+		creature: DetectedCreature;
+		kind: 'listed';
+	} | {
+		creature: DetectedCreature;
+		kind: 'confirmed';
+	} | {
+		creature: DetectedCreature;
+		kind: 'newName';
+	} | {
+		kind: 'declared';
+	};
+
+/**
+ * What to settle a group as.
+ */
+export type MobDetectionTarget = {
+		name: string;
+		kind: 'creature';
+	} | {
+		kind: 'declared';
+	};
 
 /**
  * The mob rename / restore result.
@@ -1733,6 +3710,77 @@ export interface MobEditResult {
 export type MobEntryMode = 'mob' | 'tag';
 
 /**
+ * A label a mob is shown by.
+ */
+export interface MobLabel {
+	/** The mob as its kills are recorded. */
+	species: string;
+	maturity: string;
+	/** The mob as the game prints it, without any label. */
+	printed: string;
+	label: string;
+	/** The player chose it; otherwise it is how the mob's plate was read to print it. */
+	byPlayer: boolean;
+}
+
+/**
+ * The creature every kill takes while it stands.
+ */
+export interface MobPin {
+	creature: DetectedCreature;
+	by: MobPinnedBy;
+}
+
+/**
+ * What to pin.
+ */
+export type MobPinTarget = {
+		creature: DetectedCreature;
+		kind: 'shown';
+	} | {
+		species: string;
+		maturity: string | null;
+		kind: 'typed';
+	};
+
+/**
+ * How the player pinned a creature.
+ */
+export type MobPinnedBy = 'read' | 'typed';
+
+/**
+ * Which line of a session's review: a mob detection named, as its kills
+ * were recorded (its name and maturity; with the session's own key for a
+ * mob on no list, since two such mobs can share a spelling), or the kills
+ * the screen could not name.
+ */
+export type MobReviewRef = {
+		species: string;
+		maturity: string;
+		provisionalKey: string | null;
+		kind: 'mob';
+	} | {
+		kind: 'unnamed';
+	};
+
+/**
+ * The session's one source for its kills' creature, as the overlay shows
+ * it. Idle, only the typed creature (the one the next session starts
+ * with) is present.
+ */
+export interface MobSourceView {
+	/** The screen is being read for the running session. Without it there is nothing read and nothing carried on from the latest kills, and the typed creature names every kill. */
+	readingScreen: boolean;
+	pin: MobPin | null;
+	/** The creature the player typed: while the screen is read, the backstop for a kill nothing else names. */
+	typed: DetectedCreature | null;
+	/** The creature the screen reads now. */
+	reading: DetectedCreature | null;
+	/** The creature the latest kills were, when what is read now does not name another. */
+	continuity: DetectedCreature | null;
+}
+
+/**
  * One month of the Overview monthly breakdown.
  */
 export interface MonthlyEntry {
@@ -1744,6 +3792,10 @@ export interface MonthlyEntry {
 	questPes: number;
 	ledgerGains: Record<string, number>;
 	trackingCost: number;
+	/** The overhead of the sessions started in it, and what was billed between sessions on its days: in its losses, never in `trackingCost`. */
+	overheadCost: number;
+	/** Of `overheadCost`, what was billed between sessions: credited to no activity, and left out of every rate. */
+	betweenSessionsCost: number;
 	ledgerLosses: Record<string, number>;
 }
 
@@ -1761,12 +3813,24 @@ export interface NameComparison {
 	lootRate: number;
 }
 
+/**
+ * Where a queued item's name was found.
+ */
+export type NameFound = 'itemData' | 'inventoryList' | 'nowhere';
+
+/**
+ * One position verb's answer. `refusal` is set exactly when `status` is
+ * `notRead`, `stopped` exactly when it is `pollStopped`; no refusal
+ * carries a coordinate.
+ */
 export interface NavigationPositionResult {
 	status: NavigationPositionStatus;
 	run: NavigationRun | null;
+	refusal: CoordRefusal | null;
+	stopped: PositionPollStop | null;
 }
 
-export type NavigationPositionStatus = 'updated' | 'noActiveRun' | 'paused' | 'noRegion' | 'captureFailed' | 'engineUnavailable' | 'unreadable' | 'implausible' | 'ambiguous' | 'outOfTolerance';
+export type NavigationPositionStatus = 'updated' | 'noActiveRun' | 'paused' | 'ambiguous' | 'outOfTolerance' | 'notRead' | 'jumpRefused' | 'superseded' | 'pollStopped' | 'tooSoon' | 'gameNotFocused';
 
 export interface NavigationRun {
 	id: number;
@@ -1779,8 +3843,11 @@ export interface NavigationRun {
 	currentLon: number;
 	currentLat: number;
 	lastPositionAt: number | null;
+	/** How many seconds ago the route's position was read, on a clock no change of the wall clock disturbs; null when no position has been read for the route. Steering from an old position is misleading. */
+	positionAgeS: number | null;
 	hopCount: number;
-	hotkey: string;
+	/** Trees are recorded visited on the game's interact key rather than detected from harvests. */
+	visitOnKey: boolean;
 	updatedAt: number;
 	distanceToActive: number | null;
 	/** Degrees clockwise from north. */
@@ -1843,16 +3910,20 @@ export interface OptimizerAttribute {
 }
 
 /**
- * One skill row of the profession optimizer.
+ * The overhead by category: what the sessions cost beyond performing
+ * their activities, and what was spent between them, as the account
+ * readings measured it.
  */
-export interface OptimizerSkill {
-	name: string;
-	weight: number;
-	currentLevel: number;
-	levelsNeeded: number;
-	pedToNextLevel: number;
-	codexCategory: string | null;
-	codexDivisor: number | null;
+export interface OverheadBreakdown {
+	total: number;
+	/** Of the total, what the readings billed between sessions: on the day it happened, credited to no activity, and left out of every rate. */
+	betweenSessions: number;
+	/** Teleport chips, Mind Essence, vehicles and their fuel. */
+	travel: number;
+	/** Portable repair and Trade Terminal units, and their like. */
+	fieldLogistics: number;
+	/** What was used up that the app cannot place yet. */
+	unclassified: number;
 }
 
 /**
@@ -1925,26 +3996,14 @@ export interface PathOptimizerResult {
 }
 
 /**
- * A harvest detected beyond the arrival radius, awaiting the player's confirm
- * or dismiss in the overlay. Names the proposed (active) tree and how far the
- * harvest read was from it.
+ * A harvest awaiting the player's confirm or dismiss in the overlay: one
+ * beyond the arrival radius, or one whose position did not read. Names the
+ * proposed (active) tree and how far the harvest was read to be from it;
+ * `distance` is null when no position was read for the harvest.
  */
 export interface PendingHarvest {
 	name: string;
-	distance: number;
-}
-
-/**
- * One session whose defence evidence has no setup named for it yet, so
- * no cost naming an armour or plate set can settle it.
- */
-export interface PendingProtectionSession {
-	sessionId: string;
-	name: string | null;
-	startedAt: number;
-	/** Absent while the session is still running. */
-	endedAt: number | null;
-	defenceEventCount: number;
+	distance: number | null;
 }
 
 /**
@@ -2033,6 +4092,11 @@ export interface PlanetMapCalibration {
 }
 
 /**
+ * Why the position poll is not reading.
+ */
+export type PositionPollStop = 'overlaysHidden' | 'notReading' | 'captureNotAllowed';
+
+/**
  * A completed player-to-player trade. Unlike an auction listing, its price
  * and outcome are already known and no fee is involved.
  */
@@ -2063,159 +4127,104 @@ export interface ProfessionLevel {
 }
 
 /**
- * GET profession-optimizer: the cheapest-skill breakdown to the next
- * profession level. On a missing profession the declared tail fields
- * stay unset and only `error` accompanies the empty lists.
+ * How far one stream's recordings lag the play since them.
  */
-export interface ProfessionOptimizerResult {
-	skills: OptimizerSkill[];
-	attributes: OptimizerAttribute[];
-	profession?: string | null;
-	currentLevel?: number | null;
-	nextLevel?: number | null;
-	gap?: number | null;
-	error?: string | null;
-}
-
-/**
- * One grouped Prospect slice option.
- */
-export interface ProspectOption {
-	value: string;
-	label: string;
+export interface ProtectionBacklog {
+	/** When the stream was last recorded (a limited set's latest reading); absent before the first. */
+	lastRecordedAt: number | null;
+	/** Sessions with hits since then. */
 	sessions: number;
-	kills: number;
-	hours: number;
-	cycledPed: number;
+	hits: number;
 }
 
 /**
- * The Prospect forecast query. `sliceValue` is required for every slice
- * but `global`; `markupUplift` defaults to zero.
+ * Where a limited set's baseline comes from.
  */
-export interface ProspectQuery {
-	profession: string;
-	targetLevel: number;
-	sliceType: ProspectSliceType;
-	sliceValue?: string | null;
-	markupUplift?: number;
-}
+export type ProtectionBaselineSource = 'tradeTerminal' | 'account';
 
 /**
- * GET prospect: the forecast. `error` is present only on the soft-error
- * paths (the frontend renders it inline rather than throwing); every
- * other field is always present, so the declared order below is the
- * wire order.
+ * One session a recording could be spread over.
  */
-export interface ProspectResult {
-	error?: string | null;
-	rows: ProspectRow[];
-	warnings: string[];
-	profession: string;
-	sliceType: string;
-	sliceValue: string | null;
-	markupUplift: number;
-	currentLevel: number;
-	targetLevel: number;
-	projectedCycledPed: number;
-	projectedHours: number;
-	expectedLootTt: number;
-	expectedNetTtBurn: number;
-	speculativeLootTt: number | null;
-	speculativeNetTtBurn: number | null;
-	sample: ProspectSample;
-}
-
-/**
- * One skill/attribute row of a Prospect forecast.
- */
-export interface ProspectRow {
-	name: string;
-	isAttribute: boolean;
-	weight: number;
-	currentLevel: number;
-	observedShare: number;
-	observedRate: number;
-	projectedGain: number;
-	projectedEndLevel: number;
-	professionContribution: number;
-	relevant: boolean;
-}
-
-/**
- * The observed sample a Prospect forecast projects from. The internal
- * `skillShares` / `attributeRates` maps are computed but not surfaced
- * (no consumer reads them; dropped with the migration).
- */
-export interface ProspectSample {
-	sessions: number;
-	kills: number;
-	hours: number;
-	cycledPed: number;
-	lootTt: number;
-	pes: number;
-	attributeLevels: number;
-	cycledPerHour: number;
-	lootPerHour: number;
-	returnRate: number;
-	pesPerPed: number;
-	lootTtPerPed: number;
-}
-
-/**
- * The slice a Prospect forecast aggregates over. A closed vocabulary:
- * the bindings expose only these four, so the old out-of-vocabulary 422
- * is unrepresentable rather than validated.
- */
-export type ProspectSliceType = 'global' | 'tag' | 'mob' | 'weapon';
-
-export interface ProtectionCostAllocation {
+export interface ProtectionCandidateSession {
 	sessionId: string;
+	sessionName: string | null;
+	/** The session type it was played under; absent for none. */
+	definitionId: string | null;
+	definitionName: string | null;
+	startedAt: number;
+	/** Absent while the session is still running. */
+	endedAt: number | null;
 	hitCount: number;
-	allocationShare: number;
+	/** An earlier recording of the same stream already covers it. */
+	covered: boolean;
+	/** No recording of any stream covers it yet. */
+	unrecorded: boolean;
+}
+
+/**
+ * One item confirmed as a piece of a limited set.
+ */
+export interface ProtectionConfirmedPiece {
+	name: string;
+	confirmedAt: number;
+}
+
+/**
+ * One stretch of a session's share of a recording.
+ */
+export interface ProtectionContextShare {
+	/** The segment and quest names in force; absent outside any. */
+	label: string | null;
+	hitCount: number;
 	costPed: number;
 }
 
+export interface ProtectionCostAllocation {
+	sessionId: string;
+	sessionName: string | null;
+	/** The session type it was played under; absent for none. */
+	definitionName: string | null;
+	startedAt: number;
+	hitCount: number;
+	allocationShare: number;
+	costPed: number;
+	/** The session's share by the stretch of play its hits landed in. */
+	contexts: ProtectionContextShare[];
+}
+
+export type ProtectionCostKind = 'limitedDecay' | 'repair';
+
+export type ProtectionCostStatus = 'booked' | 'pending';
+
 export interface ProtectionCostWindow {
 	id: string;
-	kind: string;
+	kind: ProtectionCostKind;
 	setId: string | null;
-	armourSetId: string | null;
-	plateSetId: string | null;
+	setName: string | null;
 	consumedTtPed: number | null;
 	markupPercent: number | null;
 	costPed: number;
 	costKnown: boolean;
-	status: ProtectionReconciliationStatus;
+	status: ProtectionCostStatus;
 	reason: string | null;
 	createdAt: number;
+	/** When it was undone; an undone recording costs nothing. */
+	supersededAt: number | null;
+	/** The latest live recording of its stream, so it can be undone. */
+	undoable: boolean;
 	allocations: ProtectionCostAllocation[];
-}
-
-export type ProtectionEconomyKind = 'limited' | 'unlimited';
-
-export interface ProtectionLoadout {
-	id: string;
-	name: string;
-	armour: ProtectionSetRef | null;
-	plates: ProtectionSetRef | null;
-}
-
-export interface ProtectionLoadoutInput {
-	name: string;
-	armourSetId?: number | null;
-	plateSetId?: number | null;
 }
 
 export interface ProtectionObservation {
 	id: string;
 	setId: string;
 	ttValuePed: number;
-	source: ProtectionObservationSource;
+	source: ProtectionReadingSource;
 	rawText: string | null;
 	observedAt: number;
 	resetReason: string | null;
-	defenceEventCursor: string;
+	/** It measured a loss against the reading before it; a baseline or a reset measures nothing. */
+	measured: boolean;
 }
 
 export interface ProtectionObservationInput {
@@ -2225,11 +4234,12 @@ export interface ProtectionObservationInput {
 	source: ProtectionObservationSource;
 	rawText?: string | null;
 	resetReason?: string | null;
+	/** The sessions a measured loss is spread over; ignored for a baseline or a reset, which measure nothing. */
+	sessionIds?: string[];
 }
 
 export interface ProtectionObservationOutcome {
 	observation: ProtectionObservation;
-	reconciliation: ProtectionReconciliation | null;
 	costWindow: ProtectionCostWindow | null;
 }
 
@@ -2237,76 +4247,129 @@ export type ProtectionObservationSource = 'ocr' | 'manual';
 
 export interface ProtectionOverview {
 	sets: ProtectionSet[];
-	loadouts: ProtectionLoadout[];
-	activeLoadoutId: string | null;
-	recentReconciliations: ProtectionReconciliation[];
+	/** Removed limited sets, newest removal first; each can be restored. */
+	removedSets: ProtectionSet[];
+	/** The pooled unlimited repair stream's lag. */
+	unlimited: ProtectionBacklog;
 	recentCostWindows: ProtectionCostWindow[];
+	unrecorded: UnrecordedProtection;
 }
 
-export interface ProtectionReconciliation {
-	id: string;
-	setId: string;
-	openingObservationId: string;
-	closingObservationId: string;
-	consumedTtPed: number;
-	markupPercent: number;
-	costPed: number;
-	status: ProtectionReconciliationStatus;
-	sessionId: string | null;
-	reason: string | null;
-	createdAt: number;
-}
+/**
+ * Where a stored reading of a limited set came from: the player's two
+ * ways of entering one, or the set's pieces in an account reading.
+ */
+export type ProtectionReadingSource = 'ocr' | 'manual' | 'account';
 
-export type ProtectionReconciliationStatus = 'booked' | 'pending';
+/**
+ * What a recording of one stream would look back over.
+ */
+export interface ProtectionRecordingCandidates {
+	stream: ProtectionStream;
+	/** When the stream was last recorded (a limited set's baseline reading); absent before the first. */
+	since: number | null;
+	baselineTtPed: number | null;
+	/** Where that baseline comes from. */
+	baselineSource: ProtectionBaselineSource | null;
+	/** An account reading passed over as the set's baseline because it does not hold every confirmed piece: when it was taken. */
+	incompleteAccountReadingAt: number | null;
+	/** What the account readings already billed of what this recording measures, in PED of TT, taken off before anything is spread: the unlimited decay of measured sessions no repair has restored since, or what a limited set's pieces lost in measured sessions since its baseline. */
+	billedFromAccountPed: number;
+	/** How far a figure read from the account may stray: a PEC per piece. */
+	accountTolerancePed: number;
+	/** Sessions since the previous recording whose armour the account readings measured, left out of this recording. */
+	measuredSessions: number;
+	/** Sessions with hits since the previous recording, oldest first. */
+	sessions: ProtectionCandidateSession[];
+	/** Unlimited only: recent sessions from before the previous recording, which may be re-included. Oldest first. */
+	earlier: ProtectionCandidateSession[];
+}
 
 export interface ProtectionRepairInput {
 	clientToken: string;
-	armourSetId?: number | null;
-	plateSetId?: number | null;
 	costPed: number;
+	/** The sessions the repair is spread over. */
+	sessionIds?: string[];
 }
 
 export interface ProtectionRepairOutcome {
 	costWindow: ProtectionCostWindow;
 }
 
-export interface ProtectionScanResult {
-	valuePed: number | null;
-	rawText: string | null;
-	confidence: number | null;
-	error: string | null;
-	calibrated: boolean;
+/**
+ * One session's protection-cost standing.
+ */
+export interface ProtectionSessionStatus {
+	/** Recorded hits no protection cost reaches yet; zero once any recording covers the session. */
+	unrecordedHits: number;
 }
 
+/**
+ * A limited armour or plate set.
+ */
 export interface ProtectionSet {
 	id: string;
 	kind: ProtectionSetKind;
 	name: string;
-	economyKind: ProtectionEconomyKind;
-	markupPercent: number | null;
+	markupPercent: number;
 	latestObservation: ProtectionObservation | null;
-	pendingReconciliations: number;
+	/** The markup is frozen once the set has a reading. */
 	basisLocked: boolean;
-	unsettledDamage: number;
-	unsettledDeflections: number;
-	unsettledSessions: number;
+	/** Play since the set's latest reading; empty before its first. */
+	backlog: ProtectionBacklog;
+	/** The item names confirmed as the set's pieces, which the account readings bill the set by. */
+	pieces: string[];
 }
 
 export interface ProtectionSetInput {
 	kind: ProtectionSetKind;
 	name: string;
-	economyKind: ProtectionEconomyKind;
-	markupPercent?: number | null;
+	markupPercent: number;
 }
 
 export type ProtectionSetKind = 'armour' | 'plates';
 
-export interface ProtectionSetRef {
-	id: string;
-	name: string;
-	economyKind: ProtectionEconomyKind;
-	markupPercent: number | null;
+/**
+ * A limited set's pieces: those confirmed, and what the latest account
+ * reading suggests.
+ */
+export interface ProtectionSetPieces {
+	setId: string;
+	confirmed: ProtectionConfirmedPiece[];
+	/** Limited armour or plates in the latest account reading that the set's name names, not yet confirmed. */
+	suggested: string[];
+	/** The reading's other limited armour and plates no set in use holds. */
+	others: string[];
+	/** When that reading was taken; absent before any. */
+	readingTakenAt: number | null;
 }
+
+export interface ProtectionSetUpdateInput {
+	name: string;
+	markupPercent: number;
+}
+
+/**
+ * One independently recorded protection cost stream: the pooled
+ * unlimited repairs, or one limited set.
+ */
+export type ProtectionStream = {
+		kind: 'unlimited';
+	} | {
+		setId: number;
+		kind: 'limited';
+	};
+
+/**
+ * What an undo takes back: the latest recording of one stream.
+ */
+export type ProtectionUndoTarget = {
+		windowId: number;
+		kind: 'recording';
+	} | {
+		observationId: number;
+		kind: 'reading';
+	};
 
 /**
  * A quest in the wire shape (`_format_quest` key for key). Ids are
@@ -2349,12 +4412,22 @@ export interface Quest {
 	familyCooldownExpiresAt: string | null;
 	/** Whether the latest completion owns an unreversed economic reward. */
 	rewardUndoAvailable: boolean;
+	/** A quest the app ships and maintains: read-only to the player. */
+	curated: boolean;
+	/** The curated catalogue key, null for a quest the player authored. */
+	catalogueKey: string | null;
+	/** The latest abandon (fractional epoch seconds), null when none. */
+	lastAbandonedAt: number | null;
+	/** The latest completion not disavowed by a cooldown reset (fractional epoch seconds). */
+	lastCompletedAt: number | null;
 }
 
 /**
- * Per-quest analytics in the wire shape (`_format_quest_analytics`).
- * The reward and cost columns are model-float coerced and rounded; the
- * session count is an integer; the markup passes through raw.
+ * Per-quest analytics in the wire shape: the recorded completions and
+ * their rewards, model-float coerced and rounded, plus the count of
+ * sessions that recorded the quest. No per-quest cost is reported: a
+ * session's cost cannot be charged to each of its co-active quests
+ * without counting it once per quest.
  */
 export interface QuestAnalyticsRow {
 	questId: string;
@@ -2369,14 +4442,49 @@ export interface QuestAnalyticsRow {
 	totalRecordedItemTt: number;
 	totalRealisedRewardMarkup: number;
 	recordedRewardItems: QuestRewardCandidate[];
+	/** Completed sessions that recorded a stretch of the quest. */
 	linkedSessions: number;
-	totalDurationSec: number;
-	totalWeaponCost: number;
-	totalHealCost: number;
-	totalEnhancerCost: number;
-	totalArmourCost: number;
-	totalLootTt: number;
-	totalPes: number;
+}
+
+/**
+ * The curated catalogue as the board lays it out.
+ */
+export interface QuestCatalogue {
+	planets: QuestCataloguePlanet[];
+}
+
+export interface QuestCatalogueCategory {
+	key: string;
+	name: string;
+	entries: QuestCatalogueEntry[];
+}
+
+export interface QuestCatalogueEntry {
+	kind: QuestCatalogueEntryKind;
+	/** Matches `catalogueKey` on the family or quest row. */
+	key: string;
+	/** What the board calls it. */
+	label: string;
+	/** A short qualifier shown beside the label. */
+	detail: string | null;
+	/** The giver's rating; a rated category lists its quests easiest first. */
+	difficulty: QuestDifficulty | null;
+	/** How the board states the reward. */
+	rewardLabel: string;
+	/** A family's known variants, by catalogue key; empty for a quest. */
+	memberKeys: string[];
+}
+
+/**
+ * A family is one rotating slot; a quest stands alone.
+ */
+export type QuestCatalogueEntryKind = 'family' | 'quest';
+
+export interface QuestCataloguePlanet {
+	key: string;
+	/** The planet as quest rows carry it. */
+	name: string;
+	categories: QuestCatalogueCategory[];
 }
 
 export type QuestCompletionTrigger = 'mission_log' | 'signal_item' | 'manual_hand_in';
@@ -2389,6 +4497,11 @@ export type QuestCompletionTrigger = 'mission_log' | 'signal_item' | 'manual_han
  * for boss runs).
  */
 export type QuestCooldownAnchor = 'pickup' | 'completion';
+
+/**
+ * The giver's own rating of a quest, easiest first.
+ */
+export type QuestDifficulty = 'beginner' | 'easy' | 'medium' | 'hard' | 'extreme';
 
 /**
  * A quest family in the wire shape: the authored slot (name, planet,
@@ -2409,6 +4522,9 @@ export interface QuestFamily {
 	lastStartedAt: number | null;
 	/** The latest member completion (fractional epoch seconds). */
 	lastCompletedAt: number | null;
+	/** A family the app ships and maintains: read-only to the player. */
+	curated: boolean;
+	catalogueKey: string | null;
 }
 
 /**
@@ -2480,18 +4596,77 @@ export interface QuestInput {
 	cooldown_anchor?: QuestCooldownAnchor | null;
 }
 
+/**
+ * How a reward line is held: liquid (ammo, a ledger gain at face value)
+ * or stock (an item, worth its markup only once sold).
+ */
+export type QuestRewardAccounting = 'liquid' | 'stock';
+
 export interface QuestRewardCandidate {
 	itemName: string;
 	quantity: number;
 	valuePed: number;
 }
 
+/**
+ * One recorded loot line a named reward can be settled with.
+ */
+export interface QuestRewardLootLine {
+	id: number;
+	itemName: string;
+	quantity: number;
+	valuePed: number;
+	/** What the line dropped from, when recorded. */
+	mobName: string | null;
+}
+
 export type QuestRewardPolicy = 'none' | 'fixed_pes' | 'named_items' | 'completion_clump';
 
 export interface QuestRewardReviewInput {
 	completionId: number;
+	/** Lines of the completion's own recorded tick. */
 	selectedIndices?: number[];
 	declareNone?: boolean;
+	/** Recorded ordinary-loot lines (from `candidates`) that were the reward. */
+	lootItemIds?: number[];
+	/** The named reward was paid, though nothing recorded shows it. */
+	declarePaid?: boolean;
+}
+
+/**
+ * How many items the window says are queued, against the drafts and
+ * unread items a capture answers.
+ */
+export type QueuedCount = {
+		kind: 'all';
+	} | {
+		of: number;
+		kind: 'some';
+	} | {
+		kind: 'unread';
+	} | {
+		kind: 'mismatched';
+	};
+
+/**
+ * A figure of a queued item, by what the player knows it as.
+ */
+export type QueuedField = 'itemName' | 'ttValue' | 'quantity' | 'startingBid' | 'buyout' | 'auctionDays' | 'listingFee' | 'markup';
+
+/**
+ * One queued item, read whole, as a draft listing.
+ */
+export interface QueuedListingDraft {
+	/** Names this draft within its capture alone. */
+	draftId: string;
+	itemName: DraftName;
+	/** The TT value of the quantity queued. */
+	ttValue: ReadFigure;
+	quantity: ReadFigure;
+	startingBid: ReadFigure;
+	buyout: DraftBuyout;
+	auctionDays: ReadFigure;
+	listingFee: ReadFigure;
 }
 
 export type RadarCalibrationStatus = 'idle' | 'awaitCentre' | 'awaitNorthEdge';
@@ -2505,8 +4680,101 @@ export interface RadarGeometry {
 	displayScale: number;
 }
 
+/**
+ * Radar guidance, as the overlays show it.
+ */
+export type RadarGuidance = {
+		stopped: RadarGuidanceStop | null;
+		kind: 'off';
+	} | {
+		kind: 'searching';
+	} | {
+		centreX: number;
+		centreY: number;
+		radiusPx: number;
+		/** The screen column right of which a window beside the radar covers neither the radar nor the coordinates under it. */
+		clearRightX: number;
+		source: RadarPlacementSource;
+		/** Null when the ring distances are hidden or did not read, or the placement is the hand calibration's: the overlay then shows direction only. */
+		scale: RadarScale | null;
+		/** Why there is no scale, once two looks agree; null otherwise. */
+		scaleMissing: RadarScaleMissing | null;
+		/** Null without an interface profile. */
+		labelStrip: RadarLabelStrip | null;
+		kind: 'placed';
+	} | {
+		reason: RadarGuidanceLoss;
+		kind: 'lost';
+	};
+
+/**
+ * Why running guidance has no placement.
+ */
+export type RadarGuidanceLoss = 'radarNotFound' | 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed';
+
+/**
+ * Why radar guidance stopped by itself.
+ */
+export type RadarGuidanceStop = 'captureNotAllowed' | 'radarNotSeen' | 'readerUnavailable' | 'failed';
+
+/**
+ * Where the radar's ring distances are printed, in shares of the radius
+ * along the line from the centre to the right edge: nothing drawn over
+ * the radar may enter it.
+ */
+export interface RadarLabelStrip {
+	from: number;
+	to: number;
+	halfHeight: number;
+}
+
+/**
+ * Where a placement came from.
+ */
+export type RadarPlacementSource = 'found' | 'calibrated';
+
+/**
+ * The radar's scale, read from its ring distances.
+ */
+export interface RadarScale {
+	metresPerPixel: number;
+	/** How far the radar's edge is from the player, in metres. */
+	edgeRangeM: number;
+}
+
+/**
+ * Why a placement has no scale.
+ */
+export type RadarScaleMissing = 'labelsUnread' | 'noRings' | 'noReader';
+
+/**
+ * A figure as read.
+ */
+export interface ReadFigure {
+	value: number;
+	/** The figure exactly as the window prints it, without the unit: `11.52`, `162`. */
+	text: string;
+	/** Nothing the window prints checks this figure beyond its own shape and bounds, so a misread digit could pass: the player should check it against the window. */
+	check: boolean;
+}
+
 export interface RealisedDefinitionMarkup {
 	definitionId: number;
+	/** Net markup from confirmed sales; zero when nothing sold. */
+	netMarkup: number;
+	/** The overhead of the definition's sessions shared to their hunting parts: a cost, never markup. Realised Net takes it off, and the Realised Rate's denominator is Cycled and it. */
+	overhead: number;
+}
+
+/**
+ * Realised markup a session definition earned through a conversion, named by
+ * the item it descends from.
+ */
+export interface RealisedDerivedMarkup {
+	definitionId: number;
+	originItem: string;
+	/** How many of `origin_item` have been realised so far. */
+	quantity: number;
 	netMarkup: number;
 }
 
@@ -2524,7 +4792,10 @@ export interface RealisedSpeciesMarkup {
  */
 export interface RealisedTierMarkup {
 	yieldTier: HarvestYieldTier;
+	/** Net markup from confirmed sales; zero when nothing sold. */
 	netMarkup: number;
+	/** The overhead of the sessions that swung this tier, shared to it by what it cycled: a cost, never markup. Realised Net takes it off, and the Realised Rate's denominator is Cycled and it. */
+	overhead: number;
 }
 
 /**
@@ -2580,11 +4851,27 @@ export interface RecommenderContribution {
 export type RecommenderTargetKind = 'hp' | 'profession';
 
 /**
- * The reject verb's result: `{ok: true}` on success, the lone `error`
- * on a refusal.
+ * The step between two account readings a record was seen in: it happened
+ * between `from` and `to`.
+ */
+export interface RecordedFromAccount {
+	/** The step's later reading: what one step recorded belongs together. */
+	readingId: number;
+	from: string;
+	to: string;
+	/** When the record was made, which may be after the step ended. */
+	recordedAt: string;
+	/** How far the PED Card moved across the step, in PED; `null` once the readings are gone. */
+	cardChange: number | null;
+}
+
+/**
+ * The reject verb's result: `{ok: true}` on success; on a refusal, why
+ * and the message to show.
  */
 export interface RejectResult {
 	ok?: boolean | null;
+	refused?: SkillScanRefusal | null;
 	error?: string | null;
 }
 
@@ -2596,14 +4883,30 @@ export interface ReleaseResult {
 }
 
 /**
- * The one-shot repair-cost read (`exclude_unset`): the cost / raw text /
- * confidence on success, plus `error` on a logical refusal.
+ * The reload speed the enabled passive effects put in force.
  */
-export interface RepairScanResult {
-	cost_ped?: number | null;
-	raw_text?: string | null;
-	confidence?: number | null;
-	error?: string | null;
+export interface ReloadSpeedInEffect {
+	/** What the enabled sources declare, summed. */
+	declaredPercent: number;
+	/** What reaches healing reloads and weapon attack rates: the declared increases held at the game's limit for equipped items, plus any declared slowing. */
+	effectivePercent: number;
+	/** The game's limit on reload speed from equipped items. */
+	itemLimitPercent: number;
+}
+
+/**
+ * The reload speed in effect and where it comes from.
+ */
+export interface ReloadSpeedNow {
+	/** What the enabled equipped sources print, summed. */
+	equippedPercent: number;
+	/** What the running doses print, summed. */
+	consumedPercent: number;
+	/** What reaches weapon attack rates and healing reloads: each group under its own limit, their sum under the total limit, then slowing. */
+	inEffectPercent: number;
+	itemLimitPercent: number;
+	consumedLimitPercent: number;
+	totalLimitPercent: number;
 }
 
 /**
@@ -2619,63 +4922,63 @@ export interface ReturnsBreakdown {
 }
 
 /**
- * What one look at the game's sale window resolved.
- * Every field is nullable because every field can refuse: a value that
- * did not read comes back empty and is named in `unread`, so the review
- * surface shows a gap to fill rather than a figure to trust. `error` is
- * set only when there was nothing to read at all (no game window, no
- * calibration, no capture), and then no field is populated.
+ * One line of the session's review: a mob and every kill given it, or the
+ * kills the screen could not name.
  */
-export interface SaleWindowCapture {
-	observedName: string | null;
-	quantity: number | null;
-	ttValue: number | null;
-	listingFee: number | null;
-	auctionDays: number | null;
-	startingBid: number | null;
-	buyout: number | null;
-	/** The lowest confidence among the fields that did read. */
-	confidence: number | null;
-	/** The fields that did not read, by the name the window gives them. */
-	unread: string[];
-	error: string | null;
+export interface ReviewedMob {
+	mob: MobReviewRef;
+	/** The mob as shown; null for the kills the screen could not name. */
+	name: string | null;
+	killCount: number;
+	/** How many of the kills the screen was less than sure of. */
+	unsureCount: number;
+	/** The text read off the plate most often for the mob's kills, when any was read. */
+	exampleText: string | null;
+	/** What the kills are recorded as now, when they agree. */
+	currentName: string | null;
+	/** The mob is on no list: its spelling is the screen's, to be confirmed. */
+	unlisted: boolean;
+	/** The player has settled the line. */
+	reviewed: boolean;
 }
 
 /**
- * The settled scan phase, in the wire vocabulary the overlay switches on.
+ * One capture of the sell queue: the listing drafts it read, or why
+ * there are none.
  */
-export type ScanPhase = 'idle' | 'capturing' | 'processing' | 'awaiting_review';
+export type SaleQueueCapture = {
+		/** The capture's identity, increasing in the order captures were started: a capture with a lower one is older, and its drafts never replace a newer capture's. */
+		captureId: number;
+		/** When the screen was read, as a local timestamp: what a listing recorded from one of these drafts is dated to. */
+		readAt: string;
+		/** One per queued item that read whole, top to bottom. */
+		drafts: QueuedListingDraft[];
+		/** The queued items in view that did not read whole. */
+		unread: UnreadQueuedItem[];
+		/** How many items the window says are queued. */
+		queued: QueuedCount;
+		kind: 'read';
+	} | {
+		captureId: number;
+		reason: SaleQueueRefusal;
+		kind: 'refused';
+	};
 
 /**
- * The per-page OCR progress counter.
+ * Why a capture produced no listing drafts.
  */
-export interface ScanProgress {
-	done: number;
-	total: number;
-}
+export type SaleQueueRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'captureNotAllowed' | 'sellWindowNotOpen' | 'sellWindowNotWhole' | 'queueNotVisible' | 'priceModeUnread' | 'otherPriceMode' | 'queueEmpty' | 'readerUnavailable';
 
 /**
- * The full manual-scan status, in the response-model field order the
- * HTTP layer emitted. `error` carries a logical refusal's message (null
- * on success); every other field is always present.
+ * Whether a feature that reads the game screen (creature detection,
+ * reading the held tool) can capture the game window when a session wants
+ * it, as the settings show it beside the feature's toggle. Each feature's
+ * watcher answers for itself.
  */
-export interface ScanStatus {
-	active: boolean;
-	processing: boolean;
-	captured_pages: number;
-	expected_pages: number;
-	last_scan_time: number | null;
-	skills_count: number;
-	configured: boolean;
-	game_window_present: boolean;
-	phase: ScanPhase;
-	processing_progress: ScanProgress;
-	has_pending_result: boolean;
-	error: string | null;
-}
+export type ScreenCapture = 'ready' | 'notRunning' | 'refused' | 'unavailable';
 
 /**
- * A catalogue vocabulary the search accepts; each maps to one snapshot
+ * A catalogue vocabulary the equipment pickers search; each maps to one snapshot
  * endpoint. An out-of-vocabulary value cannot be constructed (the
  * bindings expose the closed union), so the old unknown-type reply
  * class is unrepresentable rather than handled.
@@ -2700,7 +5003,8 @@ export interface SessionDefinition {
 	name: string;
 	adHocSegments: boolean;
 	trackProtectionCosts: boolean;
-	trackProtectionBySegment: boolean;
+	/** The planet whose quests the session offers; null when it offers its authored roster's quests instead. */
+	questPlanet: string | null;
 	/** A session that cannot be archived, because tracking always needs one to run under. It renames and takes a roster like any other. */
 	isProtected: boolean;
 	/** False for an archived definition: no longer offered for new sessions, but its recorded instances still reference it, so the review surface can still reach them. Only ever false in a listing that asked for the inactive ones. */
@@ -2721,7 +5025,8 @@ export interface SessionDefinitionInput {
 	name: string;
 	ad_hoc_segments?: boolean;
 	track_protection_costs?: boolean;
-	track_protection_by_segment?: boolean;
+	/** The planet whose quests the session offers; null or blank keeps the authored roster's quest entries. */
+	quest_planet?: string | null;
 	roster?: SessionRosterEntryInput[];
 }
 
@@ -2735,14 +5040,64 @@ export interface SessionDetail {
 	/** The session-name facet as recorded. Present here because the record is where the name is corrected: the overlay fixes it once a session starts. */
 	sessionName: string | null;
 	mobEntryMode: MobEntryMode;
+	/** `null` while the session counts in every stats scope. */
+	exclusion: SessionExclusion | null;
 	notableEvents: NotableEvent[];
 	lootBreakdown: LootEntry[];
 	deactivatedLootBreakdown: LootEntry[];
+	/** The quest rewards confirmed on the session, in the order they were handed in. A reward is never loot: none of its lines is in either loot breakdown. */
+	questRewards: SessionQuestReward[];
 	mobBreakdown: MobBreakdownRow[];
 	effectiveLoot: number;
 	toolStats: ToolStat[];
 	skillGains: SkillGain[];
+	weaponAttribution: WeaponAttributionSummary;
 	healing: HealingSessionSummary;
+	/** Each enhancer break the session kept, in the order they broke. A priced break's cost is inside the enhancer bucket; an unpriced one is in no figure, and says why. */
+	enhancerBreaks: SessionEnhancerBreak[];
+}
+
+/**
+ * One enhancer break a session kept, and what it cost.
+ */
+export interface SessionEnhancerBreak {
+	enhancerName: string;
+	/** The weapon the enhancer was fitted to. */
+	weaponName: string;
+	/** When it broke, epoch seconds. */
+	observedAt: number;
+	/** The Shrapnel the game returned for it, PED. */
+	returnedPed: number;
+	pricing: EnhancerBreakPricing;
+	/** The enhancer's TT, PED, where the game data lists it. */
+	ttPed: number | null;
+	/** The markup it consumed, PED, where the player set one. */
+	markupPed: number | null;
+	/** What it cost, PED: its TT and markup less the return. Null when it is unpriced. */
+	costPed: number | null;
+}
+
+/**
+ * Which app-wide statistics a recorded session is kept out of. The
+ * session stays on record with every figure of its own; an excluded
+ * scope's aggregates read as if it had never been recorded.
+ */
+export interface SessionExclusion {
+	/** When the PED side (loot, costs, activity evidence) was excluded; `null` while it counts. */
+	economyExcludedAt: string | null;
+	/** When the skill gains (PES) were excluded; `null` while they count. */
+	progressionExcludedAt: string | null;
+	/** Why, as the player wrote it. */
+	note: string | null;
+}
+
+/**
+ * The stats-exclusion write result: the session's exclusion as stored.
+ */
+export interface SessionExclusionResult {
+	sessionId: string;
+	/** `null` once the session counts in every scope again. */
+	exclusion: SessionExclusion | null;
 }
 
 /**
@@ -2785,6 +5140,58 @@ export interface SessionIntervals {
 }
 
 /**
+ * One step between two consecutive readings.
+ */
+export interface SessionMinute {
+	/** The later reading of the step, and the one before it. */
+	readingId: number;
+	previousReadingId: number;
+	between: MeasuredSpan;
+	/** The readings are further apart than 150 seconds: one step across the gap. */
+	gap: boolean;
+	/** False for the last step of a running session: what arrived in it is not flagged yet. */
+	settled: boolean;
+	/** The TT of the loot lines timed in the step, in PED. */
+	looted: number;
+	/** The TT of what arrived in the step, Universal Ammo aside. */
+	arrived: MeasuredAmount;
+	arrivedNotLooted: MinuteArrival[];
+	lootedNeverArrived: MinuteMissingLoot[];
+	weapon: MinuteLane;
+	healing: MinuteLane;
+	/** Measured only: armour has no tracked counterpart. */
+	armour: MinuteFigure;
+}
+
+/**
+ * A session's overhead by category, PED: what it cost beyond performing
+ * its activity, as the account readings measured it. Zero where nothing
+ * was measured: overhead has no tracked figure.
+ */
+export interface SessionOverhead {
+	/** Teleport chips, Mind Essence, vehicles and their fuel. */
+	travel: number;
+	/** Portable repair and Trade Terminal units, and their like. */
+	fieldLogistics: number;
+	/** What was used up that the app cannot place yet. */
+	unclassified: number;
+	/** Why each category is withheld from the figures above, where it is. */
+	reasons: SessionOverheadReasons;
+}
+
+/**
+ * Why each overhead category of a session the readings measured is not
+ * billed: `null` for a category measured (its figure above is the
+ * measurement, zero included), and for every category of a session the
+ * readings never measured, which has no overhead.
+ */
+export interface SessionOverheadReasons {
+	travel: CostReason | null;
+	fieldLogistics: CostReason | null;
+	unclassified: CostReason | null;
+}
+
+/**
  * A keyset page of session-list rows plus the opaque cursor for the
  * next page (`null` on the last page) and the whole-table session
  * count, mirroring the ledger's [`crate::analytics::LedgerPage`] shape.
@@ -2793,6 +5200,29 @@ export interface SessionPage {
 	sessions: TrackingSession[];
 	nextCursor: string | null;
 	total: number;
+}
+
+/**
+ * One quest reward confirmed on a session: the completion that paid it
+ * and its lines as recorded.
+ */
+export interface SessionQuestReward {
+	completionId: number;
+	questName: string;
+	/** When it was handed in, epoch seconds. */
+	completedAt: number;
+	items: SessionQuestRewardItem[];
+}
+
+/**
+ * One line of a quest reward.
+ */
+export interface SessionQuestRewardItem {
+	itemName: string;
+	quantity: number;
+	/** Its TT value, PED. */
+	valuePed: number;
+	accounting: QuestRewardAccounting;
 }
 
 /**
@@ -2852,33 +5282,98 @@ export interface SessionSummary {
 	returnRate: number;
 	kills: number;
 	duration: number;
+	/** What the session's cost rests on. */
+	costBasis: CostBasis;
 	costBreakdown: CostBreakdown;
 }
 
 /**
  * The partial settings update: every field optional, only the present
  * ones applied (the `exclude_unset` semantics the pydantic model had).
- * `active_trifecta_preset_id` is a double option so an explicit `null`
- * (clear the active preset) stays distinct from an absent field (leave
- * it untouched); every other field is nullless, so a plain `Option`
- * carries the present/absent distinction.
+ * `declared_skill_boost_percent` is a double option so an explicit
+ * `null` (withdraw the declaration) stays distinct from an absent field
+ * (leave it untouched); every other field is nullless, so a plain
+ * `Option` carries the present/absent distinction.
  */
 export interface SettingsPatch {
 	chatlog_path?: string | null;
 	player_name?: string | null;
 	hotbar_hooks_enabled?: boolean | null;
+	/** Turn keyless tracking on or off for this machine. */
+	keyless_input?: boolean | null;
 	repair_ocr_enabled?: boolean | null;
-	end_of_session_armour_reminder_enabled?: boolean | null;
-	developer_mode_enabled?: boolean | null;
+	/** Turn creature detection on or off. */
+	mob_detection_enabled?: boolean | null;
+	/** Turn reading the held tool off the screen on or off. */
+	tool_reading_enabled?: boolean | null;
+	/** Turn keeping the plates whose name did not read on or off. */
+	keep_unread_plates?: boolean | null;
 	session_name?: string | null;
 	/** Double-optioned so the patch can express all three states: absent leaves the declaration alone, an explicit null withdraws it, and a number (including 0) declares it. */
 	declared_skill_boost_percent?: number | null;
+	/** Written to the live preset, after any `active_hotbar_preset` switch in the same patch. */
 	hotbar?: Record<string, unknown> | null;
-	active_trifecta_preset_id?: string | null;
-	trifecta_presets?: TrifectaPresetInput[] | null;
+	/** Switch the live hotbar preset, 1 to 3. */
+	active_hotbar_preset?: number | null;
+	carried_weapon_ids?: number[] | null;
 	passive_effect_sources?: PassiveEffectSourceInput[] | null;
 	harvest_guardrail?: HarvestGuardrailInput | null;
 	loot_filter_blacklist?: string[] | null;
+}
+
+/**
+ * The parts a setup is built from.
+ */
+export type SetupComponentRole = 'weapon' | 'amplifier' | 'absorber' | 'implant';
+
+/**
+ * One part of a setup as priced.
+ */
+export interface SetupComponentView {
+	role: SetupComponentRole;
+	catalogId: string;
+	name: string;
+	isLimited: boolean;
+	/** The markup it runs at: the given one for a limited item, 100 for an unlimited one. */
+	markupPercent: number;
+	/** TT decay one use takes from it, PEC. */
+	decayPecPerUse: number;
+	/** Its full TT, PED, when the catalogue gives one. */
+	maxTtPed: number | null;
+}
+
+/**
+ * Per-use economics, PEC per use unless stated.
+ */
+export interface SetupEconomicsView {
+	costPerUsePec: number;
+	lossPerUsePec: number;
+	/** Limited-item markup the weapon and amplifier consume per use. */
+	consumedPremiumPec: number;
+	/** Absorber and implant decay: cost with no modelled return. */
+	outsideModelPec: number;
+	/** Return lost per use against a 100% Efficiency item cycling the same TT; independent of the looter level. */
+	efficiencyShortfallPec: number;
+	/** What a 100% Efficiency item would still lose per use on the same TT at the player's looter level. */
+	houseEdgePec: number;
+	effectiveEfficiency: EquipmentEffectiveEfficiency | null;
+	weightedEfficiencyPct: number | null;
+	maxDamage: number;
+	/** Amplifier damage above half the weapon's: paid for, never dealt. */
+	ampDamageWasted: number;
+	damagePerPec: number;
+	usesPerMinute: number | null;
+}
+
+/**
+ * A setup: a catalogue weapon with an optional amplifier, absorber, and
+ * implant.
+ */
+export interface SetupPick {
+	weapon: ComponentPick;
+	amplifier?: ComponentPick | null;
+	absorber?: ComponentPick | null;
+	implant?: ComponentPick | null;
 }
 
 /**
@@ -2889,6 +5384,11 @@ export interface ShrapnelConversionInput {
 	quantity: number;
 	convertedAt?: string | null;
 }
+
+/**
+ * What kind of tool a tool of the game's data is.
+ */
+export type SightedToolKind = 'weapon' | 'healing' | 'harvesting';
 
 /**
  * One per-skill gain (attributes excluded).
@@ -2914,20 +5414,324 @@ export interface SkillLevel {
 }
 
 /**
- * The held OCR result awaiting review: canonical skill name to level.
+ * A name this version does not know that is probably one of its skills.
  */
-export interface SkillScanPending {
-	skills: Record<string, number>;
+export interface SkillScanGuess {
+	/** What its name was read as. */
+	readAs: string;
+	/** The skill it probably is. */
+	probably: string;
+	/** The points exactly as the game prints them. */
+	pointsText: string;
 }
 
 /**
- * The spacebar-capture toggle acknowledgement: the resulting enabled
- * state after the flip.
+ * What stops the game's view, as it is now, being collected.
  */
-export interface SpacebarResult {
-	ok: boolean;
-	enabled: boolean;
+export type SkillScanHint = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'skillsWindowNotOpen' | 'skillsWindowCovered' | 'skillsWindowOffScreen' | 'notSkillsTab' | 'windowTooShort' | 'pageNotRead' | 'otherListing' | 'interfaceSizeUnreadable';
+
+/**
+ * A saved skill whose name was not read exactly.
+ */
+export interface SkillScanNearMiss {
+	/** The skill it was saved as. */
+	skill: string;
+	/** What its name was read as. */
+	readAs: string;
 }
+
+/**
+ * Why a scan verb was refused. A refused verb changes nothing.
+ */
+export type SkillScanRefusal = 'noReview' | 'staleReview' | 'totalNotConfirmed' | 'saving' | 'surfaceClosed' | 'workerUnavailable' | 'saveFailed';
+
+/**
+ * The answer to starting or cancelling: the status that results, and
+ * why the verb was refused when it was.
+ */
+export interface SkillScanReply {
+	status: SkillScanStatus;
+	refused: SkillScanRefusal | null;
+}
+
+/**
+ * A finished scan awaiting review.
+ */
+export interface SkillScanReview {
+	/** The scan this review is of: accepting or rejecting it names it. */
+	scan: number;
+	/** What accepting saves: each skill's name to its points. */
+	skills: Record<string, number>;
+	/** Whether the figures add up to the game's own total. */
+	total: SkillScanTotal;
+	/** Saved skills whose names were not read exactly. */
+	nearMisses: SkillScanNearMiss[];
+	/** Names this version does not know that are probably one of its skills; not saved. */
+	guesses: SkillScanGuess[];
+	/** Skills the game shows that this version does not know; not saved. */
+	unknown: SkillScanUnsaved[];
+	/** Rows whose name could be either of two skills; not saved. */
+	unplaced: SkillScanUnsaved[];
+	/** Skills read more than once; not saved. */
+	repeated: string[];
+}
+
+/**
+ * The skill scan's state.
+ */
+export type SkillScanStatus = {
+		/** A scan can run: the recogniser and the interface data loaded. */
+		available: boolean;
+		/** Why the last scan stopped by itself, when it did. */
+		stopped: SkillScanStop | null;
+		phase: 'idle';
+	} | {
+		/** Pages collected so far. */
+		pagesCollected: number;
+		/** How many pages the list has, once a page has shown it. */
+		pageCount: number | null;
+		/** The page numbers still to collect, once the count is known. */
+		missingPages: number[];
+		/** What stops the view in the game being collected, when something does. */
+		hint: SkillScanHint | null;
+		phase: 'collecting';
+	} | {
+		phase: 'awaitingReview';
+	} | {
+		phase: 'saving';
+	};
+
+/**
+ * Why a scan stopped collecting by itself, with no review.
+ */
+export type SkillScanStop = 'readFailed' | 'captureNotAllowed' | 'noNewPage' | 'interfaceSizeUnreadable';
+
+/**
+ * Whether a scan's figures add up to the game's own total.
+ */
+export type SkillScanTotal = {
+		check: 'matches';
+	} | {
+		sum: number;
+		total: number;
+		check: 'mismatch';
+	} | {
+		check: 'unchecked';
+	};
+
+/**
+ * A skill the game shows that the scan does not save.
+ */
+export interface SkillScanUnsaved {
+	/** The name as it was read. */
+	name: string;
+	/** The points exactly as the game prints them. */
+	pointsText: string;
+}
+
+/**
+ * A named session's TT cost to the goal with the loot Community Model v1
+ * expects from its weapons in place of the recorded loot.
+ */
+export interface SkillingExpectedLoss {
+	/** Cycled minus the expected loot TT. */
+	ttCost: number;
+	/** Expected loot TT over the weapon spend the model priced. */
+	weaponReturn: number;
+	/** The share of the recorded weapon spend the model priced; the rest returns nothing under it. */
+	coverage: number;
+}
+
+/**
+ * The forecast query. `professions` names a `profession` target (one
+ * name, or several for a family forecast as their summed level) and is
+ * ignored for `hp`; `goal` is the level (summed, for several) or HP to
+ * reach.
+ */
+export interface SkillingForecastQuery {
+	target: SkillingTargetKind;
+	professions?: string[];
+	goal: number;
+	/** Planned routes to price beside the recorded sessions. */
+	routes?: SkillingRoutePick[];
+	/** The skill boost percent planned routes assume (capped at 100); absent reads as the most recent session's. */
+	skillBoostPercent?: number | null;
+	/** The looter level planned routes are priced at; absent reads as the player's three-looter mean. */
+	looterLevel?: number | null;
+	/** Narrow the named sessions to this weapon's part of them; absent forecasts each session whole. */
+	sessionWeapon?: string | null;
+}
+
+/**
+ * The forecast from every named session, ready ones first (least TT
+ * cost to the goal leading). `error` is present only on the soft
+ * unknown-profession path.
+ */
+export interface SkillingForecastResult {
+	error?: string | null;
+	/** The target's current value (profession level or HP). */
+	current: number;
+	goal: number;
+	sources: SkillingForecastSource[];
+	/** The planned routes, in request order. */
+	routes: SkillingRouteForecast[];
+	/** The weapons the named sessions used, most used first, to narrow the sessions to one of. */
+	sessionWeapons: SkillingSessionWeapon[];
+	/** Whether hunting prices this target: HP, or professions a weapon trains. Any other target grows from hunting only as a byproduct, so no route is priced toward it. */
+	huntingTarget: boolean;
+	/** The skill boost percent the planned routes assumed. */
+	skillBoostPercent: number;
+	/** The looter level the planned routes were priced at. */
+	looterLevel: number;
+}
+
+/**
+ * The recorded play a definition's forecast projects from.
+ */
+export interface SkillingForecastSample {
+	sessions: number;
+	hours: number;
+	cycledPed: number;
+	lootTt: number;
+	pes: number;
+	/** Net markup realised from confirmed sales of the definition's stock; null when none has sold. */
+	realisedMarkup: number | null;
+	/** That markup as a fraction of the definition's loot TT. */
+	markupLift: number | null;
+}
+
+/**
+ * One skill the definition trains, projected to the goal.
+ */
+export interface SkillingForecastSkill {
+	name: string;
+	currentLevel: number;
+	/** Share of the definition's skill PES; null when it earned none. */
+	pesShare: number | null;
+	levelGain: number;
+	endLevel: number;
+	/** Profession levels or HP this skill's gain contributes. */
+	targetGain: number;
+	movesTarget: boolean;
+}
+
+/**
+ * One definition's forecast. The projected figures are zero unless the
+ * status is `ready`.
+ */
+export interface SkillingForecastSource {
+	definitionId: number;
+	name: string;
+	archived: boolean;
+	sample: SkillingForecastSample;
+	status: SkillingForecastStatus;
+	cycledPed: number;
+	hours: number;
+	lootTt: number;
+	/** Kills at the recorded kills per PED cycled; null when the definition recorded none. */
+	kills: number | null;
+	/** Realised markup lift applied to the forecast loot; null when the definition has no confirmed sales. */
+	markup: number | null;
+	/** Cycled minus loot TT. */
+	ttCost: number;
+	/** The overhead the forecast cycling carries (travel, field logistics, what the app cannot place), at the recorded overhead per PED cycled. */
+	overhead: number;
+	/** TT cost and overhead, less realised markup; null with the markup. */
+	netCost: number | null;
+	/** The TT cost under Community Model v1 at the planning looter basis; null when the model prices none of the definition's weapon spend. */
+	expected: SkillingExpectedLoss | null;
+	skills: SkillingForecastSkill[];
+	warnings: SkillingSampleWarning[];
+}
+
+/**
+ * Whether a definition answers, and if not, why.
+ */
+export type SkillingForecastStatus = 'ready' | 'reached' | 'does_not_train' | 'no_evidence' | 'out_of_range';
+
+/**
+ * One planned route's forecast, in request order. The projected figures
+ * are zero unless the status is `ready`; the per-kill figures are zero
+ * when the route could not be priced.
+ */
+export interface SkillingRouteForecast {
+	index: number;
+	weapon: string;
+	/** The maturity and species as the mob picker shows them. */
+	mob: string;
+	mobHp: number | null;
+	mobLevel: number | null;
+	status: SkillingRouteStatus;
+	/** PES one kill yields, PEC. */
+	skillPerKillPec: number;
+	cycledPerKillPec: number;
+	/** Expected loss per kill, PEC. */
+	lossPerKillPec: number;
+	/** Firing time plus the time between kills; null when the attack rate is unknown. */
+	secondsPerKill: number | null;
+	/** The share of the damage fired that lands past the kill, and so of the PED cycled, the TT lost, and the firing time. */
+	overkillShare: number;
+	kills: number;
+	cycledPed: number;
+	/** Expected TT lost on the way: cycled less expected loot TT. */
+	pedLost: number;
+	/** The expected markup on that loot TT at the route's loot markup; null when the route sets none. */
+	markup: number | null;
+	/** TT lost less the expected markup (below zero when the markup outweighs the loss); null with the markup. */
+	netCost: number | null;
+	/** The time to the goal on the clock, the route's hunting share included; null when the attack rate is unknown. */
+	hours: number | null;
+	/** The player's recorded pace between kills on the mob; null when they have too few recorded kills of it and a fixed allowance stands in. */
+	pace: SkillingRoutePace | null;
+	skills: SkillingForecastSkill[];
+}
+
+/**
+ * The player's own time between kills on a mob, from their recorded kills
+ * of it with any weapon, firing time taken out.
+ */
+export interface SkillingRoutePace {
+	betweenKillSeconds: number;
+	kills: number;
+}
+
+/**
+ * A planned route: a setup hunting one mob maturity. `species` is the
+ * catalogue's species name, or the mob's own name when it has none.
+ */
+export interface SkillingRoutePick {
+	setup: SetupPick;
+	species: string;
+	maturity: string;
+	/** The markup the player expects the route's loot to sell at, percent of TT (100 to 1000); absent prices the route at TT alone. */
+	lootMarkupPercent?: number | null;
+	/** The share of the clock the route spends hunting, percent (1 to 100): a timed instance's downtime between runs. Absent reads as all of it. */
+	huntingSharePercent?: number | null;
+}
+
+/**
+ * Whether a planned route answers, and if not, why.
+ */
+export type SkillingRouteStatus = 'ready' | 'reached' | 'out_of_range' | 'does_not_train' | 'unknown_weapon' | 'unknown_mob' | 'unmodelled';
+
+/**
+ * A sample-quality caveat on a forecast.
+ */
+export type SkillingSampleWarning = 'thin_sessions' | 'thin_hours' | 'thin_cycling' | 'long_extrapolation';
+
+/**
+ * A weapon the named sessions used, with the kills it made alone.
+ */
+export interface SkillingSessionWeapon {
+	name: string;
+	kills: number;
+}
+
+/**
+ * What the forecast measures progress on. A closed vocabulary: the
+ * bindings expose only these two.
+ */
+export type SkillingTargetKind = 'profession' | 'hp';
 
 /**
  * The start lifecycle acknowledgement.
@@ -2946,6 +5750,28 @@ export interface StatProfession {
 	name: string;
 	level: number;
 	category: string;
+}
+
+/**
+ * A conversion of an item the account readings recorded within the last
+ * hour, shown beside the conversion form's amount so the same conversion
+ * is not entered twice.
+ */
+export interface StockConversionFromAccount {
+	/** The conversion's id, as its history entry carries it. */
+	id: string;
+	/** How much of the item it took, and that amount's TT. */
+	quantity: number;
+	ttValue: number;
+	/** When the step it was seen in ended. */
+	recordedAt: string;
+}
+
+/**
+ * The item a conversion form is about to convert.
+ */
+export interface StockConversionFromAccountInput {
+	itemName: string;
 }
 
 /**
@@ -2972,7 +5798,221 @@ export interface StockPosition {
 	ttValue: number;
 	/** Quantity sitting in an unresolved auction listing. Already out of `quantity`, since listed stock has left the player's inventory in game, but reported so it does not read as simply gone. */
 	listedQuantity: number;
+	/** TT per unit, known even when none is currently held. */
+	unitTt: number;
+	/** Markup paid for bought inputs that this stock still has to recover. */
+	paidMarkup: number;
+	/** The activities a sale of this stock would credit. */
+	origins: HoldingOrigin[];
+	/** What conversions made this stock from. */
+	derivedFrom: DerivedSource[];
 }
+
+/**
+ * What applying a draft came to.
+ */
+export type StockReconciliationApplied = {
+		reconciliationId: string | null;
+		settled: string[];
+		refused: StockReconciliationRefused[];
+		outcome: 'applied';
+	} | {
+		reconciliationId: string;
+		outcome: 'alreadyApplied';
+	} | {
+		outcome: 'sessionTracked';
+	};
+
+/**
+ * The draft to apply.
+ */
+export interface StockReconciliationApplyInput {
+	draftId: string;
+}
+
+/**
+ * Something to know before applying a draft.
+ */
+export type StockReconciliationCaution = {
+		sessionEndedAt: string;
+		kind: 'pasteSoonAfterSession';
+	};
+
+/**
+ * A disposition a line can be set to on its own.
+ */
+export type StockReconciliationChoice = 'removed' | 'shrapnelConverted' | 'unknownOrigin' | 'leftAsIs';
+
+/**
+ * What to do about one item's difference.
+ */
+export type StockReconciliationDisposition = {
+		kind: 'removed';
+	} | {
+		soldAtTt: number | null;
+		kind: 'shrapnelConverted';
+	} | {
+		group: number;
+		kind: 'conversionGroup';
+	} | {
+		kind: 'unknownOrigin';
+	} | {
+		kind: 'leftAsIs';
+	};
+
+/**
+ * A reconciliation being reviewed.
+ */
+export interface StockReconciliationDraft {
+	id: string;
+	source: StockReconciliationSource;
+	/** When the account was observed. */
+	observedAt: string;
+	/** The largest difference by TT first. */
+	lines: StockReconciliationLine[];
+	excluded: StockReconciliationExcluded[];
+	/** Each conversion group's figures. */
+	groups: StockReconciliationGroup[];
+	/** `null` when there is nothing to say. */
+	caution: StockReconciliationCaution | null;
+	/** Lines whose difference a standing reconciliation accepted, standing as they were: left as they are unless brought back into review. */
+	previouslyAccepted: StockReconciliationLine[];
+}
+
+/**
+ * An item, or some of its rows, left out, with why.
+ */
+export interface StockReconciliationExcluded {
+	itemName: string;
+	/** What the account shows of it under this reason. */
+	quantity: number;
+	reason: StockReconciliationExclusion;
+}
+
+/**
+ * Why an item is left out of a reconciliation.
+ */
+export type StockReconciliationExclusion = 'equipment' | 'armour' | 'plate' | 'universalAmmo' | 'ammo' | 'attached' | 'auction' | 'auctionWithoutListing' | 'pendingProposal' | 'consumable' | 'strongbox' | 'singleItem' | 'sharedName' | 'ttDiffers' | 'heldAsAsset';
+
+/**
+ * One conversion group's figures: the TT that went in and came out.
+ */
+export interface StockReconciliationGroup {
+	group: number;
+	/** The TT of the missing items that went in. */
+	ttIn: number;
+	/** The TT of what came out. */
+	ttOut: number;
+	/** The item that came out, how much of it the conversion produced, and how much more arrived, held as of unknown origin (a recycling makes no more Nanocubes than its inputs' TT pays for). */
+	outputItem: string;
+	outputQuantity: number;
+	remainderQuantity: number;
+}
+
+/**
+ * One item whose quantity in the app differs from the account's.
+ */
+export interface StockReconciliationLine {
+	itemName: string;
+	/** Everything the app holds of it, its assets included. */
+	appQuantity: number;
+	/** The part of `appQuantity` held as assets, which a reconciliation never moves: a shortfall leaves the loose stock alone. */
+	assetQuantity: number;
+	observedQuantity: number;
+	/** The account's quantity less the app's: below zero when units are missing. */
+	difference: number;
+	unitTt: StockReconciliationUnitTt;
+	disposition: StockReconciliationDisposition;
+	/** A record the account readings made of this item was taken back and no reconciliation has settled the item since: why it is left as it is unless the player says otherwise. */
+	takenBack: boolean;
+	/** When a standing reconciliation accepted this same difference, if one did. */
+	acceptedAt: string | null;
+}
+
+/**
+ * An inventory pasted from the account site's Copy CSV.
+ */
+export interface StockReconciliationPasteInput {
+	text: string;
+}
+
+/**
+ * Why a line was not applied.
+ */
+export type StockReconciliationRefusal = 'stockMovedSince' | 'changedSincePlanned' | 'groupRefused';
+
+/**
+ * A line left for the next plan.
+ */
+export interface StockReconciliationRefused {
+	itemName: string;
+	reason: StockReconciliationRefusal;
+}
+
+/**
+ * A revision of the draft `draftId`.
+ */
+export interface StockReconciliationReviseInput {
+	draftId: string;
+	revision: StockReconciliationRevision;
+}
+
+/**
+ * A revised draft, and the lines a bulk choice was not set on.
+ */
+export interface StockReconciliationRevised {
+	draft: StockReconciliationDraft;
+	unchanged: StockReconciliationUnchanged[];
+}
+
+/**
+ * One change to the draft.
+ */
+export type StockReconciliationRevision = {
+		items: string[];
+		choice: StockReconciliationChoice;
+		kind: 'set';
+	} | {
+		quantity?: number | null;
+		kind: 'shrapnelSoldAtTt';
+	} | {
+		items: string[];
+		kind: 'group';
+	} | {
+		items: string[];
+		kind: 'reconsider';
+	};
+
+/**
+ * What a reconciliation was observed from.
+ */
+export type StockReconciliationSource = {
+		readingId: number;
+		kind: 'reading';
+	} | {
+		kind: 'paste';
+	};
+
+/**
+ * A line a bulk choice did not fit, and why.
+ */
+export interface StockReconciliationUnchanged {
+	itemName: string;
+	reason: string;
+}
+
+/**
+ * An item's TT per unit, and how far it can be trusted.
+ */
+export type StockReconciliationUnitTt = {
+		ped: number;
+		kind: 'exact';
+	} | {
+		ped: number;
+		kind: 'truncated';
+	} | {
+		kind: 'unknown';
+	};
 
 /**
  * Stock whose later fate is unknown. This changes holdings only and never
@@ -2986,6 +6026,28 @@ export interface StockRemovalInput {
 }
 
 /**
+ * A sale of an item to the Trade Terminal the account readings recorded
+ * within the last hour, shown beside the trade form's amount so the same
+ * sale is not entered twice.
+ */
+export interface StockSaleFromAccount {
+	/** The sale's id, as its history entry carries it. */
+	id: string;
+	/** How much of the item it sold, and that amount's TT. */
+	quantity: number;
+	ttValue: number;
+	/** When the step it was seen in ended. */
+	recordedAt: string;
+}
+
+/**
+ * The item a trade form is about to sell.
+ */
+export interface StockSaleFromAccountInput {
+	itemName: string;
+}
+
+/**
  * The stop lifecycle acknowledgement.
  */
 export interface StopResult {
@@ -2993,6 +6055,152 @@ export interface StopResult {
 	started_at: string;
 	ended_at: string | null;
 	kill_count: number;
+}
+
+/**
+ * An export to read as an opening of one box type.
+ */
+export interface StrongboxExportInput {
+	text: string;
+	boxItem: string;
+}
+
+/**
+ * An export read as an opening.
+ */
+export interface StrongboxExportRead {
+	boxesOpened: number;
+	keys: StrongboxKeysUsed | null;
+	/** The Universal Ammo that came back, in PED. */
+	ammoPed: number;
+	contents: StrongboxExportRow[];
+	unexpected: StrongboxUnexpectedRow[];
+	skipped: StrongboxSkippedLine[];
+	/** TT produced minus the keys' TT: zero for a clean opening. */
+	balanceGap: number;
+}
+
+/**
+ * One item's change in the export.
+ */
+export interface StrongboxExportRow {
+	/** 1-based line number in the pasted text. */
+	line: number;
+	itemName: string;
+	quantity: number;
+	valuePed: number;
+}
+
+/**
+ * How a run's result reached the app.
+ */
+export type StrongboxIntake = 'export' | 'manual';
+
+/**
+ * One thing the boxes held besides ammo.
+ */
+export interface StrongboxItemInput {
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	/** Turned into Nanocubes rather than kept. */
+	recycle: boolean;
+}
+
+/**
+ * The keys the opening used up.
+ */
+export interface StrongboxKeysUsed {
+	count: number;
+	ttValue: number;
+}
+
+/**
+ * One item of a recorded run, as it stands.
+ */
+export interface StrongboxOpenedItem {
+	itemName: string;
+	quantity: number;
+	ttValue: number;
+	/** The Nanocubes it became, while that conversion stands. */
+	nanocubes: number | null;
+}
+
+/**
+ * A recorded run.
+ */
+export interface StrongboxOpeningEntry {
+	id: string;
+	boxItem: string;
+	boxCount: number;
+	/** What the boxes cost above TT: bought for the run or held as assets. */
+	boxMarkupPaid: number;
+	keyTt: number;
+	keyMarkupPaid: number;
+	ammoPed: number;
+	contents: StrongboxOpenedItem[];
+	intake: StrongboxIntake;
+	openedAt: string;
+	undone: boolean;
+}
+
+/**
+ * A run of openings to record.
+ */
+export interface StrongboxOpeningInput {
+	boxItem: string;
+	sources: StrongboxSource[];
+	keyUnitTt: number;
+	keyMarkupPaid?: number | null;
+	contents: StrongboxItemInput[];
+	ammoPed: number;
+	intake: StrongboxIntake;
+	openedAt?: string | null;
+}
+
+/**
+ * The run just recorded.
+ */
+export interface StrongboxOpeningRecorded {
+	id: string;
+}
+
+/**
+ * A line of the paste that was not a row.
+ */
+export interface StrongboxSkippedLine {
+	line: number;
+	text: string;
+	reason: string;
+}
+
+/**
+ * Where a run's boxes came from.
+ */
+export type StrongboxSource = {
+		quantity: number;
+		kind: 'held';
+	} | {
+		itemId: string;
+		quantity: number;
+		kind: 'asset';
+	} | {
+		quantity: number;
+		markupPaid: number;
+		kind: 'bought';
+	};
+
+/**
+ * Why a row does not fit an opening of the chosen box.
+ */
+export type StrongboxUnexpectedReason = 'other_box' | 'removed' | 'gained' | 'worn';
+
+/**
+ * A row the opening does not account for.
+ */
+export interface StrongboxUnexpectedRow {
+	row: StrongboxExportRow;
+	reason: StrongboxUnexpectedReason;
 }
 
 /**
@@ -3007,6 +6215,29 @@ export interface TableVerdict {
 }
 
 /**
+ * Why a terminal read produced no figure.
+ */
+export type TerminalReadRefusal = 'gameWindowNotFound' | 'gameWindowOffScreen' | 'captureFailed' | 'terminalNotOpen' | 'figureNotVisible' | 'figureNotRead' | 'readerUnavailable';
+
+/**
+ * A figure read off a game terminal (the Repair Terminal's repair cost,
+ * the Trade Terminal's total), or why there is none. A refusal carries
+ * no figure at all, so nothing downstream can mistake it for one.
+ */
+export type TerminalReadResult = {
+		/** The amount recorded. */
+		valuePed: number;
+		/** The amount as the terminal prints it, without the unit: `2.20`, `1,234.56789`. This is what the player is shown. */
+		text: string;
+		/** What the recogniser saw, kept with a recording as its evidence and not shown. */
+		rawText: string;
+		kind: 'read';
+	} | {
+		reason: TerminalReadRefusal;
+		kind: 'refused';
+	};
+
+/**
  * One day of the Overview timeline.
  */
 export interface TimelineDay {
@@ -3018,6 +6249,10 @@ export interface TimelineDay {
 	questPes: number;
 	ledgerGains: Record<string, number>;
 	trackingCost: number;
+	/** The overhead of the sessions started in it, and what was billed between sessions on its days: in its losses, never in `trackingCost`. */
+	overheadCost: number;
+	/** Of `overheadCost`, what was billed between sessions: credited to no activity, and left out of every rate. */
+	betweenSessionsCost: number;
 	ledgerLosses: Record<string, number>;
 }
 
@@ -3027,6 +6262,250 @@ export interface TimelineDay {
  * versus "this is Hunting"). Absent when no tool is known.
  */
 export type ToolActivity = 'hunting' | 'treecutting';
+
+/**
+ * A tool the name read could be.
+ */
+export interface ToolCandidate {
+	name: string;
+	/** The library entry it is, when the library holds exactly one entry of it in use; null for a tool known only from the game's data, or one kept in several entries. */
+	libraryId: number | null;
+}
+
+/**
+ * A weapon's damage enhancers: how many are still fitted, of those it is
+ * set up with (each wears out with use).
+ */
+export interface ToolEnhancers {
+	active: number;
+	fitted: number;
+}
+
+/**
+ * A library entry, by id and name, with the label the player tells it
+ * apart from the others listed with it by (see [`lookalike_labels`]).
+ */
+export interface ToolEntry {
+	id: number;
+	name: string;
+	label: string;
+}
+
+/**
+ * Why the entry an addition created stays with the addition undone.
+ */
+export type ToolEntryKeptBecause = 'changed' | 'notInGameData' | 'otherSighting' | 'inSession' | 'referenced' | 'inSettings';
+
+/**
+ * What the screen shows is in hand.
+ */
+export type ToolHeld = {
+		kind: 'notRead';
+	} | {
+		name: string;
+		provisional: boolean;
+		setup: ToolSetupView | null;
+		kind: 'tool';
+	} | {
+		kind: 'nothing';
+	} | {
+		name: string;
+		kind: 'notTracked';
+	} | {
+		why: ToolUncertainty;
+		kind: 'uncertain';
+	} | {
+		last: string | null;
+		provisional: boolean;
+		setup: ToolSetupView | null;
+		kind: 'notVisible';
+	};
+
+/**
+ * One attachment fitted to the tool in hand.
+ */
+export interface ToolPart {
+	role: ToolPartRole;
+	name: string;
+}
+
+/**
+ * The part an attachment plays in a set-up.
+ */
+export type ToolPartRole = 'amplifier' | 'scope' | 'absorber' | 'implant';
+
+/**
+ * Why the keys are the source of the tool in hand while reading it off
+ * the screen is turned on.
+ */
+export type ToolScreenUnread = 'stopped' | 'notStarted';
+
+/**
+ * What a use of the tool in hand is priced at now, and the set-up behind
+ * the price: for a weapon, as the session prices its shots.
+ */
+export interface ToolSetupView {
+	/** What one use is. */
+	per: ToolUse;
+	/** The parts fitted, in the order a player names them; null where the declaration did not say (a healer declared by its key while the bar was unclear). */
+	parts: ToolPart[] | null;
+	/** Null when the weapon is set up with none (or it is not a weapon). */
+	enhancers: ToolEnhancers | null;
+	/** The price of one use, markup included (PED). */
+	costPerUsePed: number;
+	/** The TT one use consumes, before markup (PED), where known. */
+	ttPerUsePed: number | null;
+}
+
+/**
+ * What the screen read.
+ */
+export type ToolSighted = {
+		name: string;
+		tool: SightedToolKind;
+		shots: number | null;
+		kind: 'bundled';
+	} | {
+		text: string;
+		kind: 'unknown';
+	};
+
+/**
+ * One thing read off the screen that is not a library entry.
+ */
+export interface ToolSighting {
+	id: string;
+	sighted: ToolSighted;
+	/** When it was first and last seen in hand (epoch seconds). */
+	firstSeen: number;
+	lastSeen: number;
+	/** Null while it is still to be settled. */
+	settled: ToolSightingSettled | null;
+}
+
+/**
+ * What to settle a sighting as.
+ */
+export type ToolSightingAction = 'add' | 'dismiss' | 'leave';
+
+/**
+ * What a settlement, or its undoing, did.
+ */
+export type ToolSightingChange = {
+		created: boolean;
+		uses: ToolUsesCosting;
+		entry: ToolSightingEntry;
+		kind: 'added';
+	} | {
+		kind: 'dismissed';
+	} | {
+		kind: 'left';
+	} | {
+		was: ToolSightingSettledKind;
+		entry: ToolSightingEntryOnUndo;
+		kind: 'reopened';
+	};
+
+/**
+ * The library entry a tool was added as.
+ */
+export interface ToolSightingEntry {
+	id: string;
+	/** The entry as the player tells it from others of its name. */
+	label: string;
+	/** The entry is on. One linked to may be off, and then the reader cannot take the tool as in hand until it is turned on. */
+	enabled: boolean;
+}
+
+/**
+ * What undoing an addition did with the entry it created.
+ */
+export type ToolSightingEntryOnUndo = {
+		kind: 'none';
+	} | {
+		kind: 'removed';
+	} | {
+		because: ToolEntryKeptBecause;
+		kind: 'kept';
+	};
+
+/**
+ * Why a settlement or its undoing was refused. Nothing changed.
+ */
+export type ToolSightingRefusal = {
+		kind: 'notFound';
+	} | {
+		kind: 'otherSession';
+	} | {
+		settled: ToolSightingSettledKind;
+		kind: 'alreadySettled';
+	} | {
+		kind: 'notSettled';
+	} | {
+		kind: 'sessionRunning';
+	} | {
+		kind: 'notATool';
+	} | {
+		kind: 'notInGameData';
+	} | {
+		kind: 'needsSetUp';
+	};
+
+/**
+ * A session's sightings: the ones still to be settled first, tools of
+ * the game's data before names read.
+ */
+export interface ToolSightingReview {
+	sessionId: string;
+	/** The session has ended, so its tools can be added. */
+	ended: boolean;
+	sightings: ToolSighting[];
+}
+
+/**
+ * What settling a sighting, or undoing its settlement, came to.
+ */
+export type ToolSightingSettleResult = {
+		change: ToolSightingChange;
+		review: ToolSightingReview;
+		kind: 'settled';
+	} | {
+		reason: ToolSightingRefusal;
+		kind: 'refused';
+	};
+
+/**
+ * How a sighting was settled.
+ */
+export type ToolSightingSettled = {
+		created: boolean;
+		kind: 'added';
+	} | {
+		kind: 'dismissed';
+	} | {
+		kind: 'left';
+	};
+
+/**
+ * A settlement, by what it was alone.
+ */
+export type ToolSightingSettledKind = 'added' | 'dismissed' | 'left';
+
+/**
+ * Where the tool in hand comes from, as the overlay shows it. While the
+ * keys are the source (the setting off, or no session running) only
+ * `notReading` says anything, and the snapshot's `currentTool` keeps its
+ * meaning.
+ */
+export interface ToolSourceView {
+	/** The screen is the source of the tool in hand for the running session. */
+	readingScreen: boolean;
+	/** Reading the screen is turned on, but the keys are the source, and why. Null otherwise. */
+	notReading: ToolScreenUnread | null;
+	/** The tool held is the player's own declaration, standing until the screen next shows something conclusive. */
+	manual: boolean;
+	held: ToolHeld;
+}
 
 /**
  * One per-tool aggregate.
@@ -3040,6 +6519,63 @@ export interface ToolStat {
 }
 
 /**
+ * Why the bar does not say which tool is in hand.
+ */
+export type ToolUncertainty = {
+		entries: ToolEntry[];
+		kind: 'twins';
+	} | {
+		entries: ToolEntry[];
+		kind: 'disabled';
+	} | {
+		candidates: ToolCandidate[];
+		more: number;
+		kind: 'contended';
+	} | {
+		text: string;
+		kind: 'unknown';
+	} | {
+		kind: 'unreadable';
+	};
+
+/**
+ * What one use of a tool is.
+ */
+export type ToolUse = 'shot' | 'heal' | 'swing';
+
+/**
+ * How an added tool's uses this session are costed.
+ */
+export type ToolUsesCosting = 'withoutAttachments' | 'asBooked' | 'notCosted';
+
+/**
+ * A session's cost buckets as the chat log tracked them. The weapon's is
+ * every shot fired: its kills' spend and the shots after the last kill,
+ * as the measured weapon counts them.
+ */
+export interface TrackedCostBreakdown {
+	weaponCost: number;
+	healCost: number;
+	consumableCost: number;
+	enhancerCost: number;
+	armourCost: number;
+	harvestCost: number;
+}
+
+/**
+ * A session's tracked figures, as its summary holds them.
+ */
+export interface TrackedSessionFigures {
+	weaponCost: number;
+	healingCost: number;
+	armourCost: number;
+	/** The session has hits no armour recording covers yet: its armour cost is not recorded, and `armourCost` is not a figure to show. */
+	armourUnrecorded: boolean;
+	lootTt: number;
+	totalCycled: number;
+}
+
+/**
  * One row of the session list.
  */
 export interface TrackingSession {
@@ -3049,12 +6585,16 @@ export interface TrackingSession {
 	duration: number;
 	primaryMobs: string[];
 	primaryWeapons: string[];
+	/** Cycled. */
 	cost: number;
 	returns: number;
+	/** Returns less Cycled and the session's overhead. */
 	net: number;
 	returnRate: number;
 	globals: number;
 	hofs: number;
+	/** `null` while the session counts in every stats scope. */
+	exclusion: SessionExclusion | null;
 }
 
 /**
@@ -3066,18 +6606,22 @@ export interface TrackingSession {
 export interface TrackingSnapshot {
 	status?: TrackingState | null;
 	hotbarListenerActive?: boolean | null;
-	weaponAttribution?: WeaponAttribution | null;
+	/** Whether the player enabled the hotbar key listener: hotbar presses then declare the weapon in hand. Without it, costs follow the carried weapons' damage ranges alone. */
+	hotbarKeysEnabled?: boolean | null;
+	/** Keyless tracking: the active session's input mode while tracking, this machine's setting while idle. Equipment is then declared in the overlay and healing uses are inferred from the chat log. */
+	keylessInput?: boolean | null;
 	repairOcrEnabled?: boolean | null;
-	endOfSessionArmourReminderEnabled?: boolean | null;
 	/** The session-name facet: the active session's when tracking, the configured next-session value when idle. */
 	sessionName?: string | null;
 	/** The selected session definition (stringified id): the active session's stamped reference when tracking, the configured selection (re-validated against an active definition) when idle. Absent when no definition is in force. */
 	sessionDefinitionId?: string | null;
 	trackProtectionCosts?: boolean | null;
-	trackProtectionBySegment?: boolean | null;
 	/** The skill-boost facet (labelled percent), same idle/active sourcing as the session name. */
 	skillBoostPercent?: number | null;
-	currentMob?: string | null;
+	/** The session's one source for its kills' creature: the typed creature (idle: the one the next session starts with), the pin, and what the screen reads. */
+	mobSource?: MobSourceView | null;
+	/** Where the tool in hand comes from (the hotbar keys, or the game screen) and, while it is the screen, what the screen shows of it. While the screen is the source, the tool held is this one, never `current_tool`, which may then be only what the damage last pointed to. */
+	toolSource?: ToolSourceView | null;
 	currentTool?: string | null;
 	currentToolKind?: HeldItemKind | null;
 	/** What the held tool implies the next action is recorded as. */
@@ -3086,7 +6630,6 @@ export interface TrackingSnapshot {
 	activities?: ActivitySummary | null;
 	/** The lifetime figures of the definition this session runs (or would run) under, for the instance-versus-family flip. Carried on every frame, idle included, over the definition a start would stamp, so the flip is available while picking a session rather than only once tracking begins. Absent when no definition is in force: a legacy or unattached session has no family to flip to, and the surfaces read that absence as "offer no control". */
 	lifetime?: LifetimeStats | null;
-	trifectaAttribution?: TrifectaAttribution | null;
 	recentEvents?: RecentEvent[] | null;
 	session_id?: string | null;
 	started_at?: string | null;
@@ -3100,6 +6643,16 @@ export interface TrackingSnapshot {
 	damageDealtTotal?: number | null;
 	weaponDamageDealt?: number | null;
 	weaponCost?: number | null;
+	/** Armour and plate cost against the session so far; part of `cost`. What the account readings measured up to their latest reading when they measured it; otherwise it arrives when a repair or Trade Terminal reading is recorded, not per hit. */
+	armourCost?: number | null;
+	/** `cost` split by what it was spent on, one line per weapon, healing tool, armour stream, consumable, or harvesting tool; the lines sum to `cost`. */
+	cycledBreakdown?: CycledLine[] | null;
+	/** What the session cost beyond performing its activity (travel, field logistics, what the app cannot place yet), as the account readings measured it so far: in `net`, never in `cost`. Absent while none of the costs rests on the readings. */
+	overheadCost?: number | null;
+	/** When the costs the account readings measured run to: where they measured a bucket, `cost` holds what they measured up to then and the tracked cost of the play since. Absent while none of the costs rests on the readings (the player is not signed in, or no reading after the session's first has measured it yet). */
+	costsMeasuredThrough?: string | null;
+	/** Expected loot over the whole `cost` at every looter basis; absent until a modelled shot. */
+	expectedCycle?: LiveExpectedCycle | null;
 	expectedTtRate?: number | null;
 	expectedReturnCoverage?: number | null;
 	expectedReturnModel?: string | null;
@@ -3121,6 +6674,18 @@ export interface TrackingSnapshot {
 	harvestCost?: number | null;
 	/** The standing harvest-guardrail disagreement; present only while the loot evidence contradicts the hotbar-equipped tool. */
 	harvestGuardrail?: HarvestGuardrailAlert | null;
+	/** The standing weapon mismatch; present only while the damage evidence contradicts the weapon the hotbar declared. */
+	weaponGuardrail?: WeaponGuardrailAlert | null;
+	/** Shots this session recorded without a price because no single carried weapon explains them: the cost leaves them out. */
+	unpricedShots?: number | null;
+	/** The most those shots could have cost: each at the dearest carried weapon that fitted it. Absent while idle. */
+	unpricedCostBound?: number | null;
+	/** Of those shots, the ones no carried weapon fitted, which add nothing to the bound. Absent while idle. */
+	unpricedNoFitShots?: number | null;
+	/** Whether the active session has a weapon declared (pressed on the hotbar, or held from a press before the session). Without one, `current_tool` is only what the damage last pointed to, and hits several carried weapons explain go unpriced. Absent while idle. */
+	weaponDeclared?: boolean | null;
+	/** What the held weapon's latest hits say about its damage, when they land outside its listed range. Absent otherwise. */
+	weaponHitCue?: WeaponHitMargin | null;
 	healing?: HealingStatus | null;
 	warnings?: Warning[] | null;
 }
@@ -3144,83 +6709,38 @@ export type TreeSizeName = 'short' | 'long' | 'huge';
 export type Trend = 'improving' | 'declining' | 'stable';
 
 /**
- * The trifecta attribution summary (present when trifecta mode is active
- * and a preset or binding exists). Its members are always emitted (a
- * null binding stays on the wire), so none skip.
+ * Why a setup has no figures.
  */
-export interface TrifectaAttribution {
-	activePresetId: string | null;
-	presetName: string | null;
-	presets: TrifectaPresetRef[];
-	smallWeapon: string | null;
-	bigWeapon: string | null;
-	healTool: string | null;
+export type UnmodelledReason = 'no_damage' | 'no_cost' | 'missing_efficiency';
+
+/**
+ * One figure of a queued item that did not read.
+ */
+export interface UnreadProblem {
+	field: QueuedField;
+	why: UnreadWhy;
 }
 
 /**
- * One trifecta preset in a settings update. Field names stay in the
- * stored snake_case the config writer re-normalises.
+ * A queued item in view that did not read whole. Nothing of it that did
+ * read is carried.
  */
-export interface TrifectaPresetInput {
-	id: string;
-	name: string;
-	small_weapon_id?: number | null;
-	big_weapon_id?: number | null;
-	heal_id?: number | null;
+export interface UnreadQueuedItem {
+	/** Each figure that failed, and how, in the order the row is read. */
+	problems: UnreadProblem[];
 }
 
 /**
- * One preset reference inside the trifecta attribution summary.
+ * How a figure failed to read.
  */
-export interface TrifectaPresetRef {
-	id: string;
-	name: string;
-}
+export type UnreadWhy = 'notRead' | 'cutOff' | 'outOfBounds' | 'disagrees';
 
 /**
- * One trifecta preset in the settings view: the stored equipment ids
- * plus the live readiness validation against the library.
+ * Recorded hits no protection cost covers yet.
  */
-export interface TrifectaPresetView {
-	id: string;
-	name: string;
-	smallWeaponId: number | null;
-	bigWeaponId: number | null;
-	healId: number | null;
-	ready: boolean;
-	message: string | null;
-}
-
-/**
- * The trifecta block: every preset validated, with the active preset's
- * readiness lifted to the top level.
- */
-export interface TrifectaSettings {
-	activePresetId: string | null;
-	activePresetName: string | null;
-	presets: TrifectaPresetView[];
-	ready: boolean;
-	message: string | null;
-}
-
-/**
- * The undo verb's result: the status after the pop, plus the popped
- * page number. Absent on a refusal (the status carries the error).
- */
-export interface UndoResult {
-	active: boolean;
-	processing: boolean;
-	captured_pages: number;
-	expected_pages: number;
-	last_scan_time: number | null;
-	skills_count: number;
-	configured: boolean;
-	game_window_present: boolean;
-	phase: ScanPhase;
-	processing_progress: ScanProgress;
-	has_pending_result: boolean;
-	error: string | null;
-	undone_page?: number | null;
+export interface UnrecordedProtection {
+	sessions: number;
+	hits: number;
 }
 
 export interface UnresolvedQuestReward {
@@ -3231,7 +6751,14 @@ export interface UnresolvedQuestReward {
 	policy: string | null;
 	reason: string | null;
 	loot: QuestRewardCandidate[];
-	isolated: boolean;
+	/** Whether the completion's own tick carried nothing else; null when no tick was recorded for it, so no tick shape is named. */
+	isolated: boolean | null;
+	/** The quest's named reward items. */
+	expectedItems: string[];
+	/** Recorded ordinary-loot lines that could be the named reward, latest first. */
+	candidates: QuestRewardLootLine[];
+	/** Whether the reward may be declared paid when no line can show it. */
+	declarable: boolean;
 }
 
 /**
@@ -3244,15 +6771,347 @@ export interface Warning {
 }
 
 /**
- * Which attribution source prices weapon shots.
+ * A weapon's attack rate under the reload speed in effect. Past the
+ * server's limit of 100 attacks a minute, the rate the reload speed asks
+ * for turns into per-attack damage and cost instead: `factor` is that
+ * multiplier (1 within the limit), already applied to the detail's cost
+ * breakdown and to the weapon's damage range.
  */
-export type WeaponAttribution = 'hotbar' | 'trifecta';
-
-export async function equipmentSearch(q: string, kind: SearchKind): Promise<EquipmentSearchHit[]> {
-	return invokeCommand('equipment_search', { q, kind });
+export interface WeaponAttackRate {
+	/** The catalogue rate, attacks a minute, before any effect. */
+	basePerMinute: number;
+	/** The reload speed in effect, after the game's stacking limit. */
+	reloadSpeedPercent: number;
+	/** The rate the reload speed asks for. */
+	buffedPerMinute: number;
+	/** The rate the server runs: the buffed rate, held at the limit. */
+	effectivePerMinute: number;
+	/** Per-attack damage and cost multiplier; 1 within the limit. */
+	factor: number;
 }
 
-export async function equipmentLibrary(): Promise<EquipmentSummary[]> {
+/**
+ * How a session's shots were attributed. The two tallies were kept from
+ * this app version on and are null for an older session; the counts of
+ * stored shots and the decisions exist for every session.
+ */
+export interface WeaponAttributionSummary {
+	/** The session has ended, so its unpriced shots can be assigned. */
+	correctable: boolean;
+	/** Shots priced to the weapon the hotbar declared. */
+	agreed: number | null;
+	/** Shots priced to the weapon their damage named. */
+	evidenced: number | null;
+	/** Stored shots whose damage overrode the hotbar's weapon. */
+	evidenceShots: number;
+	/** Shots no single carried weapon explained. */
+	unresolved: number;
+	/** Of those, the ones still without a price. */
+	unpriced: number;
+	/** Of those, the ones assigned a weapon after play. */
+	assigned: number;
+	/** Of those, the ones marked as an effect's tick after play. */
+	markedTicks: number;
+	/** Ticks of an effect an earlier paid activation owns. */
+	effectTicks: number;
+	/** Of those, the ones priced as a paid shot after play. */
+	pricedTicks: number;
+	/** Hits above the held weapon's listed range, priced to it, as they landed. */
+	boostedShots: number;
+	/** Hits below the held weapon's listed range, priced to it, as they landed. */
+	reducedShots: number;
+	/** Those still standing, per weapon, the most boosted first. */
+	hitMargins: WeaponHitMarginRow[];
+	/** Ticks standing as ticks that no one effect claims: several overlapping effects explained them, or their effect's paying session was deleted. */
+	unclaimedTicks: number;
+	/** The effects the session paid for or saw tick, oldest first. */
+	effects: WeaponEffectRow[];
+	reviews: WeaponReviewRow[];
+	/** Unresolved shots that landed with no weapon declared, however they were corrected since. */
+	undeclaredShots: number;
+	/** Enough of them landed that the session ran with no weapon declared. */
+	ranUndeclared: boolean;
+	/** The live bulk assignments, oldest first. */
+	batches: WeaponCorrectionBatch[];
+	/** The most the unpriced shots could have cost: each at the dearest weapon that fitted it, priced as it is configured now. */
+	unpricedCostBound?: number;
+	/** Unpriced shots no weapon still in Equipment fitted, which add nothing to the bound. */
+	unpricedNoFitShots?: number;
+}
+
+/**
+ * What a bulk assignment did, with the session's refreshed detail.
+ */
+export interface WeaponBulkAssignment {
+	assigned: number;
+	/** Unpriced shots it left: the weapon did not explain them. */
+	skipped: number;
+	addedCostPed: number;
+	detail: SessionDetail;
+}
+
+/**
+ * A weapon a session's unpriced shots could all be assigned to at once.
+ */
+export interface WeaponBulkOption {
+	equipmentId: number;
+	name: string;
+	/** The unpriced shots its damage band fitted. */
+	fittingShots: number;
+	/** The unpriced shots it would price as boosted. */
+	boostedShots: number;
+	/** The unpriced shots it would price as reduced. */
+	reducedShots: number;
+	/** The session's other unpriced shots, which it would leave. */
+	skippedShots: number;
+	/** What pricing the shots it explains would add, priced as the weapon is configured now. */
+	addedCostPed: number;
+}
+
+/**
+ * A bulk assignment still standing: every shot it priced, undoable as one.
+ */
+export interface WeaponCorrectionBatch {
+	id: string;
+	toolName: string;
+	/** Its corrections still live. */
+	shots: number;
+	/** What they add to the weapon cost. */
+	costPed: number;
+	correctedAt: number;
+}
+
+/**
+ * What a post-play correction did to its shot.
+ */
+export type WeaponCorrectionKind = 'priced' | 'effect_tick';
+
+/**
+ * A weapon an unpriced shot could be assigned to.
+ */
+export interface WeaponCorrectionWeapon {
+	equipmentId: number;
+	name: string;
+	/** The per-shot cost an assignment would book, at today's pricing. */
+	costPerShotPed: number;
+	/** Its damage band fitted the shot when it landed. */
+	fits: boolean;
+	/** When it did not: how the shot would have to have landed for this weapon to have fired it. Null when no margin holds it. */
+	margin: WeaponHitMargin | null;
+}
+
+/**
+ * One open effect as a stored shot remembers it: the effect it was (or
+ * may have been) a tick of.
+ */
+export interface WeaponEffectCandidate {
+	windowId: string;
+	/** The weapon whose paid hit started it. */
+	toolName: string;
+	/** When that hit landed. */
+	activatedAt: number;
+	/** The effect still stands (no decision took it back and its session was not deleted), so a hit can be marked as its tick. */
+	standing: boolean;
+}
+
+/**
+ * How a paid activation of a weapon with a damage-over-time effect shows
+ * in the chat log.
+ */
+export type WeaponEffectMode = 'over_time' | 'compound';
+
+/**
+ * A weapon's declared damage-over-time effect: what one paid activation
+ * prints, and for how long its ticks follow.
+ */
+export interface WeaponEffectProfileDto {
+	mode: WeaponEffectMode;
+	/** The initial hit's range; null for an effect with only ticks. */
+	hitMin: number | null;
+	hitMax: number | null;
+	durationSeconds: number;
+	tickMin: number;
+	tickMax: number;
+	tickSeconds: number | null;
+}
+
+/**
+ * A weapon's damage-over-time effect as an add or update request declares
+ * it, in the request's casing. Absent: the weapon's every hit is a shot.
+ */
+export interface WeaponEffectRequest {
+	mode: WeaponEffectMode;
+	hit_min?: number | null;
+	hit_max?: number | null;
+	duration_seconds: number;
+	tick_min: number;
+	tick_max: number;
+	tick_seconds?: number | null;
+}
+
+/**
+ * One damage-over-time effect the session paid for or saw tick: the paid
+ * hit that started it, and the ticks it claims in this session.
+ */
+export interface WeaponEffectRow {
+	id: string;
+	/** The weapon whose paid hit started it. */
+	toolName: string;
+	activatedAt: number;
+	expiresAt: number;
+	/** The damage that paid hit printed. */
+	hitAmount: number | null;
+	/** What that hit was booked at (in the session that paid for it). */
+	costPerShot: number;
+	/** This session paid for it; otherwise an earlier one did, and its cost sits there. */
+	paidHere: boolean;
+	/** The player kept the hotbar's weapon over the damage evidence that named this cast: its hit was repriced and it explains no later tick. */
+	withdrawn: boolean;
+	/** Its ticks standing in this session. */
+	ticks: number;
+	tickDamage: number;
+}
+
+/**
+ * A weapon-guardrail disagreement on the snapshot: the weapon the hotbar
+ * declared, the weapon the damage evidence says is being fired (and what is
+ * being recorded), when the evidence first disagreed, and the shots it has
+ * recorded since.
+ */
+export interface WeaponGuardrailAlert {
+	hotbarTool: string;
+	recordingTool: string;
+	since: number;
+	shots: number;
+}
+
+/**
+ * Which side of a weapon's listed range a hit landed on.
+ */
+export type WeaponHitMargin = 'boosted' | 'reduced';
+
+/**
+ * How many of one weapon's shots landed outside its listed range.
+ */
+export interface WeaponHitMarginRow {
+	toolName: string;
+	boosted: number;
+	reduced: number;
+}
+
+/**
+ * What the player decided about a standing weapon mismatch.
+ */
+export type WeaponMismatchDecision = 'confirm' | 'keep';
+
+/**
+ * How a live decision went.
+ */
+export type WeaponReviewDecision = 'confirmed' | 'kept';
+
+/**
+ * A decision the player made on a weapon mismatch while the session ran.
+ */
+export interface WeaponReviewRow {
+	id: string;
+	decision: WeaponReviewDecision;
+	/** The weapon the hotbar declared. */
+	hotbarTool: string;
+	/** The weapon the damage evidence named. */
+	evidenceTool: string;
+	/** When the evidence first disagreed. */
+	since: number;
+	decidedAt: number;
+	repricedShots: number;
+	/** What the repricing moved the session's weapon cost by. */
+	costDelta: number;
+}
+
+/**
+ * One stored shot, as review lists it.
+ */
+export interface WeaponShot {
+	id: string;
+	/** How it was classified as it landed. */
+	group: WeaponShotGroup;
+	observedAt: number;
+	/** Null for a jam, dodge, evade, or miss: a shot with no damage figure. */
+	amount: number | null;
+	critical: boolean;
+	reason: string;
+	/** The weapon the hotbar declared when it landed. */
+	hotbarTool: string | null;
+	/** The weapon it is priced to; null while unpriced. */
+	toolName: string | null;
+	costPerShot: number;
+	/** The weapons carried when it landed. */
+	candidates: WeaponShotCandidate[];
+	/** The open effects that explained it when it landed. */
+	effectCandidates: WeaponEffectCandidate[];
+	/** The one effect a tick belongs to; null when several explained it. */
+	effectWindowId: string | null;
+	/** The live correction, which can be undone. */
+	correctionId: string | null;
+	correctionKind: WeaponCorrectionKind | null;
+	/** For a live effect-tick correction, the effect it named. */
+	correctionWindowId: string | null;
+	/** The decision on a mismatch that repriced it while the session ran. */
+	reviewDecision: WeaponReviewDecision | null;
+	/** It can be corrected, in an ended session: left without a price, or priced from outside its weapon's range, and not corrected yet. */
+	correctable: boolean;
+}
+
+/**
+ * One carried weapon as a stored shot remembers it.
+ */
+export interface WeaponShotCandidate {
+	equipmentId: number;
+	name: string;
+	/** Its damage band fitted the shot. */
+	fits: boolean;
+}
+
+/**
+ * Which stored shots a review page lists.
+ */
+export type WeaponShotGroup = 'unresolved' | 'evidence' | 'effect_tick' | 'boosted' | 'reduced';
+
+export interface WeaponShotPage {
+	shots: WeaponShot[];
+	/** Every stored shot of the requested group in the session. */
+	total: number;
+}
+
+/**
+ * What a session's unpriced shots could have cost at most. The session's
+ * cost leaves them out.
+ */
+export interface WeaponUnpricedExposure {
+	sessionId: string;
+	/** Shots still without a price or correction. */
+	shots: number;
+	/** Of those, the ones no weapon still in Equipment explains: they add nothing to the bound. */
+	noFitShots: number;
+	/** Each other shot at the dearest weapon that explains it, priced as it is configured now. */
+	costBoundPed: number;
+}
+
+/**
+ * A stretch of HP where one setup is the cheapest per kill; consecutive
+ * segments meet where the cheapest setup changes.
+ */
+export interface WinnerSegmentView {
+	/** The setup's position in the request. */
+	index: number;
+	fromHp: number;
+	toHp: number;
+}
+
+export async function equipmentCatalogue(kind: SearchKind): Promise<EquipmentSearchHit[]> {
+	return invokeCommand('equipment_catalogue', { kind });
+}
+
+export async function equipmentLibrary(): Promise<EquipmentLibrary> {
 	return invokeCommand('equipment_library', {});
 }
 
@@ -3264,12 +7123,36 @@ export async function equipmentUpdate(itemId: number, req: EquipmentRequest): Pr
 	return invokeCommand('equipment_update', { item_id: itemId, req });
 }
 
+export async function equipmentSetEnabled(itemId: number, enabled: boolean): Promise<EquipmentSummary> {
+	return invokeCommand('equipment_set_enabled', { item_id: itemId, enabled });
+}
+
 export async function equipmentDelete(itemId: number): Promise<void> {
 	return invokeCommand('equipment_delete', { item_id: itemId });
 }
 
+export async function enhancerMarkups(): Promise<EnhancerMarkups> {
+	return invokeCommand('enhancer_markups', {});
+}
+
+export async function enhancerMarkupSet(input: EnhancerTierMarkupInput): Promise<EnhancerMarkups> {
+	return invokeCommand('enhancer_markup_set', { input });
+}
+
+export async function equipmentDismissedTools(): Promise<DismissedToolName[]> {
+	return invokeCommand('equipment_dismissed_tools', {});
+}
+
+export async function equipmentTrackAgain(name: string): Promise<DismissedToolName[]> {
+	return invokeCommand('equipment_track_again', { name });
+}
+
 export async function equipmentDetail(itemId: number): Promise<EquipmentDetail> {
 	return invokeCommand('equipment_detail', { item_id: itemId });
+}
+
+export async function loadoutCompare(setups: SetupPick[], hpMax: number, looterLevel: number | null): Promise<LoadoutComparison> {
+	return invokeCommand('loadout_compare', { setups, hp_max: hpMax, looter_level: looterLevel });
 }
 
 export async function protectionOverview(): Promise<ProtectionOverview> {
@@ -3280,36 +7163,43 @@ export async function protectionSetCreate(input: ProtectionSetInput): Promise<Pr
 	return invokeCommand('protection_set_create', { input });
 }
 
-export async function protectionSetUpdate(setId: number, input: ProtectionSetInput): Promise<ProtectionOverview> {
+export async function protectionSetUpdate(setId: number, input: ProtectionSetUpdateInput): Promise<ProtectionOverview> {
 	return invokeCommand('protection_set_update', { set_id: setId, input });
-}
-
-export async function protectionLoadoutCreate(input: ProtectionLoadoutInput): Promise<ProtectionOverview> {
-	return invokeCommand('protection_loadout_create', { input });
-}
-
-export async function protectionLoadoutUpdate(loadoutId: number, input: ProtectionLoadoutInput): Promise<ProtectionOverview> {
-	return invokeCommand('protection_loadout_update', { loadout_id: loadoutId, input });
 }
 
 export async function protectionSetArchive(setId: number): Promise<ProtectionOverview> {
 	return invokeCommand('protection_set_archive', { set_id: setId });
 }
 
-export async function protectionLoadoutArchive(loadoutId: number): Promise<ProtectionOverview> {
-	return invokeCommand('protection_loadout_archive', { loadout_id: loadoutId });
+export async function protectionSetRestore(setId: number): Promise<ProtectionOverview> {
+	return invokeCommand('protection_set_restore', { set_id: setId });
 }
 
-export async function protectionSelect(loadoutId: number): Promise<ProtectionOverview> {
-	return invokeCommand('protection_select', { loadout_id: loadoutId });
+export async function protectionUndo(target: {
+		windowId: number;
+		kind: 'recording';
+	} | {
+		observationId: number;
+		kind: 'reading';
+	}): Promise<ProtectionOverview> {
+	return invokeCommand('protection_undo', { target });
 }
 
-export async function protectionPendingAttribution(): Promise<PendingProtectionSession[]> {
-	return invokeCommand('protection_pending_attribution', {});
+export async function protectionUnrecordedSessions(sessionIds: string[]): Promise<string[]> {
+	return invokeCommand('protection_unrecorded_sessions', { session_ids: sessionIds });
 }
 
-export async function protectionAssignSessionLoadout(sessionId: string, loadoutId: number): Promise<ProtectionOverview> {
-	return invokeCommand('protection_assign_session_loadout', { session_id: sessionId, loadout_id: loadoutId });
+export async function protectionSessionStatus(sessionId: string): Promise<ProtectionSessionStatus> {
+	return invokeCommand('protection_session_status', { session_id: sessionId });
+}
+
+export async function protectionRecordingCandidates(stream: {
+		kind: 'unlimited';
+	} | {
+		setId: number;
+		kind: 'limited';
+	}): Promise<ProtectionRecordingCandidates> {
+	return invokeCommand('protection_recording_candidates', { stream });
 }
 
 export async function protectionObservationConfirm(input: ProtectionObservationInput): Promise<ProtectionObservationOutcome> {
@@ -3320,8 +7210,110 @@ export async function protectionRepairConfirm(input: ProtectionRepairInput): Pro
 	return invokeCommand('protection_repair_confirm', { input });
 }
 
-export async function protectionTradeTerminalScan(): Promise<ProtectionScanResult> {
+export async function protectionSetPieces(setId: number): Promise<ProtectionSetPieces> {
+	return invokeCommand('protection_set_pieces', { set_id: setId });
+}
+
+export async function protectionSetPiecesConfirm(setId: number, names: string[]): Promise<ProtectionSetPieces> {
+	return invokeCommand('protection_set_pieces_confirm', { set_id: setId, names });
+}
+
+export async function protectionTradeTerminalScan(): Promise<{
+		/** The amount recorded. */
+		valuePed: number;
+		/** The amount as the terminal prints it, without the unit: `2.20`, `1,234.56789`. This is what the player is shown. */
+		text: string;
+		/** What the recogniser saw, kept with a recording as its evidence and not shown. */
+		rawText: string;
+		kind: 'read';
+	} | {
+		reason: TerminalReadRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('protection_trade_terminal_scan', {});
+}
+
+export async function healingOutputs(sessionId: string, classification: 'direct' | 'effect' | 'passive' | 'unattributed', offset: number, limit: number): Promise<HealingOutputPage> {
+	return invokeCommand('healing_outputs', { session_id: sessionId, classification, offset, limit });
+}
+
+export async function healingCorrectionTools(outputId: string): Promise<HealingCorrectionTool[]> {
+	return invokeCommand('healing_correction_tools', { output_id: outputId });
+}
+
+export async function healingCorrect(target: {
+		activationId: string;
+		kind: 'notPaidUse';
+	} | {
+		outputId: string;
+		equipmentId: number;
+		kind: 'paidUse';
+	}): Promise<SessionDetail> {
+	return invokeCommand('healing_correct', { target });
+}
+
+export async function healingCorrectionUndo(correctionId: string): Promise<SessionDetail> {
+	return invokeCommand('healing_correction_undo', { correction_id: correctionId });
+}
+
+export async function consumableDoses(): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_doses', {});
+}
+
+export async function consumableDoseStart(equipmentId: number, untimed: boolean): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_start', { equipment_id: equipmentId, untimed });
+}
+
+export async function consumableDoseEnd(doseId: string): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_end', { dose_id: doseId });
+}
+
+export async function consumableDoseRemove(doseId: string): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_remove', { dose_id: doseId });
+}
+
+export async function consumableDoseRestore(doseId: string): Promise<ConsumableDoses> {
+	return invokeCommand('consumable_dose_restore', { dose_id: doseId });
+}
+
+export async function consumableSessionDoses(sessionId: string): Promise<ConsumableDose[]> {
+	return invokeCommand('consumable_session_doses', { session_id: sessionId });
+}
+
+export async function weaponShots(sessionId: string, group: 'unresolved' | 'evidence' | 'effect_tick' | 'boosted' | 'reduced', offset: number, limit: number): Promise<WeaponShotPage> {
+	return invokeCommand('weapon_shots', { session_id: sessionId, group, offset, limit });
+}
+
+export async function weaponUnpricedExposure(sessionIds: string[]): Promise<WeaponUnpricedExposure[]> {
+	return invokeCommand('weapon_unpriced_exposure', { session_ids: sessionIds });
+}
+
+export async function weaponBulkOptions(sessionId: string): Promise<WeaponBulkOption[]> {
+	return invokeCommand('weapon_bulk_options', { session_id: sessionId });
+}
+
+export async function weaponAssignFitting(sessionId: string, equipmentId: number): Promise<WeaponBulkAssignment> {
+	return invokeCommand('weapon_assign_fitting', { session_id: sessionId, equipment_id: equipmentId });
+}
+
+export async function weaponBatchUndo(batchId: string): Promise<SessionDetail> {
+	return invokeCommand('weapon_batch_undo', { batch_id: batchId });
+}
+
+export async function weaponCorrectionWeapons(evidenceId: string): Promise<WeaponCorrectionWeapon[]> {
+	return invokeCommand('weapon_correction_weapons', { evidence_id: evidenceId });
+}
+
+export async function weaponAssign(evidenceId: string, equipmentId: number): Promise<SessionDetail> {
+	return invokeCommand('weapon_assign', { evidence_id: evidenceId, equipment_id: equipmentId });
+}
+
+export async function weaponMarkEffectTick(evidenceId: string, windowId: string): Promise<SessionDetail> {
+	return invokeCommand('weapon_mark_effect_tick', { evidence_id: evidenceId, window_id: windowId });
+}
+
+export async function weaponAssignmentUndo(correctionId: string): Promise<SessionDetail> {
+	return invokeCommand('weapon_assignment_undo', { correction_id: correctionId });
 }
 
 export async function characterCalibration(): Promise<CalibrationStatus> {
@@ -3340,32 +7332,28 @@ export async function characterProfessions(): Promise<ProfessionLevel[]> {
 	return invokeCommand('character_professions', {});
 }
 
-export async function characterProspectOptions(): Promise<CharacterProspectOptions> {
-	return invokeCommand('character_prospect_options', {});
+export async function characterPathOptimizer(professions: string[], targetLevel: number | null, pedBudget: number | null): Promise<PathOptimizerResult> {
+	return invokeCommand('character_path_optimizer', { professions, target_level: targetLevel, ped_budget: pedBudget });
 }
 
-export async function characterProspect(query: ProspectQuery): Promise<ProspectResult> {
-	return invokeCommand('character_prospect', { query });
-}
-
-export async function characterProfessionOptimizer(profession: string): Promise<ProfessionOptimizerResult> {
-	return invokeCommand('character_profession_optimizer', { profession });
-}
-
-export async function characterPathOptimizer(profession: string, targetLevel: number | null, pedBudget: number | null): Promise<PathOptimizerResult> {
-	return invokeCommand('character_path_optimizer', { profession, target_level: targetLevel, ped_budget: pedBudget });
-}
-
-export async function characterHpOptimizer(): Promise<HpOptimizerResult> {
-	return invokeCommand('character_hp_optimizer', {});
+export async function characterHpOptimizer(targetHp: number): Promise<HpOptimizerResult> {
+	return invokeCommand('character_hp_optimizer', { target_hp: targetHp });
 }
 
 export async function characterActivityRecommender(query: ActivityRecommenderQuery): Promise<ActivityRecommenderResult> {
 	return invokeCommand('character_activity_recommender', { query });
 }
 
+export async function characterSkillingForecast(query: SkillingForecastQuery): Promise<SkillingForecastResult> {
+	return invokeCommand('character_skilling_forecast', { query });
+}
+
 export async function settingsGet(): Promise<AppSettings> {
 	return invokeCommand('settings_get', {});
+}
+
+export async function inputStatus(): Promise<KeyboardAccess> {
+	return invokeCommand('input_status', {});
 }
 
 export async function settingsOverlayPosition(): Promise<OverlayPosition> {
@@ -3394,6 +7382,18 @@ export async function codexRecommend(speciesName: string, rank: number, professi
 
 export async function codexMetaAttributes(): Promise<CodexMetaAttribute[]> {
 	return invokeCommand('codex_meta_attributes', {});
+}
+
+export async function codexMetaTargets(): Promise<CodexMetaTargets> {
+	return invokeCommand('codex_meta_targets', {});
+}
+
+export async function codexMetaProgress(): Promise<CodexMetaProgress> {
+	return invokeCommand('codex_meta_progress', {});
+}
+
+export async function codexMetaCalibrate(earned: number): Promise<CodexMetaProgress> {
+	return invokeCommand('codex_meta_calibrate', { earned });
 }
 
 export async function codexCalibrate(speciesName: string, rank: number): Promise<CodexCalibrateResult> {
@@ -3482,6 +7482,14 @@ export async function questRewardReview(input: QuestRewardReviewInput): Promise<
 
 export async function questCancel(questId: number, undoReward: boolean): Promise<Quest> {
 	return invokeCommand('quest_cancel', { quest_id: questId, undo_reward: undoReward });
+}
+
+export async function questAbandon(questId: number): Promise<Quest> {
+	return invokeCommand('quest_abandon', { quest_id: questId });
+}
+
+export async function questCatalogue(): Promise<QuestCatalogue> {
+	return invokeCommand('quest_catalogue', {});
 }
 
 export async function questsMobs(): Promise<string[]> {
@@ -3580,6 +7588,10 @@ export async function stockConvert(input: StockConversionInput): Promise<void> {
 	return invokeCommand('stock_convert', { input });
 }
 
+export async function stockConvertItems(input: ItemConversionInput): Promise<void> {
+	return invokeCommand('stock_convert_items', { input });
+}
+
 export async function stockPrivateSale(input: PrivateSaleInput): Promise<void> {
 	return invokeCommand('stock_private_sale', { input });
 }
@@ -3592,12 +7604,24 @@ export async function stockShrapnelConvert(input: ShrapnelConversionInput): Prom
 	return invokeCommand('stock_shrapnel_convert', { input });
 }
 
+export async function stockConversionFromAccount(input: StockConversionFromAccountInput): Promise<StockConversionFromAccount | null> {
+	return invokeCommand('stock_conversion_from_account', { input });
+}
+
+export async function stockSaleFromAccount(input: StockSaleFromAccountInput): Promise<StockSaleFromAccount | null> {
+	return invokeCommand('stock_sale_from_account', { input });
+}
+
 export async function activityHistory(profession: Profession): Promise<ActivityHistoryEntry[]> {
 	return invokeCommand('activity_history', { profession });
 }
 
 export async function auctionSaleRevert(input: ActivityUndoInput): Promise<AuctionListing> {
 	return invokeCommand('auction_sale_revert', { input });
+}
+
+export async function auctionListingReopen(input: ActivityUndoInput): Promise<AuctionListing> {
+	return invokeCommand('auction_listing_reopen', { input });
 }
 
 export async function auctionListingUndo(input: ActivityUndoInput): Promise<void> {
@@ -3614,6 +7638,184 @@ export async function privateSaleUndo(input: ActivityUndoInput): Promise<void> {
 
 export async function stockRemovalUndo(input: ActivityUndoInput): Promise<void> {
 	return invokeCommand('stock_removal_undo', { input });
+}
+
+export async function strongboxExportRead(input: StrongboxExportInput): Promise<StrongboxExportRead> {
+	return invokeCommand('strongbox_export_read', { input });
+}
+
+export async function strongboxOpen(input: StrongboxOpeningInput): Promise<StrongboxOpeningRecorded> {
+	return invokeCommand('strongbox_open', { input });
+}
+
+export async function strongboxOpenings(): Promise<StrongboxOpeningEntry[]> {
+	return invokeCommand('strongbox_openings', {});
+}
+
+export async function strongboxOpeningUndo(input: ActivityUndoInput): Promise<void> {
+	return invokeCommand('strongbox_opening_undo', { input });
+}
+
+export async function accountStatus(): Promise<AccountStatus> {
+	return invokeCommand('account_status', {});
+}
+
+export async function accountSignal(): Promise<'signedIn' | 'off' | 'notSignedIn' | 'checking' | 'failing' | 'signedOut'> {
+	return invokeCommand('account_signal', {});
+}
+
+export async function accountDisconnect(): Promise<void> {
+	return invokeCommand('account_disconnect', {});
+}
+
+export async function accountActivityMarks(): Promise<AccountActivityMarks> {
+	return invokeCommand('account_activity_marks', {});
+}
+
+export async function accountActivitySeen(input: AccountActivitySeenInput): Promise<void> {
+	return invokeCommand('account_activity_seen', { input });
+}
+
+export async function accountSessionMeasure(sessionId: string): Promise<AccountSessionMeasure | null> {
+	return invokeCommand('account_session_measure', { session_id: sessionId });
+}
+
+export async function accountMeasuredSessions(cursor: string | null, limit: number | null): Promise<MeasuredSessionPage> {
+	return invokeCommand('account_measured_sessions', { cursor, limit });
+}
+
+export async function accountMeasuredSummary(): Promise<AccountMeasuredSummary> {
+	return invokeCommand('account_measured_summary', {});
+}
+
+export async function accountCostPlacements(): Promise<CostPlacements> {
+	return invokeCommand('account_cost_placements', {});
+}
+
+export async function accountCostPlace(input: CostPlacementInput): Promise<CostPlacementResult> {
+	return invokeCommand('account_cost_place', { input });
+}
+
+export async function accountCostPlacementClear(item: string): Promise<CostPlacementResult> {
+	return invokeCommand('account_cost_placement_clear', { item });
+}
+
+export async function accountArmourPieces(): Promise<ArmourPiecesView> {
+	return invokeCommand('account_armour_pieces', {});
+}
+
+export async function accountArmourPieceMarkup(input: ArmourPieceMarkupInput): Promise<ArmourPiecesView> {
+	return invokeCommand('account_armour_piece_markup', { input });
+}
+
+export async function accountProposals(kind: AccountProposalKind | null): Promise<AccountProposal[]> {
+	return invokeCommand('account_proposals', { kind });
+}
+
+export async function accountProposalsClaim(input: AccountProposalsClaimInput): Promise<void> {
+	return invokeCommand('account_proposals_claim', { input });
+}
+
+export async function accountProposalsRelease(input: AccountProposalsInput): Promise<void> {
+	return invokeCommand('account_proposals_release', { input });
+}
+
+export async function accountProposalsLink(input: AccountProposalsLinkInput): Promise<void> {
+	return invokeCommand('account_proposals_link', { input });
+}
+
+export async function accountProposalDismiss(input: AccountProposalDismissInput): Promise<void> {
+	return invokeCommand('account_proposal_dismiss', { input });
+}
+
+export async function accountSessionMinutes(sessionId: string): Promise<AccountSessionMinutes> {
+	return invokeCommand('account_session_minutes', { session_id: sessionId });
+}
+
+export async function accountArrivalUnknownOrigin(input: AccountArrivalInput): Promise<AccountArrivalRecorded> {
+	return invokeCommand('account_arrival_unknown_origin', { input });
+}
+
+export async function accountArrivalUnignore(input: AccountArrivalId): Promise<void> {
+	return invokeCommand('account_arrival_unignore', { input });
+}
+
+export async function accountArrivalUnknownOriginUndo(input: ActivityUndoInput): Promise<void> {
+	return invokeCommand('account_arrival_unknown_origin_undo', { input });
+}
+
+export async function accountReconciliationPlan(): Promise<StockReconciliationDraft> {
+	return invokeCommand('account_reconciliation_plan', {});
+}
+
+export async function accountReconciliationPaste(input: StockReconciliationPasteInput): Promise<StockReconciliationDraft> {
+	return invokeCommand('account_reconciliation_paste', { input });
+}
+
+export async function accountReconciliationDraft(): Promise<StockReconciliationDraft | null> {
+	return invokeCommand('account_reconciliation_draft', {});
+}
+
+export async function accountReconciliationRevise(input: StockReconciliationReviseInput): Promise<StockReconciliationRevised> {
+	return invokeCommand('account_reconciliation_revise', { input });
+}
+
+export async function accountReconciliationApply(input: StockReconciliationApplyInput): Promise<{
+		reconciliationId: string | null;
+		settled: string[];
+		refused: StockReconciliationRefused[];
+		outcome: 'applied';
+	} | {
+		reconciliationId: string;
+		outcome: 'alreadyApplied';
+	} | {
+		outcome: 'sessionTracked';
+	}> {
+	return invokeCommand('account_reconciliation_apply', { input });
+}
+
+export async function accountReconciliationUndo(input: ActivityUndoInput): Promise<void> {
+	return invokeCommand('account_reconciliation_undo', { input });
+}
+
+export async function accountRunBegin(): Promise<{
+		readingId: number;
+		takenAt: string;
+		outcome: 'read';
+	} | {
+		outcome: 'notConnected';
+	} | {
+		outcome: 'signedOut';
+	} | {
+		outcome: 'unreadable';
+	} | {
+		outcome: 'interrupted';
+	}> {
+	return invokeCommand('account_run_begin', {});
+}
+
+export async function accountRunDone(): Promise<{
+		readingId: number;
+		takenAt: string;
+		outcome: 'read';
+	} | {
+		outcome: 'notConnected';
+	} | {
+		outcome: 'signedOut';
+	} | {
+		outcome: 'unreadable';
+	} | {
+		outcome: 'interrupted';
+	}> {
+	return invokeCommand('account_run_done', {});
+}
+
+export async function accountRunWhole(input: AccountRunWholeInput): Promise<AccountRunWhole> {
+	return invokeCommand('account_run_whole', { input });
+}
+
+export async function accountRunCancel(): Promise<void> {
+	return invokeCommand('account_run_cancel', {});
 }
 
 export async function ledgerList(cursor: string | null, limit: number | null): Promise<LedgerPage> {
@@ -3664,11 +7866,27 @@ export async function inventorySell(itemId: string, sale: InventorySellInput): P
 	return invokeCommand('inventory_sell', { item_id: itemId, sale });
 }
 
-export async function inventorySaleWindowCapture(): Promise<SaleWindowCapture> {
+export async function inventorySaleWindowCapture(): Promise<{
+		/** The capture's identity, increasing in the order captures were started: a capture with a lower one is older, and its drafts never replace a newer capture's. */
+		captureId: number;
+		/** When the screen was read, as a local timestamp: what a listing recorded from one of these drafts is dated to. */
+		readAt: string;
+		/** One per queued item that read whole, top to bottom. */
+		drafts: QueuedListingDraft[];
+		/** The queued items in view that did not read whole. */
+		unread: UnreadQueuedItem[];
+		/** How many items the window says are queued. */
+		queued: QueuedCount;
+		kind: 'read';
+	} | {
+		captureId: number;
+		reason: SaleQueueRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('inventory_sale_window_capture', {});
 }
 
-export async function inventorySaleWindowTakeCapture(): Promise<SaleWindowCapture | null> {
+export async function inventorySaleWindowTakeCapture(): Promise<SaleQueueCapture | null> {
 	return invokeCommand('inventory_sale_window_take_capture', {});
 }
 
@@ -3682,6 +7900,18 @@ export async function inventoryEquipmentListingCreate(input: EquipmentListingInp
 
 export async function inventoryEquipmentTrade(input: EquipmentTradeInput): Promise<AuctionListing> {
 	return invokeCommand('inventory_equipment_trade', { input });
+}
+
+export async function inventoryPurchaseAdd(itemId: string, purchase: AssetPurchaseInput): Promise<InventoryItem> {
+	return invokeCommand('inventory_purchase_add', { item_id: itemId, purchase });
+}
+
+export async function inventoryPurchaseUpdate(purchaseId: number, purchase: AssetPurchaseInput): Promise<InventoryItem> {
+	return invokeCommand('inventory_purchase_update', { purchase_id: purchaseId, purchase });
+}
+
+export async function inventoryPurchaseDelete(purchaseId: number): Promise<InventoryItem> {
+	return invokeCommand('inventory_purchase_delete', { purchase_id: purchaseId });
 }
 
 export async function marketPastePreview(text: string): Promise<MarketPastePreview> {
@@ -3700,20 +7930,8 @@ export async function marketOverview(): Promise<MarketOverviewRow[]> {
 	return invokeCommand('market_overview', {});
 }
 
-export async function marketContributionBatch(): Promise<MarketContributionBatch | null> {
-	return invokeCommand('market_contribution_batch', {});
-}
-
 export async function marketAuctionPacketThreshold(maxFeeSharePct: number): Promise<MarketAuctionPacketThreshold> {
 	return invokeCommand('market_auction_packet_threshold', { max_fee_share_pct: maxFeeSharePct });
-}
-
-export async function marketBreakEven(): Promise<MarketBreakEven> {
-	return invokeCommand('market_break_even', {});
-}
-
-export async function marketMobRanking(horizon: MarketHorizon): Promise<MarketMobRankingRow[]> {
-	return invokeCommand('market_mob_ranking', { horizon });
 }
 
 export async function marketHarvestMarkups(): Promise<MarketHarvestData> {
@@ -3724,48 +7942,68 @@ export async function marketHuntMarkups(): Promise<MarketHarvestData> {
 	return invokeCommand('market_hunt_markups', {});
 }
 
+export async function marketItemMarkups(names: string[]): Promise<MarketHarvestData> {
+	return invokeCommand('market_item_markups', { names });
+}
+
+export async function marketManualMarkupSet(input: MarketManualMarkupInput): Promise<MarketManualMarkup> {
+	return invokeCommand('market_manual_markup_set', { input });
+}
+
+export async function marketManualMarkupClear(itemName: string): Promise<boolean> {
+	return invokeCommand('market_manual_markup_clear', { item_name: itemName });
+}
+
+export async function marketNanocubeMarkSet(itemName: string, marked: boolean): Promise<boolean> {
+	return invokeCommand('market_nanocube_mark_set', { item_name: itemName, marked });
+}
+
 export async function marketItemHistory(itemName: string, horizon: MarketHorizon): Promise<MarketHistoryPoint[]> {
 	return invokeCommand('market_item_history', { item_name: itemName, horizon });
 }
 
-export async function scanStatus(): Promise<ScanStatus> {
+export async function scanStatus(): Promise<{
+		/** A scan can run: the recogniser and the interface data loaded. */
+		available: boolean;
+		/** Why the last scan stopped by itself, when it did. */
+		stopped: SkillScanStop | null;
+		phase: 'idle';
+	} | {
+		/** Pages collected so far. */
+		pagesCollected: number;
+		/** How many pages the list has, once a page has shown it. */
+		pageCount: number | null;
+		/** The page numbers still to collect, once the count is known. */
+		missingPages: number[];
+		/** What stops the view in the game being collected, when something does. */
+		hint: SkillScanHint | null;
+		phase: 'collecting';
+	} | {
+		phase: 'awaitingReview';
+	} | {
+		phase: 'saving';
+	}> {
 	return invokeCommand('scan_status', {});
 }
 
-export async function scanStart(pageCount: number | null): Promise<ScanStatus> {
-	return invokeCommand('scan_start', { page_count: pageCount });
+export async function scanStart(): Promise<SkillScanReply> {
+	return invokeCommand('scan_start', {});
 }
 
-export async function scanCapture(): Promise<CaptureResult> {
-	return invokeCommand('scan_capture', {});
-}
-
-export async function scanCancel(): Promise<ScanStatus> {
+export async function scanCancel(): Promise<SkillScanReply> {
 	return invokeCommand('scan_cancel', {});
 }
 
-export async function scanUndo(): Promise<UndoResult> {
-	return invokeCommand('scan_undo', {});
+export async function scanAccept(scan: number, saveAnyway: boolean): Promise<AcceptResult> {
+	return invokeCommand('scan_accept', { scan, save_anyway: saveAnyway });
 }
 
-export async function scanProcess(): Promise<ScanStatus> {
-	return invokeCommand('scan_process', {});
+export async function scanReject(scan: number): Promise<RejectResult> {
+	return invokeCommand('scan_reject', { scan });
 }
 
-export async function scanAccept(): Promise<AcceptResult> {
-	return invokeCommand('scan_accept', {});
-}
-
-export async function scanReject(): Promise<RejectResult> {
-	return invokeCommand('scan_reject', {});
-}
-
-export async function scanPending(): Promise<SkillScanPending | null> {
+export async function scanPending(): Promise<SkillScanReview | null> {
 	return invokeCommand('scan_pending', {});
-}
-
-export async function scanSpacebarCapture(enabled: boolean): Promise<SpacebarResult> {
-	return invokeCommand('scan_spacebar_capture', { enabled });
 }
 
 export async function trackingSessions(cursor: string | null, limit: number | null, definitionId: number | null): Promise<SessionPage> {
@@ -3776,12 +8014,20 @@ export async function trackingSessionDetail(sessionId: string): Promise<SessionD
 	return invokeCommand('tracking_session_detail', { session_id: sessionId });
 }
 
+export async function trackingDefinitionLoot(definitionId: number): Promise<LootEntry[]> {
+	return invokeCommand('tracking_definition_loot', { definition_id: definitionId });
+}
+
+export async function trackingDefinitionRewards(definitionId: number): Promise<SessionQuestRewardItem[]> {
+	return invokeCommand('tracking_definition_rewards', { definition_id: definitionId });
+}
+
 export async function trackingSessionIntervals(sessionId: string): Promise<SessionIntervals> {
 	return invokeCommand('tracking_session_intervals', { session_id: sessionId });
 }
 
-export async function trackingManualMobSuggestions(q: string, limit: number | null): Promise<ManualMobSuggestion[]> {
-	return invokeCommand('tracking_manual_mob_suggestions', { q, limit });
+export async function trackingMobCatalogue(): Promise<ManualMobSuggestion[]> {
+	return invokeCommand('tracking_mob_catalogue', {});
 }
 
 export async function trackingSnapshot(): Promise<TrackingSnapshot> {
@@ -3796,12 +8042,35 @@ export async function trackingStop(): Promise<StopResult> {
 	return invokeCommand('tracking_stop', {});
 }
 
+export async function trackingWeaponDecide(decision: 'confirm' | 'keep'): Promise<boolean> {
+	return invokeCommand('tracking_weapon_decide', { decision });
+}
+
+export async function trackingDeclareEquipment(equipmentId: number): Promise<DeclaredEquipment> {
+	return invokeCommand('tracking_declare_equipment', { equipment_id: equipmentId });
+}
+
 export async function trackingReleaseMob(): Promise<ReleaseResult> {
 	return invokeCommand('tracking_release_mob', {});
 }
 
 export async function trackingManualMobLock(species: string, maturity: string | null): Promise<ManualMobLockResult> {
 	return invokeCommand('tracking_manual_mob_lock', { species, maturity });
+}
+
+export async function trackingMobPin(target: {
+		creature: DetectedCreature;
+		kind: 'shown';
+	} | {
+		species: string;
+		maturity: string | null;
+		kind: 'typed';
+	}): Promise<MobPin> {
+	return invokeCommand('tracking_mob_pin', { target });
+}
+
+export async function trackingMobUnpin(): Promise<boolean> {
+	return invokeCommand('tracking_mob_unpin', {});
 }
 
 export async function trackingSessionConfig(sessionName: string | null, skillBoostPercent: number | null): Promise<SessionConfigResult> {
@@ -3832,6 +8101,100 @@ export async function trackingRestoreMob(sessionId: string, currentMobName: stri
 	return invokeCommand('tracking_restore_mob', { session_id: sessionId, current_mob_name: currentMobName });
 }
 
+export async function trackingMobDetections(sessionId: string): Promise<MobDetectionReview> {
+	return invokeCommand('tracking_mob_detections', { session_id: sessionId });
+}
+
+export async function trackingMobDetectionSettle(sessionId: string, mob: {
+		species: string;
+		maturity: string;
+		provisionalKey: string | null;
+		kind: 'mob';
+	} | {
+		kind: 'unnamed';
+	}, target: {
+		name: string;
+		kind: 'creature';
+	} | {
+		kind: 'declared';
+	}): Promise<{
+		settled: MobDetectionSettled;
+		review: MobDetectionReview;
+		kind: 'settled';
+	} | {
+		creature: DetectedCreature;
+		kind: 'didYouMean';
+	}> {
+	return invokeCommand('tracking_mob_detection_settle', { session_id: sessionId, mob, target });
+}
+
+export async function creatureEntries(): Promise<CreatureEntry[]> {
+	return invokeCommand('creature_entries', {});
+}
+
+export async function creatureEntryCheck(text: string, replacing: string | null): Promise<{
+		name: string;
+		maturity: string | null;
+		anyNumber: boolean;
+		kind: 'ready';
+	} | {
+		name: string;
+		maturity: string | null;
+		recordedAs: DetectedCreature;
+		kind: 'known';
+	} | {
+		reason: string;
+		kind: 'refused';
+	}> {
+	return invokeCommand('creature_entry_check', { text, replacing });
+}
+
+export async function creatureEntrySave(text: string, species: string | null, replacing: string | null): Promise<CreatureEntry[]> {
+	return invokeCommand('creature_entry_save', { text, species, replacing });
+}
+
+export async function creatureEntryRemove(name: string): Promise<CreatureEntry[]> {
+	return invokeCommand('creature_entry_remove', { name });
+}
+
+export async function mobLabels(): Promise<MobLabel[]> {
+	return invokeCommand('mob_labels', {});
+}
+
+export async function mobLabelSet(mob: string, label: string): Promise<MobLabel[]> {
+	return invokeCommand('mob_label_set', { mob, label });
+}
+
+export async function mobLabelClear(species: string, maturity: string): Promise<MobLabel[]> {
+	return invokeCommand('mob_label_clear', { species, maturity });
+}
+
+export async function trackingToolSightings(sessionId: string): Promise<ToolSightingReview> {
+	return invokeCommand('tracking_tool_sightings', { session_id: sessionId });
+}
+
+export async function trackingToolSightingSettle(sessionId: string, sightingId: string, action: 'add' | 'dismiss' | 'leave'): Promise<{
+		change: ToolSightingChange;
+		review: ToolSightingReview;
+		kind: 'settled';
+	} | {
+		reason: ToolSightingRefusal;
+		kind: 'refused';
+	}> {
+	return invokeCommand('tracking_tool_sighting_settle', { session_id: sessionId, sighting_id: sightingId, action });
+}
+
+export async function trackingToolSightingUndo(sessionId: string, sightingId: string): Promise<{
+		change: ToolSightingChange;
+		review: ToolSightingReview;
+		kind: 'settled';
+	} | {
+		reason: ToolSightingRefusal;
+		kind: 'refused';
+	}> {
+	return invokeCommand('tracking_tool_sighting_undo', { session_id: sessionId, sighting_id: sightingId });
+}
+
 export async function trackingLootItemActivate(sessionId: string, itemName: string): Promise<LootItemEditResult> {
 	return invokeCommand('tracking_loot_item_activate', { session_id: sessionId, item_name: itemName });
 }
@@ -3844,56 +8207,27 @@ export async function trackingArmourCost(sessionId: string, cost: number): Promi
 	return invokeCommand('tracking_armour_cost', { session_id: sessionId, cost });
 }
 
-export async function trackingRepairScan(sessionId: string): Promise<RepairScanResult> {
+export async function trackingRepairScan(sessionId: string): Promise<{
+		/** The amount recorded. */
+		valuePed: number;
+		/** The amount as the terminal prints it, without the unit: `2.20`, `1,234.56789`. This is what the player is shown. */
+		text: string;
+		/** What the recogniser saw, kept with a recording as its evidence and not shown. */
+		rawText: string;
+		kind: 'read';
+	} | {
+		reason: TerminalReadRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('tracking_repair_scan', { session_id: sessionId });
+}
+
+export async function trackingSessionExclusion(sessionId: string, economy: boolean, progression: boolean, note: string | null): Promise<SessionExclusionResult> {
+	return invokeCommand('tracking_session_exclusion', { session_id: sessionId, economy, progression, note });
 }
 
 export async function trackingSessionDelete(sessionId: string): Promise<void> {
 	return invokeCommand('tracking_session_delete', { session_id: sessionId });
-}
-
-export async function demoAnalyticsOverview(period: string): Promise<AnalyticsOverview> {
-	return invokeCommand('demo_analytics_overview', { period });
-}
-
-export async function demoAnalyticsHunting(): Promise<AnalyticsHunting> {
-	return invokeCommand('demo_analytics_hunting', {});
-}
-
-export async function demoAnalyticsHuntingActivity(period: string): Promise<AnalyticsHuntingActivity> {
-	return invokeCommand('demo_analytics_hunting_activity', { period });
-}
-
-export async function demoAnalyticsHarvest(period: string): Promise<AnalyticsHarvest> {
-	return invokeCommand('demo_analytics_harvest', { period });
-}
-
-export async function demoLedgerList(cursor: string | null, limit: number | null): Promise<LedgerPage> {
-	return invokeCommand('demo_ledger_list', { cursor, limit });
-}
-
-export async function demoLedgerSummary(period: string): Promise<LedgerSummary> {
-	return invokeCommand('demo_ledger_summary', { period });
-}
-
-export async function demoLedgerPresetsList(): Promise<LedgerPreset[]> {
-	return invokeCommand('demo_ledger_presets_list', {});
-}
-
-export async function demoInventoryList(): Promise<InventoryItem[]> {
-	return invokeCommand('demo_inventory_list', {});
-}
-
-export async function demoTrackingSessions(cursor: string | null, limit: number | null, definitionId: number | null): Promise<SessionPage> {
-	return invokeCommand('demo_tracking_sessions', { cursor, limit, definition_id: definitionId });
-}
-
-export async function demoTrackingSessionDetail(sessionId: string): Promise<SessionDetail> {
-	return invokeCommand('demo_tracking_session_detail', { session_id: sessionId });
-}
-
-export async function demoTrackingSnapshot(): Promise<TrackingSnapshot> {
-	return invokeCommand('demo_tracking_snapshot', {});
 }
 
 export async function devMetrics(): Promise<MetricsSnapshot> {
@@ -4008,6 +8342,10 @@ export async function mapsCalibrationStart(): Promise<CoordCalibrationStatus> {
 	return invokeCommand('maps_calibration_start', {});
 }
 
+export async function mapsCalibrationConfirm(): Promise<CoordCalibrationStatus> {
+	return invokeCommand('maps_calibration_confirm', {});
+}
+
 export async function mapsCalibrationCancel(): Promise<CoordCalibrationStatus> {
 	return invokeCommand('maps_calibration_cancel', {});
 }
@@ -4016,7 +8354,15 @@ export async function mapsCalibrationStatus(): Promise<CoordCalibrationStatus> {
 	return invokeCommand('maps_calibration_status', {});
 }
 
-export async function mapsScanCoordinates(planet: string | null): Promise<CoordScanResult> {
+export async function mapsScanCoordinates(planet: string): Promise<{
+		lon: number;
+		lat: number;
+		source: CoordReadSource;
+		kind: 'read';
+	} | {
+		refusal: CoordRefusal;
+		kind: 'refused';
+	}> {
 	return invokeCommand('maps_scan_coordinates', { planet });
 }
 
@@ -4024,8 +8370,8 @@ export async function navigationSnapshot(): Promise<NavigationRun | null> {
 	return invokeCommand('navigation_snapshot', {});
 }
 
-export async function navigationStart(planet: string, mapViewId: number | null, startLon: number, startLat: number, selectedPinIds: number[] | null, hotkey: string): Promise<NavigationRun> {
-	return invokeCommand('navigation_start', { planet, map_view_id: mapViewId, start_lon: startLon, start_lat: startLat, selected_pin_ids: selectedPinIds, hotkey });
+export async function navigationStart(planet: string, mapViewId: number | null, startLon: number, startLat: number, selectedPinIds: number[] | null, visitOnKey: boolean): Promise<NavigationRun> {
+	return invokeCommand('navigation_start', { planet, map_view_id: mapViewId, start_lon: startLon, start_lat: startLat, selected_pin_ids: selectedPinIds, visit_on_key: visitOnKey });
 }
 
 export async function navigationUpdatePosition(): Promise<NavigationPositionResult> {
@@ -4056,6 +8402,10 @@ export async function radarCalibrationStart(): Promise<RadarCalibrationStatus> {
 	return invokeCommand('radar_calibration_start', {});
 }
 
+export async function radarCalibrationConfirm(): Promise<RadarCalibrationStatus> {
+	return invokeCommand('radar_calibration_confirm', {});
+}
+
 export async function radarCalibrationCancel(): Promise<void> {
 	return invokeCommand('radar_calibration_cancel', {});
 }
@@ -4066,4 +8416,34 @@ export async function radarCalibrationStatus(): Promise<RadarCalibrationStatus> 
 
 export async function radarGeometry(): Promise<RadarGeometry | null> {
 	return invokeCommand('radar_geometry', {});
+}
+
+export async function navigationResumePosition(): Promise<void> {
+	return invokeCommand('navigation_resume_position', {});
+}
+
+export async function radarGuidance(): Promise<{
+		stopped: RadarGuidanceStop | null;
+		kind: 'off';
+	} | {
+		kind: 'searching';
+	} | {
+		centreX: number;
+		centreY: number;
+		radiusPx: number;
+		/** The screen column right of which a window beside the radar covers neither the radar nor the coordinates under it. */
+		clearRightX: number;
+		source: RadarPlacementSource;
+		/** Null when the ring distances are hidden or did not read, or the placement is the hand calibration's: the overlay then shows direction only. */
+		scale: RadarScale | null;
+		/** Why there is no scale, once two looks agree; null otherwise. */
+		scaleMissing: RadarScaleMissing | null;
+		/** Null without an interface profile. */
+		labelStrip: RadarLabelStrip | null;
+		kind: 'placed';
+	} | {
+		reason: RadarGuidanceLoss;
+		kind: 'lost';
+	}> {
+	return invokeCommand('radar_guidance', {});
 }

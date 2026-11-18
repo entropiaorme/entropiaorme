@@ -1,42 +1,159 @@
 import type {
 	ActivityOption,
 	ActivityOptionsResult,
+	ConsumableOption,
 	ManualMobSuggestion,
+	MobSourceView,
 	QuestHandInState,
 	SessionDefinition,
 } from '$lib/api';
+import type { DeclarableOption } from '$lib/features/equipment/declareOptions';
+import type {
+	HeldToolAction,
+	HeldToolDisplay,
+	HeldToolSetup,
+} from '$lib/features/tracking/heldTool';
+import { expandedLines, type MobSourceLine } from '$lib/features/tracking/mobSource';
+import { subWindowChannel } from './subWindow';
 
-export const OVERLAY_MENU_WINDOW_LABEL = 'overlay-menu';
-export const OVERLAY_MENU_READY_EVENT = 'overlay-menu:ready';
-export const OVERLAY_MENU_SHOW_EVENT = 'overlay-menu:show';
-export const OVERLAY_MENU_HIDE_EVENT = 'overlay-menu:hide';
+/** The overlay's sub-window for menus and panels: one window, showing one
+ * of the kinds below at a time (see `subWindow.ts` for how they behave). */
+export const OVERLAY_MENU_CHANNEL = subWindowChannel('overlay-menu', '/overlay-menu');
+/** What the player chose in a menu or panel. */
 export const OVERLAY_MENU_SELECT_EVENT = 'overlay-menu:select';
-export const OVERLAY_MENU_CLOSED_EVENT = 'overlay-menu:closed';
-export const OVERLAY_MENU_INTERACT_EVENT = 'overlay-menu:interact';
 
-export type OverlayMenuKind = 'definition' | 'mob' | 'trifecta' | 'activities' | 'questHandIn';
+export type OverlayMenuKind =
+	| 'definition'
+	| 'mob'
+	| 'activities'
+	| 'questHandIn'
+	| 'consumables'
+	| 'equipment'
+	| 'mobSource'
+	| 'heldTool'
+	| 'note';
 
 export type OverlayMenuState =
-	| OverlayTrifectaMenuState
 	| OverlayDefinitionMenuState
 	| OverlayMobMenuState
 	| OverlayActivitiesMenuState
-	| OverlayQuestHandInMenuState;
+	| OverlayQuestHandInMenuState
+	| OverlayConsumablesMenuState
+	| OverlayEquipmentMenuState
+	| OverlayMobSourceState
+	| OverlayHeldToolState
+	| OverlayNoteState;
+
+/** The kinds that are a list of rows to pick from, sized by their count. */
+export type OverlayListMenuState = Exclude<
+	OverlayMenuState,
+	OverlayMobSourceState | OverlayHeldToolState | OverlayNoteState
+>;
+
+/** Whether `state` is a panel that says more about a line, as tall as what
+ * it says, rather than a list of rows. */
+export function isPanelState(
+	state: OverlayMenuState,
+): state is OverlayMobSourceState | OverlayHeldToolState | OverlayNoteState {
+	return state.kind === 'mobSource' || state.kind === 'heldTool' || state.kind === 'note';
+}
+
+/** The lines of the overlay's readout that open a panel saying more. */
+export type ReadoutPanel = 'mobSource' | 'heldTool' | 'screenUnread';
+
+/** The panel for where the session's mob comes from, as the snapshot last
+ * read it. */
+export function buildMobSourceState(
+	view: MobSourceView | null | undefined,
+	canType: boolean,
+	saving: boolean,
+): OverlayMobSourceState {
+	return {
+		kind: 'mobSource',
+		lines: expandedLines(view),
+		canType,
+		pinned: Boolean(view?.pin),
+		saving,
+	};
+}
+
+/** The panel for the tool in hand: what the reading says of it, with the
+ * hit cue's explanation when one stands. */
+export function buildHeldToolState(
+	display: HeldToolDisplay,
+	hitDetail: string | null,
+	declaring: boolean,
+): OverlayHeldToolState {
+	return {
+		kind: 'heldTool',
+		lines: hitDetail ? [...display.lines, hitDetail] : display.lines,
+		setup: display.setup,
+		actions: display.actions,
+		declaring,
+	};
+}
+
+/** Where the session's mob comes from: what the screen reads now, what
+ * recent kills suggest, the typed backstop, and a field to type a mob. */
+export interface OverlayMobSourceState {
+	kind: 'mobSource';
+	lines: MobSourceLine[];
+	/** The session is in a state that takes a typed mob. */
+	canType: boolean;
+	/** A mob is pinned: a typed one can only replace the pin. */
+	pinned: boolean;
+	/** A write is running: the controls wait. */
+	saving: boolean;
+}
+
+/** The tool in hand in full: its name, set-up, price, and what the screen's
+ * reading leaves open. */
+export interface OverlayHeldToolState {
+	kind: 'heldTool';
+	lines: string[];
+	setup: HeldToolSetup | null;
+	actions: HeldToolAction[];
+	/** A declaration is being saved. */
+	declaring: boolean;
+}
+
+/** A line of explanation under a heading. */
+export interface OverlayNoteState {
+	kind: 'note';
+	heading: string;
+	text: string;
+}
+
+/** The equipment picker: declare a weapon, healer, or harvesting tool in
+ * hand without its hotbar press. The tool in hand and the healer held are
+ * marked; a bound item names the key that declares it in game. */
+export interface OverlayEquipmentMenuState {
+	kind: 'equipment';
+	width: number;
+	options: DeclarableOption[];
+	/** The tool the session shows in hand. */
+	inHand: string | null;
+	/** The healer last declared, when it is not the tool in hand. */
+	healer: string | null;
+}
+
+/** The configured consumables a dose can be started from. A tap starts one
+ * (a running dose of the same item ends where it starts); a bound item
+ * names its hotbar key, which starts one in game. A lasting item not
+ * running also offers "already in effect": a dose taken before the
+ * session, counted with no timer or cost until the player ends it. */
+export interface OverlayConsumablesMenuState {
+	kind: 'consumables';
+	width: number;
+	options: ConsumableOption[];
+	/** Items with a dose running now, marked on their rows. */
+	runningIds: number[];
+}
 
 export interface OverlayQuestHandInMenuState {
 	kind: 'questHandIn';
 	width: number;
 	handIn: QuestHandInState;
-}
-
-export interface OverlayTrifectaMenuState {
-	kind: 'trifecta';
-	width: number;
-	options: {
-		id: string;
-		name: string;
-		active: boolean;
-	}[];
 }
 
 /** The session picker: the authored definitions with the current
@@ -83,14 +200,19 @@ export interface OverlayActivitiesMenuState {
 }
 
 export type OverlayMenuSelection =
-	| { kind: 'trifecta'; presetId: string }
 	| { kind: 'definition'; definitionId: string; selected: boolean }
 	| { kind: 'mob'; species: string; maturity: string }
 	| { kind: 'activities'; action: 'toggle'; key: string }
 	| { kind: 'activities'; action: 'coActivate'; key: string }
 	| { kind: 'activities'; action: 'declare'; label: string }
 	| { kind: 'activities'; action: 'handIn'; key: string }
-	| { kind: 'questHandIn'; action: 'completed' | 'cancelled' };
+	| { kind: 'questHandIn'; action: 'completed' | 'cancelled' }
+	| { kind: 'consumables'; equipmentId: number; untimed: boolean }
+	| { kind: 'equipment'; equipmentId: number }
+	| { kind: 'mobSource'; action: 'pin' | 'backstop'; species: string; maturity: string }
+	| { kind: 'mobSource'; action: 'clearBackstop' }
+	| { kind: 'heldTool'; action: 'declare'; equipmentId: number }
+	| { kind: 'heldTool'; action: 'choose' };
 
 /** The widest label's rendered width in the overlay menus' font, for
  * sizing a satellite menu to its content. Falls back to a character
@@ -135,8 +257,7 @@ export function computeMenuHeight(rows: number): number {
  * panel from the same count). Every kind falls back to one row: the
  * loading, error, and empty states each occupy exactly one line. The
  * Activities menu counts its free-text row as one more. */
-export function menuRowCount(state: OverlayMenuState): number {
-	if (state.kind === 'trifecta') return Math.max(1, state.options.length);
+export function menuRowCount(state: OverlayListMenuState): number {
 	if (state.kind === 'definition') return Math.max(1, state.definitions.length);
 	if (state.kind === 'activities') {
 		// The free-text row is one more line, and the empty state is one
@@ -144,6 +265,8 @@ export function menuRowCount(state: OverlayMenuState): number {
 		const entry = state.adHocSegments ? 1 : 0;
 		return Math.max(1, state.options.length + entry);
 	}
+	if (state.kind === 'consumables') return Math.max(1, state.options.length);
+	if (state.kind === 'equipment') return Math.max(1, state.options.length);
 	if (state.kind === 'questHandIn') {
 		// The waiting view can become a multi-item candidate without a new
 		// parent-window show event. Reserve the satellite's existing maximum
@@ -204,5 +327,44 @@ export function buildActivitiesMenuState(
 		adHocSegments: options.adHocSegments,
 		idle,
 		segmentDraft,
+	};
+}
+
+/** The consumables menu's state over the configured items. The padding
+ * leaves room for a row's duration and hotbar key beside its name, and for
+ * the "already in effect" choice when any row offers it. */
+export function buildConsumablesMenuState(
+	anchorWidth: number,
+	options: ConsumableOption[],
+	runningIds: number[],
+): OverlayConsumablesMenuState {
+	const labels = options.map((option) => option.name);
+	const offersAlreadyOn = options.some(
+		(option) => option.durationSeconds > 0 && !runningIds.includes(option.equipmentId),
+	);
+	const padding = offersAlreadyOn ? 190 : 120;
+	return {
+		kind: 'consumables',
+		width: computeMenuWidth(anchorWidth, labels.length > 0 ? labels : ['No consumables'], padding),
+		options,
+		runningIds,
+	};
+}
+
+/** The equipment picker's state over the declarable items. The padding
+ * leaves room for a row's kind and hotbar key beside its name. */
+export function buildEquipmentMenuState(
+	anchorWidth: number,
+	options: DeclarableOption[],
+	inHand: string | null,
+	healer: string | null,
+): OverlayEquipmentMenuState {
+	const labels = options.map((option) => option.name);
+	return {
+		kind: 'equipment',
+		width: computeMenuWidth(anchorWidth, labels.length > 0 ? labels : ['No equipment'], 130),
+		options,
+		inHand,
+		healer: healer === inHand ? null : healer,
 	};
 }

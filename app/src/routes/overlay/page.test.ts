@@ -1,20 +1,21 @@
 // @vitest-environment happy-dom
 
 import { act, render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The overlay window's popup orchestration: a hidden popup webview is spawned
-// once, and showing a menu must wait on the popup route's readiness handshake
-// (its `:ready` event) before emitting the show payload and revealing the
-// window; a popup that never reports ready times out into a rendered launch
-// error. Every Tauri seam is mocked; the page, OverlayStrip, and the
+// The overlay window's sub-windows: a hidden popup webview is spawned once,
+// and showing a menu must wait on the popup route's readiness handshake (its
+// `:ready` event) before handing it what to show; a popup that never reports
+// ready times out into a rendered launch error. The popup sizes, places and
+// reveals itself, so the overlay only ever hands it an envelope. Every Tauri
+// seam is mocked; the page, the readout, the sub-window host and the
 // handshake logic run for real.
 const seams = vi.hoisted(() => {
 	const listeners = new Map<string, ((event: { payload?: unknown }) => void)[]>();
 
 	class FakeWebviewWindow {
 		static instances: FakeWebviewWindow[] = [];
-		static getByLabel = vi.fn(async (): Promise<FakeWebviewWindow | null> => null);
+		static getByLabel = vi.fn(async (_label?: string): Promise<FakeWebviewWindow | null> => null);
 		label: string;
 		options: Record<string, unknown>;
 		onceHandlers = new Map<string, (event: { payload?: unknown }) => void>();
@@ -23,6 +24,8 @@ const seams = vi.hoisted(() => {
 		emit = vi.fn(async () => {});
 		show = vi.fn(async () => {});
 		setFocus = vi.fn(async () => {});
+		setFocusable = vi.fn(async (_focusable: boolean) => {});
+		isFocused = vi.fn(async () => false);
 
 		constructor(label: string, options: Record<string, unknown>) {
 			this.label = label;
@@ -52,6 +55,12 @@ const seams = vi.hoisted(() => {
 		}),
 		emit: vi.fn(async () => {}),
 		getTrackingSnapshot: vi.fn(),
+		getSessionDefinitions: vi.fn(async () => [
+			{ id: '1', name: 'ARIS Dailies' },
+			{ id: '2', name: 'Solo Run' },
+		]),
+		decideWeaponMismatch: vi.fn(async () => true),
+		getManualMobSuggestions: vi.fn(async (): Promise<unknown[]> => []),
 		getOverlayPosition: vi.fn(async () => ({ x: null, y: null })),
 		saveOverlayPosition: vi.fn(async () => {}),
 		updateSettings: vi.fn(async () => ({})),
@@ -84,10 +93,12 @@ vi.mock('$lib/api', () => {
 		getOverlayPosition: seams.getOverlayPosition,
 		saveOverlayPosition: seams.saveOverlayPosition,
 		setSessionConfig: vi.fn(),
-		getSessionDefinitions: vi.fn(async () => []),
+		getSessionDefinitions: seams.getSessionDefinitions,
 		selectDefinition: vi.fn(),
-		getManualMobSuggestions: vi.fn(async () => []),
+		getManualMobSuggestions: seams.getManualMobSuggestions,
 		lockManualMob: vi.fn(),
+		pinMob: vi.fn(),
+		unpinMob: vi.fn(),
 		getActivityOptions: vi.fn(async () => ({
 			definitionId: null,
 			definitionName: null,
@@ -106,9 +117,42 @@ vi.mock('$lib/api', () => {
 			candidate: null,
 		})),
 		getQuests: vi.fn(async () => []),
+		CONSUMABLES_TOPIC: 'consumables:updated',
+		getConsumableDoses: vi.fn(async () => ({
+			now: 0,
+			doses: [],
+			reloadSpeed: {
+				equippedPercent: 0,
+				consumedPercent: 0,
+				inEffectPercent: 0,
+				itemLimitPercent: 15,
+				consumedLimitPercent: 20,
+				totalLimitPercent: 30,
+			},
+			options: [],
+		})),
+		startConsumableDose: vi.fn(),
+		endConsumableDose: vi.fn(),
+		removeConsumableDose: vi.fn(),
+		restoreConsumableDose: vi.fn(),
 		updateSettings: seams.updateSettings,
+		// The equipment picker's rows: an empty library and no hotbar.
+		getEquipmentLibrary: vi.fn(async () => ({ entries: [] })),
+		getSettings: vi.fn(async () => ({})),
+		declareEquipment: vi.fn(),
+		decideWeaponMismatch: seams.decideWeaponMismatch,
+		// The markup pills' live valuation: no loot, so no market read.
+		MARKET_TOPIC: 'market:updated',
+		getSessionDetail: vi.fn(async () => ({ lootBreakdown: [], questRewards: [] })),
+		getMarketItemMarkups: vi.fn(async () => ({ nanocubeMarkupPct: null, items: [] })),
 	};
 });
+
+// The equipment picker's rows are not this file's business: none.
+vi.mock('$lib/features/equipment/declareOptions', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/features/equipment/declareOptions')>()),
+	declarableOptions: () => [],
+}));
 
 vi.mock('@tauri-apps/api/event', () => ({
 	listen: seams.listen,
@@ -117,6 +161,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 vi.mock('@tauri-apps/api/window', () => ({
 	getCurrentWindow: () => seams.currentWindow,
+	currentMonitor: async () => null,
 }));
 
 vi.mock('@tauri-apps/api/dpi', () => ({
@@ -138,8 +183,8 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
 	WebviewWindow: seams.FakeWebviewWindow,
 }));
 
-// Only the state seam is stubbed; the pure `scopedStats` filter stays
-// real so the strip narrows its pills the way it does in the app.
+// Only the state seam is stubbed; the pure `enabledStats` filter stays
+// real so the strip draws its pills the way it does in the app.
 vi.mock('$lib/statsCustomisation.svelte', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/statsCustomisation.svelte')>()),
 	overlayStats: seams.overlayStats,
@@ -154,26 +199,51 @@ vi.mock('$lib/statsScope.svelte', () => ({
 
 import OverlayPage from './+page.svelte';
 
+// happy-dom has no Web Animations API, and Svelte drives transition
+// completion (and outro element removal) through `animation.onfinish`; the
+// stub finishes instantly on a microtask so the notice rail's fades settle.
+beforeAll(() => {
+	Element.prototype.animate = function animate() {
+		const animation = {
+			cancel() {},
+			finish() {},
+			effect: null,
+			currentTime: 0,
+			playState: 'finished',
+			onfinish: null as (() => void) | null,
+			oncancel: null as (() => void) | null,
+		};
+		queueMicrotask(() => animation.onfinish?.());
+		return animation as unknown as Animation;
+	};
+});
+
 const activeSnapshot = {
 	status: 'active',
 	session_id: 's1',
 	elapsed: 60,
 	kill_count: 2,
-	weaponAttribution: 'trifecta',
 	sessionName: 'ARIS Dailies',
-	currentMob: 'Atrox',
-	trifectaAttribution: {
-		activePresetId: 'p1',
-		presetName: 'Hunting Set',
-		presets: [
-			{ id: 'p1', name: 'Hunting Set' },
-			{ id: 'p2', name: 'Mining Set' },
-		],
-		smallWeapon: null,
-		bigWeapon: null,
-		healTool: null,
+	sessionDefinitionId: '1',
+	mobSource: {
+		readingScreen: false,
+		pin: null,
+		typed: { name: 'Atrox', species: 'Atrox', maturity: '' },
+		reading: null,
+		continuity: null,
 	},
+	currentTool: 'Sollomate Opalo',
 };
+
+// Idle, so the session picker is a live control: the popup vehicle for the
+// readiness handshake below.
+const idleSnapshot = {
+	status: 'idle',
+	sessionName: 'ARIS Dailies',
+	sessionDefinitionId: '1',
+};
+
+const PICKER_TITLE = 'ARIS Dailies; pick the session for the next run';
 
 function fireReady(topic: string, label: string): void {
 	for (const cb of seams.listeners.get(topic) ?? []) {
@@ -181,9 +251,37 @@ function fireReady(topic: string, label: string): void {
 	}
 }
 
+/** What a sub-window tells the overlay. */
+function report(label: string, payload: Record<string, unknown>): void {
+	for (const cb of seams.listeners.get(`${label}:report`) ?? []) {
+		cb({ payload });
+	}
+}
+
+/** The popups that already exist, by label: reused, with no handshake. */
+function existingPopups(...labels: string[]) {
+	const popups = Object.fromEntries(
+		labels.map((label) => [label, new seams.FakeWebviewWindow(label, {})]),
+	);
+	seams.FakeWebviewWindow.instances = [];
+	seams.FakeWebviewWindow.getByLabel.mockImplementation(
+		async (label?: string) => popups[label ?? ''] ?? null,
+	);
+	return popups;
+}
+
+/** The envelope a sub-window was last shown or updated with. */
+function shown(popup: InstanceType<typeof seams.FakeWebviewWindow>, event: string) {
+	const calls = (popup.emit.mock.calls as unknown as [string, Record<string, unknown>][]).filter(
+		(call) => call[0] === event,
+	);
+	return calls.at(-1)?.[1];
+}
+
 async function mountAndClickTrigger(): Promise<InstanceType<typeof seams.FakeWebviewWindow>> {
+	seams.getTrackingSnapshot.mockResolvedValue(idleSnapshot);
 	render(OverlayPage);
-	const trigger = await screen.findByTitle('Hunting Set');
+	const trigger = await screen.findByTitle(PICKER_TITLE);
 	trigger.click();
 
 	// The popup webview is created hidden.
@@ -196,7 +294,7 @@ async function mountAndClickTrigger(): Promise<InstanceType<typeof seams.FakeWeb
 	return popup;
 }
 
-async function mountAndOpenTrifectaMenu(): Promise<InstanceType<typeof seams.FakeWebviewWindow>> {
+async function mountAndOpenSessionMenu(): Promise<InstanceType<typeof seams.FakeWebviewWindow>> {
 	const popup = await mountAndClickTrigger();
 	// Complete Tauri's creation handshake.
 	await act(async () => {
@@ -208,6 +306,7 @@ async function mountAndOpenTrifectaMenu(): Promise<InstanceType<typeof seams.Fak
 beforeEach(() => {
 	seams.listeners.clear();
 	seams.FakeWebviewWindow.instances = [];
+	seams.FakeWebviewWindow.getByLabel.mockReset();
 	seams.FakeWebviewWindow.getByLabel.mockResolvedValue(null);
 	seams.getTrackingSnapshot.mockResolvedValue(activeSnapshot);
 });
@@ -218,7 +317,7 @@ afterEach(() => {
 
 describe('overlay popup readiness handshake', () => {
 	it('withholds the show sequence until the popup route reports ready', async () => {
-		const popup = await mountAndOpenTrifectaMenu();
+		const popup = await mountAndOpenSessionMenu();
 
 		// Created but not ready: the show payload must not have been emitted and
 		// the window must remain hidden.
@@ -231,37 +330,50 @@ describe('overlay popup readiness handshake', () => {
 		});
 		expect(popup.show).not.toHaveBeenCalled();
 
-		// The popup route reports ready: size, position, show payload, reveal.
+		// The popup route reports ready: it is handed what to show, and where
+		// its control is, and does the rest itself.
 		await act(async () => {
 			fireReady('overlay-menu:ready', 'overlay-menu');
 		});
 		await waitFor(() => {
-			expect(popup.show).toHaveBeenCalledTimes(1);
+			expect(popup.emit).toHaveBeenCalledWith(
+				'overlay-menu:show',
+				expect.objectContaining({ id: 'definition' }),
+			);
 		});
-		expect(popup.setSize).toHaveBeenCalled();
-		expect(popup.setPosition).toHaveBeenCalled();
-		expect(popup.emit).toHaveBeenCalledWith(
-			'overlay-menu:show',
-			expect.objectContaining({
-				kind: 'trifecta',
-				options: [
-					{ id: 'p1', name: 'Hunting Set', active: true },
-					{ id: 'p2', name: 'Mining Set', active: false },
+		expect(shown(popup, 'overlay-menu:show')).toEqual({
+			id: 'definition',
+			state: expect.objectContaining({
+				kind: 'definition',
+				definitions: [
+					{ id: '1', name: 'ARIS Dailies', selected: true },
+					{ id: '2', name: 'Solo Run', selected: false },
 				],
 			}),
+			anchor: {
+				left: expect.any(Number),
+				right: expect.any(Number),
+				below: expect.any(Number),
+				above: expect.any(Number),
+			},
+			bounds: null,
+			gap: 6,
+			align: 'start',
+			// A menu takes the keyboard, so looking away closes it.
+			focus: true,
+			stays: false,
+		});
+		// It may take the keyboard before it is handed anything; it sizes,
+		// places and reveals itself, so the overlay does none of that.
+		expect(popup.setFocusable).toHaveBeenCalledWith(true);
+		expect(popup.setFocusable.mock.invocationCallOrder[0]).toBeLessThan(
+			popup.emit.mock.invocationCallOrder[0],
 		);
-		// The trifecta open path requests focus for keyboard navigation.
-		expect(popup.setFocus).toHaveBeenCalled();
-		// The sequence ORDER is the contract: size and position settle before
-		// the show payload goes out, and the window is revealed only after it.
-		const order = (mock: { mock: { invocationCallOrder: number[] } }) =>
-			mock.mock.invocationCallOrder[0];
-		expect(order(popup.setSize)).toBeLessThan(order(popup.emit));
-		expect(order(popup.setPosition)).toBeLessThan(order(popup.emit));
-		expect(order(popup.emit)).toBeLessThan(order(popup.show));
-		expect(order(popup.show)).toBeLessThan(order(popup.setFocus));
+		expect(popup.show).not.toHaveBeenCalled();
+		expect(popup.setSize).not.toHaveBeenCalled();
+		expect(popup.setPosition).not.toHaveBeenCalled();
 		// The trigger reflects the open menu.
-		expect(screen.getByTitle('Hunting Set').getAttribute('aria-expanded')).toBe('true');
+		expect(screen.getByTitle(PICKER_TITLE).getAttribute('aria-expanded')).toBe('true');
 	});
 
 	it('times out into a rendered launch error when readiness never arrives', async () => {
@@ -282,27 +394,188 @@ describe('overlay popup readiness handshake', () => {
 
 		expect(popup.show).not.toHaveBeenCalled();
 		expect(screen.getByText('Popup route did not become ready')).toBeTruthy();
-		expect(screen.getByTitle('Hunting Set').getAttribute('aria-expanded')).toBe('false');
+		expect(screen.getByTitle(PICKER_TITLE).getAttribute('aria-expanded')).toBe('false');
 	});
 
 	it('reuses the existing popup window and skips the handshake when already created', async () => {
-		const existing = new seams.FakeWebviewWindow('overlay-menu', {});
-		seams.FakeWebviewWindow.instances = [];
-		seams.FakeWebviewWindow.getByLabel.mockResolvedValue(existing);
+		const existing = existingPopups('overlay-menu')['overlay-menu'];
 
+		seams.getTrackingSnapshot.mockResolvedValue(idleSnapshot);
 		render(OverlayPage);
-		const trigger = await screen.findByTitle('Hunting Set');
+		const trigger = await screen.findByTitle(PICKER_TITLE);
 		trigger.click();
 
 		await waitFor(() => {
-			expect(existing.show).toHaveBeenCalledTimes(1);
+			expect(existing.emit).toHaveBeenCalledWith(
+				'overlay-menu:show',
+				expect.objectContaining({
+					id: 'definition',
+					state: expect.objectContaining({ kind: 'definition' }),
+				}),
+			);
 		});
 		// No second window was constructed for the already-live popup.
 		expect(seams.FakeWebviewWindow.instances).toHaveLength(0);
-		expect(existing.emit).toHaveBeenCalledWith(
-			'overlay-menu:show',
-			expect.objectContaining({ kind: 'trifecta' }),
+	});
+});
+
+describe('how the sub-windows open and close', () => {
+	async function mountIdle() {
+		const popups = existingPopups('overlay-menu');
+		seams.getTrackingSnapshot.mockResolvedValue(idleSnapshot);
+		render(OverlayPage);
+		const picker = await screen.findByTitle(PICKER_TITLE);
+		return { menu: popups['overlay-menu'], picker };
+	}
+	const expanded = (el: HTMLElement) => el.getAttribute('aria-expanded');
+
+	it('closes a sub-window on a second click of its control', async () => {
+		const { menu, picker } = await mountIdle();
+		await act(() => picker.click());
+		await waitFor(() => expect(expanded(picker)).toBe('true'));
+		await act(() => picker.click());
+		await waitFor(() => expect(expanded(picker)).toBe('false'));
+		expect(menu.emit).toHaveBeenCalledWith('overlay-menu:hide');
+	});
+
+	it('follows a sub-window that closed itself, and takes the click that closed it as that close', async () => {
+		const { menu, picker } = await mountIdle();
+		await act(() => picker.click());
+		await waitFor(() => expect(expanded(picker)).toBe('true'));
+		menu.emit.mockClear();
+		// The player clicked its control while it held the keyboard: it lost
+		// the keyboard and closed itself, and then the click lands.
+		await act(() => report('overlay-menu', { type: 'closed', id: 'definition', reason: 'blur' }));
+		expect(expanded(picker)).toBe('false');
+		await act(() => picker.click());
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+		expect(expanded(picker)).toBe('false');
+		expect(menu.emit).not.toHaveBeenCalledWith('overlay-menu:show', expect.anything());
+		// The next click is a new one: it opens.
+		await act(() => picker.click());
+		await waitFor(() => expect(expanded(picker)).toBe('true'));
+	});
+
+	it('closes every sub-window when the overlay is dragged', async () => {
+		const { menu, picker } = await mountIdle();
+		await act(() => picker.click());
+		await waitFor(() => expect(expanded(picker)).toBe('true'));
+		const frame = picker.closest('.overlay-frame') as HTMLElement;
+		await act(() =>
+			frame
+				.querySelector('.readout')
+				?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })),
 		);
+		await waitFor(() => expect(expanded(picker)).toBe('false'));
+		expect(menu.emit).toHaveBeenCalledWith('overlay-menu:hide');
+		await waitFor(() => expect(seams.currentWindow.startDragging).toHaveBeenCalled());
+	});
+});
+
+describe('the mob suggestion menu', () => {
+	async function openMobMenu() {
+		const popup = existingPopups('overlay-menu')['overlay-menu'];
+		seams.getManualMobSuggestions.mockResolvedValue([
+			{ display: 'Atrox Young', species: 'Atrox', maturity: 'Young' },
+		]);
+		seams.getTrackingSnapshot.mockResolvedValue({ status: 'idle' });
+		render(OverlayPage);
+		const input = (await screen.findByPlaceholderText('Type a mob...')) as HTMLInputElement;
+		await act(async () => {
+			input.focus();
+			input.value = 'atr';
+			input.dispatchEvent(new Event('input', { bubbles: true }));
+		});
+		await waitFor(() => {
+			expect(popup.emit).toHaveBeenCalledWith(
+				'overlay-menu:show',
+				expect.objectContaining({ id: 'mob' }),
+			);
+		});
+		// The suggestions follow the field: they take no keyboard from it.
+		expect(shown(popup, 'overlay-menu:show')).toMatchObject({
+			id: 'mob',
+			focus: false,
+			state: { kind: 'mob' },
+		});
+		expect(popup.setFocusable).toHaveBeenLastCalledWith(false);
+		popup.emit.mockClear();
+		return { popup, input };
+	}
+
+	it('stays open when the input blurs because the pointer landed in the menu', async () => {
+		const { popup, input } = await openMobMenu();
+		popup.isFocused.mockResolvedValue(true);
+
+		await act(async () => {
+			input.blur();
+			await new Promise((resolve) => setTimeout(resolve, 160));
+		});
+		expect(popup.emit).not.toHaveBeenCalledWith('overlay-menu:hide');
+	});
+
+	it('closes when the input blurs to anywhere else', async () => {
+		const { popup, input } = await openMobMenu();
+		popup.isFocused.mockResolvedValue(false);
+
+		await act(async () => {
+			input.blur();
+			await new Promise((resolve) => setTimeout(resolve, 160));
+		});
+		await waitFor(() => {
+			expect(popup.emit).toHaveBeenCalledWith('overlay-menu:hide');
+		});
+	});
+});
+
+describe('the weapon guardrail cue', () => {
+	it('sends the decision and re-reads the readout', async () => {
+		const withCue = {
+			...activeSnapshot,
+			weaponGuardrail: {
+				hotbarTool: 'Sollomate Opalo',
+				recordingTool: 'Korss H400 (L)',
+				since: 1_784_600_000,
+				shots: 2,
+			},
+		};
+		seams.getTrackingSnapshot.mockResolvedValue(withCue);
+		render(OverlayPage);
+		const confirm = await screen.findByLabelText('Confirm Korss H400 (L)');
+		seams.getTrackingSnapshot.mockResolvedValue({
+			...activeSnapshot,
+			currentTool: 'Korss H400 (L)',
+		});
+		confirm.click();
+		await waitFor(() => {
+			expect(seams.decideWeaponMismatch).toHaveBeenCalledWith('confirm');
+		});
+		await waitFor(() => {
+			expect(screen.queryByTestId('weapon-guardrail-alert')).toBeNull();
+		});
+		expect(screen.getByText('Korss H400 (L)')).toBeTruthy();
+	});
+
+	it('reports a decision that could not be saved', async () => {
+		seams.getTrackingSnapshot.mockResolvedValue({
+			...activeSnapshot,
+			weaponGuardrail: {
+				hotbarTool: 'Sollomate Opalo',
+				recordingTool: 'Korss H400 (L)',
+				since: 1_784_600_000,
+				shots: 2,
+			},
+		});
+		seams.decideWeaponMismatch.mockRejectedValueOnce(
+			new Error('The decision could not be saved; nothing changed'),
+		);
+		render(OverlayPage);
+		(await screen.findByLabelText('Keep Sollomate Opalo')).click();
+		expect(
+			await screen.findByText('The decision could not be saved; nothing changed'),
+		).toBeTruthy();
 	});
 });
 
@@ -321,46 +594,45 @@ describe('snapshot fields reaching the strip', () => {
 	});
 });
 
-describe('armour-cost popup', () => {
-	it('hands the popup its state and leaves sizing, placement and reveal to the popup', async () => {
+describe('the tool in hand read off the screen', () => {
+	it('opens in full in a sub-window, follows the snapshot, and closes when the overlay hides', async () => {
+		const popup = existingPopups('overlay-menu')['overlay-menu'];
+		seams.getTrackingSnapshot.mockResolvedValue({
+			...activeSnapshot,
+			toolSource: {
+				readingScreen: true,
+				notReading: null,
+				manual: false,
+				held: { kind: 'uncertain', why: { kind: 'unreadable' } },
+			},
+		});
 		render(OverlayPage);
-		const trigger = await screen.findByTitle('Record repair cost');
-		trigger.click();
-
-		await waitFor(() => {
-			expect(seams.FakeWebviewWindow.instances).toHaveLength(1);
+		const toggle = await screen.findByTestId('held-tool');
+		await act(() => toggle.click());
+		await waitFor(() => expect(toggle.getAttribute('aria-expanded')).toBe('true'));
+		expect(shown(popup, 'overlay-menu:show')).toMatchObject({
+			id: 'heldTool',
+			focus: true,
+			stays: false,
+			state: { kind: 'heldTool', actions: [{ kind: 'choose', label: 'Choose a tool' }] },
 		});
-		const popup = seams.FakeWebviewWindow.instances[0];
-		expect(popup.label).toBe('overlay-armour-cost');
-		expect(popup.options.visible).toBe(false);
-
+		// "Choose a tool" in the panel opens the picker where the panel hung.
+		await act(() => report('overlay-menu', { type: 'closed', id: 'heldTool', reason: 'done' }));
 		await act(async () => {
-			popup.onceHandlers.get('tauri://created')?.({});
+			for (const cb of seams.listeners.get('overlay-menu:select') ?? []) {
+				cb({ payload: { kind: 'heldTool', action: 'choose' } });
+			}
 		});
-		await act(async () => {
-			fireReady('overlay-armour-cost:ready', 'overlay-armour-cost');
-		});
-
-		await waitFor(() => {
-			expect(popup.emit).toHaveBeenCalledWith(
-				'overlay-armour-cost:show',
-				expect.objectContaining({
-					sessionId: 's1',
-					repairOcrEnabled: false,
-					steps: [expect.objectContaining({ layer: 'combined', method: 'repair' })],
-					anchor: { centerX: expect.any(Number), top: expect.any(Number) },
-				}),
-			);
-		});
-		await waitFor(() => {
-			expect(screen.getByTitle('Record repair cost').getAttribute('aria-expanded')).toBe('true');
-		});
-		// The popup measures its panel and sizes, positions, reveals and
-		// focuses itself from the payload; a host-side reveal would flash the
-		// window at a stale location before it has measured anything.
-		expect(popup.show).not.toHaveBeenCalled();
-		expect(popup.setSize).not.toHaveBeenCalled();
-		expect(popup.setPosition).not.toHaveBeenCalled();
-		expect(popup.setFocus).not.toHaveBeenCalled();
+		await waitFor(() =>
+			expect(shown(popup, 'overlay-menu:show')).toMatchObject({ id: 'equipment' }),
+		);
+		popup.emit.mockClear();
+		const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+		try {
+			await act(() => document.dispatchEvent(new Event('visibilitychange')));
+			await waitFor(() => expect(popup.emit).toHaveBeenCalledWith('overlay-menu:hide'));
+		} finally {
+			visibility.mockRestore();
+		}
 	});
 });

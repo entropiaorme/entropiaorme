@@ -11,15 +11,6 @@ publish = false
 name = "entropia_orme_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
-# `e2e-stub` compiles in the native-shell e2e suite's deterministic backend
-# fixtures, served through the typed read commands (see src/e2e_stub.rs). The
-# e2e build embeds the frontend and drives it at the app's own tauri:// origin,
-# which has native IPC, so no remote-origin grant is needed. Enabled ONLY by the e2e build
-# (`tauri build --features e2e-stub`); dev and release never enable it, so the
-# shipped binary is byte-for-byte unaffected.
-[features]
-e2e-stub = []
-
 [build-dependencies]
 tauri-build = { workspace = true }
 
@@ -35,7 +26,7 @@ thiserror = { workspace = true }
 eo-api = { workspace = true }
 # The composition root constructs the domain services the typed-command
 # facade reads through.
-eo-services = { workspace = true }
+eo-services = { workspace = true, features = ["session-keyring"] }
 # The composition root owns the SSE fan-out hub and bridges the producer
 # bus's domain topics onto it (the `/api/events` stream serves over it).
 eo-wire = { workspace = true }
@@ -49,6 +40,9 @@ rusqlite = { workspace = true }
 # command surface).
 base64 = { workspace = true }
 tokio = { workspace = true }
+# Tells the account sign-in window the app opened from any other window
+# carrying its label, by its native window handle.
+raw-window-handle = { workspace = true }
 # The composition root discharges the ONNX Runtime obligations the
 # recogniser depends on: it pins the bundled dylib to an absolute path
 # (`ort::init_from`) and configures the execution-provider ladder before
@@ -65,6 +59,9 @@ tracing-appender = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Matches capability window patterns as Tauri does (the sign-in window's
+# capability test).
+glob = { workspace = true }
 # Test-only: the composition-integration and concurrency tests assert
 # directly against the database through its closure API (rusqlite is already
 # a normal dependency) and build a frozen clock.
@@ -73,12 +70,16 @@ chrono = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
   "Win32_System_LibraryLoader",
   "Win32_System_ProcessStatus",
   "Win32_System_Threading",
   "Win32_UI_HiDpi",
   "Win32_UI_WindowsAndMessaging"
 ] }
+# Refusing the account sign-in page's permission requests on the WebView2
+# webview Tauri already runs.
+webview2-com = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The page size behind the /proc resident-set sampler (resources.rs).
@@ -87,3 +88,9 @@ libc = { workspace = true }
 # the right place to enable the Linux ScreenCast-portal capture backend that
 # the backend member keeps optional to stay system-library-free.
 eo-services = { workspace = true, features = ["linux-capture"] }
+# The overlay windows' input shapes (hit_region.rs), on the GTK window
+# Tauri already runs.
+gtk = { workspace = true }
+# Refusing the account sign-in page's permission requests on the WebKitGTK
+# webview Tauri already runs.
+webkit2gtk = { workspace = true }

@@ -11,7 +11,7 @@
 //! typed-command crossing. The pydantic-era `exclude_unset` partial the HTTP layer
 //! parsed is now the all-`Option` [`SettingsPatch`] DTO, so the framework
 //! 422/500 envelopes it produced (a non-integer overlay coordinate, a
-//! structurally-malformed `hotbar`/`trifecta_presets` container, an
+//! structurally-malformed `hotbar` container, an
 //! unrenderable surrogate string) become unrepresentable over the typed
 //! command rather than validated. And the dead `POST /api/settings/reset`
 //! retires unconverted: it has no frontend caller, exactly as the
@@ -19,10 +19,11 @@
 //! their families.
 
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
-use eo_services::config_service::{load_config_readonly, AppConfig};
+use eo_services::config_service::{load_config_readonly, AppConfig, HOTBAR_PRESET_COUNT};
+use eo_services::keystroke_source::{KeyboardObserver, KeystrokeSource};
 use eo_services::paths::DB_FILE_NAME;
-use eo_services::trifecta_service::{validate_trifecta, TrifectaPreset};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
@@ -45,32 +46,6 @@ pub struct GameConnection {
     pub chat_log_path: String,
     pub chat_log_valid: bool,
     pub player_name: String,
-}
-
-/// One trifecta preset in the settings view: the stored equipment ids
-/// plus the live readiness validation against the library.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TrifectaPresetView {
-    pub id: String,
-    pub name: String,
-    pub small_weapon_id: Nullable<i64>,
-    pub big_weapon_id: Nullable<i64>,
-    pub heal_id: Nullable<i64>,
-    pub ready: bool,
-    pub message: Nullable<String>,
-}
-
-/// The trifecta block: every preset validated, with the active preset's
-/// readiness lifted to the top level.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TrifectaSettings {
-    pub active_preset_id: Nullable<String>,
-    pub active_preset_name: Nullable<String>,
-    pub presets: Vec<TrifectaPresetView>,
-    pub ready: bool,
-    pub message: Nullable<String>,
 }
 
 /// The harvest-guardrail block: the enabled flag and the intended tool
@@ -120,6 +95,140 @@ pub struct PassiveEffectSourceInput {
     pub effects: Vec<PassiveEffectInput>,
 }
 
+/// The global key observer this machine reads keys through, as the
+/// settings show it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyboardObserverKind {
+    /// The X server's XInput2 key events (Linux).
+    Xinput,
+    /// The kernel input devices (Linux without an X server).
+    Evdev,
+    /// The Windows keyboard hook.
+    WindowsHook,
+    /// Nothing on this machine can read keys.
+    Unavailable,
+}
+
+impl From<KeyboardObserver> for KeyboardObserverKind {
+    fn from(observer: KeyboardObserver) -> Self {
+        match observer {
+            KeyboardObserver::XInput => KeyboardObserverKind::Xinput,
+            KeyboardObserver::Evdev => KeyboardObserverKind::Evdev,
+            KeyboardObserver::WindowsHook => KeyboardObserverKind::WindowsHook,
+            KeyboardObserver::Unavailable => KeyboardObserverKind::Unavailable,
+        }
+    }
+}
+
+/// How this machine reads the player's keys, and whether it runs keyless.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardAccess {
+    /// The observer hotbar keys would be read through. Null while keyless:
+    /// a keyless machine is never probed (nothing opens the keyboard).
+    pub observer: Option<KeyboardObserverKind>,
+    /// Keyless tracking is on for this machine.
+    pub keyless: bool,
+    /// Keyless tracking can be turned on: the machine can be identified, so
+    /// the setting stays with it.
+    pub keyless_available: bool,
+}
+
+/// This machine's input access: its identity (keyless tracking is held to
+/// it) and the shared keyboard source the setting suppresses. The observer
+/// is probed once, on first ask, and never while keyless.
+pub struct InputAccess {
+    machine_id: Option<String>,
+    keyboard: Option<Arc<dyn KeystrokeSource>>,
+    observer: OnceLock<KeyboardObserver>,
+}
+
+impl InputAccess {
+    pub fn new(machine_id: Option<String>, keyboard: Arc<dyn KeystrokeSource>) -> Self {
+        Self {
+            machine_id,
+            keyboard: Some(keyboard),
+            observer: OnceLock::new(),
+        }
+    }
+
+    /// No identity and no keyboard: keyless cannot be turned on.
+    pub fn inert() -> Self {
+        Self {
+            machine_id: None,
+            keyboard: None,
+            observer: OnceLock::new(),
+        }
+    }
+
+    pub fn machine_id(&self) -> Option<&str> {
+        self.machine_id.as_deref()
+    }
+
+    /// Bring the keyboard in line with the stored setting: suppressed while
+    /// this machine runs keyless.
+    pub fn apply(&self, config: &AppConfig) {
+        if let Some(keyboard) = &self.keyboard {
+            keyboard.set_suppressed(config.keyless_input_on(self.machine_id()));
+        }
+    }
+
+    fn access(&self, config: &AppConfig) -> KeyboardAccess {
+        let keyless = config.keyless_input_on(self.machine_id());
+        let observer = (!keyless).then(|| {
+            *self.observer.get_or_init(|| {
+                self.keyboard
+                    .as_ref()
+                    .map_or(KeyboardObserver::Unavailable, |keyboard| {
+                        keyboard.observer()
+                    })
+            })
+        });
+        KeyboardAccess {
+            observer: observer.map(KeyboardObserverKind::from),
+            keyless,
+            keyless_available: self.machine_id.is_some(),
+        }
+    }
+}
+
+/// Whether a feature that reads the game screen (creature detection,
+/// reading the held tool) can capture the game window when a session wants
+/// it, as the settings show it beside the feature's toggle. Each feature's
+/// watcher answers for itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenCapture {
+    /// Capture is running, needs nothing started, or will be asked for at
+    /// the next look after the player turned the feature on.
+    Ready,
+    /// Capture needs starting and is not running.
+    NotRunning,
+    /// The desktop refused capture, or it stopped while watching.
+    Refused,
+    /// The feature cannot run on this installation (no recogniser or
+    /// interface profile was loaded).
+    Unavailable,
+}
+
+impl From<eo_services::screen_watch::CaptureStatus> for ScreenCapture {
+    fn from(status: eo_services::screen_watch::CaptureStatus) -> Self {
+        use eo_services::screen_watch::CaptureStatus;
+        match status {
+            CaptureStatus::Ready => Self::Ready,
+            CaptureStatus::NotRunning => Self::NotRunning,
+            CaptureStatus::Refused => Self::Refused,
+            CaptureStatus::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+/// What a watcher's capture probe says, or unavailable without a watcher.
+fn screen_capture(probe: Option<&eo_services::screen_watch::CaptureStatusProbe>) -> ScreenCapture {
+    probe.map_or(ScreenCapture::Unavailable, |status| status().into())
+}
+
 /// The full assembled settings response. Field order is the wire order
 /// the frontend contract expects (and the HTTP body carried).
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -127,9 +236,25 @@ pub struct PassiveEffectSourceInput {
 pub struct AppSettings {
     pub game_connection: GameConnection,
     pub hotbar_hooks_enabled: bool,
+    pub keyboard: KeyboardAccess,
     pub repair_ocr_enabled: bool,
-    pub end_of_session_armour_reminder_enabled: bool,
-    pub developer_mode_enabled: bool,
+    /// Whether the creature being fought is read off the game screen while
+    /// a session runs (the player's choice, or the build's default until
+    /// they make one).
+    pub mob_detection_enabled: bool,
+    /// Whether detection can capture the game window when a session wants
+    /// it: what the settings say beside the toggle when it cannot.
+    pub mob_detection_capture: ScreenCapture,
+    /// Whether the tool in hand is read off the game's own bar while a
+    /// session runs, instead of from the hotbar keys (the player's choice;
+    /// off until they make one).
+    pub tool_reading_enabled: bool,
+    /// Whether reading the held tool can capture the game window when a
+    /// session wants it.
+    pub tool_reading_capture: ScreenCapture,
+    /// Whether a locked plate whose name did not read is kept as a small
+    /// picture on this computer, for finding out why.
+    pub keep_unread_plates: bool,
     /// The session facets the next session snapshots: the designated
     /// name (empty: not declared) and the skill boost (null: not
     /// declared; 0: declared deliberately unboosted).
@@ -137,13 +262,36 @@ pub struct AppSettings {
     pub declared_skill_boost_percent: Option<i64>,
     /// The slot-to-equipment map, carried through in its stored insertion
     /// order (`serde_json`'s `preserve_order`), so slot "0" stays last.
+    /// This is the live preset's: what a hotbar key press resolves against.
     pub hotbar: Map<String, Value>,
-    pub trifecta: TrifectaSettings,
+    /// The hotbar preset in force, 1 to 3.
+    pub active_hotbar_preset: u8,
+    /// Every preset's slot map in preset order; the live one equals `hotbar`.
+    pub hotbar_presets: Vec<Map<String, Value>>,
+    /// Weapons carried without a hotbar slot: with the slotted weapons,
+    /// the candidates weapon attribution chooses among.
+    pub carried_weapon_ids: Vec<i64>,
     pub passive_effect_sources: Vec<PassiveEffectSourceView>,
+    /// The reload speed those sources put in force.
+    pub reload_speed: ReloadSpeedInEffect,
     pub harvest_guardrail: HarvestGuardrailSettings,
     pub loot_filter_blacklist: Vec<String>,
     pub db_path: String,
     pub app_version: String,
+}
+
+/// The reload speed the enabled passive effects put in force.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ReloadSpeedInEffect {
+    /// What the enabled sources declare, summed.
+    pub declared_percent: f64,
+    /// What reaches healing reloads and weapon attack rates: the declared
+    /// increases held at the game's limit for equipped items, plus any
+    /// declared slowing.
+    pub effective_percent: f64,
+    /// The game's limit on reload speed from equipped items.
+    pub item_limit_percent: f64,
 }
 
 /// GET overlay-position: the persisted overlay window coordinates (null
@@ -156,20 +304,6 @@ pub struct OverlayPosition {
 }
 
 // ── Request DTOs ────────────────────────────────────────────────────
-
-/// One trifecta preset in a settings update. Field names stay in the
-/// stored snake_case the config writer re-normalises.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct TrifectaPresetInput {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub small_weapon_id: Option<i64>,
-    #[serde(default)]
-    pub big_weapon_id: Option<i64>,
-    #[serde(default)]
-    pub heal_id: Option<i64>,
-}
 
 /// The harvest-guardrail block in a settings update. Field names stay
 /// in the stored snake_case the config writer re-normalises.
@@ -187,10 +321,10 @@ pub struct HarvestGuardrailInput {
 
 /// The partial settings update: every field optional, only the present
 /// ones applied (the `exclude_unset` semantics the pydantic model had).
-/// `active_trifecta_preset_id` is a double option so an explicit `null`
-/// (clear the active preset) stays distinct from an absent field (leave
-/// it untouched); every other field is nullless, so a plain `Option`
-/// carries the present/absent distinction.
+/// `declared_skill_boost_percent` is a double option so an explicit
+/// `null` (withdraw the declaration) stays distinct from an absent field
+/// (leave it untouched); every other field is nullless, so a plain
+/// `Option` carries the present/absent distinction.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub struct SettingsPatch {
     #[serde(default)]
@@ -199,12 +333,20 @@ pub struct SettingsPatch {
     pub player_name: Option<String>,
     #[serde(default)]
     pub hotbar_hooks_enabled: Option<bool>,
+    /// Turn keyless tracking on or off for this machine.
+    #[serde(default)]
+    pub keyless_input: Option<bool>,
     #[serde(default)]
     pub repair_ocr_enabled: Option<bool>,
+    /// Turn creature detection on or off.
     #[serde(default)]
-    pub end_of_session_armour_reminder_enabled: Option<bool>,
+    pub mob_detection_enabled: Option<bool>,
+    /// Turn reading the held tool off the screen on or off.
     #[serde(default)]
-    pub developer_mode_enabled: Option<bool>,
+    pub tool_reading_enabled: Option<bool>,
+    /// Turn keeping the plates whose name did not read on or off.
+    #[serde(default)]
+    pub keep_unread_plates: Option<bool>,
     #[serde(default)]
     pub session_name: Option<String>,
     /// Double-optioned so the patch can express all three states: absent
@@ -212,12 +354,15 @@ pub struct SettingsPatch {
     /// number (including 0) declares it.
     #[serde(default, deserialize_with = "double_option")]
     pub declared_skill_boost_percent: Option<Option<i64>>,
+    /// Written to the live preset, after any `active_hotbar_preset` switch
+    /// in the same patch.
     #[serde(default)]
     pub hotbar: Option<Map<String, Value>>,
-    #[serde(default, deserialize_with = "double_option")]
-    pub active_trifecta_preset_id: Option<Option<String>>,
+    /// Switch the live hotbar preset, 1 to 3.
     #[serde(default)]
-    pub trifecta_presets: Option<Vec<TrifectaPresetInput>>,
+    pub active_hotbar_preset: Option<u8>,
+    #[serde(default)]
+    pub carried_weapon_ids: Option<Vec<i64>>,
     #[serde(default)]
     pub passive_effect_sources: Option<Vec<PassiveEffectSourceInput>>,
     #[serde(default)]
@@ -240,7 +385,7 @@ where
 impl SettingsPatch {
     /// The present fields as the update map the config writer applies
     /// (stored snake_case keys). Absent fields are omitted; the `hotbar`
-    /// and `trifecta_presets` containers pass through as their raw JSON
+    /// and `carried_weapon_ids` containers pass through as their raw JSON
     /// value, which the writer re-normalises.
     fn into_updates(self) -> Map<String, Value> {
         let mut updates = Map::new();
@@ -256,14 +401,14 @@ impl SettingsPatch {
         if let Some(value) = self.repair_ocr_enabled {
             updates.insert("repair_ocr_enabled".into(), Value::Bool(value));
         }
-        if let Some(value) = self.end_of_session_armour_reminder_enabled {
-            updates.insert(
-                "end_of_session_armour_reminder_enabled".into(),
-                Value::Bool(value),
-            );
+        if let Some(value) = self.mob_detection_enabled {
+            updates.insert("mob_detection".into(), Value::Bool(value));
         }
-        if let Some(value) = self.developer_mode_enabled {
-            updates.insert("developer_mode_enabled".into(), Value::Bool(value));
+        if let Some(value) = self.tool_reading_enabled {
+            updates.insert("tool_reading".into(), Value::Bool(value));
+        }
+        if let Some(value) = self.keep_unread_plates {
+            updates.insert("keep_unread_plates".into(), Value::Bool(value));
         }
         if let Some(value) = self.session_name {
             updates.insert("session_name".into(), Value::String(value));
@@ -286,14 +431,11 @@ impl SettingsPatch {
         if let Some(value) = self.hotbar {
             updates.insert("hotbar".into(), Value::Object(value));
         }
-        if let Some(value) = self.active_trifecta_preset_id {
-            updates.insert(
-                "active_trifecta_preset_id".into(),
-                value.map(Value::String).unwrap_or(Value::Null),
-            );
+        if let Some(value) = self.active_hotbar_preset {
+            updates.insert("active_hotbar_preset".into(), Value::from(value));
         }
-        if let Some(value) = self.trifecta_presets {
-            updates.insert("trifecta_presets".into(), json!(value));
+        if let Some(value) = self.carried_weapon_ids {
+            updates.insert("carried_weapon_ids".into(), json!(value));
         }
         if let Some(value) = self.passive_effect_sources {
             updates.insert("passive_effect_sources".into(), json!(value));
@@ -312,13 +454,11 @@ impl SettingsPatch {
 
 impl Api {
     /// The full settings assembly: the config fields, the live chat-log
-    /// validity, the per-preset trifecta readiness, the resolved db path,
-    /// and the version stamp. Reads the config fresh from disk, so a read
+    /// validity, the resolved db path, and the version stamp. Reads the config fresh from disk, so a read
     /// after a write is coherent (the writer saves before responding).
     pub async fn settings(&self) -> Result<AppSettings, ApiError> {
         let config = load_config_readonly(&self.data_dir)
             .map_err(ApiError::internal("settings config read"))?;
-        let trifecta = self.trifecta_block(&config).await?;
         Ok(AppSettings {
             game_connection: GameConnection {
                 chat_log_path: config.chatlog_path.clone(),
@@ -326,15 +466,21 @@ impl Api {
                 player_name: config.player_name.clone(),
             },
             hotbar_hooks_enabled: config.hotbar_hooks_enabled,
+            keyboard: self.input.access(&config),
             repair_ocr_enabled: config.repair_ocr_enabled,
-            end_of_session_armour_reminder_enabled: config.end_of_session_armour_reminder_enabled,
-            developer_mode_enabled: config.developer_mode_enabled,
+            mob_detection_enabled: config.mob_detection_on(),
+            mob_detection_capture: screen_capture(self.mob_capture.as_ref()),
+            tool_reading_enabled: config.tool_reading_on(),
+            tool_reading_capture: screen_capture(self.tool_capture.as_ref()),
+            keep_unread_plates: config.keep_unread_plates,
             session_name: config.session_name.clone(),
             declared_skill_boost_percent: config
                 .declared_skill_boost_percent
                 .filter(|percent| *percent >= 0),
             hotbar: config.hotbar.clone(),
-            trifecta,
+            active_hotbar_preset: config.active_hotbar_preset,
+            hotbar_presets: config.hotbar_presets.clone(),
+            carried_weapon_ids: config.carried_weapon_ids.clone(),
             passive_effect_sources: config
                 .passive_effect_sources
                 .iter()
@@ -356,6 +502,15 @@ impl Api {
                         .collect(),
                 })
                 .collect(),
+            reload_speed: ReloadSpeedInEffect {
+                declared_percent: eo_services::passive_effects::declared_reload_speed_percent(
+                    &config.passive_effect_sources,
+                ),
+                effective_percent: eo_services::passive_effects::reload_speed_percent(
+                    &config.passive_effect_sources,
+                ),
+                item_limit_percent: eo_services::passive_effects::RELOAD_SPEED_ITEM_LIMIT_PERCENT,
+            },
             harvest_guardrail: HarvestGuardrailSettings {
                 enabled: config.harvest_guardrail.enabled,
                 short_tool_id: config.harvest_guardrail.short_tool_id.into(),
@@ -366,6 +521,16 @@ impl Api {
             db_path: python_path_str(&self.data_dir.join(DB_FILE_NAME)),
             app_version: APP_VERSION.to_string(),
         })
+    }
+
+    /// How this machine reads keys, and whether it runs keyless: the
+    /// settings' `keyboard` block on its own, for windows that may not read
+    /// the rest of the settings (the route HUD offers its F-key mode only
+    /// where keys can be read).
+    pub fn input_status(&self) -> Result<KeyboardAccess, ApiError> {
+        let config = load_config_readonly(&self.data_dir)
+            .map_err(ApiError::internal("input status config read"))?;
+        Ok(self.input.access(&config))
     }
 
     /// The persisted overlay window position.
@@ -413,20 +578,44 @@ impl Api {
     /// fields, signal the producers (the watcher on a `chatlog_path`
     /// change, the hotbar gate on a `hotbar_hooks_enabled` change, the
     /// tracker unconditionally so an in-flight session re-reads its
-    /// config), and reply with the full assembled settings.
+    /// config), and reply with the full assembled settings. The tracker's
+    /// re-read is also what starts or stops a screen-reading watcher when
+    /// its setting changes, and lets a watcher turned on ask for capture
+    /// (the player's gesture).
     pub async fn settings_update(&self, patch: SettingsPatch) -> Result<AppSettings, ApiError> {
-        let disables_developer_mode = patch.developer_mode_enabled == Some(false);
         if let Some(sources) = patch.passive_effect_sources.as_deref() {
             validate_passive_effect_sources(sources)?;
         }
+        if patch
+            .active_hotbar_preset
+            .is_some_and(|preset| !(1..=HOTBAR_PRESET_COUNT).contains(&preset))
+        {
+            return Err(ApiError::bad_request(format!(
+                "Hotbar preset must be 1 to {HOTBAR_PRESET_COUNT}"
+            )));
+        }
+        let keyless_input = patch.keyless_input;
         let mut updates = patch.into_updates();
+        if let Some(keyless) = keyless_input {
+            let host = if keyless {
+                let Some(machine_id) = self.input.machine_id() else {
+                    return Err(ApiError::bad_request(
+                        "Keyless tracking needs a machine identity, and this machine has none",
+                    ));
+                };
+                Value::String(machine_id.to_string())
+            } else {
+                Value::Null
+            };
+            updates.insert("keyless_input_host".into(), host);
+        }
         // An empty patch is the backend's 400 (nothing to update).
         if updates.is_empty() {
             return Err(ApiError::bad_request("No fields to update"));
         }
         // Lock, validate, and write inside a block so the (non-`Send`)
         // guard is gone before the `.await` below (the response assembly).
-        let (validated_chatlog, hooks_present, hooks_value) = {
+        let (validated_chatlog, input_changed, config_after) = {
             let mut guard = self
                 .config_service
                 .lock()
@@ -455,71 +644,36 @@ impl Api {
             {
                 return Err(ApiError::bad_request("Skill boost cannot be negative"));
             }
-            let hooks_present = updates.contains_key("hotbar_hooks_enabled");
+            let input_changed = updates.contains_key("hotbar_hooks_enabled")
+                || updates.contains_key("keyless_input_host");
             guard
                 .update(&updates)
                 .map_err(ApiError::internal("settings write"))?;
-            (
-                validated_chatlog,
-                hooks_present,
-                guard.get().hotbar_hooks_enabled,
-            )
+            (validated_chatlog, input_changed, guard.get().clone())
         };
 
         if let Some(path) = validated_chatlog {
             self.watcher.restart(path);
         }
-        if hooks_present {
-            self.hotbar.set_hotbar_hooks_enabled(hooks_value);
+        if input_changed {
+            // Keyless overrides the hotbar toggle, and suppresses every other
+            // key consumer through the shared source.
+            self.input.apply(&config_after);
+            self.hotbar.set_hotbar_hooks_enabled(
+                config_after.hotbar_keys_observed(self.input.machine_id()),
+            );
         }
-        if disables_developer_mode {
-            self.stop_auction_fee_research_for_shell();
+        // The held-tool catalogue is built only while the reading is on.
+        // Built here, before the tracker re-reads its config, because that
+        // re-read is what starts the watcher: its first look then matches
+        // against the library as it stands.
+        if config_after.tool_reading_on() {
+            if let Some(catalogues) = &self.tool_catalogues {
+                catalogues.ensure_current().await;
+            }
         }
         self.tracker.reload_config().await;
         self.settings().await
-    }
-
-    /// The trifecta block: every preset validated against the live
-    /// equipment library, with the active preset's readiness lifted to
-    /// the top level (mirrors the backend's `_build_trifecta_response`).
-    async fn trifecta_block(&self, config: &AppConfig) -> Result<TrifectaSettings, ApiError> {
-        let mut presets = Vec::new();
-        let mut active_ready = false;
-        let mut active_message: Option<String> = None;
-        let mut active_name: Option<String> = None;
-
-        for preset in &config.trifecta_presets {
-            let service_preset = TrifectaPreset {
-                small_weapon_id: preset.small_weapon_id,
-                big_weapon_id: preset.big_weapon_id,
-                heal_id: preset.heal_id,
-            };
-            let (ready, message) = validate_trifecta(&self.db, Some(&service_preset))
-                .await
-                .map_err(ApiError::internal("trifecta validation"))?;
-            presets.push(TrifectaPresetView {
-                id: preset.id.clone(),
-                name: preset.name.clone(),
-                small_weapon_id: preset.small_weapon_id.into(),
-                big_weapon_id: preset.big_weapon_id.into(),
-                heal_id: preset.heal_id.into(),
-                ready,
-                message: message.clone().into(),
-            });
-            if Some(preset.id.as_str()) == config.active_trifecta_preset_id.as_deref() {
-                active_ready = ready;
-                active_message = message;
-                active_name = Some(preset.name.clone());
-            }
-        }
-
-        Ok(TrifectaSettings {
-            active_preset_id: config.active_trifecta_preset_id.clone().into(),
-            active_preset_name: active_name.into(),
-            presets,
-            ready: active_ready,
-            message: active_message.into(),
-        })
     }
 }
 
@@ -703,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_field_is_omitted_while_an_explicit_null_preset_clears() {
+    fn an_absent_field_is_omitted_while_an_explicit_null_boost_withdraws() {
         // A bare Option field: absent stays absent.
         let patch = SettingsPatch {
             player_name: Some("Mikel".into()),
@@ -713,17 +867,30 @@ mod tests {
         assert_eq!(updates.get("player_name"), Some(&json!("Mikel")));
         assert!(!updates.contains_key("chatlog_path"));
 
-        // The double-option preset id: present-null lands as a null in the
-        // update map (clear the active preset), distinct from absent.
+        // The double-option boost: present-null lands as a null in the
+        // update map (withdraw the declaration), distinct from absent.
         let cleared: SettingsPatch =
-            serde_json::from_value(json!({ "active_trifecta_preset_id": null })).unwrap();
+            serde_json::from_value(json!({ "declared_skill_boost_percent": null })).unwrap();
         assert_eq!(
-            cleared.into_updates().get("active_trifecta_preset_id"),
+            cleared.into_updates().get("declared_skill_boost_percent"),
             Some(&Value::Null)
         );
         let untouched: SettingsPatch = serde_json::from_value(json!({})).unwrap();
         assert!(!untouched
             .into_updates()
-            .contains_key("active_trifecta_preset_id"));
+            .contains_key("declared_skill_boost_percent"));
+
+        // Carried weapons pass through as the raw list the writer
+        // re-normalises; the retired preset keys are no longer accepted
+        // into the update.
+        let carried: SettingsPatch =
+            serde_json::from_value(json!({ "carried_weapon_ids": [4, 4, 7] })).unwrap();
+        assert_eq!(
+            carried.into_updates().get("carried_weapon_ids"),
+            Some(&json!([4, 4, 7]))
+        );
+        let retired: SettingsPatch =
+            serde_json::from_value(json!({ "active_trifecta_preset_id": "p" })).unwrap();
+        assert!(retired.into_updates().is_empty());
     }
 }

@@ -14,14 +14,43 @@
  * as the pager steps past it), while the client-side pager over the
  * loaded window is the shared table model; the server's count gives the
  * pager its true bounds.
+ *
+ * Armour cost is recorded when the player repairs, possibly sessions after
+ * the play it covers, so a row whose session still awaits a recording is
+ * marked: its net is not final. So is a row holding shots no weapon could
+ * be priced to, until they are assigned in the session's record. A
+ * recording, a correction, or an assignment from any window re-reads the
+ * loaded rows and their marks in place.
+ *
+ * A session can be kept on record while its PED side, its skill gains, or
+ * both are left out of the app-wide statistics. The write is instant and
+ * reversible, so it carries no confirmation; the row and any open detail
+ * take the stored state from the reply.
  */
 
-import { deleteSession, getSessionDetail, getTrackingSessions, reassignSession } from '$lib/api';
-import type { SessionDetail, TrackingSession } from '$lib/types/tracking';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import {
+	CONSUMABLES_TOPIC,
+	deleteSession,
+	getSessionDetail,
+	getTrackingSessions,
+	getUnpricedExposure,
+	getUnrecordedArmourSessions,
+	HEALING_TOPIC,
+	PROTECTION_TOPIC,
+	reassignSession,
+	setSessionExclusion,
+	WEAPONS_TOPIC,
+	type WeaponUnpricedExposure,
+} from '$lib/api';
+import type { SessionDetail, SessionExclusion, TrackingSession } from '$lib/types/tracking';
 import { describeError } from '$lib/view/errorState';
 import { createTableModel } from '$lib/view/tableModel.svelte';
 
 export const PAGE_SIZE = 10;
+
+/** The most rows one in-place refresh re-reads (the backend's page cap). */
+const REFRESH_LIMIT = 200;
 
 export interface InstancesModelOptions {
 	/** The definition whose instances to read; null (or omitted) reads
@@ -50,6 +79,13 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 	// The in-flight guard for a re-file write. The chooser's own open
 	// state belongs to the menu that renders it.
 	let reassigning = $state(false);
+	// The session whose stats exclusion is being written, if any.
+	let excludingId = $state<string | null>(null);
+	// Loaded sessions whose armour cost no recording covers yet.
+	let armourPending = $state<ReadonlySet<string>>(new Set());
+	// Loaded sessions holding shots recorded without a price, with the most
+	// those shots could have cost.
+	let unpricedShots = $state<ReadonlyMap<string, WeaponUnpricedExposure>>(new Map());
 
 	// Pure pager over the loaded window: no search, category, or sort, so
 	// the paged rows keep the backend's ordering unchanged.
@@ -57,6 +93,58 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		rows: () => sessions,
 		pageSize: PAGE_SIZE,
 	});
+
+	/** Re-read which loaded sessions' costs are not final: awaiting an
+	 * armour recording, or holding unpriced shots. A failed read keeps that
+	 * mark's previous state rather than clearing it. */
+	async function refreshMarks(): Promise<void> {
+		const ids = sessions.map((session) => session.id);
+		if (ids.length === 0) {
+			armourPending = new Set();
+			unpricedShots = new Map();
+			return;
+		}
+		const [armour, unpriced] = await Promise.allSettled([
+			(async () => getUnrecordedArmourSessions(ids))(),
+			(async () => getUnpricedExposure(ids))(),
+		]);
+		// A failed read waits for the next write to re-read.
+		if (armour.status === 'fulfilled') armourPending = new Set(armour.value);
+		if (unpriced.status === 'fulfilled') {
+			unpricedShots = new Map(unpriced.value.map((exposure) => [exposure.sessionId, exposure]));
+		}
+	}
+
+	/** After an armour recording, a healing correction, or a weapon
+	 * assignment: re-read the loaded
+	 * rows' figures in place, keeping the page and any open row, then their
+	 * marks. */
+	async function refreshCosts(): Promise<void> {
+		if (loading || sessions.length === 0) return;
+		try {
+			const limit = Math.min(sessions.length, REFRESH_LIMIT);
+			const page = await getTrackingSessions(undefined, limit, scope());
+			const fresh = new Map(page.sessions.map((session) => [session.id, session]));
+			sessions = sessions.map((session) => fresh.get(session.id) ?? session);
+		} catch {
+			// Keep the rows shown; the next write re-reads.
+		}
+		await refreshMarks();
+	}
+
+	/** Follow armour recordings, healing corrections, weapon assignments,
+	 * and dose changes from any window, all of which move session costs;
+	 * returns the detach function. */
+	async function subscribeCostChanges(): Promise<UnlistenFn> {
+		const stops = await Promise.all(
+			[PROTECTION_TOPIC, HEALING_TOPIC, WEAPONS_TOPIC, CONSUMABLES_TOPIC].map((topic) =>
+				listen(topic, () => void refreshCosts()),
+			),
+		);
+		return () => {
+			for (const stop of stops) stop();
+		};
+	}
 
 	async function loadSessions() {
 		loading = true;
@@ -77,6 +165,7 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		} finally {
 			loading = false;
 		}
+		await refreshMarks();
 	}
 
 	// Fetch the next keyset page and append it, growing the client
@@ -96,6 +185,7 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		} finally {
 			loadingMore = false;
 		}
+		await refreshMarks();
 	}
 
 	// Pager bounds from the server total: the client pages the loaded
@@ -180,6 +270,34 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		}
 	}
 
+	/** Set which statistics a session is left out of (the whole desired
+	 * state: both scopes and the note). Returns whether it was stored. */
+	async function setExclusion(
+		id: string,
+		next: { economy: boolean; progression: boolean; note: string | null },
+	): Promise<boolean> {
+		if (excludingId !== null) return false;
+		error = null;
+		excludingId = id;
+		try {
+			const result = await setSessionExclusion(id, next.economy, next.progression, next.note);
+			applyExclusion(id, result.exclusion);
+			return true;
+		} catch (e) {
+			error = describeError(e, 'Failed to change what the session counts towards');
+			return false;
+		} finally {
+			excludingId = null;
+		}
+	}
+
+	function applyExclusion(id: string, exclusion: SessionExclusion | null) {
+		sessions = sessions.map((s) => (s.id === id ? { ...s, exclusion } : s));
+		if (expandedSessionId === id && expandedDetail) {
+			expandedDetail = { ...expandedDetail, exclusion };
+		}
+	}
+
 	function collapseAll() {
 		expandedSessionId = null;
 		expandedDetail = null;
@@ -239,14 +357,30 @@ export function createInstancesModel(options: InstancesModelOptions = {}) {
 		get reassigning() {
 			return reassigning;
 		},
+		get excludingId() {
+			return excludingId;
+		},
+
+		/** The session's armour cost awaits a recording, so its net is not final. */
+		armourPending(id: string): boolean {
+			return armourPending.has(id);
+		},
+		/** The session's shots recorded without a price, which its net leaves
+		 * out, and the most they could have cost; null when it has none. */
+		unpriced(id: string): WeaponUnpricedExposure | null {
+			return unpricedShots.get(id) ?? null;
+		},
 
 		loadSessions,
 		loadMoreSessions,
+		refreshCosts,
+		subscribeCostChanges,
 		nextPage,
 		prevPage,
 		toggleSession,
 		handleDelete,
 		reassign,
+		setExclusion,
 		collapseAll,
 	};
 }

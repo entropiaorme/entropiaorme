@@ -217,6 +217,7 @@ impl SkillTracker {
                 // session, so the newest IS the one in force: exact,
                 // and never a timestamp comparison (gain timestamps
                 // carry in-game server time, interval bounds wall-clock).
+                // id-order: insertion (contexts append in process order).
                 use rusqlite::OptionalExtension as _;
                 let context_id: Option<i64> = conn
                     .query_row(
@@ -403,6 +404,7 @@ mod tests {
             self.runtime.block_on(async {
                 self.db
                     .with_reader(|conn| {
+                        // id-order: insertion (the gain this test just wrote).
                         Ok(conn.query_row(
                             "SELECT skill_name, amount, ped_value, timestamp FROM skill_gains \
                              ORDER BY id DESC LIMIT 1",

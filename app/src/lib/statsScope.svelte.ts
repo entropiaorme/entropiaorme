@@ -9,9 +9,8 @@
  * the way the overlay's stat prefs already do.
  *
  * Scope is a VIEW state: flipping it never touches the user's stat
- * selection. Lifetime mode draws a subset of that selection; flipping
- * back restores the whole of it, so a round trip is a no-op on
- * preferences.
+ * selection. Both scopes draw the same tiles, so a round trip is a no-op
+ * on preferences and on the layout.
  */
 
 import { emit } from '@tauri-apps/api/event';

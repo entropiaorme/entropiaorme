@@ -1,0 +1,18 @@
+[
+  {"equipment_id": 1, "name": "Exceptional Mayhem Electric Attack Chip 15, Perfected (L)", "damage": 191.4, "decay": 36.6602},
+  {
+    "equipment_id": 2,
+    "name": "Electrocution Chip 10 (L)",
+    "damage": 2000.0,
+    "decay": 487.32,
+    "effect_profile": {
+      "mode": "compound",
+      "hit_min": 100.0,
+      "hit_max": 160.0,
+      "duration_seconds": 25.0,
+      "tick_min": 35.0,
+      "tick_max": 75.0,
+      "tick_seconds": 1.15
+    }
+  }
+]

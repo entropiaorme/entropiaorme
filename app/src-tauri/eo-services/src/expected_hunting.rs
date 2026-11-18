@@ -1,10 +1,12 @@
 //! Versioned expected-hunting economics over immutable offensive evidence.
 //!
 //! Community Model v1 is a planning estimate, not observed loot and not
-//! realised accounting. Weapon and amplifier streams retain their own raw TT,
-//! consumed limited-item premium, and Efficiency. Healing, protection,
-//! harvesting, enhancers, scopes, absorbers, implants, and other components
-//! stay outside this model until their return treatment is grounded.
+//! realised accounting. Weapon, amplifier, and scope streams retain their own
+//! raw TT, consumed limited-item premium, and Efficiency (a scope or sight
+//! publishes an Efficiency of its own, like an amplifier). Healing,
+//! protection, harvesting, enhancers, absorbers, implants, and other
+//! components stay outside this model until their return treatment is
+//! grounded.
 
 use eo_wire::normalizer::round_half_even;
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,9 @@ pub const COMMUNITY_MODEL_V1: &str = "community_v1";
 pub enum OffensiveComponentKind {
     Weapon,
     Amplifier,
+    /// A scope or sight: its decay is a stream of its own, at its own
+    /// Efficiency.
+    Scope,
 }
 
 /// Model-neutral evidence for one efficiency-bearing candidate stream.
@@ -65,6 +70,17 @@ pub struct OffensiveLoadoutEvidence {
     pub components: Vec<OffensiveComponentEvidence>,
     pub looters: HuntingLooterLevels,
     pub looter_source: LooterSource,
+    /// Loot-bearing TT per activation that an implant or absorber takes over
+    /// from the weapon's decay, in PED. Outside this model (no Efficiency is
+    /// grounded for it), but still cycled into the loot pool: the whole-Cycled
+    /// expectation counts it as unknown-efficiency TT. Evidence recorded
+    /// before it was kept reads as zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub transferred_tt_per_use: f64,
+}
+
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 impl OffensiveLoadoutEvidence {
@@ -274,6 +290,11 @@ pub fn with_current_offensive_efficiencies(props: &Value, game_data: &GameDataSt
     for (entity_key, id_key, endpoint) in [
         ("weapon_entity", "weapon_catalog_id", "weapons"),
         ("amp_entity", "amp_catalog_id", "weapon_amplifiers"),
+        (
+            "scope_entity",
+            "scope_catalog_id",
+            "weapon_vision_attachments",
+        ),
     ] {
         let Some(entity) = props.get(entity_key).filter(|entity| !entity.is_null()) else {
             continue;
@@ -315,11 +336,15 @@ fn component_from_props(
     damage_enhancers: i64,
 ) -> Option<OffensiveComponentEvidence> {
     let entity = props.get(entity_key).filter(|value| !value.is_null())?;
-    let multiplier = if kind == OffensiveComponentKind::Weapon {
+    // Past the server's attack-rate limit every component of an attack
+    // consumes the carried factor more (1 on props never enriched), so the
+    // per-use figures agree with the cost engine's; ratios are unchanged.
+    let enhancement = if kind == OffensiveComponentKind::Weapon {
         1.0 + 0.1 * damage_enhancers.max(0) as f64
     } else {
         1.0
     };
+    let multiplier = enhancement * crate::attack_rate::factor_from_props(props);
     let decay_pec = economy_number(entity, "decay") * multiplier;
     let ammo_pec = economy_number(entity, "ammo_burn") / 100.0 * multiplier;
 
@@ -373,8 +398,9 @@ fn component_from_props(
     })
 }
 
-/// Extract the supported weapon and amplifier streams from one immutable
-/// stored equipment payload. Other component families are absent by design.
+/// Extract the supported weapon, amplifier, and scope streams from one
+/// immutable stored equipment payload. Other component families are absent
+/// by design.
 pub fn evidence_from_equipment_props(
     props: &Value,
     damage_enhancers: Option<i64>,
@@ -386,6 +412,7 @@ pub fn evidence_from_equipment_props(
             .and_then(Value::as_i64)
             .unwrap_or(0)
     });
+    let transferred_tt_per_use = transferred_tt_per_use(props, configured);
     let mut components = Vec::new();
     if let Some(weapon) = component_from_props(
         props,
@@ -407,11 +434,46 @@ pub fn evidence_from_equipment_props(
     ) {
         components.push(amplifier);
     }
+    if let Some(scope) = component_from_props(
+        props,
+        OffensiveComponentKind::Scope,
+        "scope_entity",
+        "scope_catalog_id",
+        "scope_markup",
+        configured,
+    )
+    // The cost engine prices a scope only when one is fitted (an empty
+    // entity is none), so the evidence follows it.
+    .filter(|scope| scope.raw_tt_per_use > 0.0)
+    {
+        components.push(scope);
+    }
     OffensiveLoadoutEvidence {
         components,
         looters,
         looter_source: LooterSource::ThreeLooterMean,
+        transferred_tt_per_use,
     }
+}
+
+/// The weapon decay an implant and an absorber take over per activation, as
+/// TT in PED: the cost engine's split of the same decay, before any markup.
+fn transferred_tt_per_use(props: &Value, damage_enhancers: i64) -> f64 {
+    let Some(weapon) = props.get("weapon_entity").filter(|value| !value.is_null()) else {
+        return 0.0;
+    };
+    let multiplier =
+        (1.0 + 0.1 * damage_enhancers.max(0) as f64) * crate::attack_rate::factor_from_props(props);
+    let decay_pec = economy_number(weapon, "decay") * multiplier;
+    let share = |key: &str| {
+        props
+            .get(key)
+            .filter(|value| !value.is_null())
+            .map(|device| economy_number(device, "absorption").clamp(0.0, 1.0))
+            .unwrap_or(0.0)
+    };
+    let retained = decay_pec * (1.0 - share("implant_entity")) * (1.0 - share("absorber_entity"));
+    round_half_even((decay_pec - retained).max(0.0) / 100.0, 8)
 }
 
 #[cfg(test)]
@@ -425,6 +487,40 @@ mod tests {
             mutant: level,
             robot: level,
         }
+    }
+
+    #[test]
+    fn the_attack_rate_scales_per_use_evidence_and_leaves_every_rate_alone() {
+        let props = json!({
+            "weapon_entity": {
+                "name": "Rapid (L)",
+                "uses_per_minute": 90,
+                "economy": {"decay": 2.0, "ammo_burn": 200, "efficiency": 60.0},
+            },
+            "weapon_markup": 120,
+            "amp_entity": {
+                "name": "Amp",
+                "economy": {"decay": 0.5, "ammo_burn": 50, "efficiency": 70.0},
+            },
+        });
+        let own = evaluate(&evidence_from_equipment_props(&props, None, looters(20.0))).unwrap();
+        let rated_props = crate::attack_rate::with_attack_rate(&props, None, 30.0);
+        let rated = evaluate(&evidence_from_equipment_props(
+            &rated_props,
+            None,
+            looters(20.0),
+        ))
+        .unwrap();
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        assert!(close(rated.modelled_raw_tt, own.modelled_raw_tt * 1.17));
+        assert!(close(
+            rated.eligible_offensive_cost,
+            own.eligible_offensive_cost * 1.17
+        ));
+        assert!(close(rated.expected_loot_tt, own.expected_loot_tt * 1.17));
+        assert_eq!(rated.expected_tt_rate, own.expected_tt_rate);
+        assert_eq!(rated.break_even_loot_markup, own.break_even_loot_markup);
+        assert_eq!(rated.weighted_efficiency_pct, own.weighted_efficiency_pct);
     }
 
     #[test]
@@ -463,6 +559,7 @@ mod tests {
             ],
             looters: looters(50.0),
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let result = evaluate(&evidence).unwrap();
         assert_eq!(result.weighted_efficiency_pct, Some(82.5));
@@ -536,6 +633,7 @@ mod tests {
             ],
             looters: looters(50.0),
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let result = evaluate(&evidence).unwrap();
         assert_eq!(result.coverage, 0.75);
@@ -567,6 +665,7 @@ mod tests {
             ],
             looters: looters(50.0),
             looter_source: LooterSource::ThreeLooterMean,
+            transferred_tt_per_use: 0.0,
         };
         let result = evaluate(&evidence).unwrap();
         assert_eq!(result.coverage, 1.0);
@@ -617,6 +716,7 @@ mod tests {
                 components,
                 looters: looters(50.0),
                 looter_source: LooterSource::ThreeLooterMean,
+                transferred_tt_per_use: 0.0,
             })
             .unwrap()
         };
@@ -649,6 +749,7 @@ mod tests {
                 components: vec![],
                 looters: levels,
                 looter_source: source,
+                transferred_tt_per_use: 0.0,
             };
             assert_eq!(evidence.selected_looter_level(), expected);
         }
@@ -721,5 +822,72 @@ mod tests {
         assert_eq!(enriched["amp_entity"]["economy"]["decay"], 0.5);
         assert!(props["weapon_entity"]["economy"]["efficiency"].is_null());
         assert_eq!(props["amp_entity"]["economy"]["efficiency"], 60.0);
+    }
+
+    /// A fitted scope is a third offensive stream at its own Efficiency: its
+    /// decay is loot-bearing TT, a limited scope's markup over that decay is
+    /// consumed premium, and the result weighs it by its TT like the weapon
+    /// and amplifier. An empty scope slot adds nothing.
+    #[test]
+    fn a_fitted_scope_is_modelled_at_its_own_efficiency() {
+        let base = json!({
+            "weapon_catalog_id": "weapon",
+            "weapon_entity": {
+                "name": "Weapon",
+                "economy": {"decay": 1.0, "ammo_burn": 100.0, "efficiency": 80.0}
+            },
+            "amp_entity": null,
+            "scope_entity": {}
+        });
+        let plain = evidence_from_equipment_props(&base, None, looters(50.0));
+        assert_eq!(plain.components.len(), 1);
+
+        let mut scoped = base.clone();
+        let object = scoped.as_object_mut().unwrap();
+        object.insert("scope_catalog_id".into(), json!("scope"));
+        object.insert(
+            "scope_entity".into(),
+            json!({"name": "Sight (L)", "economy": {"decay": 0.5, "efficiency": 60.0}}),
+        );
+        object.insert("scope_markup".into(), json!(120.0));
+        let evidence = evidence_from_equipment_props(&scoped, None, looters(50.0));
+        let scope = evidence
+            .components
+            .iter()
+            .find(|component| component.kind == OffensiveComponentKind::Scope)
+            .expect("the scope stream");
+        assert_eq!(scope.catalog_id.as_deref(), Some("scope"));
+        assert_eq!(scope.efficiency_pct, Some(60.0));
+        assert_eq!(scope.raw_tt_per_use, 0.005);
+        assert_eq!(scope.consumed_premium_per_use, 0.001);
+
+        let result = evaluate(&evidence).unwrap();
+        assert!(!result.incomplete);
+        assert_eq!(result.modelled_component_count, 2);
+        // Weapon 0.02 PED at 80% and scope 0.005 PED at 60%, by TT.
+        assert_eq!(result.weighted_efficiency_pct, Some(76.0));
+        let expected_loot = 0.02 * community_model_v1(80.0, 50.0).unwrap()
+            + 0.005 * community_model_v1(60.0, 50.0).unwrap();
+        assert!((result.expected_loot_tt - expected_loot).abs() < 1e-9);
+        assert!((result.eligible_offensive_cost - 0.026).abs() < 1e-9);
+    }
+
+    #[test]
+    fn current_catalogue_efficiency_reaches_a_saved_scope() {
+        let snapshot = tempfile::tempdir().unwrap();
+        std::fs::write(
+            snapshot.path().join("weapon_vision_attachments.json"),
+            r#"[{"id":"scope","name":"Legacy scope","economy":{"decay":0.029,"efficiency":60.0}}]"#,
+        )
+        .unwrap();
+        let game_data = GameDataStore::new(snapshot.path()).unwrap();
+        let props = json!({
+            "weapon_entity": {"name": "Weapon", "economy": {"decay": 1.0}},
+            "scope_catalog_id": "scope",
+            "scope_entity": {"id": "scope", "name": "Legacy scope", "economy": {"decay": 0.029}}
+        });
+        let enriched = with_current_offensive_efficiencies(&props, &game_data);
+        assert_eq!(enriched["scope_entity"]["economy"]["efficiency"], 60.0);
+        assert!(props["scope_entity"]["economy"]["efficiency"].is_null());
     }
 }

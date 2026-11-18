@@ -1,6 +1,6 @@
 //! The tracking read/edit computation: the session list and detail
-//! reads, the tag suggestions, the post-hoc session edits, and the
-//! snapshot's trifecta attribution summary, over the shared database.
+//! reads, the tag suggestions, and the post-hoc session edits, over the
+//! shared database.
 //!
 //! The shaping here produces the wire `serde_json::Value` forms the
 //! facade's DTOs pin byte-for-byte: the exclude-none projections, the
@@ -14,8 +14,10 @@ use chrono::DateTime;
 use serde_json::{json, Map, Value};
 
 use crate::character_calc::ATTRIBUTE_SKILLS;
-use crate::config_service::{active_trifecta_preset, AppConfig};
+use crate::config_service::AppConfig;
 use crate::db::{Db, DbError};
+use crate::session_costs::Bucket;
+use crate::session_scope::SessionExclusion;
 use crate::time::to_iso_utc;
 use eo_wire::normalizer::round_half_even;
 
@@ -124,10 +126,13 @@ pub fn notable_event_category(event_type: &str) -> &'static str {
 struct ListSummary {
     weapon_cost: f64,
     heal_cost: f64,
+    consumable_cost: f64,
     enhancer_cost: f64,
     armour_cost: f64,
     dangling_cost: f64,
     harvest_cost: f64,
+    /// What the session cost beyond performing its activity.
+    overhead_cost: f64,
     loot_tt: f64,
     primary_mobs: Value,
     primary_weapons: Value,
@@ -213,13 +218,17 @@ pub fn list_sessions_read(
     // Both predicates are optional and compose, so the seek's own `OR`
     // is parenthesised: unwrapped it would bind looser than the AND and
     // silently widen a scoped page back to the whole table.
-    let mut sql = String::from("SELECT id, started_at, ended_at, is_active FROM tracking_sessions");
+    let mut sql = format!(
+        "SELECT id, started_at, ended_at, is_active, {} FROM tracking_sessions",
+        crate::session_scope::EXCLUSION_COLUMNS
+    );
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
     let mut clauses: Vec<&str> = Vec::new();
     if let Some(id) = definition_id {
         clauses.push("definition_id = ?");
         params.push(Box::new(id));
     }
+    // id-order: tiebreak (the seek is by started_at; id splits equal instants).
     if let Some((started_at, id)) = seek {
         clauses.push("(started_at < ? OR (started_at = ? AND id < ?))");
         params.push(Box::new(*started_at));
@@ -233,7 +242,7 @@ pub fn list_sessions_read(
     sql.push_str(" ORDER BY started_at DESC, id DESC LIMIT ?");
     params.push(Box::new(page + 1));
 
-    let meta: Vec<(String, Option<f64>, Option<f64>, bool)> = {
+    let meta: Vec<ListRowMeta> = {
         let mut stmt = conn.prepare(&sql)?;
         let map_row = |row: &rusqlite::Row| -> rusqlite::Result<_> {
             Ok((
@@ -241,6 +250,7 @@ pub fn list_sessions_read(
                 row.get::<_, Option<f64>>(1)?,
                 row.get::<_, Option<f64>>(2)?,
                 row.get::<_, i64>(3)? != 0,
+                crate::session_scope::read_exclusion(row, 4)?,
             ))
         };
         let rows = stmt
@@ -262,13 +272,16 @@ pub fn list_sessions_read(
     let summaries = fetch_list_summaries(conn, &ids)?;
 
     let mut sessions = Vec::with_capacity(kept.len());
-    for (sid, started_at, ended_at, is_active) in kept {
-        let session = match summaries.get(sid) {
+    for (sid, started_at, ended_at, is_active, exclusion) in kept {
+        let mut session = match summaries.get(sid) {
             Some(summary) if !*is_active => {
                 list_row_from_summary(sid, *started_at, *ended_at, *is_active, now, summary)
             }
             _ => list_row_from_raw(conn, sid, *started_at, *ended_at, *is_active, now)?,
         };
+        if let Value::Object(row) = &mut session {
+            row.insert("exclusion".to_string(), exclusion_json(exclusion));
+        }
         sessions.push(session);
     }
     let next_cursor = has_more
@@ -282,6 +295,10 @@ pub fn list_sessions_read(
     })
 }
 
+/// One session-list row's own facts, as the page read selects them: id,
+/// start, end, whether it is running, and its stats exclusion.
+type ListRowMeta = (String, Option<f64>, Option<f64>, bool, SessionExclusion);
+
 fn fetch_list_summaries(
     conn: &rusqlite::Connection,
     ids: &[String],
@@ -292,7 +309,8 @@ fn fetch_list_summaries(
     let placeholders = vec!["?"; ids.len()].join(", ");
     let sql = format!(
         "SELECT session_id, weapon_cost, heal_cost, enhancer_cost, armour_cost, dangling_cost, \
-         harvest_cost, loot_tt, primary_mobs_json, primary_weapons_json, globals, hofs \
+         harvest_cost, loot_tt, primary_mobs_json, primary_weapons_json, globals, hofs, \
+         consumable_cost, overhead_cost \
          FROM session_summaries WHERE session_id IN ({placeholders})"
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -314,6 +332,8 @@ fn fetch_list_summaries(
                 primary_weapons: parse_string_array(&row.get::<_, String>(9)?),
                 globals: row.get::<_, i64>(10)?,
                 hofs: row.get::<_, i64>(11)?,
+                consumable_cost: as_f64(&sql_number(row, 12)),
+                overhead_cost: as_f64(&sql_number(row, 13)),
             },
         );
     }
@@ -333,17 +353,21 @@ fn list_row_from_summary(
     summary: &ListSummary,
 ) -> Value {
     let duration = duration_seconds(started_at, ended_at, is_active, now);
-    // Cost mirrors the summary's own cycled composition (weapon + heal +
-    // enhancer + armour + dangling + harvest swing decay), matching the
-    // detail read; loot_tt already folds harvest loot in.
-    let cost = summary.weapon_cost
-        + summary.heal_cost
-        + summary.enhancer_cost
-        + summary.armour_cost
-        + summary.dangling_cost
-        + summary.harvest_cost;
+    // Cost is the summary's own buckets, as resolved when it was written,
+    // summed as every session read sums them (Cycled); loot_tt already
+    // folds harvest loot in. Net takes the overhead off too.
+    let cost = crate::session_costs::BucketCosts {
+        weapon: summary.weapon_cost,
+        enhancer: summary.enhancer_cost,
+        armour: summary.armour_cost,
+        heal: summary.heal_cost,
+        consumable: summary.consumable_cost,
+        dangling: summary.dangling_cost,
+        harvest: summary.harvest_cost,
+    }
+    .cycled();
     let returns = summary.loot_tt;
-    let net = returns - cost;
+    let net = returns - cost - summary.overhead_cost;
     let return_rate = if cost > 0.0 { returns / cost } else { 0.0 };
     json!({
         "id": session_id,
@@ -372,41 +396,19 @@ pub fn list_row_from_raw(
 ) -> Result<Value, DbError> {
     let duration = duration_seconds(started_at, ended_at, is_active, now);
 
-    let weapon_cost = scalar(
+    // The session's costs as resolved (a running session's are tracked);
+    // harvest loot joins the returns as the summary path's does. Cost is
+    // Cycled; Net takes the overhead off too.
+    let resolved = crate::session_costs::resolve(conn, session_id)?;
+    let cost = resolved.resolved.cycled();
+    let overhead = resolved.overhead.total();
+    let harvest_loot = as_f64(&scalar(
         conn,
-        "SELECT COALESCE(SUM(ts.cost_per_shot * ts.shots_fired), 0) \
-         FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id WHERE k.session_id = ?",
+        "SELECT COALESCE(SUM(loot_total_ped), 0) FROM harvest_events WHERE session_id = ?",
         session_id,
-    )?;
-    let enhancer_cost = scalar(
-        conn,
-        "SELECT COALESCE(SUM(k.enhancer_cost), 0) FROM kills k WHERE k.session_id = ?",
-        session_id,
-    )?;
-    let (armour_cost, heal_cost, dangling_cost) = conn.query_row(
-        "SELECT COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0) \
-         FROM tracking_sessions WHERE id = ?",
-        rusqlite::params![session_id],
-        |row| {
-            Ok((
-                as_f64(&sql_number(row, 0)),
-                as_f64(&sql_number(row, 1)),
-                as_f64(&sql_number(row, 2)),
-            ))
-        },
-    )?;
-    // Harvest loot and swing decay join the raw shape symmetrically (the
-    // summary path and the detail read both carry them).
-    let (harvest_loot, harvest_cost) = conn.query_row(
-        "SELECT COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(cost_ped), 0) \
-         FROM harvest_events WHERE session_id = ?",
-        rusqlite::params![session_id],
-        |row| Ok((as_f64(&sql_number(row, 0)), as_f64(&sql_number(row, 1)))),
-    )?;
-    let weapon_cost = as_f64(&weapon_cost);
-    let enhancer_cost = as_f64(&enhancer_cost);
-    let cost = weapon_cost + heal_cost + enhancer_cost + armour_cost + dangling_cost + harvest_cost;
+    )?);
 
+    // every-kill: spend (the session's loot, every row's).
     let returns = as_f64(&scalar(
         conn,
         "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
@@ -415,11 +417,12 @@ pub fn list_row_from_raw(
 
     let primary_mobs = string_column(
         conn,
-        "SELECT mob_name FROM kills \
+        "SELECT mob_name FROM counted_kills \
          WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
          GROUP BY mob_name ORDER BY COUNT(*) DESC LIMIT 3",
         session_id,
     )?;
+    // every-kill: spend (ranked by shots fired, every shot counts).
     let primary_weapons = string_column(
         conn,
         "SELECT ts.tool_name FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
@@ -428,7 +431,7 @@ pub fn list_row_from_raw(
         session_id,
     )?;
 
-    let net = returns - cost;
+    let net = returns - cost - overhead;
     let return_rate = if cost > 0.0 { returns / cost } else { 0.0 };
 
     let (globals, hofs) = conn.query_row(
@@ -493,8 +496,11 @@ pub fn get_session_read(
 
     let session_meta = conn
         .query_row(
-            "SELECT id, started_at, ended_at, is_active, mob_tracking_mode, session_name \
-             FROM tracking_sessions WHERE id = ?",
+            &format!(
+                "SELECT id, started_at, ended_at, is_active, mob_tracking_mode, session_name, {} \
+                 FROM tracking_sessions WHERE id = ?",
+                crate::session_scope::EXCLUSION_COLUMNS
+            ),
             rusqlite::params![session_id],
             |row| {
                 Ok((
@@ -503,11 +509,13 @@ pub fn get_session_read(
                     row.get::<_, i64>(3)? != 0,
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, Option<String>>(5)?,
+                    crate::session_scope::read_exclusion(row, 6)?,
                 ))
             },
         )
         .optional()?;
-    let Some((started_at, ended_at, is_active, mob_mode, session_name)) = session_meta else {
+    let Some((started_at, ended_at, is_active, mob_mode, session_name, exclusion)) = session_meta
+    else {
         return Ok(None);
     };
 
@@ -521,33 +529,24 @@ pub fn get_session_read(
 
     let duration = duration_seconds(started_at, ended_at, is_active, now);
 
-    let (armour_cost, session_heal_cost, dangling_cost) = conn.query_row(
-        "SELECT COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0) \
-         FROM tracking_sessions WHERE id = ?",
-        rusqlite::params![session_id],
-        |row| {
-            Ok((
-                as_f64(&sql_number(row, 0)),
-                as_f64(&sql_number(row, 1)),
-                as_f64(&sql_number(row, 2)),
-            ))
-        },
-    )?;
+    // The session's costs as resolved: a bucket the account readings
+    // measured is the measured amount, and each weapon's part of it is its
+    // tracked cost at the weapon bucket's scale.
+    let costs = crate::session_costs::resolve(conn, session_id)?;
+    let weapon_scale = costs.scale(crate::session_costs::Bucket::Weapon);
 
-    let (kills, total_returns, total_enhancer_cost) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
+    let (kills, total_returns) = conn.query_row(
+        // every-kill: spend (loot sums every row; the count takes only the
+        // rows still counted as kills).
+        "SELECT COUNT(CASE WHEN reward_claimed_at IS NULL THEN 1 END), \
+         COALESCE(SUM(loot_total_ped), 0) \
          FROM kills WHERE session_id = ?",
         rusqlite::params![session_id],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                as_f64(&sql_number(row, 1)),
-                as_f64(&sql_number(row, 2)),
-            ))
-        },
+        |row| Ok((row.get::<_, i64>(0)?, as_f64(&sql_number(row, 1)))),
     )?;
 
     let merged_tools: Vec<(String, i64, f64, i64, f64)> = {
+        // every-kill: spend (each tool's shots, damage and spend).
         let mut stmt = conn.prepare(
             "SELECT t.tool_name, SUM(t.shots_fired), SUM(t.damage_dealt), SUM(t.critical_hits), \
              SUM(COALESCE(t.cost_per_shot, 0) * COALESCE(t.shots_fired, 0)) \
@@ -565,17 +564,13 @@ pub fn get_session_read(
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let weapon_cost: f64 = merged_tools
-        .iter()
-        .map(|(_, _, _, _, cost_attr)| cost_attr)
-        .sum();
 
     // Harvesting swings join the session economy: wood TT is loot,
     // swing decay is cost.
-    let (harvest_swings, harvest_successes, harvest_loot, harvest_cost) = conn.query_row(
+    let (harvest_swings, harvest_successes, harvest_loot) = conn.query_row(
         "SELECT COUNT(*), \
            COALESCE(SUM(CASE WHEN success != 0 THEN 1 ELSE 0 END), 0), \
-           COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(cost_ped), 0) \
+           COALESCE(SUM(loot_total_ped), 0) \
          FROM harvest_events WHERE session_id = ?",
         rusqlite::params![session_id],
         |row| {
@@ -583,7 +578,6 @@ pub fn get_session_read(
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 as_f64(&sql_number(row, 2)),
-                as_f64(&sql_number(row, 3)),
             ))
         },
     )?;
@@ -600,26 +594,49 @@ pub fn get_session_read(
 
     let mob_breakdown: Vec<Value> = {
         let mut stmt = conn.prepare(
-            "SELECT mob_name, original_mob_name, COUNT(*) FROM kills \
+            "SELECT mob_name, original_mob_name, COUNT(*), \
+                    CASE \
+                        WHEN mob_detection_grade = 'guess' THEN 'probable' \
+                        WHEN mob_detection_grade = 'provisional' THEN 'unlisted' \
+                        WHEN mob_detection_grade = 'provisional_guess' THEN 'unlisted_probable' \
+                        WHEN mob_stamp_source = 'detected' \
+                             AND mob_route = 'provisional_continuity' THEN 'unlisted' \
+                        WHEN mob_route = 'pinned_read' AND EXISTS ( \
+                             SELECT 1 FROM kill_mob_carried c \
+                             WHERE c.kill_id = kills.id AND c.grade = 'provisional_pinned' \
+                               AND c.reviewed_at IS NULL) THEN 'unlisted' \
+                        ELSE 'recorded' END \
+             FROM counted_kills AS kills \
              WHERE session_id = ? AND mob_name IS NOT NULL \
-             GROUP BY mob_name, original_mob_name ORDER BY COUNT(*) DESC",
+             GROUP BY 1, 2, 4 ORDER BY COUNT(*) DESC",
         )?;
         let rows = stmt.query_map(rusqlite::params![session_id], |row| {
             Ok(json!({
                 "currentName": row.get::<_, String>(0)?,
                 "originalName": row.get::<_, Option<String>>(1)?,
                 "killCount": row.get::<_, i64>(2)?,
+                // How sure the stamp is: as recorded, or detected only
+                // probably, or under the spelling read for a creature on no
+                // list, which the player has not confirmed yet (detected,
+                // carried on from earlier kills, or pinned from a reading
+                // and not yet settled). A settled kill is the player's word
+                // and reads as recorded.
+                "certainty": row.get::<_, String>(3)?,
             }))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
 
-    let total_cost = weapon_cost
-        + session_heal_cost
-        + total_enhancer_cost
-        + armour_cost
-        + dangling_cost
-        + harvest_cost;
+    let total_cost = costs.resolved.cycled();
+    // A measured weapon bucket is shown whole: every shot fired, the ones
+    // after the last kill included, so the measured figure is the one shown.
+    // So is one measured but for the steps its ammo was topped up in.
+    let weapon_line = match costs.basis(Bucket::Weapon) {
+        crate::session_costs::Basis::Measured(_) | crate::session_costs::Basis::Mixed { .. } => {
+            costs.resolved.weapon + costs.resolved.dangling
+        }
+        crate::session_costs::Basis::Tracked(_) => costs.resolved.weapon,
+    };
 
     let detail_skill_tt = as_f64(&scalar(
         conn,
@@ -627,12 +644,17 @@ pub fn get_session_read(
         session_id,
     )?);
 
-    let net = total_returns - total_cost;
+    // Net takes the session's overhead off too; the cost shown and the
+    // return rate stay Cycled's, so neither moves with it.
+    let overhead = costs.overhead;
+    let net = total_returns - total_cost - overhead.total();
     let return_rate = if total_cost > 0.0 {
         total_returns / total_cost
     } else {
         0.0
     };
+
+    let quest_rewards = session_quest_rewards(conn, session_id)?;
 
     let loot_breakdown = loot_breakdown_sorted(&merged_loot);
     let deactivated_loot_breakdown = loot_breakdown_sorted(&merged_deactivated_loot);
@@ -647,7 +669,7 @@ pub fn get_session_read(
                     "shotsFired": shots,
                     "damageDealt": float_field(json!(dmg)),
                     "crits": crits,
-                    "costAttributed": round(*cost_attr, 2),
+                    "costAttributed": round(*cost_attr * weapon_scale, 2),
                 }),
             )
         })
@@ -677,29 +699,88 @@ pub fn get_session_read(
 
     let skill_gains = session_skill_gains(conn, session_id)?;
 
+    // Every live activation, plus each one a live correction marked as not a
+    // paid use (listed so the correction can be undone). An activation a
+    // correction minted and its undo then superseded is provenance only.
     let healing_activations: Vec<Value> = {
         let mut stmt = conn.prepare(
             "SELECT a.id, a.tool_name, a.observed_at, a.cost_ped, a.provenance, \
                     (SELECT MAX(w.expires_at) FROM healing_effect_windows w \
                      WHERE w.activation_id = a.id), \
                     (SELECT COUNT(*) FROM healing_outputs o \
-                     WHERE o.activation_id = a.id) \
-             FROM healing_activations a WHERE a.session_id = ? \
+                     WHERE o.activation_id = a.id), \
+                    (SELECT o.amount FROM healing_outputs o \
+                     WHERE o.id = a.confirming_output_id), \
+                    a.superseded_at IS NOT NULL, a.correction_id IS NOT NULL, \
+                    c.id, c.kind \
+             FROM healing_activations a \
+             LEFT JOIN healing_corrections c \
+                    ON c.activation_id = a.id AND c.undone_at IS NULL \
+             WHERE a.session_id = ? AND (a.superseded_at IS NULL OR c.id IS NOT NULL) \
              ORDER BY a.observed_at, a.id",
         )?;
         let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            let minted = row.get::<_, bool>(9)?;
+            let provenance = if minted {
+                "corrected".to_string()
+            } else {
+                match row.get::<_, String>(4)?.as_str() {
+                    "health_capped" => "healthCapped".to_string(),
+                    other => other.to_string(),
+                }
+            };
+            let correction = match (
+                row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
+            ) {
+                (Some(id), Some(kind)) => json!({
+                    "id": id,
+                    "kind": if kind == "paid_use" { "paidUse" } else { "notPaidUse" },
+                }),
+                _ => Value::Null,
+            };
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "toolName": row.get::<_, String>(1)?,
                 "observedAt": row.get::<_, f64>(2)?,
                 "cost": row.get::<_, f64>(3)?,
-                "provenance": row.get::<_, String>(4)?,
+                "provenance": provenance,
                 "effectUntil": row.get::<_, Option<f64>>(5)?,
                 "outputCount": row.get::<_, i64>(6)?,
+                "amount": row.get::<_, Option<f64>>(7)?,
+                "superseded": row.get::<_, bool>(8)?,
+                "correction": correction,
             }))
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
     };
+    // Each enhancer break the session kept, with what it cost or why it
+    // has no cost.
+    let enhancer_breaks: Vec<Value> = {
+        let mut stmt = conn.prepare(
+            "SELECT enhancer_name, weapon_name, observed_at, returned_ped, pricing, \
+                    tt_ped, markup_ped, cost_ped \
+             FROM enhancer_breaks WHERE session_id = ? ORDER BY observed_at, rowid",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            Ok(json!({
+                "enhancerName": row.get::<_, String>(0)?,
+                "weaponName": row.get::<_, String>(1)?,
+                "observedAt": row.get::<_, f64>(2)?,
+                "returnedPed": row.get::<_, f64>(3)?,
+                "pricing": row.get::<_, String>(4)?,
+                "ttPed": row.get::<_, Option<f64>>(5)?,
+                "markupPed": row.get::<_, Option<f64>>(6)?,
+                "costPed": row.get::<_, Option<f64>>(7)?,
+            }))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let healing_correctable: bool = conn.query_row(
+        "SELECT COALESCE(is_active, 0) = 0 FROM tracking_sessions WHERE id = ?",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )?;
     let (healing_outputs, direct_outputs, effect_outputs, passive_outputs, unattributed_outputs) =
         conn.query_row(
             "SELECT COUNT(*), \
@@ -719,7 +800,59 @@ pub fn get_session_read(
                 ))
             },
         )?;
-    let healing_activation_count = healing_activations.len();
+    let healing_activation_count = healing_activations
+        .iter()
+        .filter(|activation| activation["superseded"] == json!(false))
+        .count();
+
+    let mut cost_breakdown = json!({
+        "weaponCost": round(weapon_line, 2),
+        "healCost": round(costs.resolved.heal, 2),
+        "consumableCost": round(costs.resolved.consumable, 2),
+        "enhancerCost": round(costs.resolved.enhancer, 2),
+        "armourCost": round(costs.resolved.armour, 2),
+        "harvestCost": round(costs.resolved.harvest, 2),
+        "tracked": {
+            // What the measured weapon bucket answers: every shot fired,
+            // the ones after the last kill included.
+            "weaponCost": round(costs.tracked.of(Bucket::Weapon), 2),
+            "healCost": round(costs.tracked.heal, 2),
+            "consumableCost": round(costs.tracked.consumable, 2),
+            "enhancerCost": round(costs.tracked.enhancer, 2),
+            "armourCost": round(costs.tracked.armour, 2),
+            "harvestCost": round(costs.tracked.harvest, 2),
+        },
+        "basis": {
+            "weaponCost": bucket_basis_json(&costs, Bucket::Weapon),
+            "healCost": bucket_basis_json(&costs, Bucket::Healing),
+            "consumableCost": bucket_basis_json(&costs, Bucket::Consumables),
+            "enhancerCost": bucket_basis_json(&costs, Bucket::Enhancer),
+            "armourCost": bucket_basis_json(&costs, Bucket::Armour),
+            "harvestCost": bucket_basis_json(&costs, Bucket::Harvesting),
+        },
+        "reasons": {
+            "weaponCost": cost_reason_json(costs.basis(Bucket::Weapon)),
+            "healCost": cost_reason_json(costs.basis(Bucket::Healing)),
+            "consumableCost": cost_reason_json(costs.basis(Bucket::Consumables)),
+            "enhancerCost": cost_reason_json(costs.basis(Bucket::Enhancer)),
+            "armourCost": cost_reason_json(costs.basis(Bucket::Armour)),
+            "harvestCost": cost_reason_json(costs.basis(Bucket::Harvesting)),
+        },
+        "overheadCost": round(overhead.total(), 2),
+        "overhead": {
+            "travel": round(overhead.travel, 2),
+            "fieldLogistics": round(overhead.field_logistics, 2),
+            "unclassified": round(overhead.unclassified, 2),
+            "reasons": overhead_reasons_json(conn, session_id)?,
+        },
+        "measured": measured_detail_json(conn, session_id)?,
+        "armourUnrecorded": crate::protection::armour_unrecorded(conn, session_id)?,
+    });
+    // A session whose figures were measured across a gap says how long the
+    // gap was, to the nearest minute and never under one.
+    if let Some(gap) = costs.shown_across_gap() {
+        cost_breakdown["measuredAcrossGapMinutes"] = json!(((gap.gap_seconds + 30) / 60).max(1));
+    }
 
     Ok(Some(json!({
         "sessionId": session_id,
@@ -731,30 +864,30 @@ pub fn get_session_read(
             "returnRate": round(return_rate, 4),
             "kills": kills,
             "duration": duration,
-            "costBreakdown": {
-                "weaponCost": round(weapon_cost, 2),
-                "healCost": round(session_heal_cost, 2),
-                "enhancerCost": round(total_enhancer_cost, 2),
-                "armourCost": round(armour_cost, 2),
-                "harvestCost": round(harvest_cost, 2),
-            },
+            "costBasis": cost_basis_json(costs.cycled_basis()),
+            "costBreakdown": cost_breakdown,
         },
         "harvest": {
             "swings": harvest_swings,
             "successes": harvest_successes,
             "lootTt": round(harvest_loot, 2),
-            "cost": round(harvest_cost, 2),
+            "cost": round(costs.resolved.harvest, 2),
         },
         "sessionName": session_name,
         "mobEntryMode": mob_entry_mode,
+        "exclusion": exclusion_json(&exclusion),
         "notableEvents": notable_events,
         "lootBreakdown": loot_breakdown,
         "deactivatedLootBreakdown": deactivated_loot_breakdown,
+        "questRewards": quest_rewards,
         "mobBreakdown": mob_breakdown,
         "effectiveLoot": round(total_returns, 2),
         "toolStats": tool_stats,
         "skillGains": skill_gains,
+        "weaponAttribution": crate::weapon_review::session_detail_block(conn, session_id)?,
+        "enhancerBreaks": enhancer_breaks,
         "healing": {
+            "correctable": healing_correctable,
             "activations": healing_activations,
             "activationCount": healing_activation_count,
             "outputCount": healing_outputs,
@@ -766,14 +899,266 @@ pub fn get_session_read(
     })))
 }
 
+/// Why a bucket's figure is not what the readings measured, as the wire
+/// spells it: `null` for a measured bucket. A bucket measured in part reads
+/// as why the rest is tracked: armour whose unlimited part was measured
+/// while a limited piece waits for its set as waiting for the set, a weapon
+/// whose ammo was topped up as topped up. The one mapping from what the
+/// resolver says to the wire.
+fn cost_reason_json(basis: crate::session_costs::Basis) -> Value {
+    use crate::session_costs::Basis;
+    match basis {
+        Basis::Measured(_) => Value::Null,
+        Basis::Mixed { reason, .. } | Basis::Tracked(reason) => json!(reason.as_str()),
+    }
+}
+
+/// Why each overhead category of a session the readings measured is
+/// withheld, as the wire spells it: `null` for a category measured, and for
+/// every category of a session with no current measured costs (it has no
+/// overhead, and says nothing of it).
+fn overhead_reasons_json(conn: &rusqlite::Connection, session_id: &str) -> Result<Value, DbError> {
+    use crate::session_costs::{OverheadCategory, OverheadReason};
+    let reasons = crate::session_costs::overhead_reasons(conn, session_id)?;
+    let spelled = |category: OverheadCategory| match reasons[category as usize] {
+        None => Value::Null,
+        Some(OverheadReason::InGap) => json!("overheadInGap"),
+        Some(OverheadReason::Tracked(reason)) => json!(reason.as_str()),
+    };
+    Ok(json!({
+        "travel": spelled(OverheadCategory::Travel),
+        "fieldLogistics": spelled(OverheadCategory::FieldLogistics),
+        "unclassified": spelled(OverheadCategory::Unclassified),
+    }))
+}
+
+/// A session's measured lines grouped by bucket (Cycled buckets, then the
+/// overhead categories) and its armour in parts, read through the
+/// resolver; `null` unless the readings measured the session. An overhead
+/// line whose item a ledger expense pegged to the session names (in its
+/// description, ignoring case) is marked with that entry, earliest first:
+/// the entry may repeat a cost the readings now measure. Neither figure is
+/// adjusted.
+fn measured_detail_json(conn: &rusqlite::Connection, session_id: &str) -> Result<Value, DbError> {
+    use crate::session_costs::{
+        LinePricing, MeasuredArmourPart, MeasuredLineKind, MeasuredPrecision, StoredBucket,
+        Unpriced,
+    };
+    let Some(detail) = crate::session_costs::measured_detail(conn, session_id)? else {
+        return Ok(Value::Null);
+    };
+    let pegged: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, description FROM ledger_entries \
+             WHERE source_session_id = ? AND type = 'expense' ORDER BY date, id",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let precision = |precision: MeasuredPrecision| match precision {
+        MeasuredPrecision::Exact => "exact",
+        MeasuredPrecision::WholePec => "wholePec",
+    };
+    let bucket_name = |bucket: StoredBucket| match bucket {
+        StoredBucket::Cycled(bucket) => bucket.as_str(),
+        StoredBucket::Overhead(category) => category.as_str(),
+    };
+    let mut groups: Vec<(StoredBucket, Vec<Value>)> = Vec::new();
+    for line in &detail.lines {
+        let pegged_entry = match line.bucket {
+            StoredBucket::Overhead(_) => {
+                let item = line.item.to_lowercase();
+                pegged
+                    .iter()
+                    .find(|(_, description)| description.to_lowercase().contains(&item))
+                    .cloned()
+            }
+            StoredBucket::Cycled(_) => None,
+        };
+        let (markup_percent, unpriced) = match line.pricing {
+            LinePricing::AtTt => (None, None),
+            LinePricing::AtMarkup(percent) => (Some(percent), None),
+            LinePricing::Unpriced(Unpriced::BoughtThroughLedger) => {
+                (None, Some("boughtThroughLedger"))
+            }
+            LinePricing::Unpriced(Unpriced::LimitedSetUnconfirmed) => {
+                (None, Some("limitedSetUnconfirmed"))
+            }
+            LinePricing::Unpriced(Unpriced::NotPlaced) => (None, Some("notPlaced")),
+        };
+        let value = json!({
+            "kind": match line.kind {
+                MeasuredLineKind::AmmoBurned => "ammoBurned",
+                MeasuredLineKind::Decay => "decay",
+                MeasuredLineKind::LimitedDecay => "limitedDecay",
+                MeasuredLineKind::Consumed => "consumed",
+            },
+            "item": line.item,
+            "units": line.units,
+            "amount": line.amount.map(|(ped, _)| round(ped, 6)),
+            "precision": line.amount.map(|(_, exactly)| precision(exactly)),
+            "markupPercent": markup_percent,
+            // Units used up of an item bought at markup are billed at TT
+            // for now: the markup paid for them is not in the figure.
+            "markupNotIncluded": line.kind == MeasuredLineKind::Consumed
+                && line.pricing == LinePricing::AtTt,
+            "unpriced": unpriced,
+            "peggedLedgerEntryId": pegged_entry.as_ref().map(|(id, _)| id),
+            "peggedLedgerEntryDescription": pegged_entry.as_ref().map(|(_, text)| text),
+        });
+        match groups.iter_mut().find(|(bucket, _)| *bucket == line.bucket) {
+            Some((_, lines)) => lines.push(value),
+            None => groups.push((line.bucket, vec![value])),
+        }
+    }
+    groups.sort_by_key(|(bucket, _)| *bucket);
+    let armour: Vec<Value> = detail
+        .armour
+        .iter()
+        .map(|part| match part {
+            MeasuredArmourPart::Unlimited { lost } => json!({
+                "part": "unlimited",
+                "setId": null,
+                "setName": null,
+                "item": null,
+                "markupPercent": null,
+                "lost": round(lost.0, 6),
+                "lostPrecision": precision(lost.1),
+                "cost": round(lost.0, 6),
+                "costPrecision": precision(lost.1),
+            }),
+            MeasuredArmourPart::Set {
+                set_id,
+                name,
+                markup_percent,
+                lost,
+                cost,
+            } => json!({
+                "part": "limitedSet",
+                "setId": set_id,
+                "setName": name,
+                "item": null,
+                "markupPercent": markup_percent,
+                "lost": round(lost.0, 6),
+                "lostPrecision": precision(lost.1),
+                "cost": round(cost.0, 6),
+                "costPrecision": precision(cost.1),
+            }),
+            MeasuredArmourPart::Piece {
+                item,
+                markup_percent,
+                lost,
+                cost,
+            } => json!({
+                "part": "limitedPiece",
+                "setId": null,
+                "setName": null,
+                "item": item,
+                "markupPercent": markup_percent,
+                "lost": round(lost.0, 6),
+                "lostPrecision": precision(lost.1),
+                "cost": round(cost.0, 6),
+                "costPrecision": precision(cost.1),
+            }),
+            MeasuredArmourPart::Unconfirmed { lost } => json!({
+                "part": "unconfirmed",
+                "setId": null,
+                "setName": null,
+                "item": null,
+                "markupPercent": null,
+                "lost": round(lost.0, 6),
+                "lostPrecision": precision(lost.1),
+                "cost": null,
+                "costPrecision": null,
+            }),
+        })
+        .collect();
+    Ok(json!({
+        "buckets": groups
+            .into_iter()
+            .map(|(bucket, lines)| json!({"bucket": bucket_name(bucket), "lines": lines}))
+            .collect::<Vec<_>>(),
+        "armourParts": armour,
+    }))
+}
+
+/// A cost figure's basis as the wire spells it.
+fn cost_basis_json(basis: crate::session_costs::CostBasis) -> &'static str {
+    match basis {
+        crate::session_costs::CostBasis::Measured => "measured",
+        crate::session_costs::CostBasis::Tracked => "tracked",
+        crate::session_costs::CostBasis::Mixed => "mixed",
+    }
+}
+
+fn bucket_basis_json(costs: &crate::session_costs::SessionCosts, bucket: Bucket) -> &'static str {
+    cost_basis_json(costs.cost_basis(bucket))
+}
+
+/// The quest rewards confirmed on a session, one entry per completion in
+/// the order they were handed in, each with its reward lines. A reward that
+/// was undone, or whose latest review is not a confirmation, is left out.
+/// The lines are the reward as recorded: liquid lines (ammo) at face value,
+/// stock lines (items) at TT, for the frontend to value at market.
+fn session_quest_rewards(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Vec<Value>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, COALESCE(q.name, ''), c.completed_at, \
+                ri.item_name, ri.quantity, ri.value_ped, ri.accounting_kind \
+         FROM session_quest_completions c \
+         JOIN session_quest_completion_reward_items ri ON ri.completion_id = c.id \
+         LEFT JOIN quests q ON q.id = c.quest_id \
+         WHERE c.session_id = ?1 \
+           AND COALESCE((SELECT r.outcome FROM quest_reward_reviews r \
+                         WHERE r.completion_id = c.id \
+                         ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1), \
+                        c.reward_outcome) = 'confirmed' \
+           AND NOT EXISTS (SELECT 1 FROM quest_reward_reversals rr \
+                           WHERE rr.completion_id = c.id) \
+         ORDER BY c.completed_at, c.id, ri.id",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![session_id])?;
+    let mut rewards: Vec<Value> = Vec::new();
+    while let Some(row) = rows.next()? {
+        let completion_id: i64 = row.get(0)?;
+        let item = json!({
+            "itemName": row.get::<_, String>(3)?,
+            "quantity": row.get::<_, i64>(4)?,
+            "valuePed": float_field(json!(row.get::<_, f64>(5)?)),
+            "accounting": row.get::<_, String>(6)?,
+        });
+        match rewards.last_mut() {
+            Some(reward) if reward["completionId"] == completion_id => {
+                reward["items"]
+                    .as_array_mut()
+                    .expect("a reward's items are a list")
+                    .push(item);
+            }
+            _ => rewards.push(json!({
+                "completionId": completion_id,
+                "questName": row.get::<_, String>(1)?,
+                "completedAt": row.get::<_, f64>(2)?,
+                "items": [item],
+            })),
+        }
+    }
+    Ok(rewards)
+}
+
 pub fn loot_agg(
     conn: &rusqlite::Connection,
     session_id: &str,
     deactivated_clause: &str,
 ) -> Result<Vec<(String, i64, f64)>, DbError> {
+    // A claimed quest reward's lines are the reward's, shown as such, never
+    // as loot taken off the session.
     let sql = format!(
         "SELECT l.item_name, SUM(l.quantity), SUM(l.value_ped) \
-         FROM kill_loot_items l JOIN kills k ON k.id = l.kill_id \
+         FROM kill_loot_items l JOIN counted_kills k ON k.id = l.kill_id \
          WHERE k.session_id = ? AND COALESCE(l.is_enhancer_shrapnel, 0) = 0 AND {deactivated_clause} \
          GROUP BY l.item_name"
     );
@@ -878,21 +1263,14 @@ pub fn session_skill_gains(
         return Ok(json!([]));
     }
 
+    // The current level per gained skill is the latest calibration in
+    // time, never the highest id: a calibration recorded later from an
+    // older screenshot must not displace a newer reading.
     let skill_names: Vec<String> = rows.iter().map(|(name, _)| name.clone()).collect();
-    let placeholders = vec!["?"; skill_names.len()].join(",");
-    let cal_sql = format!(
-        "SELECT skill_name, level FROM skill_calibrations WHERE id IN ( \
-         SELECT MAX(id) FROM skill_calibrations WHERE skill_name IN ({placeholders}) \
-         GROUP BY skill_name)"
-    );
-    let mut levels: BTreeMap<String, f64> = BTreeMap::new();
-    {
-        let mut stmt = conn.prepare(&cal_sql)?;
-        let mut cal_rows = stmt.query(rusqlite::params_from_iter(&skill_names))?;
-        while let Some(row) = cal_rows.next()? {
-            levels.insert(row.get::<_, String>(0)?, as_f64(&sql_number(row, 1)));
-        }
-    }
+    let levels: BTreeMap<String, f64> =
+        crate::db::latest_skill_levels(conn, None, Some(&skill_names))?
+            .into_iter()
+            .collect();
 
     let gains: Vec<Value> = rows
         .iter()
@@ -995,7 +1373,7 @@ pub async fn build_mob_edit_response(
     let kill_count = db
         .with_reader(move |conn| {
             Ok(conn.query_row(
-                "SELECT COUNT(*) FROM kills WHERE session_id = ? AND mob_name = ?",
+                "SELECT COUNT(*) FROM counted_kills WHERE session_id = ? AND mob_name = ?",
                 rusqlite::params![sid, mob],
                 |row| row.get::<_, i64>(0),
             )?)
@@ -1018,6 +1396,7 @@ pub async fn build_loot_item_edit_response(
     let sid = session_id.to_string();
     let session_returns = db
         .with_reader(move |conn| {
+            // every-kill: spend (the session's loot, every row's).
             Ok(as_f64(&conn.query_row(
                 "SELECT COALESCE(SUM(loot_total_ped), 0) FROM kills WHERE session_id = ?",
                 rusqlite::params![sid],
@@ -1300,13 +1679,15 @@ pub async fn bulk_flip_loot_item(
         Flipped { affected: i64, total_delta: f64 },
     }
 
+    // A loot edit never reaches a claimed quest reward's lines: they are the
+    // reward's evidence, and putting one back would count it twice.
     let flip_sql = format!(
         "UPDATE kill_loot_items \
          SET deactivated_at = {new_flag_sql} \
          WHERE id IN ( \
              SELECT l.id \
              FROM kill_loot_items l \
-             JOIN kills k ON k.id = l.kill_id \
+             JOIN counted_kills k ON k.id = l.kill_id \
              WHERE k.session_id = ? AND l.item_name = ? AND {opposite_clause} \
          ) \
          RETURNING kill_id, value_ped"
@@ -1329,7 +1710,7 @@ pub async fn bulk_flip_loot_item(
                 let any_row: Option<i64> = tx
                     .query_row(
                         "SELECT 1 FROM kill_loot_items l \
-                         JOIN kills k ON k.id = l.kill_id \
+                         JOIN counted_kills k ON k.id = l.kill_id \
                          WHERE k.session_id = ? AND l.item_name = ? \
                          LIMIT 1",
                         rusqlite::params![sid, item],
@@ -1431,161 +1812,156 @@ pub async fn set_armour_cost_impl(
     }))
 }
 
-/// Delete a tracking session and every row that references it. An active
-/// session cannot be deleted (its writes are still in flight); a missing one
-/// is a not-found. The cascade runs in one transaction, child-scoped rows
-/// first, and repairs the daily rollups for exactly the calendar days the
-/// session touched (captured before the deletes empty those tables).
-pub async fn delete_session_impl(db: &Db, session_id: &str) -> Result<(), EditError> {
-    // The domain outcome of the writer-core transaction: the guard branches the
-    // original raised as edit errors, or the completed cascade.
-    enum DeleteOutcome {
+/// A session's stats exclusion on the wire: `null` while the session
+/// counts in every scope, otherwise when each scope was excluded and why.
+pub fn exclusion_json(exclusion: &SessionExclusion) -> Value {
+    if !exclusion.any() {
+        return Value::Null;
+    }
+    json!({
+        "economyExcludedAt": list_ts_to_iso(exclusion.economy_excluded_at),
+        "progressionExcludedAt": list_ts_to_iso(exclusion.progression_excluded_at),
+        "note": exclusion.note,
+    })
+}
+
+/// The longest exclusion note kept, in characters; longer input is cut.
+pub const EXCLUSION_NOTE_MAX_CHARS: usize = 500;
+
+/// Set which stats scopes a session is excluded from ([`crate::session_scope`]).
+///
+/// The request names the whole desired state, so repeating it is harmless:
+/// a scope already excluded keeps its original stamp, a scope switched back
+/// on clears it, and the note (trimmed, blank as none) is kept only while
+/// some scope is excluded. Only an ended session can be excluded: a running
+/// one is still being written and folded into the live figures. The write,
+/// the daily rollup repair for every key the session touches, and the
+/// summary refresh commit together.
+pub async fn set_session_exclusion_impl(
+    db: &Db,
+    session_id: &str,
+    economy: bool,
+    progression: bool,
+    note: Option<String>,
+    now: f64,
+) -> Result<Value, EditError> {
+    enum Outcome {
         NotFound,
         Active,
-        Deleted,
+        Set(SessionExclusion),
     }
 
+    let note = note
+        .map(|note| {
+            note.trim()
+                .chars()
+                .take(EXCLUSION_NOTE_MAX_CHARS)
+                .collect::<String>()
+        })
+        .filter(|note| !note.is_empty())
+        .filter(|_| economy || progression);
     let sid = session_id.to_string();
     let outcome = db
         .with_writer(move |conn| {
             use rusqlite::OptionalExtension as _;
             let tx = conn.transaction()?;
-
-            // Read the existence-and-active guard inside the transaction, so the
-            // check and the cascade are one atomic unit (a separate acquisition
-            // for the check could interleave with another write between the read
-            // and the delete).
-            let is_active: Option<i64> = tx
+            let current = tx
                 .query_row(
-                    "SELECT is_active FROM tracking_sessions WHERE id = ?",
+                    &format!(
+                        "SELECT is_active, {} FROM tracking_sessions WHERE id = ?",
+                        crate::session_scope::EXCLUSION_COLUMNS
+                    ),
                     rusqlite::params![sid],
-                    |row| row.get::<_, i64>(0),
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)? != 0,
+                            crate::session_scope::read_exclusion(row, 1)?,
+                        ))
+                    },
                 )
                 .optional()?;
-            let Some(is_active) = is_active else {
-                return Ok(DeleteOutcome::NotFound);
+            let Some((is_active, current)) = current else {
+                return Ok(Outcome::NotFound);
             };
-            if is_active != 0 {
-                return Ok(DeleteOutcome::Active);
+            if is_active {
+                return Ok(Outcome::Active);
             }
-
-            // Capture the days this session touches before its rows are deleted,
-            // so the rollup repair below recomputes exactly those days.
-            let days: Vec<String> = {
-                let mut stmt = tx.prepare(
-                    "SELECT DISTINCT date(timestamp, 'unixepoch') FROM kills WHERE session_id = ? \
-                     UNION SELECT DISTINCT date(timestamp, 'unixepoch') FROM skill_gains \
-                           WHERE session_id = ? \
-                     UNION SELECT date(started_at, 'unixepoch') FROM tracking_sessions WHERE id = ? \
-                     UNION SELECT date(ended_at, 'unixepoch') FROM tracking_sessions \
-                           WHERE id = ? AND ended_at IS NOT NULL",
-                )?;
-                let rows = stmt.query_map(
-                    rusqlite::params![sid, sid, sid, sid],
-                    |row| row.get::<_, String>(0),
-                )?;
-                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            let stamp = |wanted: bool, existing: Option<f64>| {
+                if wanted {
+                    Some(existing.unwrap_or(now))
+                } else {
+                    None
+                }
             };
-
-            // Child-scoped rows first (the kill-scoped tables have no ON DELETE
-            // cascade), then the kills, the session-scoped rows, and the session.
+            let next = SessionExclusion {
+                economy_excluded_at: stamp(economy, current.economy_excluded_at),
+                progression_excluded_at: stamp(progression, current.progression_excluded_at),
+                note,
+            };
             tx.execute(
-                "DELETE FROM kill_tool_stats \
-                 WHERE kill_id IN (SELECT id FROM kills WHERE session_id = ?)",
-                rusqlite::params![sid],
+                "UPDATE tracking_sessions SET economy_excluded_at = ?, \
+                 progression_excluded_at = ?, exclusion_note = ? WHERE id = ?",
+                rusqlite::params![
+                    next.economy_excluded_at,
+                    next.progression_excluded_at,
+                    next.note,
+                    sid
+                ],
             )?;
-            tx.execute(
-                "DELETE FROM kill_loot_items \
-                 WHERE kill_id IN (SELECT id FROM kills WHERE session_id = ?)",
-                rusqlite::params![sid],
-            )?;
-            tx.execute(
-                "DELETE FROM kills WHERE session_id = ?",
-                rusqlite::params![sid],
-            )?;
-            tx.execute(
-                "DELETE FROM skill_gains WHERE session_id = ?",
-                rusqlite::params![sid],
-            )?;
-            tx.execute(
-                "DELETE FROM notable_events WHERE session_id = ?",
-                rusqlite::params![sid],
-            )?;
-            tx.execute(
-                "DELETE FROM session_summaries WHERE session_id = ?",
-                rusqlite::params![sid],
-            )?;
-            // SQLite foreign keys are deliberately disabled for this schema,
-            // so healing evidence must participate in the explicit cascade.
-            tx.execute(
-                "DELETE FROM healing_outputs WHERE session_id = ?",
-                rusqlite::params![sid],
-            )?;
-            tx.execute(
-                "DELETE FROM healing_effect_windows WHERE session_id = ?",
-                rusqlite::params![sid],
-            )?;
-            tx.execute(
-                "DELETE FROM healing_activations WHERE session_id = ?",
-                rusqlite::params![sid],
-            )?;
-            tx.execute(
-                "DELETE FROM tracking_sessions WHERE id = ?",
-                rusqlite::params![sid],
-            )?;
-            crate::session_rollup::drop_session(&tx, &sid)?;
-
-            crate::daily_rollup::refresh_days(&tx, days)?;
+            // Readers filter by the flag at read time, so only the daily
+            // rollup (which stores pre-filtered sums) needs recomputing; the
+            // per-session projections keep the session's own figures.
+            crate::daily_rollup::refresh_session_days(&tx, &sid)?;
             tx.commit()?;
-            Ok(DeleteOutcome::Deleted)
+            Ok(Outcome::Set(next))
         })
         .await?;
     match outcome {
-        DeleteOutcome::NotFound => Err(EditError::NotFound("Session not found".to_string())),
-        DeleteOutcome::Active => Err(EditError::Conflict(
-            "Cannot delete an active session".to_string(),
+        Outcome::NotFound => Err(EditError::NotFound("Session not found".to_string())),
+        Outcome::Active => Err(EditError::Conflict(
+            "Stop the session before excluding it from stats".to_string(),
         )),
-        DeleteOutcome::Deleted => Ok(()),
+        Outcome::Set(exclusion) => Ok(json!({
+            "sessionId": session_id,
+            "exclusion": exclusion_json(&exclusion),
+        })),
     }
 }
 
 // ── Producer helpers ────────────────────────────────────────────────
 
-/// `_validate_hotbar`: hotbar attribution is workable while at least one
-/// slot is bound (a non-null library id).
-pub fn validate_hotbar(config: &AppConfig) -> (bool, Option<String>) {
-    let any_bound = config
-        .hotbar
-        .values()
-        .any(|library_id| !library_id.is_null());
-    if any_bound {
+/// Tracking is workable once the player has configured a tool: a slot
+/// bound on any hotbar preset or a weapon carried without one. With
+/// neither, no shot could ever be priced.
+pub fn validate_tools(config: &AppConfig) -> (bool, Option<String>) {
+    let any_bound = !config.hotbar_ids_live_first().is_empty();
+    if any_bound || !config.carried_weapon_ids.is_empty() {
         (true, None)
     } else {
         (
             false,
             Some(
-                "Bind at least one hotbar slot in the Equipment page before tracking.".to_string(),
+                "Bind a hotbar slot or add a carried weapon in Equipment before tracking."
+                    .to_string(),
             ),
         )
     }
 }
 
-/// The idle-state mob label: the standing declaration, exactly as the
-/// active-session label derives it. A declaration outlives the session
-/// that set it, so idle reads the same facet rather than any retired
-/// exclusive-capture value.
-pub fn declared_mob_label(config: &AppConfig) -> Value {
+/// The idle-state typed creature: the standing declaration, exactly as the
+/// session start seeds it. A declaration outlives the session that set it,
+/// so idle reads the same facet rather than any retired exclusive-capture
+/// value. A blank species is no declaration.
+pub fn declared_mob(config: &AppConfig) -> Option<crate::tracker::DeclaredMob> {
     let species = config.manual_mob_species.trim();
     let maturity = config.manual_mob_maturity.trim();
     if species.is_empty() {
-        return Value::Null;
+        return None;
     }
-    let display = if maturity.is_empty() {
-        species.to_string()
-    } else {
-        format!("{maturity} {species}")
-    };
-    Value::String(display)
+    Some(crate::tracker::DeclaredMob::from_parts(
+        species.to_string(),
+        maturity.to_string(),
+    ))
 }
 
 /// `_notable_event_label`: the curated label for known event types, else
@@ -1641,10 +2017,8 @@ pub fn clear_manual_mob() -> Map<String, Value> {
 pub fn mob_display(species: &str, maturity: &str) -> Value {
     if species.is_empty() {
         Value::Null
-    } else if maturity.is_empty() {
-        Value::String(species.to_string())
     } else {
-        Value::String(format!("{maturity} {species}"))
+        Value::String(crate::mob_display::printed(species, maturity))
     }
 }
 
@@ -1667,64 +2041,10 @@ pub fn opt_str(value: &Value) -> Option<String> {
     value.as_str().map(str::to_string)
 }
 
-/// `_trifecta_attribution_summary`: the active preset's bound
-/// weapon/heal names plus the preset list, or null when nothing exists.
-pub async fn trifecta_attribution_summary(db: &Db, config: &AppConfig) -> Result<Value, DbError> {
-    let active = active_trifecta_preset(config);
-    let small = active.and_then(|preset| preset.small_weapon_id);
-    let big = active.and_then(|preset| preset.big_weapon_id);
-    let heal = active.and_then(|preset| preset.heal_id);
-    let presets: Vec<Value> = config
-        .trifecta_presets
-        .iter()
-        .map(|preset| json!({"id": preset.id, "name": preset.name}))
-        .collect();
-    if presets.is_empty() && small.is_none() && big.is_none() && heal.is_none() {
-        return Ok(Value::Null);
-    }
-    let mut summary = Map::new();
-    summary.insert(
-        "activePresetId".into(),
-        match &config.active_trifecta_preset_id {
-            Some(id) => Value::String(id.clone()),
-            None => Value::Null,
-        },
-    );
-    summary.insert(
-        "presetName".into(),
-        match active {
-            Some(preset) => Value::String(preset.name.clone()),
-            None => Value::Null,
-        },
-    );
-    summary.insert("presets".into(), Value::Array(presets));
-    summary.insert(
-        "smallWeapon".into(),
-        equipment_name(db, small, "weapon").await?,
-    );
-    summary.insert("bigWeapon".into(), equipment_name(db, big, "weapon").await?);
-    summary.insert(
-        "healTool".into(),
-        equipment_name(db, heal, "healing").await?,
-    );
-    Ok(Value::Object(summary))
-}
-
-/// The equipment-library name for a bound id and type, or null.
-pub async fn equipment_name(db: &Db, id: Option<i64>, item_type: &str) -> Result<Value, DbError> {
-    let Some(id) = id else {
-        return Ok(Value::Null);
-    };
-    match db.equipment_item(id, item_type).await? {
-        Some((_id, name, _properties)) => Ok(Value::String(name)),
-        None => Ok(Value::Null),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_service::{AppConfig, TrifectaPresetConfig};
+    use crate::config_service::AppConfig;
     use crate::db::Db;
     use rusqlite::{params, Connection};
     use serde_json::json;
@@ -1859,15 +2179,16 @@ mod tests {
         Ok(())
     }
 
-    fn seed_equipment(
+    fn seed_calibration_at(
         conn: &Connection,
-        id: i64,
-        name: &str,
-        item_type: &str,
+        skill: &str,
+        level: f64,
+        scanned_at: f64,
     ) -> Result<(), DbError> {
         conn.execute(
-            "INSERT INTO equipment_library (id, name, item_type, properties_json) VALUES (?, ?, ?, '{}')",
-            params![id, name, item_type],
+            "INSERT INTO skill_calibrations (skill_name, level, source, scanned_at) \
+             VALUES (?, ?, 'scan', ?)",
+            params![skill, level, scanned_at],
         )?;
         Ok(())
     }
@@ -2018,10 +2339,13 @@ mod tests {
         let summary = ListSummary {
             weapon_cost: 1.0,
             heal_cost: 2.0,
+            consumable_cost: 0.0,
             enhancer_cost: 3.0,
             armour_cost: 4.0,
             dangling_cost: 5.0,
             harvest_cost: 6.0,
+            // Overhead takes the net down, never the cost or the rate.
+            overhead_cost: 0.5,
             loot_tt: 30.0,
             primary_mobs: json!(["Argonaut"]),
             primary_weapons: json!(["Gun"]),
@@ -2040,7 +2364,7 @@ mod tests {
                 "primaryWeapons": ["Gun"],
                 "cost": 21.0,
                 "returns": 30.0,
-                "net": 9.0,
+                "net": 8.5,
                 "returnRate": round(30.0 / 21.0, 4),
                 "globals": 2,
                 "hofs": 1,
@@ -2404,12 +2728,53 @@ mod tests {
                     "returnRate": 1.5,
                     "kills": 2,
                     "duration": 3600,
+                    "costBasis": "tracked",
                     "costBreakdown": {
                         "weaponCost": 10.0,
                         "healCost": 2.0,
+                        "consumableCost": 0.0,
                         "enhancerCost": 3.0,
                         "armourCost": 4.0,
                         "harvestCost": 0.0,
+                        // Every shot fired: the kills' and the 1.00 after
+                        // the last kill.
+                        "tracked": {
+                            "weaponCost": 11.0,
+                            "healCost": 2.0,
+                            "consumableCost": 0.0,
+                            "enhancerCost": 3.0,
+                            "armourCost": 4.0,
+                            "harvestCost": 0.0,
+                        },
+                        "basis": {
+                            "weaponCost": "tracked",
+                            "healCost": "tracked",
+                            "consumableCost": "tracked",
+                            "enhancerCost": "tracked",
+                            "armourCost": "tracked",
+                            "harvestCost": "tracked",
+                        },
+                        "reasons": {
+                            "weaponCost": "noMeasuredCosts",
+                            "healCost": "noMeasuredCosts",
+                            "consumableCost": "noMeasuredCosts",
+                            "enhancerCost": "noMeasuredCosts",
+                            "armourCost": "noMeasuredCosts",
+                            "harvestCost": "noMeasuredCosts",
+                        },
+                        "overheadCost": 0.0,
+                        "overhead": {
+                            "travel": 0.0,
+                            "fieldLogistics": 0.0,
+                            "unclassified": 0.0,
+                            "reasons": {
+                                "travel": null,
+                                "fieldLogistics": null,
+                                "unclassified": null,
+                            },
+                        },
+                        "measured": null,
+                        "armourUnrecorded": false,
                     },
                 },
                 "harvest": {
@@ -2420,17 +2785,42 @@ mod tests {
                 },
                 "sessionName": null,
                 "mobEntryMode": "mob",
+                "exclusion": null,
                 "notableEvents": [
                     {"type": "global", "eventType": "global_kill", "target": "Argonaut", "item": "Argonaut", "value": 50.0},
                     {"type": "hof", "eventType": "hof_item", "target": "Sword", "item": "Sword", "value": 100.0},
                 ],
                 "lootBreakdown": [{"name": "Oil", "quantity": 2, "ttValue": 20.0}],
                 "deactivatedLootBreakdown": [{"name": "Hide", "quantity": 1, "ttValue": 10.0}],
-                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 2}],
+                "questRewards": [],
+                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 2, "certainty": "recorded"}],
                 "effectiveLoot": 30.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 20, "damageDealt": 200.0, "crits": 1, "costAttributed": 10.0}],
                 "skillGains": [{"skillName": "Laser Weaponry Technology", "level": 42.5, "ttValueGained": 0.5}],
+                "weaponAttribution": {
+                    "correctable": true,
+                    "agreed": null,
+                    "evidenced": null,
+                    "evidenceShots": 0,
+                    "unresolved": 0,
+                    "unpriced": 0,
+                    "assigned": 0,
+                    "markedTicks": 0,
+                    "effectTicks": 0,
+                    "pricedTicks": 0,
+                    "boostedShots": 0,
+                    "reducedShots": 0,
+                    "hitMargins": [],
+                    "unclaimedTicks": 0,
+                    "undeclaredShots": 0,
+                    "ranUndeclared": false,
+                    "batches": [],
+                    "effects": [],
+                    "reviews": [],
+                },
+                "enhancerBreaks": [],
                 "healing": {
+                    "correctable": true,
                     "activations": [{
                         "id": "ha1",
                         "toolName": "Restoration Chip",
@@ -2439,6 +2829,9 @@ mod tests {
                         "provenance": "direct",
                         "effectUntil": 1030.0,
                         "outputCount": 2,
+                        "amount": null,
+                        "superseded": false,
+                        "correction": null,
                     }],
                     "activationCount": 1,
                     "outputCount": 3,
@@ -2529,12 +2922,51 @@ mod tests {
                     "returnRate": 3.5,
                     "kills": 1,
                     "duration": 3600,
+                    "costBasis": "tracked",
                     "costBreakdown": {
                         "weaponCost": 5.0,
                         "healCost": 0.0,
+                        "consumableCost": 0.0,
                         "enhancerCost": 0.0,
                         "armourCost": 0.0,
                         "harvestCost": 3.0,
+                        "tracked": {
+                            "weaponCost": 5.0,
+                            "healCost": 0.0,
+                            "consumableCost": 0.0,
+                            "enhancerCost": 0.0,
+                            "armourCost": 0.0,
+                            "harvestCost": 3.0,
+                        },
+                        "basis": {
+                            "weaponCost": "tracked",
+                            "healCost": "tracked",
+                            "consumableCost": "tracked",
+                            "enhancerCost": "tracked",
+                            "armourCost": "tracked",
+                            "harvestCost": "tracked",
+                        },
+                        "reasons": {
+                            "weaponCost": "noMeasuredCosts",
+                            "healCost": "noMeasuredCosts",
+                            "consumableCost": "noMeasuredCosts",
+                            "enhancerCost": "noMeasuredCosts",
+                            "armourCost": "noMeasuredCosts",
+                            "harvestCost": "noMeasuredCosts",
+                        },
+                        "overheadCost": 0.0,
+                        "overhead": {
+                            "travel": 0.0,
+                            "fieldLogistics": 0.0,
+                            "unclassified": 0.0,
+                            "reasons": {
+                                "travel": null,
+                                "fieldLogistics": null,
+                                "unclassified": null,
+                            },
+                        },
+                        "measured": null,
+                        "armourUnrecorded": false,
                     },
                 },
                 "harvest": {
@@ -2545,6 +2977,7 @@ mod tests {
                 },
                 "sessionName": null,
                 "mobEntryMode": "mob",
+                "exclusion": null,
                 "notableEvents": [],
                 "lootBreakdown": [
                     {"name": "Oil", "quantity": 2, "ttValue": 20.0},
@@ -2553,11 +2986,35 @@ mod tests {
                 "deactivatedLootBreakdown": [
                     {"name": "Wood Shavings", "quantity": 2, "ttValue": 1.0},
                 ],
-                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 1}],
+                "questRewards": [],
+                "mobBreakdown": [{"currentName": "Argonaut", "originalName": null, "killCount": 1, "certainty": "recorded"}],
                 "effectiveLoot": 28.0,
                 "toolStats": [{"weaponName": "Gun", "shotsFired": 10, "damageDealt": 100.0, "crits": 0, "costAttributed": 5.0}],
                 "skillGains": [],
+                "weaponAttribution": {
+                    "correctable": true,
+                    "agreed": null,
+                    "evidenced": null,
+                    "evidenceShots": 0,
+                    "unresolved": 0,
+                    "unpriced": 0,
+                    "assigned": 0,
+                    "markedTicks": 0,
+                    "effectTicks": 0,
+                    "pricedTicks": 0,
+                    "boostedShots": 0,
+                    "reducedShots": 0,
+                    "hitMargins": [],
+                    "unclaimedTicks": 0,
+                    "undeclaredShots": 0,
+                    "ranUndeclared": false,
+                    "batches": [],
+                    "effects": [],
+                    "reviews": [],
+                },
+                "enhancerBreaks": [],
                 "healing": {
+                    "correctable": true,
                     "activations": [],
                     "activationCount": 0,
                     "outputCount": 0,
@@ -2716,6 +3173,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(empty, json!([]));
+    }
+
+    #[tokio::test]
+    async fn session_skill_gains_reports_the_level_latest_in_time_not_by_id() {
+        let (_dir, db) = open_db().await;
+        db.with_writer(|conn| {
+            seed_session(
+                conn,
+                "s1",
+                1000.0,
+                Some(2000.0),
+                false,
+                "mob",
+                0.0,
+                0.0,
+                0.0,
+            )?;
+            seed_skill_gain(conn, "s1", "Laser Weaponry Technology", 1.0, 0.5, 1000.0)?;
+            // The newer reading is written first; an older screenshot is
+            // recorded afterwards and so carries the higher id. The level
+            // reported is the one latest in time.
+            seed_calibration_at(conn, "Laser Weaponry Technology", 50.0, 5000.0)?;
+            seed_calibration_at(conn, "Laser Weaponry Technology", 40.0, 4000.0)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let gains = db
+            .with_reader(|conn| session_skill_gains(conn, "s1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            gains,
+            json!([{"skillName": "Laser Weaponry Technology", "level": 50.0, "ttValueGained": 0.5}])
+        );
     }
 
     #[test]
@@ -3169,7 +3662,22 @@ mod tests {
                  ) VALUES (
                     'ho1', 's1', 'ha1', 'hw1', 1000,
                     '2026-01-01 00:00:00', 30, 'direct', 'intent_confirmed'
-                 );",
+                 );
+                 INSERT INTO healing_corrections (
+                    id, session_id, kind, activation_id, output_id, cost_delta_ped,
+                    corrected_at, undone_at
+                 ) VALUES ('hc1', 's1', 'not_paid_use', 'ha1', 'ho1', -0.01, 1100, 1200);
+                 INSERT INTO tool_sightings (
+                    id, session_id, kind, endpoint, item_id, item_name, first_seen, last_seen
+                 ) VALUES ('ts1', 's1', 'bundled', 'weapons', '7', 'Rusty Rifle', 1000, 1010);
+                 INSERT INTO enhancer_breaks (
+                    id, session_id, kill_id, observed_at, enhancer_name, weapon_name,
+                    returned_ped, deducted_ped, pricing, tt_ped, cost_ped
+                 ) VALUES
+                    ('eb1', 's1', 'k1', 1000, 'Weapon Damage Enhancer 1', 'Gun',
+                     0.8, 0.8, 'markupNotSet', 1.0, 0.2),
+                    ('eb2', 's1', NULL, 1500, 'Weapon Damage Enhancer 1', 'Gun',
+                     0.8, 0.8, 'markupNotSet', 1.0, 0.2);",
             )?;
             seed_session(conn, "active", 1000.0, None, true, "mob", 0.0, 0.0, 0.0)?;
             Ok(())
@@ -3178,15 +3686,17 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            delete_session_impl(&db, "absent").await,
+            crate::session_delete::delete_session_impl(&db, "absent").await,
             Err(EditError::NotFound(_))
         ));
         assert!(matches!(
-            delete_session_impl(&db, "active").await,
+            crate::session_delete::delete_session_impl(&db, "active").await,
             Err(EditError::Conflict(_))
         ));
 
-        delete_session_impl(&db, "s1").await.unwrap();
+        crate::session_delete::delete_session_impl(&db, "s1")
+            .await
+            .unwrap();
         assert!(!session_exists(&db, "s1").await.unwrap());
         // The kill-scoped children are gone with it.
         let kill_count = db
@@ -3206,7 +3716,8 @@ mod tests {
                     "SELECT
                          (SELECT COUNT(*) FROM healing_activations WHERE session_id = 's1') +
                          (SELECT COUNT(*) FROM healing_effect_windows WHERE session_id = 's1') +
-                         (SELECT COUNT(*) FROM healing_outputs WHERE session_id = 's1')",
+                         (SELECT COUNT(*) FROM healing_outputs WHERE session_id = 's1') +
+                         (SELECT COUNT(*) FROM healing_corrections WHERE session_id = 's1')",
                     [],
                     |row| row.get::<_, i64>(0),
                 )?)
@@ -3214,39 +3725,76 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(healing_count, 0);
+        let sightings = db
+            .with_reader(|conn| {
+                Ok::<i64, DbError>(conn.query_row(
+                    "SELECT COUNT(*) FROM tool_sightings WHERE session_id = 's1'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(sightings, 0, "the session's sightings leave with it");
+        let breaks = db
+            .with_reader(|conn| {
+                Ok::<i64, DbError>(conn.query_row(
+                    "SELECT COUNT(*) FROM enhancer_breaks WHERE session_id = 's1'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(breaks, 0, "the session's enhancer breaks leave with it");
     }
 
     // ── Producer helpers ────────────────────────────────────────────
 
     #[test]
-    fn validate_hotbar_needs_a_bound_slot() {
+    fn validate_tools_needs_a_bound_slot_or_a_carried_weapon() {
         let mut config = AppConfig::default();
-        // The default hotbar is all-null: not workable.
-        let (ok, message) = validate_hotbar(&config);
+        // The default hotbar is all-null and nothing is carried.
+        let (ok, message) = validate_tools(&config);
         assert!(!ok);
-        assert!(message.unwrap().contains("Bind at least one"));
+        assert!(message.unwrap().contains("Bind a hotbar slot"));
 
-        // Binding one slot makes it workable.
+        // A carried weapon alone makes it workable.
+        config.carried_weapon_ids = vec![4];
+        assert_eq!(validate_tools(&config), (true, None));
+
+        // So does one bound slot alone.
+        config.carried_weapon_ids.clear();
         config.hotbar.insert("1".to_string(), json!(5));
-        assert_eq!(validate_hotbar(&config), (true, None));
+        assert_eq!(validate_tools(&config), (true, None));
+
+        // Including one on a preset that is not live.
+        let mut parked = AppConfig::default();
+        parked.hotbar_presets[2].insert("4".to_string(), json!(6));
+        assert_eq!(validate_tools(&parked), (true, None));
     }
 
     #[test]
     #[allow(clippy::field_reassign_with_default)]
-    fn declared_mob_label_reads_the_standing_declaration() {
+    fn declared_mob_reads_the_standing_declaration() {
         let mut config = AppConfig::default();
+        let name = |config: &AppConfig| declared_mob(config).map(|mob| mob.name);
 
         // No declaration at all.
-        assert_eq!(declared_mob_label(&config), Value::Null);
+        assert_eq!(name(&config), None);
 
         // Species with and without maturity, and a whitespace-only species.
         config.manual_mob_species = "Argonaut".to_string();
         config.manual_mob_maturity = "Young".to_string();
-        assert_eq!(declared_mob_label(&config), json!("Young Argonaut"));
+        assert_eq!(name(&config).as_deref(), Some("Argonaut Young"));
+        assert_eq!(
+            declared_mob(&config).map(|mob| (mob.species, mob.maturity)),
+            Some(("Argonaut".to_string(), "Young".to_string()))
+        );
         config.manual_mob_maturity = String::new();
-        assert_eq!(declared_mob_label(&config), json!("Argonaut"));
+        assert_eq!(name(&config).as_deref(), Some("Argonaut"));
         config.manual_mob_species = "  ".to_string();
-        assert_eq!(declared_mob_label(&config), Value::Null);
+        assert_eq!(name(&config), None);
     }
 
     #[test]
@@ -3292,7 +3840,7 @@ mod tests {
 
     #[test]
     fn mob_display_joins_maturity_and_species() {
-        assert_eq!(mob_display("Argonaut", "Young"), json!("Young Argonaut"));
+        assert_eq!(mob_display("Argonaut", "Young"), json!("Argonaut Young"));
         assert_eq!(mob_display("Argonaut", ""), json!("Argonaut"));
         assert_eq!(mob_display("", ""), Value::Null);
     }
@@ -3315,80 +3863,6 @@ mod tests {
         assert_eq!(opt_str(&json!(5)), None);
     }
 
-    // ── Trifecta ────────────────────────────────────────────────────
-
-    #[tokio::test]
-    async fn trifecta_attribution_summary_builds_or_nulls() {
-        let (_dir, db) = open_db().await;
-        db.with_writer(|conn| {
-            seed_equipment(conn, 1, "Small Gun", "weapon")?;
-            seed_equipment(conn, 2, "Heal Tool", "healing")?;
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-        let config = AppConfig {
-            trifecta_presets: vec![TrifectaPresetConfig {
-                id: "p1".to_string(),
-                name: "Preset One".to_string(),
-                small_weapon_id: Some(1),
-                big_weapon_id: None,
-                heal_id: Some(2),
-            }],
-            active_trifecta_preset_id: Some("p1".to_string()),
-            ..AppConfig::default()
-        };
-        let summary = trifecta_attribution_summary(&db, &config).await.unwrap();
-        assert_eq!(
-            summary,
-            json!({
-                "activePresetId": "p1",
-                "presetName": "Preset One",
-                "presets": [{"id": "p1", "name": "Preset One"}],
-                "smallWeapon": "Small Gun",
-                "bigWeapon": null,
-                "healTool": "Heal Tool",
-            })
-        );
-
-        // No presets and no bound ids collapses to null.
-        let empty = AppConfig {
-            trifecta_presets: vec![],
-            active_trifecta_preset_id: None,
-            ..AppConfig::default()
-        };
-        assert_eq!(
-            trifecta_attribution_summary(&db, &empty).await.unwrap(),
-            Value::Null
-        );
-    }
-
-    #[tokio::test]
-    async fn equipment_name_resolves_by_id_and_type() {
-        let (_dir, db) = open_db().await;
-        db.with_writer(|conn| seed_equipment(conn, 1, "Small Gun", "weapon"))
-            .await
-            .unwrap();
-        assert_eq!(
-            equipment_name(&db, None, "weapon").await.unwrap(),
-            Value::Null
-        );
-        assert_eq!(
-            equipment_name(&db, Some(1), "weapon").await.unwrap(),
-            json!("Small Gun")
-        );
-        // An absent id and a type mismatch both read null.
-        assert_eq!(
-            equipment_name(&db, Some(999), "weapon").await.unwrap(),
-            Value::Null
-        );
-        assert_eq!(
-            equipment_name(&db, Some(1), "healing").await.unwrap(),
-            Value::Null
-        );
-    }
-
     // ── Return-rate zero-cost guards and active-duration ────────────
 
     /// A zero-cost summary row with loot returns a 0.0 rate, never a
@@ -3399,10 +3873,12 @@ mod tests {
         let summary = ListSummary {
             weapon_cost: 0.0,
             heal_cost: 0.0,
+            consumable_cost: 0.0,
             enhancer_cost: 0.0,
             armour_cost: 0.0,
             dangling_cost: 0.0,
             harvest_cost: 0.0,
+            overhead_cost: 0.0,
             loot_tt: 30.0,
             primary_mobs: json!([]),
             primary_weapons: json!([]),
@@ -3474,33 +3950,5 @@ mod tests {
         assert_eq!(value["summary"]["duration"], json!(3600));
         assert_eq!(value["summary"]["cost"], json!(0.0));
         assert_eq!(value["summary"]["returnRate"], json!(0.0));
-    }
-
-    /// A preset exists but none is active, so every bound id is None while the
-    /// preset list is non-empty. The early-return guard is a conjunction of
-    /// four terms; turning any `&&` into `||` would collapse this real preset
-    /// list to null.
-    #[tokio::test]
-    async fn trifecta_attribution_summary_keeps_an_unbound_preset_list() {
-        let (_dir, db) = open_db().await;
-        let config = AppConfig {
-            trifecta_presets: vec![TrifectaPresetConfig {
-                id: "p1".to_string(),
-                name: "Preset One".to_string(),
-                small_weapon_id: None,
-                big_weapon_id: None,
-                heal_id: None,
-            }],
-            active_trifecta_preset_id: None,
-            ..AppConfig::default()
-        };
-        let summary = trifecta_attribution_summary(&db, &config).await.unwrap();
-        assert_ne!(summary, Value::Null);
-        assert_eq!(
-            summary["presets"],
-            json!([{"id": "p1", "name": "Preset One"}])
-        );
-        assert_eq!(summary["activePresetId"], Value::Null);
-        assert_eq!(summary["smallWeapon"], Value::Null);
     }
 }

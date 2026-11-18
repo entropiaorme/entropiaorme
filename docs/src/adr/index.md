@@ -37,3 +37,13 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0027](0027-intent-led-healing-attribution.md) | Intent-led healing attribution with durable output evidence |
 | [ADR-0028](0028-versioned-expected-hunting-economics.md) | Versioned expected-hunting economics over immutable offensive evidence |
 | [ADR-0029](0029-two-line-development.md) | Two-line development: `next` integrates, `main` is promoted to after soak; the merge queue retired |
+| [ADR-0030](0030-startup-readiness-boundary.md) | An explicit startup readiness boundary: a level-triggered shell answer, commands held in the typed transport, the frame painted first |
+| [ADR-0031](0031-session-grain-protection-costs.md) | Protection costs recorded at session grain, when the player repairs: nothing declared during play, hit-weighted over the sessions the player ticks |
+| [ADR-0032](0032-unified-weapon-attribution.md) | Unified weapon attribution: hotbar intent validated by each carried weapon's damage band, with bounded, player-decided correction and no mode to choose |
+| [ADR-0033](0033-damage-over-time-effect-windows.md) | Damage-over-time effects as persisted windows of one paid activation: ticks cost nothing, concurrent explanations stay unresolved, and windows outlive their session |
+| [ADR-0034](0034-attack-rate-limit.md) | The server's attack-rate limit as a per-attack cost and damage factor, applied at read time through one pricing preparation; reload speed held at the game's per-source stacking limits |
+| [ADR-0035](0035-user-led-promotion.md) | Promotion is user-led: no cadence; `next` is promoted up to the point the maintainer has used, as a prefix, never a selection |
+| [ADR-0036](0036-consumable-dose-lifecycle.md) | Consumable doses as one persisted lifecycle: an absolute expiry the tracker owns, the consumed input to the one reload evaluator, booked once by the player's per-item choice, never stacked, corrected by supersession |
+| [ADR-0037](0037-retire-golden-ratification-guard.md) | Retire the golden-ratification guard: goldens still assert, and a deliberate change is reviewed in the commit that moves them |
+| [ADR-0038](0038-promotion-carries-public-polish.md) | Promotion carries the public surface's polish: in-development marking and documentation are settled once per promotion, not per landing on `next` |
+| [ADR-0039](0039-retire-port-equivalence-evidence.md) | Retire the port-equivalence evidence and scale testing to a personal project: the replay corpus stays; the WebDriver suite, mutation floors, and per-push coverage go |

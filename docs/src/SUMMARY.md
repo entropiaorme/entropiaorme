@@ -8,7 +8,7 @@
 - [Service and crate map](architecture/service-map.md)
 - [Event taxonomy](architecture/event-taxonomy.md)
 - [OCR pipeline](architecture/ocr-pipeline.md)
-- [Database schema reference](architecture/database-schema.md)
+- [Database schema](architecture/database-schema.md)
 - [Market data pipeline](architecture/market-data.md)
 
 # Decision records
@@ -43,3 +43,13 @@
   - [ADR-0027: Intent-led healing attribution with durable output evidence](adr/0027-intent-led-healing-attribution.md)
   - [ADR-0028: Versioned expected-hunting economics over immutable evidence](adr/0028-versioned-expected-hunting-economics.md)
   - [ADR-0029: Two-line development with promotion after soak](adr/0029-two-line-development.md)
+  - [ADR-0030: An explicit startup readiness boundary](adr/0030-startup-readiness-boundary.md)
+  - [ADR-0031: Protection costs recorded at session grain](adr/0031-session-grain-protection-costs.md)
+  - [ADR-0032: Unified weapon attribution](adr/0032-unified-weapon-attribution.md)
+  - [ADR-0033: Damage-over-time effect windows](adr/0033-damage-over-time-effect-windows.md)
+  - [ADR-0034: The server's attack-rate limit](adr/0034-attack-rate-limit.md)
+  - [ADR-0035: User-led promotion](adr/0035-user-led-promotion.md)
+  - [ADR-0036: Consumable dose lifecycle](adr/0036-consumable-dose-lifecycle.md)
+  - [ADR-0037: Retire the golden-ratification guard](adr/0037-retire-golden-ratification-guard.md)
+  - [ADR-0038: Promotion carries the public surface's polish](adr/0038-promotion-carries-public-polish.md)
+  - [ADR-0039: Retire the port-equivalence evidence](adr/0039-retire-port-equivalence-evidence.md)

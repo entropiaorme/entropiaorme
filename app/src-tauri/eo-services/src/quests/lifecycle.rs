@@ -46,6 +46,24 @@ enum CompletionWrite {
     Refused(String),
 }
 
+/// Where a reward item's existence comes from: a line the chat log recorded,
+/// or the player's own statement that it was paid when no line exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EvidenceBasis {
+    Observed,
+    Declared,
+}
+
+impl EvidenceBasis {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            EvidenceBasis::Observed => "observed",
+            EvidenceBasis::Declared => "declared",
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub(super) fn insert_reward_item(
     conn: &rusqlite::Connection,
     completion_id: i64,
@@ -54,18 +72,20 @@ pub(super) fn insert_reward_item(
     item_name: &str,
     quantity: i64,
     value_ped: f64,
+    basis: EvidenceBasis,
 ) -> rusqlite::Result<()> {
     let liquid = item_name.trim().eq_ignore_ascii_case("Universal Ammo");
     conn.execute(
         "INSERT INTO session_quest_completion_reward_items \
-         (completion_id, item_name, quantity, value_ped, accounting_kind) \
-         VALUES (?, ?, ?, ?, ?)",
+         (completion_id, item_name, quantity, value_ped, accounting_kind, evidence_basis) \
+         VALUES (?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             completion_id,
             item_name,
             quantity.max(1),
             value_ped.max(0.0),
             if liquid { "liquid" } else { "stock" },
+            basis.as_str(),
         ],
     )?;
     let reward_item_id = conn.last_insert_rowid();
@@ -118,7 +138,12 @@ fn snapshot_reward_attributions(
         duration: f64,
     }
 
+    // Contexts weigh by their tracked spend, never a measured one: the
+    // snapshot is taken at the hand-in, usually while the session is still
+    // live and before anything is measured, so every session a run spans
+    // is weighed on the one basis the chat log gives them all.
     let rows: Vec<ContextWeight> = {
+        // every-kill: spend (a context's cycled spend, every shot fired).
         let mut stmt = conn.prepare(
             "SELECT c.id, s.definition_id, \
                     COALESCE((SELECT SUM(k.cost_ped + k.enhancer_cost) \
@@ -410,6 +435,7 @@ impl QuestService {
                     }
                 };
                 if let Some(claim) = &manual_clump {
+                    // every-kill: by-id (the clump's own source row).
                     let valid = tx.query_row(
                         "SELECT EXISTS( \
                          SELECT 1 FROM quest_reward_clumps c \
@@ -509,6 +535,7 @@ impl QuestService {
                         &item.item_name,
                         item.quantity,
                         item.value_ped.value(),
+                        EvidenceBasis::Observed,
                     )?;
                 }
                 if has_item_reward {
@@ -525,10 +552,16 @@ impl QuestService {
                                  WHERE kill_id = ? AND deactivated_at IS NULL",
                                 rusqlite::params![now, claim.source_record_id],
                             )?;
+                            // The arrival is the reward's evidence from here
+                            // on, not a kill: it leaves every kill count.
                             tx.execute(
-                                "UPDATE kills SET loot_total_ped = 0 \
+                                "UPDATE kills SET loot_total_ped = 0, reward_claimed_at = ? \
                                  WHERE id = ? AND loot_source_id = ?",
-                                rusqlite::params![claim.source_record_id, claim.source_id],
+                                rusqlite::params![
+                                    now,
+                                    claim.source_record_id,
+                                    claim.source_id
+                                ],
                             )?;
                         }
                         "harvest" => {
@@ -559,6 +592,12 @@ impl QuestService {
                             "That loot clump has already been used".to_string(),
                         ));
                     }
+                    // An ended session's summary counted the arrival as a
+                    // kill with loot: drop it, and the next read rebuilds it.
+                    tx.execute(
+                        "DELETE FROM session_summaries WHERE session_id = ?",
+                        rusqlite::params![claim.session_id],
+                    )?;
                     crate::session_rollup::recompute_session(&tx, &claim.session_id)?;
                     crate::daily_rollup::refresh_session_days(&tx, &claim.session_id)?;
                 }
@@ -616,6 +655,8 @@ impl QuestService {
         Ok(self
             .db
             .with_reader(move |conn| {
+                // id-order: insertion (contexts append in process order, so
+                // the newest is the one in force; see skill_tracker).
                 Ok(conn
                     .query_row(
                         "SELECT c.id, i.id \
@@ -631,6 +672,51 @@ impl QuestService {
                     .optional()?)
             })
             .await?)
+    }
+
+    /// Give up a quest in progress, as the player just did in game. The run
+    /// ends cancelled with no completion and no reward, but the slot is held
+    /// until the next mission can be collected: a pickup-anchored timer keeps
+    /// running from the pickup, and a completion-anchored one runs from the
+    /// abandon. Any declared stretch of it closes, and the run keeps the
+    /// effort it was given.
+    pub async fn abandon_quest(&self, quest_id: i64) -> Result<Option<Value>, QuestError> {
+        let Some(quest) = self.get_quest(quest_id).await? else {
+            return Ok(None);
+        };
+        if quest["started_at"].is_null() {
+            return Err(QuestError::Invalid(
+                "Only a quest in progress can be abandoned".to_string(),
+            ));
+        }
+        let now = self.now_epoch();
+        self.report_stretch_closed(quest_id).await;
+        self.db
+            .with_writer(move |conn| {
+                let tx = conn.transaction()?;
+                tx.execute(
+                    "UPDATE quests SET started_at = NULL WHERE id = ?",
+                    rusqlite::params![quest_id],
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO quest_run_intervals(run_id, interval_id) \
+                     SELECT r.id, i.id FROM quest_runs r \
+                     JOIN session_intervals i ON i.kind = 'quest' AND i.ref_id = r.quest_id \
+                     WHERE r.quest_id = ? AND r.status = 'in_progress' \
+                       AND i.started_at >= r.started_at AND i.started_at <= ?",
+                    rusqlite::params![quest_id, now],
+                )?;
+                tx.execute(
+                    "UPDATE quest_runs \
+                     SET status = 'cancelled', abandoned_at = ?, hand_in_waiting = 0 \
+                     WHERE quest_id = ? AND status = 'in_progress'",
+                    rusqlite::params![now, quest_id],
+                )?;
+                tx.commit()?;
+                Ok(())
+            })
+            .await?;
+        self.get_quest(quest_id).await
     }
 
     /// Undo an in-progress quest, or disavow the active cooldown while
@@ -673,6 +759,33 @@ impl QuestService {
         let cooling = self.is_quest_cooling(&quest);
         if !cooling && !undo_reward {
             return Ok(Some(quest));
+        }
+        // A completion-anchored timer held by an abandon (later than the
+        // last completion) is corrected by forgetting the abandon: the
+        // completion it would otherwise disavow was never the binding fact.
+        let abandon_binds = cooling
+            && !undo_reward
+            && quest.get("cooldown_anchor").and_then(Value::as_str) != Some("pickup")
+            && match (
+                quest.get("last_abandoned_at").and_then(Value::as_f64),
+                quest.get("last_completed_at").and_then(Value::as_f64),
+            ) {
+                (Some(abandoned), Some(completed)) => abandoned > completed,
+                (Some(_), None) => true,
+                _ => false,
+            };
+        if abandon_binds {
+            self.db
+                .with_writer(move |conn| {
+                    conn.execute(
+                        "UPDATE quest_runs SET abandoned_at = NULL \
+                         WHERE quest_id = ? AND abandoned_at IS NOT NULL",
+                        rusqlite::params![quest_id],
+                    )?;
+                    Ok(())
+                })
+                .await?;
+            return self.get_quest(quest_id).await;
         }
 
         // A pickup-anchored quest additionally clears its durable start
@@ -868,6 +981,10 @@ impl QuestService {
                                 rusqlite::params![source_record_id],
                             )?;
                             recompute_kill_loot_total(&tx, &source_record_id)?;
+                            tx.execute(
+                                "UPDATE kills SET reward_claimed_at = NULL WHERE id = ?",
+                                rusqlite::params![source_record_id],
+                            )?;
                         } else {
                             tx.execute(
                                 "UPDATE harvest_loot_items SET deactivated_at = NULL \
@@ -884,6 +1001,12 @@ impl QuestService {
                             )?;
                         }
                     }
+                    // The summary counted the reward as no kill and no loot:
+                    // drop it, and the next read rebuilds it.
+                    tx.execute(
+                        "DELETE FROM session_summaries WHERE session_id = ?",
+                        rusqlite::params![session_id],
+                    )?;
                     crate::session_rollup::recompute_session(&tx, session_id)?;
                     crate::daily_rollup::refresh_session_days(&tx, session_id)?;
                     crate::daily_rollup::refresh_days(
@@ -903,6 +1026,7 @@ impl QuestService {
             let source_ids = self
                 .db
                 .with_reader(move |conn| {
+                    // every-kill: by-id (the sources of the reward's own lines).
                     let mut stmt = conn.prepare(
                         "SELECT DISTINCT k.loot_source_id \
                          FROM session_quest_completions c \
@@ -974,7 +1098,10 @@ impl QuestService {
         let anchor = quest.get("cooldown_anchor").and_then(Value::as_str);
         let last = match anchor {
             Some("pickup") => quest.get("last_started_at").and_then(Value::as_f64),
-            _ => quest.get("last_completed_at").and_then(Value::as_f64),
+            _ => super::families::completion_anchor_instant(
+                quest.get("last_completed_at").and_then(Value::as_f64),
+                quest.get("last_abandoned_at").and_then(Value::as_f64),
+            ),
         };
         let cooldown_hours = quest.get("cooldown_hours").and_then(Value::as_f64);
         let (Some(last), Some(cooldown_hours)) = (last, cooldown_hours) else {
@@ -984,5 +1111,82 @@ impl QuestService {
             return false;
         }
         (last + cooldown_hours * 3600.0) > self.now_epoch()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A quest's reward weighs the contexts of its run by their tracked
+    /// spend, even when a session in the run was measured since.
+    #[test]
+    fn a_quest_weighs_its_contexts_by_tracked_spend() {
+        let conn = crate::db::migrated_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+             VALUES ('s1', 1000.0, 4600.0, 0)",
+            [],
+        )
+        .unwrap();
+        for (context, cost, enhancer) in [(1_i64, 1.0, 0.1), (2, 3.0, 0.0)] {
+            conn.execute(
+                "INSERT INTO session_contexts (id, session_id, created_at) \
+                 VALUES (?1, 's1', 1000.0)",
+                [context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO session_intervals (id, session_id, kind, label, started_at) \
+                 VALUES (?1, 's1', 'quest', 'Daily', 1000.0)",
+                [context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO session_context_intervals (context_id, interval_id) \
+                 VALUES (?1, ?1)",
+                [context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO quest_run_intervals (run_id, interval_id) VALUES (5, ?1)",
+                [context],
+            )
+            .unwrap();
+            let kill = format!("k{context}");
+            conn.execute(
+                "INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, \
+                 enhancer_cost, loot_total_ped, context_id) \
+                 VALUES (?1, 's1', 'Atrox', 1500.0, ?2, ?3, 1.0, ?4)",
+                rusqlite::params![kill, cost, enhancer, context],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO kill_tool_stats (kill_id, tool_name, shots_fired, cost_per_shot) \
+                 VALUES (?1, 'Rifle', 1, ?2)",
+                rusqlite::params![kill, cost],
+            )
+            .unwrap();
+        }
+        // Measured at twice what was tracked: the weights must not see it.
+        crate::session_costs_tests::store_measured(&conn, "s1", &[("weapon", 8.0)]);
+        crate::session_costs::refresh_derived(&conn, "s1").unwrap();
+
+        snapshot_reward_attributions(&conn, 9, 5, 4600.0).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT activity_context_id, cycled_ped, weight FROM quest_reward_attributions \
+                 WHERE completion_id = 9 ORDER BY activity_context_id",
+            )
+            .unwrap();
+        let rows: Vec<(i64, f64, f64)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!((rows[0].1 - 1.1).abs() < 1e-9, "{rows:?}");
+        assert!((rows[1].1 - 3.0).abs() < 1e-9, "{rows:?}");
+        assert!((rows[0].2 - 1.1 / 4.1).abs() < 1e-9, "{rows:?}");
     }
 }

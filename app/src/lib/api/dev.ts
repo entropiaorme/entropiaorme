@@ -1,8 +1,6 @@
 /**
- * Developer tools (hidden, developer-mode-gated). Each command is gated
- * on developer mode in the facade; when it is off the command rejects
- * with the `notFound` kind, so the metrics page treats that kind as
- * "gate closed".
+ * Developer tools: the metrics snapshot, crash reporting, database
+ * maintenance, and the auction-fee research session. Nothing gates them.
  */
 
 import * as commands from './commands.gen';

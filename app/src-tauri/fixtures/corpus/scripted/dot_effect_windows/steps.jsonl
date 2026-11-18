@@ -1,0 +1,37 @@
+{"hotbar": {"slot": "3", "equipment_id": 3, "item_name": "Shock Chip", "item_kind": "weapon", "cost_per_use_ped": 0.0, "reload_seconds": 0.0}}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}
+"restart"
+{"advance": 2.0}
+{"chat": 1}
+{"advance": 0.5}
+{"hotbar": {"slot": "3", "equipment_id": 3, "item_name": "Shock Chip", "item_kind": "weapon", "cost_per_use_ped": 0.0, "reload_seconds": 0.0}}
+{"advance": 0.5}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}
+{"advance": 0.5}
+{"hotbar": {"slot": "2", "equipment_id": 2, "item_name": "Rifle", "item_kind": "weapon", "cost_per_use_ped": 0.0, "reload_seconds": 0.0}}
+{"advance": 0.5}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}
+{"advance": 21.5}
+{"hotbar": {"slot": "1", "equipment_id": 1, "item_name": "Pistol", "item_kind": "weapon", "cost_per_use_ped": 0.0, "reload_seconds": 0.0}}
+{"advance": 0.5}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}
+{"advance": 1.0}
+{"decide": "keep"}
+{"advance": 1.0}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}
+{"advance": 1.0}
+{"chat": 1}

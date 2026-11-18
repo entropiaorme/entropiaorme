@@ -25,9 +25,14 @@ export const IN_DEVELOPMENT_SURFACES: readonly InDevelopmentSurface[] = [
 	{
 		id: 'limited-protection',
 		summary:
-			'Armour cost tracking is available, but recorded readings and allocations cannot yet be corrected and archived setups cannot be restored.',
-		graduates:
-			'Readings and allocations support correction or supersession, archived setups can be restored, and broader field validation is complete.',
+			'Limited armour and plates are read from the account and billed at the markup set for each piece, but this has not yet been walked in live play.',
+		graduates: 'Setting a markup and seeing a session billed by it has been walked in live play.',
+	},
+	{
+		id: 'account-readings',
+		summary:
+			'The account connection and the figures measured from its readings have not yet been walked in live play, so a measured figure may still differ from what the account site shows.',
+		graduates: 'Connecting, reading, and the measured figures have been walked in live play.',
 	},
 ] as const;
 

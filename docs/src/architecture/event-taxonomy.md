@@ -1,8 +1,8 @@
 # Event taxonomy
 
-EntropiaOrme is an analytical desktop application whose Rust core observes a stream of game-state changes (parsed chat-log lines, manual skill scans) and pushes the resulting changes to the frontend windows without polling. Internally this is built as **two distinct event systems**, layered so that each solves a different problem. This page documents both layers end to end: from the low-level, synchronous, in-process topics that core services use to coordinate, up to the coarse typed envelopes that cross to the webview over the in-process Tauri event bridge.
+EntropiaOrme is an analytical desktop application whose Rust core observes a stream of game-state changes (parsed chat-log lines, skill scans) and pushes the resulting changes to the frontend windows without polling. Internally this is built as **two distinct event systems**, layered so that each solves a different problem. This page documents both layers end to end: from the low-level, synchronous, in-process topics that core services use to coordinate, up to the coarse typed envelopes that cross to the webview over the in-process Tauri event bridge.
 
-The two-layer shape is implemented in Rust under `app/src-tauri/`: the low-level bus lives in the `eo-services` crate (`app/src-tauri/eo-services/src/event_bus.rs`, with its typed payloads in `app/src-tauri/eo-services/src/bus_events.rs`), and the domain envelopes and the typed broadcast channel live in the `eo-wire` crate (`app/src-tauri/eo-wire/src/domain_events.rs` and `app/src-tauri/eo-wire/src/bus.rs`). This began life as a Python FastAPI sidecar that was kept on only as a cross-language equivalence test oracle; that oracle has since been retired and its tree removed, so the Rust implementation is now the only one. The wire contract the two implementations shared is preserved as the committed schema snapshot the Rust types are asserted against.
+The two-layer shape is implemented in Rust under `app/src-tauri/`: the low-level bus lives in the `eo-services` crate (`app/src-tauri/eo-services/src/event_bus.rs`, with its typed payloads in `app/src-tauri/eo-services/src/bus_events.rs`), and the domain envelopes and the typed broadcast channel live in the `eo-wire` crate (`app/src-tauri/eo-wire/src/domain_events.rs` and `app/src-tauri/eo-wire/src/bus.rs`). This began life as a Python FastAPI sidecar; the Rust implementation is now the only one.
 
 For the wider context of where this fits, see the [architecture overview](overview.md) and the [service map](service-map.md). The two design decisions that shape this layer are recorded as [ADR 0002: the event spine](../adr/0002-event-spine.md) and [ADR 0009: push-to-pull invalidation](../adr/0009-push-to-pull-invalidation.md).
 
@@ -24,7 +24,7 @@ The **low-level bus** is intra-core wiring. As the domain-events module puts it,
 
 The **domain event layer** is the coarse, frontend-facing subset. Each domain event is a typed envelope carrying a `type` discriminator, so the wire format is a serde-compatible tagged JSON object. The set of domain events is small and curated; the low-level topics stay inside the process and are never forwarded.
 
-The two layers share one piece of plumbing: the four domain envelopes ride the *same* `EventBus` instance as the low-level topics, as typed variants of the `BusEvent` enum. They carry the `eo-wire` envelope types (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, and `NavigationUpdated`) directly. `EventBus::publish` takes a `&BusEvent` and derives the topic from the variant, so "a typed envelope on a domain topic" is enforced by construction at the bus seam: a foreign value on a domain topic is unrepresentable, and no runtime re-validation exists because none is needed. `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`) republishes those four variants' envelopes, still typed, onto the broadcast channel the shell's bridge consumes.
+The two layers share one piece of plumbing: the eight domain envelopes ride the *same* `EventBus` instance as the low-level topics, as typed variants of the `BusEvent` enum. They carry the `eo-wire` envelope types (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, `NavigationUpdated`, `ProtectionUpdated`, `HealingUpdated`, `WeaponsUpdated`, and `ConsumablesUpdated`) directly. `EventBus::publish` takes a `&BusEvent` and derives the topic from the variant, so "a typed envelope on a domain topic" is enforced by construction at the bus seam: a foreign value on a domain topic is unrepresentable, and no runtime re-validation exists because none is needed. `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`) republishes those eight variants' envelopes, still typed, onto the broadcast channel the shell's bridge consumes.
 
 ### The bus mechanics
 
@@ -56,35 +56,11 @@ The variants of the `Topic` enum in `app/src-tauri/eo-services/src/event_bus.rs`
 | `MissionReceived` | `mission_received` | A mission was received. |
 | `TickFlushed` | `tick_flushed` | The settling boundary: a parse tick has closed and every per-event subscriber write for that tick has completed. |
 
-The same enum also carries the four frontend-facing domain topics (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, and `NavigationUpdated`), whose `as_str()` returns the dotted constants from `app/src-tauri/eo-wire/src/domain_events.rs`, because the typed envelopes ride this same bus before the bridge republishes them onto the broadcast channel.
+The same enum also carries the eight frontend-facing domain topics (`TrackingSessionUpdated`, `ScanStatusChanged`, `HarvestRecorded`, `NavigationUpdated`, `ProtectionUpdated`, `HealingUpdated`, `WeaponsUpdated`, and `ConsumablesUpdated`), whose `as_str()` returns the dotted constants from `app/src-tauri/eo-wire/src/domain_events.rs`, because the typed envelopes ride this same bus before the bridge republishes them onto the broadcast channel.
 
-### Healing intent and chat evidence
+### Intent and evidence
 
-Healing attribution consumes two independent observations. `HotbarIntent`
-carries the user's resolved equipment intent and the time at which the input
-hook observed the key. A later compatible activation output confirms one paid
-activation: a direct output for a direct or compound profile, or the first
-matching tick for a pure over-time profile. Subsequent effect outputs, passive
-outputs, and unattributed outputs remain zero-cost evidence. The game chat
-timestamp is retained as provenance, but it has only
-whole-second precision, so local monotonic observation and input occurrence
-times decide ordering and bounded reconciliation.
-
-The hotbar resolver runs off the hook callback on its worker thread. A rapid
-healer activation followed by a weapon switch therefore keeps a short closed
-intent tail, allowing the heal output to confirm the healer that was actually
-used. The inverse delivery order is also safe: an unexplained output is first
-persisted at zero cost and can be reconciled only when a subsequently delivered
-intent proves it occurred first and matches the healing profile.
-
-The tracker derives its active weapon, healing tool, or harvesting tool from
-that same session-scoped `HotbarIntent`, so a session transition cannot split
-intent attribution from the corresponding equipment change.
-`ActiveToolChanged`, `ActiveHealToolChanged`, and
-`ActiveHarvestToolChanged` remain supported compatibility topics for direct
-producers. Healing cost no longer depends on chat-only tool inference: a
-self-heal without compatible hotbar intent is passive or unattributed evidence
-and cannot add PED cost.
+Healing and weapon attribution each combine two independent observations: `HotbarIntent`, the equipment the player pressed and when the input hook saw the key, and the chat-log output that later confirms (or contradicts) it. The chat timestamp has only whole-second precision, so the input occurrence time and local monotonic observation decide ordering. How the tracker reconciles the two, and what it does when they disagree, is recorded in [ADR-0027](../adr/0027-intent-led-healing-attribution.md) (healing), [ADR-0032](../adr/0032-unified-weapon-attribution.md) (weapons), and [ADR-0033](../adr/0033-damage-over-time-effect-windows.md) (damage-over-time effect windows).
 
 ### The tick_flushed settling boundary
 
@@ -94,7 +70,7 @@ This is purely intra-core, like the other low-level topics. Its purpose is to gi
 
 ## Domain event envelopes
 
-The frontend-facing domain events are defined in `app/src-tauri/eo-wire/src/domain_events.rs`. Four concrete envelope types exist today.
+The frontend-facing domain events are defined in `app/src-tauri/eo-wire/src/domain_events.rs`, which is the reference for each envelope's exact fields.
 
 ### The shared envelope shape
 
@@ -109,54 +85,32 @@ Every envelope carries the same three top-level fields, then a typed `payload`:
 
 #### occurred_at is required and never null
 
-`occurred_at` is a **required** envelope field and is never `null` and never the bus's raw float. In `app/src-tauri/eo-wire/src/domain_events.rs` it is typed as a plain `String` on every envelope, with no `Option`. The schema snapshot in `app/src-tauri/contracts/event_schemas.snapshot.json` confirms this: `occurred_at` is `"type": "string"` and appears in every envelope's `required` array, with no null branch.
+`occurred_at` is a **required** envelope field and is never `null` and never the bus's raw float. In `app/src-tauri/eo-wire/src/domain_events.rs` it is typed as a plain `String` on every envelope, with no `Option`.
 
 An emitter whose domain carries no instant for the change (for example a settled tick that has no timestamp) synthesises one from its injected clock rather than threading a null to the wire. The helper `to_iso_utc(ts)` (in `app/src-tauri/eo-services/src/tracker.rs`) renders a Unix timestamp (a SQLite REAL or a bus float) as ISO-8601 UTC, so the required `occurred_at` always names a real instant.
 
 #### The closed-schema rule
 
-Every envelope struct and every payload struct carries `#[serde(deny_unknown_fields)]`, so the wire contract is closed in both directions: an undeclared key is rejected on the way in, and the core is the *emitter* that constructs these explicitly, so an undeclared key is a bug the schema-drift snapshot must catch. Payload field names are spelled camelCase via serde renames (no alias generators), so snake_case keys and float timestamps cannot leak onto the wire. The schema snapshot records this as `"additionalProperties": false` on every `$def`. The module's tests assert that an extra payload key, an extra envelope key, a missing `type` tag, and a foreign `type` tag are all rejected.
+Every envelope struct and every payload struct carries `#[serde(deny_unknown_fields)]`, so the wire contract is closed in both directions: an undeclared key is rejected on the way in, and the core is the *emitter* that constructs these explicitly, so an undeclared key is a bug. Payload field names are spelled camelCase via serde renames (no alias generators), so snake_case keys and float timestamps cannot leak onto the wire. The module's tests assert that an extra payload key, an extra envelope key, a missing `type` tag, and a foreign `type` tag are all rejected.
 
-### `tracking.session.updated`
+### The eight events
 
-`TrackingSessionUpdated` fires when the session aggregates changed: the session started, advanced a tick, or stopped. Its payload (`TrackingSessionUpdatedPayload`):
-
-| Payload field | Type | Notes |
+| Topic | Fires when | Payload |
 | --- | --- | --- |
-| `sessionId` | `Option<String>` (default `None`) | Which session changed. Serialised as `null` when absent, never omitted. |
-| `status` | `TrackingStatus` (`active` / `idle`) | The coarse session state, so a subscriber can route on it without parsing the body. |
-| `reason` | `TrackingReason` (`started` / `updated` / `stopped`) | Why the event fired. |
+| `tracking.session.updated` | the live session started, advanced a tick that changed its readout, or stopped; also after a decision on a weapon mismatch | `sessionId` (nullable, never omitted), `status` (`active` / `idle`), `reason` (`started` / `updated` / `stopped`) |
+| `scan.status.changed` | the skill scan changed phase, collected a page, or what stops the game's view being collected changed | `phase` (`idle` / `capturing` / `processing` / `awaiting_review`; the scan collects pages as it reads them, so it has no separate `processing` step and never sends it) |
+| `harvest.recorded` | a harvesting attempt, successful or failed, has been written durably | `harvestId`, `success` |
+| `navigation.updated` | persisted navigation state changed | none |
+| `protection.updated` | a protection write committed (a repair or reading, an undo, a limited set changed) | none |
+| `healing.updated` | a healing correction or its undo committed, or a session was deleted | none |
+| `weapons.updated` | a stored shot of an ended session was corrected, or the correction undone | none |
+| `consumables.updated` | the running doses changed: started, expired, removed, or restored ([ADR-0036](../adr/0036-consumable-dose-lifecycle.md)) | none |
 
-`session_id: Option<String>` carries `#[serde(rename = "sessionId", default)]`, and a dedicated test asserts a `None` value serialises as `"sessionId":null` rather than being dropped. In the schema snapshot, `sessionId` has an `anyOf` of string and null with a `null` default, and is absent from the payload's `required` list (only `status` and `reason` are required).
-
-### `scan.status.changed`
-
-`ScanStatusChanged` fires when the manual skill-scan status changed: a phase transition, or a capture / OCR progress step. Its payload (`ScanStatusChangedPayload`):
-
-| Payload field | Type | Notes |
-| --- | --- | --- |
-| `phase` | `ScanPhase` (`idle` / `capturing` / `processing` / `awaiting_review`) | The coarse scan phase. The only payload field. |
-
-`phase` is the sole field and is required (confirmed by the `required: ["phase"]` entry and the four-value enum in the schema snapshot). The `ScanPhase` enum uses `#[serde(rename_all = "snake_case")]`, so `awaiting_review` round-trips byte-for-byte.
-
-### `harvest.recorded`
-
-`HarvestRecorded` fires only after a successful or failed harvesting attempt has
-been written durably. Its payload carries the stable `harvestId` and a required
-`success` boolean. Navigation consumes this semantic boundary rather than
-guessing from raw loot lines, then captures the current coordinates and applies
-the same arrival policy as a manual refresh.
-
-### `navigation.updated`
-
-`NavigationUpdated` is a content-free push-to-pull invalidation for persisted
-navigation state. The Maps page and navigation overlay re-read the complete run
-from the typed snapshot command on every event. Radar calibration uses its
-separate status read and does not emit this route-state signal.
+Most payloads are empty on purpose (see [push-to-pull](#why-the-payloads-are-minimal-push-to-pull)): each consumer re-reads what it shows. Two domain topics are also consumed inside the core: navigation advances a run on `harvest.recorded`, and the tracker re-reads its live effect windows and running doses on `healing.updated`. A refused write publishes nothing.
 
 ### The discriminated union
 
-The four envelopes form a discriminated union:
+The eight envelopes form a discriminated union:
 
 ```rust
 #[serde(untagged)]
@@ -165,10 +119,14 @@ pub enum DomainEvent {
     ScanStatusChanged(ScanStatusChanged),
     HarvestRecorded(HarvestRecorded),
     NavigationUpdated(NavigationUpdated),
+    ProtectionUpdated(ProtectionUpdated),
+    HealingUpdated(HealingUpdated),
+    WeaponsUpdated(WeaponsUpdated),
+    ConsumablesUpdated(ConsumablesUpdated),
 }
 ```
 
-The `#[serde(untagged)]` dispatch is made exact by the closed topic-tag fields: a frame routes to the one variant whose `type` literal it carries, and a missing or unrecognised `type` fails outright, so adding a new member changes neither the existing members nor the wire format. Every call site (the bus publish, the broadcast channel, the schema snapshot) routes through this union unchanged. The schema snapshot records the union as a `oneOf` over the four `$def`s with a `discriminator` mapping keyed on `type`. `DomainEvent::topic()` returns the variant's wire topic, and `to_wire_json()` yields the compact envelope JSON.
+The `#[serde(untagged)]` dispatch is made exact by the closed topic-tag fields: a frame routes to the one variant whose `type` literal it carries, and a missing or unrecognised `type` fails outright, so adding a new member changes neither the existing members nor the wire format. Every call site (the bus publish, the broadcast channel) routes through this union unchanged. `DomainEvent::topic()` returns the variant's wire topic, and `to_wire_json()` yields the compact envelope JSON.
 
 ## The typed broadcast channel
 
@@ -176,7 +134,7 @@ Domain events leave the producer spine through a typed broadcast channel and rea
 
 ### The channel: typed fan-out
 
-`DomainBus` wraps a tokio `broadcast::Sender<DomainEvent>`. It is fed by `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`), which subscribes the four domain topics on the bus and republishes each typed envelope onto the channel. The low-level topics stay intra-core and are deliberately not forwarded.
+`DomainBus` wraps a tokio `broadcast::Sender<DomainEvent>`. It is fed by `subscribe_domain_bridge` (in `app/src-tauri/entropia-orme/src/composition.rs`), which subscribes the eight domain topics on the bus and republishes each typed envelope onto the channel. The low-level topics stay intra-core and are deliberately not forwarded.
 
 The work spans a thread boundary. `EventBus::publish` runs synchronously on whatever thread mutated state (for the tick-coalesced tracking event, that is the chat-log watcher's OS thread). The channel crosses the boundary in one place and one direction: the bus subscriber closure runs on the **publisher** thread and calls `DomainBus::publish` (a non-blocking broadcast send), and the bridge task consumes its `subscribe()` receiver asynchronously on the runtime. The envelope stays typed end to end; nothing is serialised until the bridge hands it to the Tauri emitter.
 
@@ -202,20 +160,15 @@ The tracker (`app/src-tauri/eo-services/src/tracker.rs`) produces `tracking.sess
 
 In all three paths the published value is a typed `TrackingSessionUpdated` instance, with `occurred_at` produced by `to_iso_utc(...)`. The `session_id` is captured under the lock and passed into the emit helper rather than re-read off the live session, so the published id provably belongs to the session whose mutation the event describes even if a concurrent `stop_session` has since cleared it.
 
-### The manual-scan service
+### The skill-scan service
 
-The manual skill-scan service (`app/src-tauri/eo-services/src/skill_scan_manual.rs`) produces `scan.status.changed`. It has no external tick boundary like the tracker's, so it coalesces with an internal **settled-boundary key**. The helper `publish_status` is called after releasing the lock at every settled mutation point (verb completion, each per-page OCR step, worker completion). Under the lock it computes a `status_key()` projection of the owned state and compares it to the last published key (`last_emitted_key`); it advances the key and publishes only when the key actually moved. This coalesces to one frame per discrete status change rather than one per call, and ensures the main and worker threads cannot both emit the same transition. The key is baselined at construction to the resting idle status, so the redundant initial idle frame is suppressed (listeners hydrate the idle status via the GET on mount).
+The skill-scan service (`app/src-tauri/eo-services/src/skill_scan/mod.rs`) produces `scan.status.changed`. It has no external tick boundary like the tracker's, so it coalesces on its own status. The helper `publish_status` is called after releasing the lock at every settled change (a verb's completion, each look its worker writes back, the scan's completion). Under the lock it computes the status and compares it to the last published one (`last_emitted`); it advances that and publishes only when the status actually moved. This coalesces to one frame per discrete status change rather than one per call (a worker looking twice a second at an unchanged view publishes nothing), and ensures the caller's and the worker's threads cannot both emit the same transition. The last published status is baselined at construction to the resting idle status, so the redundant initial idle frame is suppressed (listeners read the idle status on mount).
 
-The payload carries only the coarse `phase`. Per-page capture / OCR progress liveness rides the snapshot re-hydration the frame triggers, rather than widening the wire: the emitter fires on every discrete progress change, but the payload stays a minimal invalidation signal.
+The payload carries only the coarse `phase`. Progress (a page collected) and the hint shown to the player ride the status re-read the frame triggers, rather than widening the wire: the emitter fires on every discrete change of status, but the payload stays a minimal invalidation signal. A hint is shown only once it has held for two looks running, so a view flickering between covered and clear does not send a frame per look.
 
-### Harvesting and navigation
+### The other producers
 
-The tracker publishes `harvest.recorded` after its harvest transaction commits,
-for both resource-yielding and failed attempts. The navigation service subscribes
-to that topic only while a run is live. After serialising its route mutations it
-publishes `navigation.updated`; navigation consumers then hydrate the persisted
-snapshot. Repeated harvesting events at the same captured location are debounced
-for 30 seconds so tool swings cannot advance several closely spaced stops.
+The remaining producers publish after a committed write, outside their own lock, stamped from the injected clock. The tracker publishes `harvest.recorded` after its harvest transaction commits and `consumables.updated` after each dose change or expiry sweep. The navigation, protection, healing-review, and weapon-review services each take a change sink at composition and call it after every committed write or undo; the sink publishes the service's topic. Navigation debounces repeated harvesting events at one captured location for 30 seconds, so tool swings cannot advance several closely spaced stops.
 
 ### Why the payloads are minimal: push-to-pull
 
@@ -229,4 +182,4 @@ In the shipped application the producer spine's domain events are forwarded onto
 
 - **Whole-envelope forwarding.** The bridge emits the **whole** typed envelope (`type`, `event_version`, `occurred_at`, `payload`) onto the colon-form Tauri topic, not just the payload, so a topic-aware consumer sees the full contract; the Tauri emitter serialises it, the first and only serialisation on the path. A receiver that falls behind the channel's capacity observes a lag error, which is logged, and skips to live (the snapshot re-hydration the next event triggers absorbs the gap).
 
-The frontend half (`app/src/lib/realtime/eventRelay.ts`) now owns only the **re-hydrate nudge**. It listens for the `substrate:native-installed` event the shell emits once the native services compose, and fires a payload-less re-hydrate on each consumer's topic. Each topic-aware consumer (the tracking and scan stores, the overlay) subscribes through its typed topic and re-reads rather than reduces, so a payload-less frame reads as "re-hydrate" rather than as an idle session; this keeps a freshly live (or re-composed) core from leaving a window showing stale data. The nudge stays frontend-owned because it must fire after the webview is listening, which an emit at install time cannot guarantee on a cold load. The relay returns a stop function the layout hands back to Svelte for teardown on window close.
+There is no frontend relay layer. Each topic-aware consumer (the tracking and scan stores, the overlay) attaches its listener first and then reads its snapshot once, re-reading on every frame rather than reducing it, so a payload-less frame reads as "re-hydrate" rather than as an idle session (`app/src/lib/realtime/snapshotStore.svelte.ts`). Startup needs no special signal: a read made before the backend has composed is held by the typed transport until the startup readiness answer says it is up ([ADR-0030](../adr/0030-startup-readiness-boundary.md)), so the initial read always lands on live state.

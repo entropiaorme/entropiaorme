@@ -2,7 +2,6 @@
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.png';
 	import { Sidebar, Titlebar, UpdateToast } from '$lib/components';
-	import GuideOverlay from '$lib/guide/GuideOverlay.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
@@ -15,18 +14,19 @@
 	import { initNews, newsOptIn, newsHasUnread, NEWS_PREFERENCE_KEYS } from '$lib/news.svelte';
 	import { initUpdater, maybeCheckOnLaunch, updateAvailable } from '$lib/updater.svelte';
 	import { maybeRefreshOnMount } from '$lib/newsFetch';
-	import { initMarketData, MARKET_DATA_PREFERENCE_KEYS } from '$lib/marketData.svelte';
-	import { maybeRefreshMarketSnapshotOnMount } from '$lib/marketDataFetch';
-	import { getPreference } from '$lib/preferences';
-	import { startEventRelay } from '$lib/realtime/eventRelay';
+	import { initLooterBasis } from '$lib/looterBasis.svelte';
+	import { followLiveMarkupSettings, initLiveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
+	import { getPreference, purgeRetiredPreferences } from '$lib/preferences';
+	import { substrate, whenSubstrateReady } from '$lib/api/readiness.svelte';
+	import StartupFailure from '$lib/features/startup/StartupFailure.svelte';
+	import StartupIndicator from '$lib/features/startup/StartupIndicator.svelte';
+	import { activityMarks } from '$lib/features/account/activityMarks.svelte';
 	import {
 		NavDashboard,
 		NavAnalytics,
 		NavCharacter,
 		NavQuests,
 		NavEquipment,
-		NavMaps,
-		NavMarket,
 		NavInventory,
 		NavSettings,
 		NavNews,
@@ -35,9 +35,12 @@
 
 	let { children } = $props();
 
-	// Open the backend event stream once for the app. Guarded to the main
-	// window inside the relay; the returned stopper runs on window teardown.
-	onMount(() => startEventRelay());
+	// Ask whether the backend has started as soon as this window exists, not
+	// when its first page happens to read something: the startup indicator
+	// and the failure surface follow this answer. Pages mount straight away
+	// either way; the typed transport holds their reads until it is ready.
+	// A failed start is shown by the failure surface, not thrown here.
+	void whenSubstrateReady().catch(() => {});
 
 	// The stats scope is shared with the overlay window, so a flip made
 	// there moves this window's figures too.
@@ -55,9 +58,16 @@
 			if (unmounted) detach();
 			else unlisten = detach;
 		})();
+		// So are the live markup settings (confidence and looter basis).
+		let unlistenLive: (() => void) | undefined;
+		void followLiveMarkupSettings().then((detach) => {
+			if (unmounted) detach();
+			else unlistenLive = detach;
+		});
 		return () => {
 			unmounted = true;
 			unlisten?.();
+			unlistenLive?.();
 		};
 	});
 
@@ -77,10 +87,11 @@
 			initStatsScope(),
 			initNews(),
 			initUpdater(),
-			initMarketData(),
+			purgeRetiredPreferences(),
+			initLooterBasis(),
+			initLiveMarkupSettings(),
 		]);
 		void maybeRefreshOnMount();
-		void maybeRefreshMarketSnapshotOnMount();
 		if (
 			typeof sessionStorage !== 'undefined' &&
 			sessionStorage.getItem('welcome_just_finished') === '1'
@@ -102,10 +113,7 @@
 				await goto('/welcome', { replaceState: true });
 			} else if (!(await isTosAccepted())) {
 				await goto('/welcome/terms', { replaceState: true });
-			} else if (
-				!(await getPreference<boolean>(NEWS_PREFERENCE_KEYS.optInSeen, false)) ||
-				!(await getPreference<boolean>(MARKET_DATA_PREFERENCE_KEYS.optInSeen, false))
-			) {
+			} else if (!(await getPreference<boolean>(NEWS_PREFERENCE_KEYS.optInSeen, false))) {
 				// The networking-consent reprompt: shown until every online
 				// feature's choice has been seen, so features added after a
 				// user onboarded still get an explicit yes/no.
@@ -120,16 +128,38 @@
 		onboardingChecked = true;
 	});
 
-	const navItems = [
+	// Something new from the account marks the Inventory until the player
+	// opens what the account did (see `activityMarks`).
+	let navItems = $derived([
 		{ id: '/', label: 'Dashboard', icon: NavDashboard },
 		{ id: '/analytics', label: 'Analytics', icon: NavAnalytics },
-		{ id: '/inventory', label: 'Inventory', icon: NavInventory },
+		{
+			id: '/inventory',
+			label: 'Inventory',
+			icon: NavInventory,
+			...(activityMarks.anyNew ? { indicator: 'attention' as const } : {}),
+		},
 		{ id: '/character', label: 'Character', icon: NavCharacter },
 		{ id: '/quests', label: 'Quests', icon: NavQuests },
 		{ id: '/equipment', label: 'Equipment', icon: NavEquipment },
-		{ id: '/market', label: 'Market', icon: NavMarket },
-		{ id: '/maps', label: 'Maps', icon: NavMaps },
-	];
+	]);
+
+	// The marks are read only where the sidebar shows: the main window,
+	// once past onboarding. Every other window is refused the account's
+	// commands.
+	const showsShell = $derived(
+		onboardingChecked &&
+			!page.url.pathname.startsWith('/welcome') &&
+			!page.url.pathname.startsWith('/overlay') &&
+			!page.url.pathname.startsWith('/scan-overlay') &&
+			!page.url.pathname.startsWith('/cartography-overlay') &&
+			!page.url.pathname.startsWith('/navigation-hud') &&
+			!page.url.pathname.startsWith('/radar-guidance'),
+	);
+	$effect(() => {
+		if (!showsShell) return;
+		return activityMarks.connect();
+	});
 
 	let footerNavItems = $derived([
 		...(newsOptIn.current
@@ -186,15 +216,22 @@
 			onnavigate={handleNavigate}
 			footerItems={footerNavItems}
 			{settingsItem}
+			disabled={substrate.phase === 'failed'}
 		/>
-		<div class="flex flex-col flex-1 overflow-hidden">
+		<div class="relative flex flex-col flex-1 overflow-hidden">
 			<Titlebar />
+			{#if substrate.phase === 'starting'}
+				<StartupIndicator />
+			{/if}
 			<main class="flex-1 min-h-0 overflow-y-auto">
-				{@render children()}
+				{#if substrate.failure}
+					<StartupFailure failure={substrate.failure} />
+				{:else}
+					{@render children()}
+				{/if}
 			</main>
 		</div>
 	</div>
-	<GuideOverlay />
 	<UpdateToast />
 {/if}
 

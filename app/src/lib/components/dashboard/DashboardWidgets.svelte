@@ -1,94 +1,126 @@
 <script lang="ts">
-	import { Tabs } from '$lib/components';
-	import QuestingWidget from './QuestingWidget.svelte';
+	import { untrack } from 'svelte';
+	import { Skeleton, Tabs } from '$lib/components';
 	import CustomiseStatsWidget from './CustomiseStatsWidget.svelte';
 	import LootCompositionWidget from './LootCompositionWidget.svelte';
 	import LootPulseWidget from './LootPulseWidget.svelte';
-	import type { ActivityOptionsResult } from '$lib/api';
-	import type { Quest } from '$lib/types/quests';
-	import { onMount } from 'svelte';
-	import { registerDemoApi, unregisterDemoApi } from '$lib/guide/state.svelte';
+	import RecentEventsWidget from './RecentEventsWidget.svelte';
+	import MapsSurface from '$lib/features/maps/MapsSurface.svelte';
+	import QuestBoard from '$lib/features/quests/board/QuestBoard.svelte';
+	import type { BoardRow } from '$lib/features/quests/board/questBoard';
+	import type { QuestBoardModel } from '$lib/features/quests/board/questBoardModel.svelte';
+	import {
+		acknowledgeHead,
+		feedHead,
+		hasUnseenEvents,
+	} from '$lib/features/dashboard/recentEvents';
+	import type { RecentEvent } from '$lib/api';
+	import type { LiveLootValuation } from '$lib/features/dashboard/liveLootValuation.svelte';
 
 	let {
+		trackingPending,
+		recentEvents,
 		sessionId,
+		valuation = null,
 		multiplierHistory,
 		cumulativeNetHistory,
-		activityOptions,
-		quests,
-		pendingCancelChoiceQuestId,
+		board,
 		copiedWp,
-		onQuestStart,
-		onQuestComplete,
-		onQuestCancel,
-		onToggleCancelChoice,
 		onCopyWaypoint,
-		onEditSession,
-		getCooldownRemaining,
+		onCreateCustomQuest,
+		onEditCustomQuest,
+		onDeleteCustomQuest,
 	}: {
+		/** No tracking snapshot has been read yet, so whether a session is
+		 * running is still unknown. */
+		trackingPending: boolean;
+		/** The live session's notable-event feed, newest first; `null` until
+		 * the tracking snapshot has been read. */
+		recentEvents: RecentEvent[] | null;
 		sessionId: string | null;
+		/** The live session's loot valuation, shared with the stat tiles. */
+		valuation?: LiveLootValuation | null;
 		multiplierHistory: number[] | null;
 		cumulativeNetHistory: number[] | null;
-		activityOptions: ActivityOptionsResult | null;
-		quests: Quest[];
-		pendingCancelChoiceQuestId: string | null;
+		/** The quest board's view model (the Quests widget tab). */
+		board: QuestBoardModel;
 		copiedWp: string | null;
-		onQuestStart: (questId: string) => void;
-		onQuestComplete: (questId: string) => void;
-		onQuestCancel: (questId: string, undoReward: boolean) => void;
-		onToggleCancelChoice: (questId: string) => void;
-		onCopyWaypoint: (questId: string, waypoint: string) => void;
-		onEditSession: (definitionId: number | null) => void;
-		getCooldownRemaining: (quest: import('$lib/types/quests').Quest) => string | null;
+		onCopyWaypoint: (key: string, waypoint: string) => void;
+		onCreateCustomQuest: (planet: string | null) => void;
+		onEditCustomQuest: (row: BoardRow) => void;
+		onDeleteCustomQuest: (row: BoardRow) => void;
 	} = $props();
-
-	const tabs = [
-		{ id: 'pulse', label: 'Loot Pulse' },
-		{ id: 'loot', label: 'Loot Composition' },
-		{ id: 'quests', label: 'Quests' },
-		{ id: 'customise', label: 'Customise Stats' },
-	];
 
 	let activeTab = $state<string>('pulse');
 
-	onMount(() => {
-		// Sub-API composition. Surface module's dashboard-widgets card cycles
-		// tabs via setTab during its looped play(): the cursor's click ripple
-		// is visual; setTab is the authoritative state mutation (DnD
-		// imperative-shim shape generalised to tab switching).
-		registerDemoApi('dashboard-widgets', {
-			setTab: (id: string) => {
-				activeTab = id;
-			},
-			getTab: () => activeTab
-		});
-		return () => unregisterDemoApi('dashboard-widgets');
+	// An event arriving while another tab is open marks the events tab until
+	// the reader opens it.
+	const eventsHead = $derived(recentEvents === null ? undefined : feedHead(recentEvents));
+	let seenEventsHead = $state<string | null | undefined>(undefined);
+	$effect.pre(() => {
+		const head = eventsHead;
+		const watching = activeTab === 'events';
+		seenEventsHead = acknowledgeHead(untrack(() => seenEventsHead), head, watching);
 	});
+	const eventsUnseen = $derived(
+		hasUnseenEvents(seenEventsHead, eventsHead, activeTab === 'events'),
+	);
+
+	const tabs = $derived([
+		{ id: 'pulse', label: 'Loot Pulse' },
+		{ id: 'events', label: 'Recent Events', attention: eventsUnseen },
+		{ id: 'loot', label: 'Loot Composition' },
+		{ id: 'quests', label: 'Quests' },
+		{ id: 'map', label: 'Map' },
+		{ id: 'customise', label: 'Customise Stats' },
+	]);
+
+	// Whether the open tab's data is still unread, so its empty state ("No
+	// active session", an empty board) would be a claim, not a fact.
+	// The map and the stats customiser load their own data and show their own
+	// loading states.
+	const tabPending = $derived.by(() => {
+		switch (activeTab) {
+			case 'events':
+			case 'pulse':
+			case 'loot':
+				return trackingPending;
+			case 'quests':
+				return !board.catalogueLoaded;
+			default:
+				return false;
+		}
+	});
+
 </script>
 
 <section
 	class="panel p-4 flex-1 min-h-[480px] flex flex-col"
-	data-guide-anchor="dashboard-widgets-area"
+	data-testid="dashboard-widgets-area"
 >
 	<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} class="mb-3" />
 
-	{#if activeTab === 'pulse'}
+	{#if tabPending}
+		<div class="flex-1 flex flex-col" aria-busy="true" data-testid="dashboard-widget-pending">
+			<Skeleton class="flex-1 w-full rounded-md" />
+		</div>
+	{:else if activeTab === 'events'}
+		<RecentEventsWidget events={recentEvents ?? []} />
+	{:else if activeTab === 'pulse'}
 		<LootPulseWidget history={multiplierHistory} netHistory={cumulativeNetHistory} />
 	{:else if activeTab === 'loot'}
-		<LootCompositionWidget {sessionId} />
+		<LootCompositionWidget {sessionId} {valuation} />
 	{:else if activeTab === 'quests'}
-		<QuestingWidget
-			{activityOptions}
-			{quests}
-			{pendingCancelChoiceQuestId}
-			{copiedWp}
-			{onQuestStart}
-			{onQuestComplete}
-			{onQuestCancel}
-			{onToggleCancelChoice}
+		<QuestBoard
+			model={board}
+			copiedKey={copiedWp}
 			{onCopyWaypoint}
-			{onEditSession}
-			{getCooldownRemaining}
+			onCreateCustom={onCreateCustomQuest}
+			onEditCustom={onEditCustomQuest}
+			onDeleteCustom={onDeleteCustomQuest}
 		/>
+	{:else if activeTab === 'map'}
+		<MapsSurface class="flex-1" />
 	{:else if activeTab === 'customise'}
 		<CustomiseStatsWidget />
 	{/if}

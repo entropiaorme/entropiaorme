@@ -31,6 +31,7 @@ import {
 import { hydrate } from '$lib/stores/trackingStore.svelte';
 import type { Quest, QuestFamily } from '$lib/types';
 import { describeError } from '$lib/view/errorState';
+import { matchesQuery } from '$lib/view/search';
 import { sortDefinitions } from './definitionCatalogue';
 
 /** One roster row as the editor drafts it (ids stringified for the UI;
@@ -100,7 +101,9 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 	let name = $state('');
 	let adHocSegments = $state(false);
 	let trackProtectionCosts = $state(true);
-	let trackProtectionBySegment = $state(false);
+	/** The planet whose quests the session offers; null keeps the roster's
+	 * own quest entries (the hand-built way). */
+	let questPlanet = $state<string | null>(null);
 	let roster = $state<RosterDraftEntry[]>([]);
 	let saving = $state(false);
 	let authoringError = $state<string | null>(null);
@@ -146,7 +149,7 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 	);
 
 	function matchesFilter(value: string): boolean {
-		return value.toLowerCase().includes(catalogFilter.trim().toLowerCase());
+		return matchesQuery(value, catalogFilter);
 	}
 
 	const catalogFamilies = $derived(
@@ -180,6 +183,16 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 			? [...named, { category: null, quests: [...loose].sort(byName) }]
 			: named;
 	});
+
+	/** The planets a session can follow: every planet with a quest on it. */
+	const questPlanets = $derived([...new Set(quests.map((quest) => quest.planet))].sort());
+
+	/** The roster entries the editor shows: a planet-following session's
+	 * quest entries are kept (non-lossy) but stand in for nothing, so only
+	 * its segments are listed. */
+	const visibleRoster = $derived(
+		questPlanet === null ? roster : roster.filter((entry) => entry.kind === 'segment'),
+	);
 
 	/** Whether the draft roster already references this target. */
 	function hasRosterRef(kind: SessionRosterEntryKind, refId: string): boolean {
@@ -232,7 +245,7 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		name = '';
 		adHocSegments = false;
 		trackProtectionCosts = true;
-		trackProtectionBySegment = false;
+		questPlanet = null;
 		roster = [];
 		authoringError = null;
 		archiveArmed = false;
@@ -248,7 +261,7 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		name = definition.name;
 		adHocSegments = definition.adHocSegments;
 		trackProtectionCosts = definition.trackProtectionCosts;
-		trackProtectionBySegment = definition.trackProtectionBySegment;
+		questPlanet = definition.questPlanet;
 		roster = definition.roster
 			.map((entry) => ({
 				key: rosterKey(),
@@ -314,6 +327,10 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		roster = roster.filter((_, i) => i !== index);
 	}
 
+	function removeEntryByKey(key: number) {
+		roster = roster.filter((entry) => entry.key !== key);
+	}
+
 	// ── Persistence ──
 
 	function toInput(): SessionDefinitionInput {
@@ -321,7 +338,7 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 			name: name.trim(),
 			ad_hoc_segments: adHocSegments,
 			track_protection_costs: trackProtectionCosts,
-			track_protection_by_segment: trackProtectionCosts && trackProtectionBySegment,
+			quest_planet: questPlanet,
 			// A dead reference is dropped on save: keeping it would fail
 			// the server's active-target validation, and the editor showed
 			// the hole explicitly before this point.
@@ -437,21 +454,26 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		set adHocSegments(value: boolean) {
 			adHocSegments = value;
 		},
-		get trackProtectionBySegment() {
-			return trackProtectionBySegment;
-		},
-		set trackProtectionBySegment(value: boolean) {
-			trackProtectionBySegment = value;
-		},
 		get trackProtectionCosts() {
 			return trackProtectionCosts;
 		},
 		set trackProtectionCosts(value: boolean) {
 			trackProtectionCosts = value;
-			if (!value) trackProtectionBySegment = false;
 		},
 		get roster() {
 			return roster;
+		},
+		get visibleRoster() {
+			return visibleRoster;
+		},
+		get questPlanet() {
+			return questPlanet;
+		},
+		set questPlanet(value: string | null) {
+			questPlanet = value;
+		},
+		get questPlanets() {
+			return questPlanets;
 		},
 		get saving() {
 			return saving;
@@ -513,6 +535,7 @@ export function createDefinitionsModel(deps: DefinitionsModelDeps) {
 		addQuest,
 		addQuests,
 		removeEntry,
+		removeEntryByKey,
 		save,
 		archiveEditing,
 	};

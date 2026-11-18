@@ -3,13 +3,13 @@
 //! eagerly when a session ends and clear when a session stops
 //! qualifying; a stale or missing summary rebuilds lazily on read.
 //! (The summary table sits outside the snapshot catalogue, so parity
-//! here surfaces through the prospect reads rather than the goldens.)
+//! here surfaces through its readers' tests rather than the goldens.)
 
 use rusqlite::OptionalExtension as _;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use crate::character_calc::ATTRIBUTE_SKILLS;
-use crate::db::{Db, DbError};
+use crate::db::DbError;
 use eo_wire::normalizer::{round_half_even, to_python_json};
 
 /// Whether a rusqlite error is SQLite's "no such table" report: the
@@ -31,9 +31,106 @@ fn is_missing_table(error: &rusqlite::Error) -> bool {
 // tag-or-mob capture (session name and skill boost carried onto the summary,
 // mob dominance computed over species-bearing kills only, the dominant-tag
 // pair retired to NULL/0); to 5 when protection costs were re-attributed by
-// hit count. A below-version row heals on the next read.
-pub const SUMMARY_VERSION: i64 = 5;
+// hit count; to 6 when consumed doses joined cycledPed as their own bucket;
+// to 7 when a mob's shown name became the game's own (name, then maturity),
+// so the dominant and primary mob names read as the kills now do; to 8 when a
+// quest reward claimed at a hand-in stopped counting as a kill; to 9 when a
+// bucket the account readings measured became the session's cost
+// (`crate::session_costs`); to 10 when an enhancer break became a cost (its
+// TT and markup less its returned Shrapnel), carried by its kill or, after
+// the last kill, by the session (`crate::enhancer_breaks`); to 11 when the
+// session's measured overhead (`overhead_cost`) joined it beside Cycled,
+// for the readers that show its Costs and Net.
+// A below-version row heals on the next read.
+pub const SUMMARY_VERSION: i64 = 11;
 pub const DOMINANCE_THRESHOLD: f64 = 0.6;
+
+/// What a session's kills add up to: the sums and per-kill extremes a
+/// definition's lifetime figures fold across sessions, read in the pass
+/// the summary already makes over the session's kills.
+///
+/// The multiplier stays a sum and a count so the lifetime figure is the
+/// mean over every kill, never the mean of each session's mean. A kill
+/// with no recorded weapon cost has no multiplier, as in the live readout.
+struct KillTotals {
+    kills: i64,
+    loot_tt: f64,
+    damage_total: f64,
+    damage_max: f64,
+    shots: i64,
+    crits: i64,
+    globals: i64,
+    hofs: i64,
+    multiplier_sum: f64,
+    multiplier_count: i64,
+    multiplier_max: Option<f64>,
+}
+
+impl KillTotals {
+    fn read(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<Self> {
+        conn.query_row(
+            // every-kill: spend (loot, damage, shots and crits sum
+            // every row; the count, the per-kill extremes, the globals and
+            // the multipliers take only the rows still counted as kills).
+            "SELECT COUNT(CASE WHEN counted THEN 1 END), COALESCE(SUM(loot_total_ped), 0), \
+               COALESCE(SUM(damage_dealt), 0), \
+               COALESCE(MAX(CASE WHEN counted THEN damage_dealt END), 0), \
+               COALESCE(SUM(shots_fired), 0), COALESCE(SUM(critical_hits), 0), \
+               COALESCE(SUM(CASE WHEN counted THEN is_global END), 0), \
+               COALESCE(SUM(CASE WHEN counted THEN is_hof END), 0), \
+               COALESCE(SUM(CASE WHEN counted AND cost_ped > 0 \
+                 THEN loot_total_ped / cost_ped END), 0), \
+               COUNT(CASE WHEN counted AND cost_ped > 0 THEN 1 END), \
+               MAX(CASE WHEN counted AND cost_ped > 0 THEN loot_total_ped / cost_ped END) \
+             FROM (SELECT *, reward_claimed_at IS NULL AS counted \
+                   FROM kills WHERE session_id = ?)",
+            rusqlite::params![session_id],
+            |row| {
+                Ok(Self {
+                    kills: row.get(0)?,
+                    loot_tt: row.get(1)?,
+                    damage_total: row.get(2)?,
+                    damage_max: row.get(3)?,
+                    shots: row.get(4)?,
+                    crits: row.get(5)?,
+                    globals: row.get(6)?,
+                    hofs: row.get(7)?,
+                    multiplier_sum: row.get(8)?,
+                    multiplier_count: row.get(9)?,
+                    multiplier_max: row.get(10)?,
+                })
+            },
+        )
+    }
+}
+
+/// A session's most recent kill, for the "last" figures. `multiplier` is
+/// `None` when that kill has no recorded weapon cost.
+struct LastKill {
+    at: f64,
+    loot: f64,
+    multiplier: Option<f64>,
+}
+
+impl LastKill {
+    fn read(conn: &rusqlite::Connection, session_id: &str) -> rusqlite::Result<Option<Self>> {
+        conn.query_row(
+            "SELECT timestamp, loot_total_ped, \
+               CASE WHEN cost_ped > 0 THEN loot_total_ped / cost_ped END \
+             FROM counted_kills WHERE session_id = ? \
+             ORDER BY timestamp DESC, rowid DESC LIMIT 1",
+            rusqlite::params![session_id],
+            |row| {
+                Ok(Self {
+                    at: row.get(0)?,
+                    loot: row.get(1)?,
+                    multiplier: row.get(2)?,
+                })
+            },
+        )
+        .optional()
+    }
+}
 
 /// The computed summary for one completed session, or None when the
 /// session is active or fails the economic filters (zero cycled value,
@@ -45,34 +142,20 @@ pub fn compute_session_summary(
 ) -> Result<Option<Map<String, Value>>, DbError> {
     let session = conn
         .query_row(
-            "SELECT started_at, ended_at, \
-             COALESCE(armour_cost, 0), COALESCE(heal_cost, 0), COALESCE(dangling_cost, 0), \
-             session_name, skill_boost_percent \
+            "SELECT started_at, ended_at, session_name, skill_boost_percent \
              FROM tracking_sessions WHERE id = ? AND ended_at IS NOT NULL",
             rusqlite::params![session_id],
             |row| {
                 Ok((
                     row.get::<_, f64>(0)?,
                     row.get::<_, f64>(1)?,
-                    row.get::<_, f64>(2)?,
-                    row.get::<_, f64>(3)?,
-                    row.get::<_, f64>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
                 ))
             },
         )
         .optional()?;
-    let Some((
-        started_at,
-        ended_at,
-        armour_cost,
-        heal_cost,
-        dangling_cost,
-        session_name,
-        skill_boost_percent,
-    )) = session
-    else {
+    let Some((started_at, ended_at, session_name, skill_boost_percent)) = session else {
         return Ok(None);
     };
 
@@ -99,26 +182,23 @@ pub fn compute_session_summary(
         Err(error) => return Err(error.into()),
     }
 
-    let (kills, kill_loot_tt, enhancer_cost) = conn.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(enhancer_cost), 0) \
-         FROM kills WHERE session_id = ?",
-        rusqlite::params![session_id],
-        |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, f64>(1)?,
-                row.get::<_, f64>(2)?,
-            ))
-        },
-    )?;
+    let kill_totals = KillTotals::read(conn, session_id)?;
+    let (kills, kill_loot_tt) = (kill_totals.kills, kill_totals.loot_tt);
+    // The session's costs, bucket by bucket, as resolved: a bucket the
+    // account readings measured is the measured amount. Its overhead is
+    // kept beside Cycled, never in it.
+    let resolution = crate::session_costs::resolve(conn, session_id)?;
+    let costs = resolution.resolved;
+    let overhead = resolution.overhead.total();
+    let last_kill = LastKill::read(conn, session_id)?;
 
     // Harvesting (tree cutting) swings: wood TT is liquid loot and
     // swing decay is cycled spend, so both join the session economy
     // (`lootTt` / `cycledPed`) beside their own explicit columns.
-    let (harvest_swings, harvest_successes, harvest_loot_tt, harvest_cost) = conn.query_row(
+    let (harvest_swings, harvest_successes, harvest_loot_tt) = conn.query_row(
         "SELECT COUNT(*), \
            COALESCE(SUM(CASE WHEN success != 0 THEN 1 ELSE 0 END), 0), \
-           COALESCE(SUM(loot_total_ped), 0), COALESCE(SUM(cost_ped), 0) \
+           COALESCE(SUM(loot_total_ped), 0) \
          FROM harvest_events WHERE session_id = ?",
         rusqlite::params![session_id],
         |row| {
@@ -126,20 +206,10 @@ pub fn compute_session_summary(
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, f64>(2)?,
-                row.get::<_, f64>(3)?,
             ))
         },
     )?;
     let loot_tt = kill_loot_tt + harvest_loot_tt;
-
-    let weapon_cost: f64 = conn.query_row(
-        "SELECT COALESCE(SUM(COALESCE(ts.cost_per_shot, 0) * COALESCE(ts.shots_fired, 0)), 0) \
-         FROM kill_tool_stats ts \
-         JOIN kills k ON k.id = ts.kill_id \
-         WHERE k.session_id = ?",
-        rusqlite::params![session_id],
-        |row| row.get::<_, f64>(0),
-    )?;
 
     // Mob dominance is computed over species-bearing stamps only: a legacy
     // tag-mode kill carries the tag in mob_name with an empty species, and
@@ -149,7 +219,7 @@ pub fn compute_session_summary(
     let mob_rows: Vec<(String, i64)> = {
         let mut stmt = conn.prepare(
             "SELECT mob_name, COUNT(*) \
-             FROM kills \
+             FROM counted_kills \
              WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
                AND COALESCE(mob_species, '') != '' \
              GROUP BY mob_name \
@@ -176,6 +246,7 @@ pub fn compute_session_summary(
 
     let tool_rows: Vec<(String, f64)> = {
         let mut stmt = conn.prepare(
+            // every-kill: spend (dominance by shots fired, every shot counts).
             "SELECT ts.tool_name, COALESCE(SUM(ts.shots_fired), 0) \
              FROM kill_tool_stats ts \
              JOIN kills k ON k.id = ts.kill_id \
@@ -202,7 +273,7 @@ pub fn compute_session_summary(
     // the list read runs, so the stored order matches it row for row.
     let primary_mobs: Vec<String> = {
         let mut stmt = conn.prepare(
-            "SELECT mob_name FROM kills \
+            "SELECT mob_name FROM counted_kills \
              WHERE session_id = ? AND mob_name IS NOT NULL AND mob_name != 'Unknown' \
                AND COALESCE(mob_species, '') != '' \
              GROUP BY mob_name ORDER BY COUNT(*) DESC LIMIT 3",
@@ -212,6 +283,7 @@ pub fn compute_session_summary(
     };
     let primary_weapons: Vec<String> = {
         let mut stmt = conn.prepare(
+            // every-kill: spend (ranked by shots fired, every shot counts).
             "SELECT ts.tool_name FROM kill_tool_stats ts JOIN kills k ON k.id = ts.kill_id \
              WHERE k.session_id = ? AND ts.tool_name IS NOT NULL AND ts.tool_name != 'Unknown' \
              GROUP BY ts.tool_name ORDER BY SUM(ts.shots_fired) DESC LIMIT 3",
@@ -285,12 +357,13 @@ pub fn compute_session_summary(
     }
 
     let duration_hours = ((ended_at - started_at) / 3600.0).max(0.0);
-    let cycled_ped =
-        weapon_cost + enhancer_cost + armour_cost + heal_cost + dangling_cost + harvest_cost;
+    let cycled_ped = costs.cycled();
     let regular_skill_tt: f64 = regular_skill_ped.values().filter_map(Value::as_f64).sum();
     let attribute_levels_total: f64 = attribute_levels.values().filter_map(Value::as_f64).sum();
 
-    if cycled_ped <= 0.0 || duration_hours <= 0.0 {
+    // A session that cost anything is summarised: Cycled, or overhead alone
+    // (a trip that fought nothing still cost its teleports).
+    if (cycled_ped <= 0.0 && overhead <= 0.0) || duration_hours <= 0.0 {
         return Ok(None);
     }
 
@@ -299,11 +372,12 @@ pub fn compute_session_summary(
     summary.insert("startedAt".into(), Value::from(started_at));
     summary.insert("endedAt".into(), Value::from(ended_at));
     summary.insert("durationHours".into(), Value::from(duration_hours));
-    summary.insert("armourCost".into(), Value::from(armour_cost));
-    summary.insert("healCost".into(), Value::from(heal_cost));
-    summary.insert("danglingCost".into(), Value::from(dangling_cost));
-    summary.insert("weaponCost".into(), Value::from(weapon_cost));
-    summary.insert("enhancerCost".into(), Value::from(enhancer_cost));
+    summary.insert("armourCost".into(), Value::from(costs.armour));
+    summary.insert("healCost".into(), Value::from(costs.heal));
+    summary.insert("consumableCost".into(), Value::from(costs.consumable));
+    summary.insert("danglingCost".into(), Value::from(costs.dangling));
+    summary.insert("weaponCost".into(), Value::from(costs.weapon));
+    summary.insert("enhancerCost".into(), Value::from(costs.enhancer));
     summary.insert("kills".into(), Value::from(kills));
     summary.insert("lootTt".into(), Value::from(loot_tt));
     summary.insert("regularSkillPed".into(), Value::Object(regular_skill_ped));
@@ -331,6 +405,10 @@ pub fn compute_session_summary(
         "cycledPed".into(),
         Value::from(round_half_even(cycled_ped, 4)),
     );
+    summary.insert(
+        "overheadCost".into(),
+        Value::from(round_half_even(overhead, 4)),
+    );
     // Activity/session-list read columns (SUMMARY_VERSION 2).
     summary.insert("dominantMobKills".into(), Value::from(dominant_mob_kills));
     summary.insert("dominantTagKills".into(), Value::from(0));
@@ -354,7 +432,7 @@ pub fn compute_session_summary(
     );
     summary.insert(
         "harvestCost".into(),
-        Value::from(round_half_even(harvest_cost, 4)),
+        Value::from(round_half_even(costs.harvest, 4)),
     );
     // Session facets (SUMMARY_VERSION 4), copied from the session row.
     summary.insert(
@@ -371,6 +449,40 @@ pub fn compute_session_summary(
             .map(Value::from)
             .unwrap_or(Value::Null),
     );
+    // Kill totals the definition's lifetime figures fold across sessions.
+    summary.insert(
+        "killDamageTotal".into(),
+        Value::from(kill_totals.damage_total),
+    );
+    summary.insert("killDamageMax".into(), Value::from(kill_totals.damage_max));
+    summary.insert("killShots".into(), Value::from(kill_totals.shots));
+    summary.insert("killCrits".into(), Value::from(kill_totals.crits));
+    summary.insert("killGlobals".into(), Value::from(kill_totals.globals));
+    summary.insert("killHofs".into(), Value::from(kill_totals.hofs));
+    summary.insert(
+        "multiplierSum".into(),
+        Value::from(kill_totals.multiplier_sum),
+    );
+    summary.insert(
+        "multiplierCount".into(),
+        Value::from(kill_totals.multiplier_count),
+    );
+    summary.insert(
+        "multiplierMax".into(),
+        Value::from(kill_totals.multiplier_max),
+    );
+    summary.insert(
+        "lastKillAt".into(),
+        Value::from(last_kill.as_ref().map(|kill| kill.at)),
+    );
+    summary.insert(
+        "lastKillLoot".into(),
+        Value::from(last_kill.as_ref().map(|kill| kill.loot)),
+    );
+    summary.insert(
+        "lastKillMultiplier".into(),
+        Value::from(last_kill.as_ref().and_then(|kill| kill.multiplier)),
+    );
     Ok(Some(summary))
 }
 
@@ -380,6 +492,9 @@ pub fn compute_session_summary(
 /// orphan-recovery paths run this inside their write transaction, so
 /// the computation reads the not-yet-committed session end stamp.
 pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> Result<(), DbError> {
+    // What the session's costs resolve to follows every write that moves
+    // them, tracked or measured.
+    crate::session_costs::refresh(conn, session_id)?;
     let Some(summary) = compute_session_summary(conn, session_id)? else {
         conn.execute(
             "DELETE FROM session_summaries WHERE session_id = ?",
@@ -393,6 +508,11 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
         serde_json::to_string(&summary["primaryMobs"]).expect("primaryMobs serialises");
     let primary_weapons_json =
         serde_json::to_string(&summary["primaryWeapons"]).expect("primaryWeapons serialises");
+    let expected = expected_columns(crate::session_expectation::compute(
+        conn,
+        session_id,
+        tracked_cycled(conn, session_id)?,
+    )?);
     conn.execute(
         "INSERT OR REPLACE INTO session_summaries (\
          session_id, summary_version, started_at, ended_at, duration_hours, \
@@ -402,8 +522,18 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
          dominant_weapon, dominant_mob_kills, dominant_tag_kills, activity_skill_tt, \
          primary_mobs_json, primary_weapons_json, globals, hofs, \
          harvest_swings, harvest_successes, harvest_loot_tt, harvest_cost, \
-         session_name, skill_boost_percent, computed_at) \
+         session_name, skill_boost_percent, consumable_cost, \
+         kill_damage_total, kill_damage_max, kill_shots, kill_crits, kill_globals, \
+         kill_hofs, multiplier_sum, multiplier_count, multiplier_max, last_kill_at, \
+         last_kill_loot, last_kill_multiplier, \
+         expected_tt_mean, expected_tt_mean_low, expected_tt_mean_high, \
+         expected_tt_animal, expected_tt_animal_low, expected_tt_animal_high, \
+         expected_tt_mutant, expected_tt_mutant_low, expected_tt_mutant_high, \
+         expected_tt_robot, expected_tt_robot_low, expected_tt_robot_high, overhead_cost, \
+         computed_at) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch('now'))",
         rusqlite::params![
             summary["id"].as_str(),
@@ -439,79 +569,151 @@ pub fn write_session_summary(conn: &rusqlite::Connection, session_id: &str) -> R
             summary["harvestCost"].as_f64(),
             summary["sessionName"].as_str(),
             summary["skillBoostPercent"].as_i64(),
+            summary["consumableCost"].as_f64(),
+            summary["killDamageTotal"].as_f64(),
+            summary["killDamageMax"].as_f64(),
+            summary["killShots"].as_i64(),
+            summary["killCrits"].as_i64(),
+            summary["killGlobals"].as_i64(),
+            summary["killHofs"].as_i64(),
+            summary["multiplierSum"].as_f64(),
+            summary["multiplierCount"].as_i64(),
+            summary["multiplierMax"].as_f64(),
+            summary["lastKillAt"].as_f64(),
+            summary["lastKillLoot"].as_f64(),
+            summary["lastKillMultiplier"].as_f64(),
+            expected[0],
+            expected[1],
+            expected[2],
+            expected[3],
+            expected[4],
+            expected[5],
+            expected[6],
+            expected[7],
+            expected[8],
+            expected[9],
+            expected[10],
+            expected[11],
+            summary["overheadCost"].as_f64(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// The Cycled a session's expected loot is bounded by: the tracked one,
+/// as the summary rounds Cycled, so an expected figure rests on the model's
+/// inputs alone and never moves with what the readings measured.
+fn tracked_cycled(conn: &rusqlite::Connection, session_id: &str) -> Result<f64, DbError> {
+    Ok(round_half_even(
+        crate::session_costs::tracked(conn, session_id)?.cycled(),
+        4,
+    ))
+}
+
+/// The session's expected loot as its twelve summary columns, in column
+/// order; every column NULL for a session with no weapon evidence.
+fn expected_columns(
+    expectation: Option<crate::session_expectation::SessionExpectation>,
+) -> [Option<f64>; 12] {
+    let Some(expectation) = expectation else {
+        return [None; 12];
+    };
+    let mut columns = [None; 12];
+    for (slot, span) in [
+        expectation.three_looter_mean,
+        expectation.animal,
+        expectation.mutant,
+        expectation.robot,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        columns[slot * 3] = Some(span.expected);
+        columns[slot * 3 + 1] = Some(span.low);
+        columns[slot * 3 + 2] = Some(span.high);
+    }
+    columns
+}
+
+/// The summaries of sessions with weapon evidence but no expected loot yet:
+/// what existed before those columns did. The evidence is read from the
+/// settled cells, so a session with none is not looked at again.
+pub fn sessions_missing_expectation(conn: &rusqlite::Connection) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT ss.session_id FROM session_summaries ss \
+         JOIN session_offensive_evidence_rollups e ON e.session_id = ss.session_id \
+         WHERE ss.expected_tt_mean IS NULL AND e.expected_economics_json IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Fill one summary's expected loot in place, without recomputing the rest
+/// of the row. Absent or disqualified summaries are left alone.
+pub fn write_session_expectation(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<(), DbError> {
+    let summarised: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM session_summaries WHERE session_id = ?)",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )?;
+    if !summarised {
+        return Ok(());
+    }
+    let expected = expected_columns(crate::session_expectation::compute(
+        conn,
+        session_id,
+        tracked_cycled(conn, session_id)?,
+    )?);
+    conn.execute(
+        "UPDATE session_summaries SET \
+         expected_tt_mean = ?, expected_tt_mean_low = ?, expected_tt_mean_high = ?, \
+         expected_tt_animal = ?, expected_tt_animal_low = ?, expected_tt_animal_high = ?, \
+         expected_tt_mutant = ?, expected_tt_mutant_low = ?, expected_tt_mutant_high = ?, \
+         expected_tt_robot = ?, expected_tt_robot_low = ?, expected_tt_robot_high = ? \
+         WHERE session_id = ?",
+        rusqlite::params![
+            expected[0],
+            expected[1],
+            expected[2],
+            expected[3],
+            expected[4],
+            expected[5],
+            expected[6],
+            expected[7],
+            expected[8],
+            expected[9],
+            expected[10],
+            expected[11],
+            session_id,
         ],
     )?;
     Ok(())
 }
 
 /// Remove a session's summary row; idempotent.
-/// One stored summary row to its camelCase prospect shape (the
-/// original's column order and coercions: or-zero floats, an integer
-/// kill count, JSON columns parsed when non-empty, and the dominant
-/// fields passed through raw).
-fn row_to_prospect_dict(row: &rusqlite::Row) -> Value {
-    let float_or_zero = |index: usize| -> f64 {
-        row.get::<_, Option<f64>>(index)
-            .ok()
-            .flatten()
-            .unwrap_or(0.0)
-    };
-    let json_or_empty = |index: usize| -> Value {
-        row.get::<_, Option<String>>(index)
-            .ok()
-            .flatten()
-            .filter(|text| !text.is_empty())
-            .map(|text| serde_json::from_str(&text).expect("stored summary JSON parses"))
-            .unwrap_or_else(|| json!({}))
-    };
-    json!({
-        "id": row.get_unwrap::<_, String>(0),
-        "startedAt": float_or_zero(1),
-        "endedAt": float_or_zero(2),
-        "durationHours": float_or_zero(3),
-        "kills": row.get::<_, Option<i64>>(4).ok().flatten().unwrap_or(0),
-        "lootTt": float_or_zero(5),
-        "weaponCost": float_or_zero(6),
-        "enhancerCost": float_or_zero(7),
-        "armourCost": float_or_zero(8),
-        "healCost": float_or_zero(9),
-        "danglingCost": float_or_zero(10),
-        "cycledPed": float_or_zero(11),
-        "regularSkillPed": json_or_empty(12),
-        "attributeLevels": json_or_empty(13),
-        "regularSkillTt": float_or_zero(14),
-        "attributeLevelsTotal": float_or_zero(15),
-        "dominantMob": row.get_unwrap::<_, Option<String>>(16),
-        "dominantTag": row.get_unwrap::<_, Option<String>>(17),
-        "dominantWeapon": row.get_unwrap::<_, Option<String>>(18),
-    })
-}
-
 /// Rebuild every missing or stale-version summary row, so a read taken after a
 /// `SUMMARY_VERSION` bump (or on a fresh install) sees current rows without a
-/// data migration. Shared by every summary reader (the prospect surface and the
-/// Activity / session-list reads); once the rows converge it finds nothing and
-/// is cheap.
+/// data migration. Shared by every summary reader (the skilling forecast and
+/// the Activity / session-list reads); once the rows converge it finds nothing
+/// and is cheap.
 pub fn heal_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
+    // A session whose measured costs moved since its summary was written
+    // is rewritten first, with everything else derived from its costs.
+    crate::session_costs::heal(conn)?;
     let missing: Vec<String> = {
-        let mut stmt = conn.prepare(
+        // An ended session is owed a summary when it cost anything,
+        // tracked or measured.
+        let mut stmt = conn.prepare(&format!(
             "SELECT s.id FROM tracking_sessions s \
              LEFT JOIN session_summaries ss ON ss.session_id = s.id \
              WHERE s.ended_at IS NOT NULL \
              AND (ss.summary_version < ?1 OR (ss.session_id IS NULL \
-               AND s.ended_at > s.started_at \
-               AND (COALESCE(s.armour_cost, 0) > 0 \
-                 OR COALESCE(s.heal_cost, 0) > 0 \
-                 OR COALESCE(s.dangling_cost, 0) > 0 \
-                 OR EXISTS (SELECT 1 FROM kills k \
-                            WHERE k.session_id = s.id AND k.enhancer_cost > 0) \
-                 OR EXISTS (SELECT 1 FROM kills k JOIN kill_tool_stats ts ON ts.kill_id = k.id \
-                            WHERE k.session_id = s.id \
-                              AND COALESCE(ts.cost_per_shot, 0) \
-                                  * COALESCE(ts.shots_fired, 0) > 0) \
-                 OR EXISTS (SELECT 1 FROM harvest_events h \
-                            WHERE h.session_id = s.id AND h.cost_ped > 0))))",
-        )?;
+               AND s.ended_at > s.started_at AND {}))",
+            crate::session_costs::spent_anything_sql("s")
+        ))?;
         let rows = stmt.query_map(rusqlite::params![SUMMARY_VERSION], |row| {
             row.get::<_, String>(0)
         })?;
@@ -521,32 +723,6 @@ pub fn heal_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
         write_session_summary(conn, id)?;
     }
     Ok(())
-}
-
-/// All qualifying completed-session summaries, lazily rebuilding any
-/// missing or stale-version rows first so new installs converge on
-/// first read without a migration. A summarised session may carry no
-/// skill gains at all, so consumers reading the skill maps must
-/// tolerate them being empty.
-pub async fn load_prospect_sessions(db: &Db) -> Result<Vec<Value>, DbError> {
-    // Heal (a write) on the writer core; read the prospect rows in one
-    // synchronous pass on a reader-core connection.
-    db.with_writer(|conn| heal_summaries(conn)).await?;
-    db.with_reader(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT session_id, started_at, ended_at, duration_hours, kills, loot_tt, \
-             weapon_cost, enhancer_cost, armour_cost, heal_cost, dangling_cost, \
-             cycled_ped, regular_skill_ped_json, attribute_levels_json, \
-             regular_skill_tt, attribute_levels_total, dominant_mob, dominant_tag, \
-             dominant_weapon \
-             FROM session_summaries",
-        )?;
-        let rows = stmt
-            .query_map([], |row| Ok(row_to_prospect_dict(row)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    })
-    .await
 }
 
 pub fn delete_session_summary(
@@ -574,6 +750,8 @@ pub fn rebuild_summaries(conn: &rusqlite::Connection) -> Result<(), DbError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Db;
+    use serde_json::json;
 
     async fn env() -> (tempfile::TempDir, Db) {
         let dir = tempfile::tempdir().unwrap();
@@ -725,6 +903,174 @@ mod tests {
         // No notable events seeded.
         assert_eq!(summary["globals"], Value::from(0_i64));
         assert_eq!(summary["hofs"], Value::from(0_i64));
+    }
+
+    #[tokio::test]
+    async fn kill_totals_carry_what_the_lifetime_figures_fold() {
+        let (_dir, db) = env().await;
+        run(
+            &db,
+            "INSERT INTO tracking_sessions \
+             (id, started_at, ended_at, is_active, armour_cost, mob_tracking_mode) \
+             VALUES ('s1', 1000.0, 8200.0, 0, 1.0, 'mob')",
+        )
+        .await;
+        for (kill, at, shots, damage, crits, cost, loot, global, hof) in [
+            ("k1", 1500.0, 4, 60.0, 1, 2.0, 1.0, 0, 0),
+            ("k2", 1700.0, 2, 120.0, 0, 1.0, 4.0, 1, 0),
+            // No recorded weapon cost: it counts everywhere but the multiplier.
+            ("k3", 1600.0, 3, 30.0, 2, 0.0, 9.0, 1, 1),
+        ] {
+            run(
+                &db,
+                &format!(
+                    "INSERT INTO kills (id, session_id, mob_name, timestamp, shots_fired, \
+                     damage_dealt, critical_hits, cost_ped, loot_total_ped, is_global, is_hof) \
+                     VALUES ('{kill}', 's1', 'Atrox', {at}, {shots}, {damage}, {crits}, \
+                     {cost}, {loot}, {global}, {hof})"
+                ),
+            )
+            .await;
+        }
+
+        let summary = compute(&db, "s1").await.unwrap();
+        assert_eq!(summary["killDamageTotal"], Value::from(210.0));
+        assert_eq!(summary["killDamageMax"], Value::from(120.0));
+        assert_eq!(summary["killShots"], Value::from(9_i64));
+        assert_eq!(summary["killCrits"], Value::from(3_i64));
+        assert_eq!(summary["killGlobals"], Value::from(2_i64));
+        assert_eq!(summary["killHofs"], Value::from(1_i64));
+        // 1/2 and 4/1; the costless kill has no multiplier to add.
+        assert_eq!(summary["multiplierSum"], Value::from(4.5));
+        assert_eq!(summary["multiplierCount"], Value::from(2_i64));
+        assert_eq!(summary["multiplierMax"], Value::from(4.0));
+        // Latest by time, not by the order the rows arrived in.
+        assert_eq!(summary["lastKillAt"], Value::from(1700.0));
+        assert_eq!(summary["lastKillLoot"], Value::from(4.0));
+        assert_eq!(summary["lastKillMultiplier"], Value::from(4.0));
+
+        // The latest kill can have no multiplier without losing its loot.
+        run(&db, "UPDATE kills SET cost_ped = 0 WHERE id = 'k2'").await;
+        let summary = compute(&db, "s1").await.unwrap();
+        assert_eq!(summary["lastKillLoot"], Value::from(4.0));
+        assert_eq!(summary["lastKillMultiplier"], Value::Null);
+        assert_eq!(summary["multiplierMax"], Value::from(0.5));
+    }
+
+    /// A hunted session with evidence on its first phase.
+    async fn seed_with_evidence(db: &Db) {
+        run(
+            db,
+            "INSERT INTO tracking_sessions \
+             (id, started_at, ended_at, is_active, mob_tracking_mode) \
+             VALUES ('s1', 1000.0, 8200.0, 0, 'mob'); \
+             INSERT INTO kills (id, session_id, mob_name, timestamp, cost_ped, loot_total_ped) \
+             VALUES ('k1', 's1', 'Atrox', 1500.0, 5.0, 4.0); \
+             INSERT INTO kill_tool_stats \
+                 (kill_id, tool_name, shots_fired, cost_per_shot, expected_economics_json) \
+             VALUES ('k1', 'Rifle', 100, 0.05, \
+                 '{\"components\":[{\"kind\":\"weapon\",\"name\":\"Rifle\",\
+\"efficiencyPct\":80.0,\"rawTtPerUse\":0.05,\"consumedPremiumPerUse\":0.0}],\
+\"looters\":{\"animal\":40.0,\"mutant\":50.0,\"robot\":60.0},\
+\"looterSource\":\"three_looter_mean\"}');",
+        )
+        .await;
+    }
+
+    async fn expected_mean(db: &Db) -> (Option<f64>, Option<f64>, Option<f64>) {
+        db.with_reader(|conn| {
+            Ok(conn.query_row(
+                "SELECT expected_tt_mean, expected_tt_mean_low, expected_tt_mean_high \
+                 FROM session_summaries WHERE session_id = 's1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?)
+        })
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_session_with_no_weapon_evidence_has_no_expected_loot() {
+        let (_dir, db) = env().await;
+        seed_standard(&db).await;
+        write_summary(&db, "s1").await;
+        assert_eq!(expected_mean(&db).await, (None, None, None));
+    }
+
+    #[tokio::test]
+    async fn unreadable_weapon_evidence_never_stops_a_summary_from_writing() {
+        let (_dir, db) = env().await;
+        seed_with_evidence(&db).await;
+        run(
+            &db,
+            "UPDATE kill_tool_stats SET expected_economics_json = '{\"not\":\"evidence\"}'",
+        )
+        .await;
+        write_summary(&db, "s1").await;
+        assert_eq!(expected_mean(&db).await, (None, None, None));
+    }
+
+    #[tokio::test]
+    async fn a_repair_recorded_after_the_session_moves_its_expected_loot() {
+        let (_dir, db) = env().await;
+        seed_with_evidence(&db).await;
+        write_summary(&db, "s1").await;
+        let (expected, low, high) = expected_mean(&db).await;
+        let expected = expected.unwrap();
+        // Nothing unknown yet: the three readings are one.
+        assert_eq!(low, Some(expected));
+        assert_eq!(high, Some(expected));
+
+        // Armour TT joins the loot pool at an unknown Efficiency.
+        run(
+            &db,
+            "UPDATE tracking_sessions SET armour_cost = 2.0 WHERE id = 's1'",
+        )
+        .await;
+        write_summary(&db, "s1").await;
+        let (moved, low, high) = expected_mean(&db).await;
+        assert!(moved.unwrap() > expected);
+        assert!(low.unwrap() < moved.unwrap());
+        assert!(high.unwrap() > moved.unwrap());
+    }
+
+    #[tokio::test]
+    async fn an_existing_summary_gains_its_expected_loot_without_a_recompute() {
+        let (_dir, db) = env().await;
+        seed_with_evidence(&db).await;
+        write_summary(&db, "s1").await;
+        let expected = expected_mean(&db).await.0;
+        run(
+            &db,
+            "UPDATE session_summaries SET expected_tt_mean = NULL, kills = 99",
+        )
+        .await;
+        db.with_writer(crate::session_rollup::heal).await.unwrap();
+
+        let missing = db
+            .with_reader(|conn| sessions_missing_expectation(conn))
+            .await
+            .unwrap();
+        assert_eq!(missing, vec!["s1".to_string()]);
+        db.with_writer(|conn| write_session_expectation(conn, "s1"))
+            .await
+            .unwrap();
+
+        assert_eq!(expected_mean(&db).await.0, expected);
+        // The rest of the row was left as it stood.
+        let kills: i64 = db
+            .with_reader(|conn| {
+                Ok(conn.query_row("SELECT kills FROM session_summaries", [], |row| row.get(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(kills, 99);
+        assert!(db
+            .with_reader(|conn| sessions_missing_expectation(conn))
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1069,16 +1415,13 @@ mod tests {
         assert_eq!(count, 0);
     }
 
-    /// The prospect reader over a seeded summary table, mirroring the
-    /// original's run: a missing summary rebuilds lazily, a
-    /// stale-version row for a session that no longer qualifies (zero
-    /// cycled PED) clears instead of rebuilding, sessions without
-    /// gains or still active never enter, and a minimal current
-    /// version row passes through with the falsy-JSON and null
-    /// dominant legs intact. Every expected object is the original
-    /// implementation's output over byte-identical seeds.
+    /// Healing over a seeded summary table: a missing summary rebuilds
+    /// lazily, a stale-version row for a session that no longer qualifies
+    /// (zero cycled PED) clears instead of rebuilding, sessions without
+    /// gains or still active never enter, and a current-version row
+    /// passes through untouched.
     #[tokio::test]
-    async fn the_prospect_reader_matches_the_original() {
+    async fn healing_rebuilds_missing_rows_and_clears_disqualified_ones() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::Db::open(&dir.path().join("entropia_orme.db"))
             .await
@@ -1180,34 +1523,7 @@ mod tests {
         .await
         .unwrap();
 
-        let prospects = load_prospect_sessions(&db).await.unwrap();
-        assert_eq!(
-            prospects,
-            vec![
-                json!({
-                    "id": "sess-manual", "startedAt": 0.0, "endedAt": 0.0,
-                    "durationHours": 0.0, "kills": 0, "lootTt": 0.0, "weaponCost": 0.0,
-                    "enhancerCost": 0.0, "armourCost": 0.0, "healCost": 0.0,
-                    "danglingCost": 0.0, "cycledPed": 0.0, "regularSkillPed": {},
-                    "attributeLevels": {}, "regularSkillTt": 0.0,
-                    "attributeLevelsTotal": 0.0, "dominantMob": null,
-                    "dominantTag": null, "dominantWeapon": null,
-                }),
-                json!({
-                    "id": "sess-full", "startedAt": 1000.0, "endedAt": 4600.0,
-                    "durationHours": 1.0, "kills": 1, "lootTt": 12.75, "weaponCost": 2.0,
-                    "enhancerCost": 0.5, "armourCost": 0.0, "healCost": 1.5,
-                    "danglingCost": 0.25, "cycledPed": 4.25,
-                    "regularSkillPed": {"Rifle": 0.8},
-                    "attributeLevels": {"Agility": 1.0}, "regularSkillTt": 0.8,
-                    "attributeLevelsTotal": 1.0, "dominantMob": null,
-                    // The seeded kill carries no species, so it reaches
-                    // neither axis here; its designated identity lives on
-                    // the session row as the name facet.
-                    "dominantTag": null, "dominantWeapon": "LR-32",
-                }),
-            ]
-        );
+        db.with_writer(|conn| heal_summaries(conn)).await.unwrap();
 
         // The disqualified stale row cleared rather than rebuilding.
         let rows: Vec<String> = db

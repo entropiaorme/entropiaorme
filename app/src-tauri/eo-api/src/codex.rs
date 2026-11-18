@@ -1,6 +1,7 @@
 //! The codex family: the species listing and per-species rank breakdown,
-//! the skill-recommendation read, the six meta attributes, and the
-//! claim / unclaim / calibrate / meta-claim writes.
+//! the skill-recommendation read, the six meta attributes, the
+//! meta-target ranking and the metas earned, and the
+//! claim / unclaim / calibrate / meta-claim / meta-calibrate writes.
 //!
 //! The computation stays in `eo_services::codex::CodexService`, which
 //! returns typed records; the facade maps them field by field onto the
@@ -148,6 +149,56 @@ pub struct CodexMetaAttribute {
     pub current_level: Nullable<f64>,
 }
 
+/// One species' next meta reward: the breakpoint it reaches next, the
+/// codex cost of the ranks left before it, and that cost as estimated PED
+/// cycled (a planning estimate, never an accounting figure). `planets` is
+/// sorted and empty when the catalogue names none. `followingStages`
+/// prices every later breakpoint up to rank 25, in order, each from the
+/// breakpoint before it.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexMetaTarget {
+    pub species_name: String,
+    pub planets: Vec<String>,
+    pub current_rank: i64,
+    pub target_rank: i64,
+    pub cost: f64,
+    pub estimated_ped: f64,
+    pub following_stages: Vec<CodexMetaStage>,
+}
+
+/// One meta stage past a species' next meta: the five ranks up to
+/// `targetRank`, as codex cost and estimated PED cycled.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexMetaStage {
+    pub target_rank: i64,
+    pub cost: f64,
+    pub estimated_ped: f64,
+}
+
+/// The metas earned against the cap: `tracked` is what the recorded
+/// species ranks account for, `earned` adds the player's calibration.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexMetaProgress {
+    pub earned: i64,
+    pub tracked: i64,
+    pub cap: i64,
+}
+
+/// The meta-target ranking: every species short of rank 25, cheapest next
+/// meta first, with the metas the recorded ranks have earned against the
+/// cap and the rate the PED estimates use.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexMetaTargets {
+    pub metas_earned: i64,
+    pub meta_cap: i64,
+    pub ped_per_cost: f64,
+    pub targets: Vec<CodexMetaTarget>,
+}
+
 /// The record a rank claim (or its reversal) returns.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -258,6 +309,63 @@ impl Api {
                 current_level: attribute.current_level.into(),
             })
             .collect())
+    }
+
+    /// Every species short of rank 25, ranked by the codex cost of its
+    /// next meta reward, with the earned-meta tally.
+    pub async fn codex_meta_targets(&self) -> Result<CodexMetaTargets, ApiError> {
+        let result = self
+            .codex
+            .get_meta_targets()
+            .await
+            .map_err(ApiError::internal("codex meta targets read"))?;
+        Ok(CodexMetaTargets {
+            metas_earned: result.metas_earned,
+            meta_cap: result.meta_cap,
+            ped_per_cost: result.ped_per_cost,
+            targets: result
+                .targets
+                .into_iter()
+                .map(|target| CodexMetaTarget {
+                    species_name: target.species_name,
+                    planets: target.planets,
+                    current_rank: target.current_rank,
+                    target_rank: target.target_rank,
+                    cost: target.cost,
+                    estimated_ped: target.estimated_ped,
+                    following_stages: target
+                        .following_stages
+                        .into_iter()
+                        .map(|stage| CodexMetaStage {
+                            target_rank: stage.target_rank,
+                            cost: stage.cost,
+                            estimated_ped: stage.estimated_ped,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+    }
+
+    /// The metas earned against the cap, calibration included.
+    pub async fn codex_meta_progress(&self) -> Result<CodexMetaProgress, ApiError> {
+        let progress = self
+            .codex
+            .get_meta_progress()
+            .await
+            .map_err(ApiError::internal("codex meta progress read"))?;
+        Ok(meta_progress_dto(progress))
+    }
+
+    /// Calibrate the metas earned to the game's count. An out-of-domain
+    /// count is the service's `bad_request`.
+    pub async fn codex_meta_calibrate(&self, earned: i64) -> Result<CodexMetaProgress, ApiError> {
+        let progress = self
+            .codex
+            .calibrate_meta(earned)
+            .await
+            .map_err(codex_write_error("codex meta calibrate"))?;
+        Ok(meta_progress_dto(progress))
     }
 
     /// Set a species' codex rank directly (manual calibration, no side
@@ -386,6 +494,14 @@ impl Api {
 }
 
 // ── Service-record to DTO mapping ───────────────────────────────────
+
+fn meta_progress_dto(progress: codex::MetaProgress) -> CodexMetaProgress {
+    CodexMetaProgress {
+        earned: progress.earned,
+        tracked: progress.tracked,
+        cap: progress.cap,
+    }
+}
 
 fn species_dto(entry: codex::SpeciesEntry) -> CodexSpecies {
     CodexSpecies {

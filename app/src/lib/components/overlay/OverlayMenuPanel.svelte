@@ -1,15 +1,17 @@
 <script lang="ts">
+	import { formatDuration } from '$lib/features/consumables/doses';
+	import { declarableKindLabel, type DeclarableOption } from '$lib/features/equipment/declareOptions';
 	import { formatTimeUntil } from '$lib/features/quests/cooldown';
 	import { useVisiblePoll } from '$lib/realtime/useVisiblePoll';
 	import type { ActivityOption } from '$lib/api';
-	import type { OverlayMenuSelection, OverlayMenuState } from '$lib/windows/overlayMenu';
+	import type { OverlayListMenuState, OverlayMenuSelection } from '$lib/windows/overlayMenu';
 
 	let {
 		menuState,
 		onSelect,
 		onActivitySelect
 	}: {
-		menuState: OverlayMenuState;
+		menuState: OverlayListMenuState;
 		/** A pick that closes the menu (every kind but an Activities action). */
 		onSelect: (selection: OverlayMenuSelection) => void;
 		/** An Activities action, which keeps the control open (the overlay
@@ -50,6 +52,15 @@
 		return left ? `${option.unavailableReason} · ${left}` : option.unavailableReason;
 	}
 
+	/** What an equipment row says about itself: held now, or its kind and
+	 * the key that declares it in game. */
+	function equipmentBadge(option: DeclarableOption, inHand: string | null, healer: string | null): string {
+		if (option.name === inHand) return 'In hand';
+		if (option.name === healer) return 'Healer held';
+		const kind = declarableKindLabel(option.kind);
+		return option.hotbarSlot ? `${kind} · key ${option.hotbarSlot}` : kind;
+	}
+
 	function rowTitle(option: ActivityOption, idle: boolean): string {
 		if (option.active) return 'Recording this; tap to stop recording it';
 		if (!option.available) return option.unavailableReason ?? '';
@@ -66,7 +77,7 @@
 	}
 </script>
 
-<div class="menu-panel">
+<div class="menu-panel" data-overlay-surface>
 	{#if menuState.kind === 'activities'}
 		{#if menuState.options.length === 0 && !menuState.adHocSegments}
 			<div class="menu-empty">Nothing to declare</div>
@@ -144,19 +155,6 @@
 		{/if}
 	{:else if menuState.kind === 'questHandIn'}
 		<!-- Rendered by the dedicated hand-in panel in the popup route. -->
-	{:else if menuState.kind === 'trifecta'}
-		{#each menuState.options as option}
-			<button
-				type="button"
-				class="menu-option {option.active ? 'menu-option-active' : ''}"
-				onclick={() => onSelect({ kind: 'trifecta', presetId: option.id })}
-			>
-				<span class="menu-option-name">{option.name}</span>
-				{#if option.active}
-					<span class="menu-option-badge">Active</span>
-				{/if}
-			</button>
-		{/each}
 	{:else if menuState.kind === 'definition'}
 		{#if menuState.definitions.length === 0}
 			<div class="menu-empty">Sessions unavailable; open the dashboard</div>
@@ -179,6 +177,63 @@
 					{#if definition.selected}
 						<span class="menu-option-badge">Selected</span>
 					{/if}
+				</button>
+			{/each}
+		{/if}
+	{:else if menuState.kind === 'consumables'}
+		{#if menuState.options.length === 0}
+			<div class="menu-empty">No consumables in Equipment</div>
+		{:else}
+			{#each menuState.options as option (option.equipmentId)}
+				{@const running = menuState.runningIds.includes(option.equipmentId)}
+				<div class="menu-row">
+					<button
+						type="button"
+						class="menu-option {running ? 'menu-option-active' : ''}"
+						title={running
+							? `Take another dose of ${option.name}; the running one ends now`
+							: `Take a dose of ${option.name}`}
+						onclick={() =>
+							onSelect({ kind: 'consumables', equipmentId: option.equipmentId, untimed: false })}
+					>
+						<span class="menu-option-name">{option.name}</span>
+						<span class="menu-option-badge {running ? '' : 'menu-option-badge-muted'}">
+							{running ? 'Running' : formatDuration(option.durationSeconds)}{option.hotbarSlot
+								? ` · key ${option.hotbarSlot}`
+								: ''}
+						</span>
+					</button>
+					<!-- A dose taken before tracking started: its timer is unknown,
+						 so it counts until the player ends it, and books nothing. -->
+					{#if !running && option.durationSeconds > 0}
+						<button
+							type="button"
+							class="menu-hand-in-btn"
+							aria-label={`${option.name} is already in effect`}
+							title="Already taken before tracking: count its effect, with no timer or cost, until you end it"
+							onclick={() =>
+								onSelect({ kind: 'consumables', equipmentId: option.equipmentId, untimed: true })}
+						>Already on</button>
+					{/if}
+				</div>
+			{/each}
+		{/if}
+	{:else if menuState.kind === 'equipment'}
+		{#if menuState.options.length === 0}
+			<div class="menu-empty">No weapons, healers, or tools in Equipment</div>
+		{:else}
+			{#each menuState.options as option (option.equipmentId)}
+				{@const held = option.name === menuState.inHand || option.name === menuState.healer}
+				<button
+					type="button"
+					class="menu-option {held ? 'menu-option-active' : ''}"
+					title={`${option.name} is in hand from now, as its hotbar press would declare it`}
+					onclick={() => onSelect({ kind: 'equipment', equipmentId: option.equipmentId })}
+				>
+					<span class="menu-option-name">{option.name}</span>
+					<span class="menu-option-badge {held ? '' : 'menu-option-badge-muted'}">
+						{equipmentBadge(option, menuState.inHand, menuState.healer)}
+					</span>
 				</button>
 			{/each}
 		{/if}
@@ -215,9 +270,6 @@
 		border: 1px solid rgba(255, 255, 255, 0.12);
 		background: rgba(11, 15, 25, 0.96);
 		backdrop-filter: blur(16px) saturate(150%);
-		box-shadow:
-			0 14px 30px rgba(0, 0, 0, 0.48),
-			0 0 0 1px rgba(255, 255, 255, 0.03);
 	}
 
 	.menu-option {

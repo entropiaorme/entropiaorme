@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SearchHighlight from '$lib/components/SearchHighlight.svelte';
 	import { onDestroy } from 'svelte';
 	import PickerInput from '$lib/components/PickerInput.svelte';
 	import type { MapPin } from '$lib/api';
@@ -35,6 +36,9 @@
 		get error() {
 			return picker.error;
 		},
+		get settledQuery() {
+			return picker.settledQuery;
+		},
 		select(pin: MapPin) {
 			picker.select(pin);
 			onselect(pin);
@@ -62,10 +66,10 @@
 		class="relative"
 		dropdownClass="absolute left-0 right-0 z-30 shadow-lg"
 	>
-		{#snippet result({ item })}
+		{#snippet result({ item, query })}
 			<span class="flex min-w-0 items-center gap-2">
 				<span aria-hidden="true">{pinGlyph(item.icon)}</span>
-				<span class="truncate">{item.name}</span>
+				<span class="truncate"><SearchHighlight text={item.name} {query} /></span>
 			</span>
 			<span class="ml-3 shrink-0 text-xs tabular-nums text-text-tertiary">
 				{formatGamePoint({ lon: item.lon, lat: item.lat })}

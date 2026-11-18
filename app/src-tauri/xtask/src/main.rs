@@ -7,28 +7,36 @@
 //! Usage:
 //!
 //! ```text
-//! xtask ratify-check        --range <BASE>..<HEAD>
 //! xtask authoring-lint      --range <BASE>..<HEAD>
 //! xtask version-stamps
-//! xtask mutation-floors     --outcomes <PATH> [--outcomes <PATH> ...]
+//! xtask mutation-score      --outcomes <PATH> [--outcomes <PATH> ...] [--badge-out <PATH>]
 //! xtask no-bare-setinterval [--warn-only]
 //! xtask no-new-writable     [--warn-only]
+//! xtask measured-isolation  [--warn-only]
 //! xtask in-development      [--warn-only]
+//! xtask id-order            [--warn-only]
+//! xtask counted-kills       [--warn-only]
 //! xtask route-ceilings      [--warn-only]
+//! xtask single-search       [--warn-only]
+//! xtask ui-profile          [--warn-only]
 //! xtask bump-version        <NEW_VERSION>
 //! ```
 
 mod authoring;
 mod bump_version;
+mod counted_kills;
 mod gen_ts;
 mod git;
+mod id_order;
 mod in_development;
 mod market_isolation;
-mod mutation_floors;
+mod measured_isolation;
+mod mutation_score;
 mod no_bare_setinterval;
 mod no_new_writable;
-mod ratify;
 mod route_ceilings;
+mod single_search;
+mod ui_profile;
 mod version_stamps;
 mod vocabulary;
 
@@ -41,15 +49,19 @@ USAGE:
     xtask <subcommand> [options]
 
 SUBCOMMANDS:
-    ratify-check    --range <BASE>..<HEAD>   guard golden changes behind a recorded ratification verdict
     authoring-lint  --range <BASE>..<HEAD>   flag em dashes, US spellings, and stray references in what a change adds
     version-stamps                            assert the app version stamps agree across the tree
-    mutation-floors --outcomes <PATH>...      enforce per-file cargo-mutants score floors (flag repeats to merge campaign shards)
+    mutation-score --outcomes <PATH>...       report per-file and aggregate cargo-mutants scores (flag repeats to merge campaign shards)
     no-bare-setinterval [--warn-only]         forbid bare setInterval and the retired tracking event in the frontend
     no-new-writable [--warn-only]             forbid svelte/store imports outside the frozen legacy surface
     market-isolation [--warn-only]            forbid market-layer references on the accounting surface
+    measured-isolation [--warn-only]          forbid account-reading references on the accounting surface
     in-development [--warn-only]              keep the in-development register and its consumers in step
+    id-order [--warn-only]                    require every id-ordered database read to name its allowed case
+    counted-kills [--warn-only]               keep claimed quest rewards out of every kill figure
     route-ceilings [--warn-only]              hold tracked route files at or under their line ceilings
+    single-search [--warn-only]               keep every frontend search on the shared search module
+    ui-profile [--warn-only]                  keep the game-interface readers on their pipeline and their layout in the profile
     bump-version <NEW_VERSION>                rewrite the app version stamps in lock-step
     gen-ts [--check]                          emit the TypeScript bindings for the typed IPC commands
 ";
@@ -63,15 +75,19 @@ fn main() -> ExitCode {
     let rest = &args[1..];
 
     let result: Result<i32, String> = match subcommand.as_str() {
-        "ratify-check" => ratify::run(rest),
         "authoring-lint" => authoring::run(rest),
         "version-stamps" => version_stamps::run(rest),
-        "mutation-floors" => mutation_floors::run(rest),
+        "mutation-score" => mutation_score::run(rest),
         "no-bare-setinterval" => no_bare_setinterval::run(rest),
         "no-new-writable" => no_new_writable::run(rest),
         "market-isolation" => market_isolation::run(rest),
+        "measured-isolation" => measured_isolation::run(rest),
         "in-development" => in_development::run(rest),
+        "id-order" => id_order::run(rest),
+        "counted-kills" => counted_kills::run(rest),
         "route-ceilings" => route_ceilings::run(rest),
+        "single-search" => single_search::run(rest),
+        "ui-profile" => ui_profile::run(rest),
         "bump-version" => bump_version::run(rest),
         "gen-ts" => gen_ts::run(rest),
         "-h" | "--help" | "help" => {

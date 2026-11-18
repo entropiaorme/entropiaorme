@@ -19,13 +19,15 @@
  *   factory's state so a later `ensure()` retries creation from scratch.
  * - **Show protocol.** Size and position settle before the show payload goes
  *   out, and the window is revealed only after it, so the satellite never
- *   flashes at a stale location. Focus is optional and best-effort. A
+ *   flashes at a stale location. Focus is optional and best-effort; a
+ *   satellite revealed without it cannot take the keyboard at all. A
  *   satellite route that sizes and reveals itself from the state payload
  *   opts out of the host-side reveal (`reveal: false`).
- * - **Tolerant hide and emit.** `hide()` and `emitTo()` address whichever
- *   window can be resolved (the pending creation, else get-by-label) and are
- *   no-ops when none can: the satellite may never have been created, or its
- *   creation may have failed.
+ * - **Tolerant hide, emit, and focus query.** `hide()`, `emitTo()`, and
+ *   `isFocused()` address whichever window can be resolved (the pending
+ *   creation, else get-by-label) and are no-ops (or false) when none can:
+ *   the satellite may never have been created, or its creation may have
+ *   failed.
  */
 
 import { LogicalSize, PhysicalPosition } from '@tauri-apps/api/dpi';
@@ -77,13 +79,20 @@ export interface SatellitePosition {
 }
 
 export interface SatelliteShowOptions {
-	/** Focus the satellite after revealing it (best-effort; failures are swallowed). */
+	/**
+	 * Focus the satellite after revealing it (best-effort; failures are
+	 * swallowed). A satellite revealed without focus is made non-focusable
+	 * first, so the reveal never takes the keyboard from the host (an X11
+	 * window manager otherwise focuses a newly mapped window); it still
+	 * takes clicks.
+	 */
 	focus?: boolean;
 	/**
 	 * Reveal the window after emitting the state (default true). A satellite
 	 * route that measures its content and reveals itself, to avoid a flash at
 	 * a stale position, opts out; `show()` then only delivers the state
-	 * payload (and focus is left to the satellite too).
+	 * payload, having made the window focusable or not as `focus` says, and
+	 * the satellite takes the keyboard itself when it should.
 	 */
 	reveal?: boolean;
 }
@@ -101,6 +110,13 @@ export interface SatelliteWindow {
 	 * when the emit fails. Never creates the window.
 	 */
 	emitTo(event: string, payload?: unknown): Promise<void>;
+	/**
+	 * Whether the satellite holds keyboard focus (false when it does not
+	 * exist or the query fails). Never creates the window. A host that
+	 * dismisses a satellite when its own input blurs asks this first: a blur
+	 * caused by the pointer landing in the satellite is not a dismissal.
+	 */
+	isFocused(): Promise<boolean>;
 }
 
 export function createSatelliteWindow(options: SatelliteWindowOptions): SatelliteWindow {
@@ -214,6 +230,9 @@ export function createSatelliteWindow(options: SatelliteWindowOptions): Satellit
 			);
 			await satellite.setPosition(new PhysicalPosition(position.x, position.y));
 		}
+		// Whether it may take the keyboard is settled before anyone reveals
+		// it, the satellite itself included.
+		await satellite.setFocusable(opts?.focus === true).catch(() => {});
 		await satellite.emit(options.showEvent, state);
 		if (opts?.reveal === false) return;
 		await satellite.show();
@@ -241,5 +260,11 @@ export function createSatelliteWindow(options: SatelliteWindowOptions): Satellit
 		await satellite.emit(event, payload).catch(() => {});
 	}
 
-	return { ensure, show, hide, emitTo };
+	async function isFocused(): Promise<boolean> {
+		const satellite = await resolveExisting();
+		if (!satellite) return false;
+		return satellite.isFocused().catch(() => false);
+	}
+
+	return { ensure, show, hide, emitTo, isFocused };
 }

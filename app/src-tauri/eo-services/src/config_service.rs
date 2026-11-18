@@ -12,9 +12,12 @@
 //!
 //! Update semantics: unknown update keys are
 //! ignored; the hotbar always re-normalises to its full slot shape; the
-//! trifecta preset list re-validates its active id. Where a stored or
-//! submitted value does not fit its typed field, this implementation
-//! coalesces or skips instead of carrying the raw value; the divergence
+//! carried weapons re-normalise to distinct positive ids. The hotbar is
+//! the live preset of three, as in the game: a preset switch applies
+//! before a hotbar write in the same update, so the write lands on the
+//! preset it names. Where a stored or submitted value does not fit its
+//! typed field, this implementation coalesces or skips instead of
+//! carrying the raw value; the divergence
 //! register's configuration entry records those cases and their
 //! reachability.
 
@@ -25,34 +28,27 @@ use serde_json::{Map, Value};
 
 use crate::passive_effects::{PassiveEffect, PassiveEffectKind, PassiveEffectSource};
 
+/// Whether this build is a published release. The release pipeline stamps
+/// it into every build it publishes; the same stamp hides the frontend's
+/// in-development surfaces, and a backend feature still in development is
+/// held off a published build through this read alone, so it stays off
+/// exactly where its controls are hidden. The `in-development` guard holds
+/// this read to the stamp's name.
+pub fn published_build() -> bool {
+    option_env!("ENTROPIAORME_STABLE_CHANNEL") == Some("1")
+}
+
+/// Whether a feature that reads the game screen runs on the player's word
+/// alone: only when they have turned it on, which is their consent to the
+/// screen being read. An unset choice is off. Creature detection and reading
+/// the held tool both follow this rule, in every build.
+pub fn screen_reading_consented(stored: Option<bool>) -> bool {
+    stored == Some(true)
+}
+
 pub const HOTBAR_SLOTS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-pub const DEFAULT_TRIFECTA_PRESET_ID: &str = "default";
-pub const DEFAULT_TRIFECTA_PRESET_NAME: &str = "Default";
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TrifectaPresetConfig {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub small_weapon_id: Option<i64>,
-    #[serde(default)]
-    pub big_weapon_id: Option<i64>,
-    #[serde(default)]
-    pub heal_id: Option<i64>,
-}
-
-impl TrifectaPresetConfig {
-    fn default_preset() -> Self {
-        Self {
-            id: DEFAULT_TRIFECTA_PRESET_ID.to_string(),
-            name: DEFAULT_TRIFECTA_PRESET_NAME.to_string(),
-            small_weapon_id: None,
-            big_weapon_id: None,
-            heal_id: None,
-        }
-    }
-}
-
+/// The hotbar presets the game offers, numbered from 1.
+pub const HOTBAR_PRESET_COUNT: u8 = 3;
 /// The harvesting tool guardrail: the tool the user intends to use for
 /// each board-output class. While enabled, harvest swings whose loot
 /// identifies a board class are attributed to its intended tool, and a
@@ -76,9 +72,30 @@ pub struct AppConfig {
     pub chatlog_path: String,
     pub player_name: String,
     pub hotbar_hooks_enabled: bool,
+    /// Keyless tracking, held as the identity of the machine it was turned
+    /// on for rather than a flag: this machine cannot read keys, so nothing
+    /// opens the keyboard and attribution infers from the chat log instead.
+    /// Keyed to the machine so a `settings.json` carried to another one
+    /// leaves keyless tracking off there (see [`AppConfig::keyless_input_on`]).
+    pub keyless_input_host: Option<String>,
     pub repair_ocr_enabled: bool,
-    pub end_of_session_armour_reminder_enabled: bool,
-    pub developer_mode_enabled: bool,
+    /// Whether the player has turned creature detection on (the creature
+    /// they fight read off the game screen while a session runs); `None`
+    /// until they choose, which is off (see [`AppConfig::mob_detection_on`]).
+    pub mob_detection: Option<bool>,
+    /// Whether the player has turned on reading the held tool (the tool in
+    /// hand read off the game's own bar instead of the hotbar keys); `None`
+    /// until they choose, which is off (see [`AppConfig::tool_reading_on`]).
+    pub tool_reading: Option<bool>,
+    /// Whether a locked plate whose name did not read is kept as a small
+    /// picture, for finding out why (see [`crate::unread_plates`]). Off
+    /// until the player turns it on.
+    pub keep_unread_plates: bool,
+    /// Whether the player has connected the app to their Entropia Universe
+    /// account (and not disconnected since). Written by the account
+    /// connection itself, never offered as a toggle: it tells the app to
+    /// take up the stored session on its next start.
+    pub account_connected: bool,
     /// The declared-mob facet: the kill-stamp source in force, carried
     /// across sessions so a declaration outlives the session that set it.
     pub manual_mob_species: String,
@@ -97,9 +114,18 @@ pub struct AppConfig {
     /// not hold the middle state (its 0 meant "not declared"), so it is
     /// left to the carry-forward map rather than reinterpreted.
     pub declared_skill_boost_percent: Option<i64>,
+    /// The live preset's slots: what a hotbar key press resolves against.
     pub hotbar: Map<String, Value>,
-    pub trifecta_presets: Vec<TrifectaPresetConfig>,
-    pub active_trifecta_preset_id: Option<String>,
+    /// The preset in force, 1 to [`HOTBAR_PRESET_COUNT`].
+    pub active_hotbar_preset: u8,
+    /// Every preset's slots in preset order, each in the full slot shape.
+    /// The live preset's entry always equals `hotbar`.
+    pub hotbar_presets: Vec<Map<String, Value>>,
+    /// Weapons the player carries without a hotbar slot. With the hotbar
+    /// slots' weapons they are the candidates weapon attribution chooses
+    /// among when the damage evidence disagrees with the hotbar, or when
+    /// there is no hotbar signal at all.
+    pub carried_weapon_ids: Vec<i64>,
     /// Persistent item or condition effects. Each source owns typed effects so
     /// new capabilities and future time-bounded sources can share evaluators.
     pub passive_effect_sources: Vec<PassiveEffectSource>,
@@ -121,25 +147,26 @@ pub struct AppConfig {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        let mut hotbar = Map::new();
-        for slot in HOTBAR_SLOTS {
-            hotbar.insert(slot.to_string(), Value::Null);
-        }
+        let hotbar = normalize_hotbar(None);
         Self {
             chatlog_path: String::new(),
             player_name: String::new(),
             hotbar_hooks_enabled: false,
+            keyless_input_host: None,
             repair_ocr_enabled: false,
-            end_of_session_armour_reminder_enabled: false,
-            developer_mode_enabled: false,
+            keep_unread_plates: false,
+            account_connected: false,
+            mob_detection: None,
+            tool_reading: None,
             manual_mob_species: String::new(),
             manual_mob_maturity: String::new(),
             session_name: String::new(),
             session_definition_id: None,
             declared_skill_boost_percent: None,
+            hotbar_presets: vec![hotbar.clone(); usize::from(HOTBAR_PRESET_COUNT)],
             hotbar,
-            trifecta_presets: vec![TrifectaPresetConfig::default_preset()],
-            active_trifecta_preset_id: Some(DEFAULT_TRIFECTA_PRESET_ID.to_string()),
+            active_hotbar_preset: 1,
+            carried_weapon_ids: Vec::new(),
             passive_effect_sources: Vec::new(),
             harvest_guardrail: HarvestGuardrailConfig::default(),
             loot_filter_blacklist: vec!["Universal Ammo".to_string()],
@@ -152,6 +179,31 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    /// Whether keyless tracking is on for the machine identified by
+    /// `machine_id`: only when it was turned on there. An unidentifiable
+    /// machine never runs keyless.
+    pub fn keyless_input_on(&self, machine_id: Option<&str>) -> bool {
+        machine_id.is_some_and(|id| self.keyless_input_host.as_deref() == Some(id))
+    }
+
+    /// Whether hotbar presses are observed: the capability toggle, and never
+    /// on a machine running keyless.
+    pub fn hotbar_keys_observed(&self, machine_id: Option<&str>) -> bool {
+        self.hotbar_hooks_enabled && !self.keyless_input_on(machine_id)
+    }
+
+    /// Whether creature detection runs: exactly when the player has turned
+    /// it on, in any build (see [`screen_reading_consented`]).
+    pub fn mob_detection_on(&self) -> bool {
+        screen_reading_consented(self.mob_detection)
+    }
+
+    /// Whether the held tool is read off the screen: exactly when the player
+    /// has turned it on, in any build (see [`screen_reading_consented`]).
+    pub fn tool_reading_on(&self) -> bool {
+        screen_reading_consented(self.tool_reading)
+    }
+
     /// The default chat-log location under the user's home directory.
     pub fn default_chatlog_path() -> String {
         let home = std::env::var_os("HOME")
@@ -164,18 +216,62 @@ impl AppConfig {
             .to_string_lossy()
             .into_owned()
     }
-}
 
-/// The currently active trifecta preset, or None when not resolvable.
-pub fn active_trifecta_preset(config: &AppConfig) -> Option<&TrifectaPresetConfig> {
-    let active_id = config.active_trifecta_preset_id.as_deref()?;
-    if active_id.is_empty() {
-        return None;
+    /// Every library id bound to a slot on any preset, each once: the live
+    /// preset's in slot order first, then the other presets' in preset and
+    /// slot order. Items on a preset are items the player carries, so they
+    /// stay attribution candidates whichever preset is live.
+    pub fn hotbar_ids_live_first(&self) -> Vec<i64> {
+        let live = self.live_preset_index();
+        let parked = self
+            .hotbar_presets
+            .iter()
+            .enumerate()
+            .filter(move |(index, _)| *index != live)
+            .map(|(_, preset)| preset);
+        let mut ids: Vec<i64> = Vec::new();
+        for preset in std::iter::once(&self.hotbar).chain(parked) {
+            for id in HOTBAR_SLOTS
+                .iter()
+                .filter_map(|slot| preset.get(*slot).and_then(Value::as_i64))
+            {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        ids
     }
-    config
-        .trifecta_presets
-        .iter()
-        .find(|preset| preset.id == active_id)
+
+    /// Make `preset` the live one: the live slots are kept on the preset
+    /// being left, and the arriving preset's become the live slots. A
+    /// number outside 1 to [`HOTBAR_PRESET_COUNT`] changes nothing.
+    pub fn switch_hotbar_preset(&mut self, preset: u8) {
+        if !(1..=HOTBAR_PRESET_COUNT).contains(&preset) {
+            return;
+        }
+        self.set_live_hotbar(self.hotbar.clone());
+        self.active_hotbar_preset = preset;
+        self.hotbar = self
+            .hotbar_presets
+            .get(self.live_preset_index())
+            .cloned()
+            .unwrap_or_else(|| normalize_hotbar(None));
+    }
+
+    /// Replace the live preset's slots.
+    fn set_live_hotbar(&mut self, hotbar: Map<String, Value>) {
+        let live = self.live_preset_index();
+        if let Some(preset) = self.hotbar_presets.get_mut(live) {
+            *preset = hotbar.clone();
+        }
+        self.hotbar = hotbar;
+    }
+
+    /// The live preset's position in `hotbar_presets`.
+    fn live_preset_index(&self) -> usize {
+        usize::from(self.active_hotbar_preset.clamp(1, HOTBAR_PRESET_COUNT) - 1)
+    }
 }
 
 /// Load the stored config without writing anything: the read-through
@@ -381,11 +477,16 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         // `bool(data.get(key, False))`: any truthy JSON value enables.
         data.get(key).map(json_truthy).unwrap_or(false)
     };
-    let (trifecta_presets, active_id) = normalize_trifecta_presets(
-        data.get("trifecta_presets"),
-        data.get("active_trifecta_preset_id")
-            .and_then(Value::as_str),
-    );
+    let hotbar = normalize_hotbar(data.get("hotbar"));
+    let active_hotbar_preset = data
+        .get("active_hotbar_preset")
+        .and_then(Value::as_u64)
+        .and_then(|preset| u8::try_from(preset).ok())
+        .filter(|preset| (1..=HOTBAR_PRESET_COUNT).contains(preset))
+        .unwrap_or(1);
+    let hotbar_presets =
+        normalize_hotbar_presets(data.get("hotbar_presets"), active_hotbar_preset, &hotbar);
+    let carried_weapon_ids = carried_weapons_from_stored(data, &hotbar);
     let known: std::collections::BTreeSet<&str> = KNOWN_KEYS.iter().copied().collect();
     let extra: Map<String, Value> = data
         .iter()
@@ -396,9 +497,18 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
         chatlog_path: string_or("chatlog_path", &AppConfig::default_chatlog_path()),
         player_name: string_or("player_name", ""),
         hotbar_hooks_enabled: toggle("hotbar_hooks_enabled"),
+        keyless_input_host: data
+            .get("keyless_input_host")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|host| !host.is_empty())
+            .map(str::to_string),
         repair_ocr_enabled: toggle("repair_ocr_enabled"),
-        end_of_session_armour_reminder_enabled: toggle("end_of_session_armour_reminder_enabled"),
-        developer_mode_enabled: toggle("developer_mode_enabled"),
+        // Anything but a stored boolean reads as no choice made.
+        mob_detection: data.get("mob_detection").and_then(Value::as_bool),
+        tool_reading: data.get("tool_reading").and_then(Value::as_bool),
+        keep_unread_plates: toggle("keep_unread_plates"),
+        account_connected: toggle("account_connected"),
         manual_mob_species: string_or("manual_mob_species", ""),
         manual_mob_maturity: string_or("manual_mob_maturity", ""),
         // One-time legacy inheritance: a store written before the facet
@@ -427,9 +537,10 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
             .get("declared_skill_boost_percent")
             .and_then(Value::as_i64)
             .filter(|percent| *percent >= 0),
-        hotbar: normalize_hotbar(data.get("hotbar")),
-        trifecta_presets,
-        active_trifecta_preset_id: Some(active_id),
+        hotbar,
+        active_hotbar_preset,
+        hotbar_presets,
+        carried_weapon_ids,
         passive_effect_sources: normalize_passive_effect_sources(
             data.get("passive_effect_sources"),
         ),
@@ -468,21 +579,39 @@ fn from_stored(data: &Map<String, Value>) -> AppConfig {
 // facet splits into "not declared" and "declared zero". Reading it
 // forward would turn every existing store's default into a claim the
 // user never made, so it stays unknown and carries through untouched.
-const KNOWN_KEYS: [&str; 20] = [
+//
+// `end_of_session_armour_reminder_enabled` retired with the stop prompt it
+// armed: protection costs are recorded when the player repairs, not when a
+// session ends. A stored value carries through untouched like the others.
+//
+// `trifecta_presets` and `active_trifecta_preset_id` retired with the
+// attribution mode they selected: one engine now attributes shots from the
+// hotbar and every carried weapon's damage band. They stay unknown and
+// carry through untouched, and a store written before `carried_weapon_ids`
+// seeds it once from them (see `carried_weapons_from_stored`).
+//
+// `developer_mode_enabled` retired with the mode it stored: the diagnostic
+// and maintenance tools it hid are open, the app being its maintainer's own.
+// A stored value carries through untouched like the others.
+const KNOWN_KEYS: [&str; 24] = [
     "chatlog_path",
     "player_name",
     "hotbar_hooks_enabled",
+    "keyless_input_host",
     "repair_ocr_enabled",
-    "end_of_session_armour_reminder_enabled",
-    "developer_mode_enabled",
+    "mob_detection",
+    "tool_reading",
+    "keep_unread_plates",
+    "account_connected",
     "manual_mob_species",
     "manual_mob_maturity",
     "session_name",
     "session_definition_id",
     "declared_skill_boost_percent",
     "hotbar",
-    "trifecta_presets",
-    "active_trifecta_preset_id",
+    "active_hotbar_preset",
+    "hotbar_presets",
+    "carried_weapon_ids",
     "passive_effect_sources",
     "harvest_guardrail",
     "loot_filter_blacklist",
@@ -577,102 +706,122 @@ fn normalize_hotbar(raw: Option<&Value>) -> Map<String, Value> {
     hotbar
 }
 
-/// Normalise a stored or submitted preset list: dict entries need a
-/// non-empty trimmed id, names fall back to their position, duplicate
-/// ids keep the first occurrence, an empty result becomes the default
-/// preset, and the active id must name a surviving preset.
-fn normalize_trifecta_presets(
+/// Normalise the stored presets to [`HOTBAR_PRESET_COUNT`] full slot maps.
+/// A store written before presets existed has none, so its hotbar becomes
+/// the live preset and the others start empty. The stored `hotbar` is the
+/// authority for the live preset either way: a build that knows only the
+/// single hotbar edits that key and leaves the presets untouched, and its
+/// edit must not be undone.
+fn normalize_hotbar_presets(
     raw: Option<&Value>,
-    active_id: Option<&str>,
-) -> (Vec<TrifectaPresetConfig>, String) {
-    let mut presets: Vec<TrifectaPresetConfig> = Vec::new();
-    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    active: u8,
+    hotbar: &Map<String, Value>,
+) -> Vec<Map<String, Value>> {
+    let stored = raw.and_then(Value::as_array);
+    let mut presets: Vec<Map<String, Value>> = (0..usize::from(HOTBAR_PRESET_COUNT))
+        .map(|index| normalize_hotbar(stored.and_then(|presets| presets.get(index))))
+        .collect();
+    presets[usize::from(active - 1)] = hotbar.clone();
+    presets
+}
+
+/// The most weapons carried without a hotkey that the config keeps: far
+/// beyond any real loadout, and a bound on the work every read repeats.
+const MAX_CARRIED_WEAPONS: usize = 64;
+
+/// Normalise stored or submitted carried weapons: positive integer ids,
+/// each once, in the order given, up to `MAX_CARRIED_WEAPONS`. Anything
+/// else is skipped.
+fn normalize_carried_weapon_ids(raw: Option<&Value>) -> Vec<i64> {
+    let mut ids: Vec<i64> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     if let Some(Value::Array(entries)) = raw {
-        for (index, entry) in entries.iter().enumerate() {
-            let Some(object) = entry.as_object() else {
-                continue;
-            };
-            // `str(raw.get("id") or "")`: any FALSY id (null, false, 0,
-            // 0.0, "", empty containers) collapses to the empty string
-            // and the entry is skipped.
-            let id = object
-                .get("id")
-                .filter(|v| json_truthy(v))
-                .and_then(stringify)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            if id.is_empty() {
-                continue;
+        for id in entries.iter().filter_map(Value::as_i64) {
+            if ids.len() == MAX_CARRIED_WEAPONS {
+                break;
             }
-            let name_raw = object
-                .get("name")
-                .filter(|v| json_truthy(v))
-                .and_then(stringify)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let name = if name_raw.is_empty() {
-                format!("Preset {}", index + 1)
-            } else {
-                name_raw
-            };
-            if seen.contains(&id) {
-                continue;
+            if id > 0 && seen.insert(id) {
+                ids.push(id);
             }
-            seen.insert(id.clone());
-            presets.push(TrifectaPresetConfig {
-                id,
-                name,
-                small_weapon_id: object.get("small_weapon_id").and_then(Value::as_i64),
-                big_weapon_id: object.get("big_weapon_id").and_then(Value::as_i64),
-                heal_id: object.get("heal_id").and_then(Value::as_i64),
-            });
         }
     }
-    if presets.is_empty() {
-        presets.push(TrifectaPresetConfig::default_preset());
+    ids
+}
+
+/// The carried weapons a stored config names. A store written before the
+/// key existed seeds it once from the retired preset that was in force (the
+/// stored active id, else the first preset): its small and big weapons keep
+/// their identity as attribution candidates, less any a hotbar slot already
+/// carries. The retired keys themselves are left exactly as they are.
+fn carried_weapons_from_stored(data: &Map<String, Value>, hotbar: &Map<String, Value>) -> Vec<i64> {
+    if data.contains_key("carried_weapon_ids") {
+        return normalize_carried_weapon_ids(data.get("carried_weapon_ids"));
     }
-    let active = match active_id {
-        Some(candidate) if presets.iter().any(|p| p.id == candidate) => candidate.to_string(),
-        _ => presets[0].id.clone(),
+    let Some(Value::Array(presets)) = data.get("trifecta_presets") else {
+        return Vec::new();
     };
-    (presets, active)
+    let presets: Vec<&Map<String, Value>> = presets.iter().filter_map(Value::as_object).collect();
+    let active = data
+        .get("active_trifecta_preset_id")
+        .and_then(Value::as_str);
+    let preset = presets
+        .iter()
+        .find(|preset| {
+            active.is_some_and(|id| preset.get("id").and_then(Value::as_str) == Some(id))
+        })
+        .or_else(|| presets.first());
+    let Some(preset) = preset else {
+        return Vec::new();
+    };
+    let slotted: Vec<i64> = hotbar.values().filter_map(Value::as_i64).collect();
+    let seeded: Vec<Value> = ["small_weapon_id", "big_weapon_id"]
+        .iter()
+        .filter_map(|key| preset.get(*key).and_then(Value::as_i64))
+        .filter(|id| !slotted.contains(id))
+        .map(Value::from)
+        .collect();
+    normalize_carried_weapon_ids(Some(&Value::Array(seeded)))
 }
 
-/// Python `str(value)` over the scalar JSON shapes a stored id or name
-/// can take (strings pass through; booleans and numbers render as
-/// Python renders them). Container-typed ids and names are skipped
-/// rather than repr-rendered, a deliberate divergence from the original.
-fn stringify(value: &Value) -> Option<String> {
-    match value {
-        Value::String(s) => Some(s.clone()),
-        Value::Bool(true) => Some("True".to_string()),
-        Value::Bool(false) => Some("False".to_string()),
-        Value::Number(n) => Some(if let Some(i) = n.as_i64() {
-            i.to_string()
-        } else if let Some(u) = n.as_u64() {
-            u.to_string()
-        } else {
-            eo_wire::normalizer::python_repr_f64(n.as_f64()?)
-        }),
-        _ => None,
-    }
-}
-
-/// Apply partial updates: unknown keys are ignored; hotbar and preset
-/// updates re-normalise; a value that does not fit its field is skipped.
+/// Apply partial updates: unknown keys are ignored; hotbar and carried
+/// weapon updates re-normalise; a value that does not fit its field is
+/// skipped. A preset switch applies first, whatever the key order, so a
+/// hotbar write beside it lands on the preset it names.
 fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
+    if let Some(preset) = updates
+        .get("active_hotbar_preset")
+        .and_then(Value::as_u64)
+        .and_then(|preset| u8::try_from(preset).ok())
+    {
+        config.switch_hotbar_preset(preset);
+    }
     for (key, value) in updates {
         match key.as_str() {
             "chatlog_path" => assign_string(&mut config.chatlog_path, value),
             "player_name" => assign_string(&mut config.player_name, value),
             "hotbar_hooks_enabled" => assign_bool(&mut config.hotbar_hooks_enabled, value),
-            "repair_ocr_enabled" => assign_bool(&mut config.repair_ocr_enabled, value),
-            "end_of_session_armour_reminder_enabled" => {
-                assign_bool(&mut config.end_of_session_armour_reminder_enabled, value)
+            // An explicit null turns keyless tracking off; a host id turns
+            // it on for that machine.
+            "keyless_input_host" => {
+                config.keyless_input_host = value
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|host| !host.is_empty())
+                    .map(str::to_string);
             }
-            "developer_mode_enabled" => assign_bool(&mut config.developer_mode_enabled, value),
+            "repair_ocr_enabled" => assign_bool(&mut config.repair_ocr_enabled, value),
+            "mob_detection" => {
+                if let Some(on) = value.as_bool() {
+                    config.mob_detection = Some(on);
+                }
+            }
+            "tool_reading" => {
+                if let Some(on) = value.as_bool() {
+                    config.tool_reading = Some(on);
+                }
+            }
+            "keep_unread_plates" => assign_bool(&mut config.keep_unread_plates, value),
+            "account_connected" => assign_bool(&mut config.account_connected, value),
             "manual_mob_species" => assign_string(&mut config.manual_mob_species, value),
             "manual_mob_maturity" => assign_string(&mut config.manual_mob_maturity, value),
             "session_name" => assign_string(&mut config.session_name, value),
@@ -692,21 +841,9 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
                     config.declared_skill_boost_percent = Some(percent);
                 }
             }
-            "hotbar" => config.hotbar = normalize_hotbar(Some(value)),
-            "trifecta_presets" => {
-                let (presets, active) = normalize_trifecta_presets(
-                    Some(value),
-                    config.active_trifecta_preset_id.as_deref(),
-                );
-                config.trifecta_presets = presets;
-                config.active_trifecta_preset_id = Some(active);
-            }
-            "active_trifecta_preset_id" => {
-                config.active_trifecta_preset_id = match value {
-                    Value::Null => None,
-                    Value::String(s) => Some(s.clone()),
-                    _ => continue,
-                };
+            "hotbar" => config.set_live_hotbar(normalize_hotbar(Some(value))),
+            "carried_weapon_ids" => {
+                config.carried_weapon_ids = normalize_carried_weapon_ids(Some(value));
             }
             "passive_effect_sources" => {
                 config.passive_effect_sources = normalize_passive_effect_sources(Some(value));
@@ -731,10 +868,6 @@ fn apply_updates(config: &mut AppConfig, updates: &Map<String, Value>) {
             _ => {}
         }
     }
-    if updates.contains_key("trifecta_presets") || updates.contains_key("active_trifecta_preset_id")
-    {
-        ensure_active_trifecta_preset(config);
-    }
 }
 
 fn assign_string(slot: &mut String, value: &Value) {
@@ -749,20 +882,101 @@ fn assign_bool(slot: &mut bool, value: &Value) {
     }
 }
 
-/// When the active id no longer resolves, the preset list collapses to
-/// the default preset.
-fn ensure_active_trifecta_preset(config: &mut AppConfig) {
-    if active_trifecta_preset(config).is_some() {
-        return;
-    }
-    let fallback = TrifectaPresetConfig::default_preset();
-    config.active_trifecta_preset_id = Some(fallback.id.clone());
-    config.trifecta_presets = vec![fallback];
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn each_screen_reading_feature_runs_on_the_players_word_in_every_build() {
+        for (stored, runs) in [(None, false), (Some(false), false), (Some(true), true)] {
+            assert_eq!(screen_reading_consented(stored), runs, "{stored:?}");
+            let config = AppConfig {
+                tool_reading: stored,
+                mob_detection: stored,
+                ..AppConfig::default()
+            };
+            // Neither reads the build stamp: the answer is the same in a
+            // published build.
+            assert_eq!(config.tool_reading_on(), runs, "held tool, {stored:?}");
+            assert_eq!(
+                config.mob_detection_on(),
+                runs,
+                "creature detection, {stored:?}"
+            );
+        }
+        // A test build is not a published one.
+        assert!(!published_build());
+    }
+
+    /// The two screen-reading settings: the stored key, the field it reads
+    /// into, and whether the feature runs.
+    type ScreenSetting = (
+        &'static str,
+        fn(&AppConfig) -> Option<bool>,
+        fn(&AppConfig) -> bool,
+    );
+
+    const SCREEN_SETTINGS: [ScreenSetting; 2] = [
+        (
+            "mob_detection",
+            |config| config.mob_detection,
+            AppConfig::mob_detection_on,
+        ),
+        (
+            "tool_reading",
+            |config| config.tool_reading,
+            AppConfig::tool_reading_on,
+        ),
+    ];
+
+    #[test]
+    fn each_screen_reading_setting_is_off_until_chosen_and_takes_only_a_boolean() {
+        for (key, field, on) in SCREEN_SETTINGS {
+            let unset = from_stored(&Map::new());
+            assert_eq!(field(&unset), None, "{key}");
+            assert!(!on(&unset), "{key} is off until chosen");
+            assert!(!on(&AppConfig::default()), "{key}");
+            for (stored, read) in [
+                (json!(true), Some(true)),
+                (json!(false), Some(false)),
+                (json!("yes"), None),
+                (Value::Null, None),
+            ] {
+                let mut data = Map::new();
+                data.insert(key.into(), stored);
+                let config = from_stored(&data);
+                assert_eq!(field(&config), read, "{key}");
+                assert!(!config.extra.contains_key(key), "{key} is a known key");
+            }
+            let mut config = AppConfig::default();
+            let mut updates = Map::new();
+            updates.insert(key.into(), json!(true));
+            apply_updates(&mut config, &updates);
+            assert!(on(&config), "{key} turned on by the player");
+            updates.insert(key.into(), json!(false));
+            apply_updates(&mut config, &updates);
+            assert!(!on(&config), "{key} and off again");
+            updates.insert(key.into(), json!(1));
+            apply_updates(&mut config, &updates);
+            assert_eq!(
+                field(&config),
+                Some(false),
+                "{key}: only a boolean is a choice"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_screen_reading_settings_are_independent() {
+        let mut config = AppConfig::default();
+        let mut updates = Map::new();
+        updates.insert("tool_reading".into(), json!(true));
+        apply_updates(&mut config, &updates);
+        assert!(config.tool_reading_on());
+        assert!(!config.mob_detection_on(), "one choice is not the other");
+        assert_eq!(config.mob_detection, None);
+    }
 
     fn service(dir: &Path) -> ConfigService {
         ConfigService::new(dir).unwrap()
@@ -963,34 +1177,73 @@ mod tests {
     }
 
     #[test]
-    fn preset_normalisation_follows_the_stored_rules() {
-        let raw = serde_json::json!([
-            {"id": "  ", "name": "skipped: blank id"},
-            {"id": "alpha", "name": "", "small_weapon_id": 7},
-            {"id": "alpha", "name": "duplicate skipped"},
-            {"id": 42, "name": null, "heal_id": 3},
-            "not an object",
-        ]);
-        let (presets, active) = normalize_trifecta_presets(Some(&raw), Some("missing"));
-        assert_eq!(presets.len(), 2);
-        assert_eq!(presets[0].id, "alpha");
-        assert_eq!(
-            presets[0].name, "Preset 2",
-            "blank name falls back by position"
-        );
-        assert_eq!(presets[0].small_weapon_id, Some(7));
-        assert_eq!(presets[1].id, "42", "ids stringify");
-        assert_eq!(presets[1].name, "Preset 4");
-        assert_eq!(
-            active, "alpha",
-            "unknown active id falls to the first preset"
-        );
+    fn carried_weapons_normalise_to_distinct_positive_ids() {
+        let raw = serde_json::json!([4, 0, -2, 4, "7", 9, null, 7.5, {"id": 3}]);
+        assert_eq!(normalize_carried_weapon_ids(Some(&raw)), vec![4, 9]);
+        assert!(normalize_carried_weapon_ids(Some(&serde_json::json!({"1": 2}))).is_empty());
+        assert!(normalize_carried_weapon_ids(None).is_empty());
+        let many = serde_json::json!((1..=MAX_CARRIED_WEAPONS as i64 + 10).collect::<Vec<_>>());
+        let kept = normalize_carried_weapon_ids(Some(&many));
+        assert_eq!(kept.len(), MAX_CARRIED_WEAPONS);
+        assert_eq!(kept.last(), Some(&(MAX_CARRIED_WEAPONS as i64)));
 
-        let (empty, active) = normalize_trifecta_presets(Some(&serde_json::json!([])), None);
-        assert_eq!(empty[0].id, DEFAULT_TRIFECTA_PRESET_ID);
-        assert_eq!(active, DEFAULT_TRIFECTA_PRESET_ID);
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        let mut updates = Map::new();
+        updates.insert("carried_weapon_ids".into(), serde_json::json!([5, 5, 6]));
+        svc.update(&updates).unwrap();
+        assert_eq!(svc.get().carried_weapon_ids, vec![5, 6]);
+        assert!(read_settings(dir.path()).contains("\"carried_weapon_ids\""));
+        assert_eq!(service(dir.path()).get().carried_weapon_ids, vec![5, 6]);
     }
 
+    #[test]
+    fn a_store_from_before_carried_weapons_seeds_them_once_from_the_retired_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = serde_json::json!({
+            "hotbar_hooks_enabled": false,
+            "hotbar": {"1": 12},
+            "trifecta_presets": [
+                {"id": "alpha", "name": "A", "small_weapon_id": 3, "big_weapon_id": 4, "heal_id": 8},
+                {"id": "beta", "name": "B", "small_weapon_id": 11, "big_weapon_id": 12, "heal_id": 9},
+            ],
+            "active_trifecta_preset_id": "beta",
+        });
+        std::fs::write(dir.path().join("settings.json"), legacy.to_string()).unwrap();
+        let mut svc = service(dir.path());
+        // The active preset's weapons, less the one a hotbar slot carries.
+        assert_eq!(svc.get().carried_weapon_ids, vec![11]);
+        // The retired keys carry through untouched.
+        assert_eq!(svc.get().extra["active_trifecta_preset_id"], "beta");
+        assert_eq!(
+            svc.get().extra["trifecta_presets"],
+            legacy["trifecta_presets"]
+        );
+
+        // Once stored, the seed never runs again: clearing sticks.
+        let mut updates = Map::new();
+        updates.insert("carried_weapon_ids".into(), serde_json::json!([]));
+        svc.update(&updates).unwrap();
+        let reloaded = service(dir.path());
+        assert!(reloaded.get().carried_weapon_ids.is_empty());
+        assert!(read_settings(dir.path()).contains("\"trifecta_presets\""));
+
+        // An unknown active id falls to the first preset; a store with no
+        // presets seeds nothing.
+        let first = serde_json::json!({
+            "trifecta_presets": [{"id": "alpha", "small_weapon_id": 3, "big_weapon_id": 3}],
+            "active_trifecta_preset_id": "ghost",
+        });
+        let data = first.as_object().unwrap();
+        assert_eq!(
+            carried_weapons_from_stored(data, &normalize_hotbar(None)),
+            vec![3]
+        );
+        let none = serde_json::json!({"trifecta_presets": "broken"});
+        assert!(carried_weapons_from_stored(none.as_object().unwrap(), &Map::new()).is_empty());
+        let empty = serde_json::json!({"trifecta_presets": []});
+        assert!(carried_weapons_from_stored(empty.as_object().unwrap(), &Map::new()).is_empty());
+    }
     #[test]
     fn hotbar_always_normalises_to_the_full_slot_shape() {
         let dir = tempfile::tempdir().unwrap();
@@ -1004,6 +1257,186 @@ mod tests {
         assert_eq!(hotbar["1"], Value::Null);
         let keys: Vec<&String> = hotbar.keys().collect();
         assert_eq!(keys[9], "0", "slot order preserved");
+    }
+
+    fn update(svc: &mut ConfigService, updates: Value) {
+        svc.update(updates.as_object().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_fresh_store_has_three_empty_presets_with_the_first_live() {
+        let dir = tempfile::tempdir().unwrap();
+        let svc = service(dir.path());
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 1);
+        assert_eq!(config.hotbar_presets.len(), 3);
+        for preset in &config.hotbar_presets {
+            assert_eq!(preset, &normalize_hotbar(None));
+        }
+        let body = read_settings(dir.path());
+        assert!(body.contains("\"active_hotbar_preset\": 1"));
+        assert!(body.contains("\"hotbar_presets\""));
+    }
+
+    #[test]
+    fn a_store_from_before_presets_keeps_its_hotbar_as_the_first_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({"hotbar": {"1": 12, "4": 7}}).to_string(),
+        )
+        .unwrap();
+        let svc = service(dir.path());
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 1);
+        assert_eq!(config.hotbar_presets[0], config.hotbar);
+        assert_eq!(config.hotbar["1"], 12);
+        assert_eq!(config.hotbar_presets[1], normalize_hotbar(None));
+        assert_eq!(config.hotbar_presets[2], normalize_hotbar(None));
+    }
+
+    #[test]
+    fn switching_presets_keeps_each_presets_slots() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(&mut svc, serde_json::json!({"hotbar": {"1": 12}}));
+        update(&mut svc, serde_json::json!({"active_hotbar_preset": 2}));
+        assert_eq!(svc.get().active_hotbar_preset, 2);
+        assert_eq!(
+            svc.get().hotbar,
+            normalize_hotbar(None),
+            "preset 2 starts empty"
+        );
+
+        update(&mut svc, serde_json::json!({"hotbar": {"3": 40}}));
+        assert_eq!(svc.get().hotbar_presets[1]["3"], 40);
+        assert_eq!(svc.get().hotbar_presets[0]["1"], 12, "preset 1 untouched");
+
+        update(&mut svc, serde_json::json!({"active_hotbar_preset": 1}));
+        assert_eq!(svc.get().hotbar["1"], 12);
+        assert_eq!(svc.get().hotbar["3"], Value::Null);
+
+        // Everything survives a reload from disk.
+        let reloaded = service(dir.path());
+        assert_eq!(reloaded.get().active_hotbar_preset, 1);
+        assert_eq!(reloaded.get().hotbar["1"], 12);
+        assert_eq!(reloaded.get().hotbar_presets[1]["3"], 40);
+    }
+
+    #[test]
+    fn a_hotbar_write_beside_a_switch_lands_on_the_named_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(&mut svc, serde_json::json!({"hotbar": {"1": 12}}));
+        // The hotbar key comes first in the update; the switch still
+        // applies before it.
+        update(
+            &mut svc,
+            serde_json::json!({"hotbar": {"2": 9}, "active_hotbar_preset": 3}),
+        );
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 3);
+        assert_eq!(config.hotbar["2"], 9);
+        assert_eq!(config.hotbar_presets[2]["2"], 9);
+        assert_eq!(config.hotbar_presets[0]["1"], 12);
+        assert_eq!(config.hotbar_presets[0]["2"], Value::Null);
+    }
+
+    #[test]
+    fn a_preset_outside_the_three_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(&mut svc, serde_json::json!({"hotbar": {"1": 12}}));
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(4),
+            serde_json::json!(-1),
+            serde_json::json!(300),
+            serde_json::json!("2"),
+            Value::Null,
+        ] {
+            update(
+                &mut svc,
+                serde_json::json!({"active_hotbar_preset": invalid}),
+            );
+            assert_eq!(svc.get().active_hotbar_preset, 1);
+            assert_eq!(svc.get().hotbar["1"], 12);
+        }
+
+        // A malformed stored preset reads as the first, and malformed
+        // stored presets read as empty ones.
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({
+                "hotbar": {"1": 5},
+                "active_hotbar_preset": 9,
+                "hotbar_presets": [null, "garbled"],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let reloaded = service(dir.path());
+        let config = reloaded.get();
+        assert_eq!(config.active_hotbar_preset, 1);
+        assert_eq!(config.hotbar_presets.len(), 3);
+        assert_eq!(config.hotbar_presets[0]["1"], 5);
+        assert_eq!(config.hotbar_presets[1], normalize_hotbar(None));
+        assert_eq!(config.hotbar_presets[2], normalize_hotbar(None));
+    }
+
+    /// A build that knows only the single hotbar edits that key and leaves
+    /// the presets alone; its edit is the live preset's slots, not a value
+    /// the stale preset entry may overwrite.
+    #[test]
+    fn the_stored_hotbar_is_the_authority_for_the_live_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = normalize_hotbar(None);
+        let mut second = empty.clone();
+        second.insert("5".into(), Value::from(31));
+        std::fs::write(
+            dir.path().join("settings.json"),
+            serde_json::json!({
+                "hotbar": {"1": 77},
+                "active_hotbar_preset": 2,
+                "hotbar_presets": [{"1": 12}, second, empty],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let svc = service(dir.path());
+        let config = svc.get();
+        assert_eq!(config.active_hotbar_preset, 2);
+        assert_eq!(config.hotbar["1"], 77);
+        assert_eq!(config.hotbar["5"], Value::Null);
+        assert_eq!(config.hotbar_presets[1], config.hotbar);
+        assert_eq!(config.hotbar_presets[0]["1"], 12);
+    }
+
+    #[test]
+    fn hotbar_ids_list_the_live_preset_first_then_the_others_once_each() {
+        let mut config = AppConfig::default();
+        config.hotbar_presets[0].insert("1".into(), Value::from(4));
+        config.hotbar_presets[0].insert("2".into(), Value::from(5));
+        config.hotbar_presets[2].insert("0".into(), Value::from(9));
+        config.hotbar_presets[2].insert("1".into(), Value::from(5));
+        config.switch_hotbar_preset(2);
+        config.set_live_hotbar(normalize_hotbar(Some(&serde_json::json!({"7": 8, "8": 4}))));
+        assert_eq!(config.hotbar_ids_live_first(), vec![8, 4, 5, 9]);
+
+        assert!(AppConfig::default().hotbar_ids_live_first().is_empty());
+    }
+
+    #[test]
+    fn reset_returns_to_three_empty_presets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        update(
+            &mut svc,
+            serde_json::json!({"active_hotbar_preset": 3, "hotbar": {"1": 2}}),
+        );
+        svc.reset().unwrap();
+        assert_eq!(svc.get().active_hotbar_preset, 1);
+        assert!(svc.get().hotbar_ids_live_first().is_empty());
     }
 
     #[test]
@@ -1049,6 +1482,74 @@ mod tests {
     }
 
     #[test]
+    fn keyless_tracking_holds_only_on_the_machine_it_was_turned_on_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        let mut config = svc.get().clone();
+        config.hotbar_hooks_enabled = true;
+        assert!(!config.keyless_input_on(Some("machine-a")));
+        assert!(config.hotbar_keys_observed(Some("machine-a")));
+
+        let mut updates = Map::new();
+        updates.insert(
+            "keyless_input_host".into(),
+            serde_json::json!(" machine-a "),
+        );
+        updates.insert("hotbar_hooks_enabled".into(), serde_json::json!(true));
+        svc.update(&updates).unwrap();
+        let config = svc.get().clone();
+        assert_eq!(config.keyless_input_host.as_deref(), Some("machine-a"));
+        assert!(config.keyless_input_on(Some("machine-a")));
+        // Keyless overrides the hotbar toggle on that machine only.
+        assert!(!config.hotbar_keys_observed(Some("machine-a")));
+        // The same settings carried to another machine, or read where the
+        // machine cannot be identified, leave keyless off.
+        assert!(!config.keyless_input_on(Some("machine-b")));
+        assert!(config.hotbar_keys_observed(Some("machine-b")));
+        assert!(!config.keyless_input_on(None));
+
+        // It survives a reload, and an explicit null (or blank) turns it off.
+        assert_eq!(
+            service(dir.path()).get().keyless_input_host.as_deref(),
+            Some("machine-a")
+        );
+        let mut updates = Map::new();
+        updates.insert("keyless_input_host".into(), Value::Null);
+        svc.update(&updates).unwrap();
+        assert_eq!(svc.get().keyless_input_host, None);
+        let mut updates = Map::new();
+        updates.insert("keyless_input_host".into(), serde_json::json!("  "));
+        svc.update(&updates).unwrap();
+        assert_eq!(svc.get().keyless_input_host, None);
+    }
+
+    #[test]
+    fn keeping_unread_plates_is_off_until_turned_on_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        assert!(!svc.get().keep_unread_plates);
+        let mut updates = Map::new();
+        updates.insert("keep_unread_plates".into(), Value::Bool(true));
+        svc.update(&updates).unwrap();
+        assert!(svc.get().keep_unread_plates);
+        assert!(service(dir.path()).get().keep_unread_plates);
+    }
+
+    #[test]
+    fn the_account_connection_flag_is_off_until_written_and_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut svc = service(dir.path());
+        assert!(!svc.get().account_connected);
+        let mut updates = Map::new();
+        updates.insert("account_connected".into(), Value::Bool(true));
+        svc.update(&updates).unwrap();
+        assert!(service(dir.path()).get().account_connected);
+        updates.insert("account_connected".into(), Value::Bool(false));
+        svc.update(&updates).unwrap();
+        assert!(!service(dir.path()).get().account_connected);
+    }
+
+    #[test]
     fn toggles_coerce_truthy_stored_shapes() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -1056,8 +1557,6 @@ mod tests {
             serde_json::json!({
                 "hotbar_hooks_enabled": 1,
                 "repair_ocr_enabled": "yes",
-                "end_of_session_armour_reminder_enabled": 0,
-                "developer_mode_enabled": null,
             })
             .to_string(),
         )
@@ -1065,26 +1564,20 @@ mod tests {
         let svc = service(dir.path());
         assert!(svc.get().hotbar_hooks_enabled);
         assert!(svc.get().repair_ocr_enabled);
-        assert!(!svc.get().end_of_session_armour_reminder_enabled);
-        assert!(!svc.get().developer_mode_enabled);
     }
 
     #[test]
-    fn unknown_update_keys_are_ignored_and_active_preset_falls_back() {
+    fn unknown_and_retired_update_keys_are_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let mut svc = service(dir.path());
         let mut updates = Map::new();
         updates.insert("no_such_field".into(), Value::from(1));
         updates.insert("active_trifecta_preset_id".into(), Value::from("ghost"));
         svc.update(&updates).unwrap();
-        assert_eq!(
-            svc.get().active_trifecta_preset_id.as_deref(),
-            Some(DEFAULT_TRIFECTA_PRESET_ID),
-            "an unresolvable active id collapses to the default preset"
-        );
         assert!(svc.get().extra.get("no_such_field").is_none());
+        assert!(svc.get().extra.get("active_trifecta_preset_id").is_none());
+        assert!(!read_settings(dir.path()).contains("active_trifecta_preset_id"));
     }
-
     #[test]
     fn ascii_escaped_legacy_files_load_intact() {
         // Files written by earlier releases carry `\uXXXX` escapes
@@ -1126,12 +1619,11 @@ mod tests {
             "player_name": "Each",
             "hotbar_hooks_enabled": true,
             "repair_ocr_enabled": true,
-            "end_of_session_armour_reminder_enabled": true,
             "developer_mode_enabled": true,
             "manual_mob_species": "Atrox",
             "manual_mob_maturity": "Old",
             "hotbar": {"1": 5},
-            "trifecta_presets": [{"id": "beta", "name": "Beta", "heal_id": 9}],
+            "carried_weapon_ids": [9],
             "loot_filter_blacklist": ["Shrapnel"],
             "overlay_x": 11,
             "overlay_y": -4,
@@ -1145,46 +1637,13 @@ mod tests {
         assert_eq!(config.player_name, "Each");
         assert!(config.hotbar_hooks_enabled);
         assert!(config.repair_ocr_enabled);
-        assert!(config.end_of_session_armour_reminder_enabled);
-        assert!(config.developer_mode_enabled);
         assert_eq!(config.manual_mob_species, "Atrox");
         assert_eq!(config.manual_mob_maturity, "Old");
         assert_eq!(config.hotbar["1"], 5);
-        assert_eq!(config.trifecta_presets[0].id, "beta");
-        assert_eq!(config.trifecta_presets[0].heal_id, Some(9));
-        assert_eq!(config.active_trifecta_preset_id.as_deref(), Some("beta"));
+        assert_eq!(config.carried_weapon_ids, vec![9]);
         assert_eq!(config.loot_filter_blacklist, ["Shrapnel"]);
         assert_eq!(config.overlay_x, Some(11));
         assert_eq!(config.overlay_y, Some(-4));
-
-        // Switching the active id by string to another existing preset
-        // takes effect (no fallback involved).
-        let mut two_presets = Map::new();
-        two_presets.insert(
-            "trifecta_presets".into(),
-            serde_json::json!([
-                {"id": "beta", "name": "Beta"},
-                {"id": "gamma", "name": "Gamma"},
-            ]),
-        );
-        svc.update(&two_presets).unwrap();
-        assert_eq!(svc.get().active_trifecta_preset_id.as_deref(), Some("beta"));
-        let mut switch = Map::new();
-        switch.insert("active_trifecta_preset_id".into(), Value::from("gamma"));
-        svc.update(&switch).unwrap();
-        assert_eq!(
-            svc.get().active_trifecta_preset_id.as_deref(),
-            Some("gamma")
-        );
-
-        // A null active id collapses to the default preset.
-        let mut null_id = Map::new();
-        null_id.insert("active_trifecta_preset_id".into(), Value::Null);
-        svc.update(&null_id).unwrap();
-        assert_eq!(
-            svc.get().active_trifecta_preset_id.as_deref(),
-            Some(DEFAULT_TRIFECTA_PRESET_ID)
-        );
 
         // Reload from disk: the saved state equals the live state.
         let reloaded = service(dir.path());
@@ -1239,40 +1698,6 @@ mod tests {
     }
 
     #[test]
-    fn active_preset_resolution_honours_a_valid_stored_id() {
-        let mut config = AppConfig {
-            trifecta_presets: vec![
-                TrifectaPresetConfig {
-                    id: "alpha".into(),
-                    name: "A".into(),
-                    small_weapon_id: None,
-                    big_weapon_id: None,
-                    heal_id: None,
-                },
-                TrifectaPresetConfig {
-                    id: "beta".into(),
-                    name: "B".into(),
-                    small_weapon_id: None,
-                    big_weapon_id: None,
-                    heal_id: None,
-                },
-            ],
-            active_trifecta_preset_id: Some("beta".into()),
-            ..AppConfig::default()
-        };
-        assert_eq!(active_trifecta_preset(&config).unwrap().id, "beta");
-        config.active_trifecta_preset_id = Some(String::new());
-        assert!(active_trifecta_preset(&config).is_none());
-        config.active_trifecta_preset_id = None;
-        assert!(active_trifecta_preset(&config).is_none());
-
-        // A valid stored active id survives normalisation untouched.
-        let raw = serde_json::json!([{"id": "alpha", "name": "A"}, {"id": "beta", "name": "B"}]);
-        let (_, active) = normalize_trifecta_presets(Some(&raw), Some("beta"));
-        assert_eq!(active, "beta");
-    }
-
-    #[test]
     fn falsy_string_and_collection_toggles_stay_off() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -1280,7 +1705,6 @@ mod tests {
             serde_json::json!({
                 "hotbar_hooks_enabled": "",
                 "repair_ocr_enabled": [],
-                "developer_mode_enabled": {},
             })
             .to_string(),
         )
@@ -1288,7 +1712,6 @@ mod tests {
         let svc = service(dir.path());
         assert!(!svc.get().hotbar_hooks_enabled);
         assert!(!svc.get().repair_ocr_enabled);
-        assert!(!svc.get().developer_mode_enabled);
     }
 
     #[test]
@@ -1346,21 +1769,6 @@ mod tests {
     }
 
     #[test]
-    fn falsy_and_scalar_preset_ids_follow_the_python_semantics() {
-        let raw = serde_json::json!([
-            {"id": 0, "name": "skipped"},
-            {"id": 0.0, "name": "skipped"},
-            {"id": false, "name": "skipped"},
-            {"id": true, "name": 1.5},
-            {"id": {"container": 1}, "name": "skipped: container id"},
-        ]);
-        let (presets, _) = normalize_trifecta_presets(Some(&raw), None);
-        assert_eq!(presets.len(), 1);
-        assert_eq!(presets[0].id, "True");
-        assert_eq!(presets[0].name, "1.5");
-    }
-
-    #[test]
     fn non_ascii_text_is_stored_as_utf8_and_reloads_intact() {
         let dir = tempfile::tempdir().unwrap();
         let mut svc = service(dir.path());
@@ -1414,16 +1822,5 @@ mod tests {
             "{broken",
             "an unparseable file is read past, never rewritten"
         );
-    }
-
-    #[test]
-    fn stringify_renders_scalars_as_python_does() {
-        assert_eq!(stringify(&Value::Bool(true)).as_deref(), Some("True"));
-        assert_eq!(stringify(&Value::Bool(false)).as_deref(), Some("False"));
-        assert_eq!(stringify(&Value::from(42)).as_deref(), Some("42"));
-        assert_eq!(stringify(&Value::from(1.5)).as_deref(), Some("1.5"));
-        assert_eq!(stringify(&Value::from("s")).as_deref(), Some("s"));
-        assert_eq!(stringify(&serde_json::json!({"a": 1})), None);
-        assert_eq!(stringify(&serde_json::json!([1])), None);
     }
 }

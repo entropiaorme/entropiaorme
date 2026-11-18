@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { enrichmentColor, enrichmentLabel, formatPec } from './display';
+import { enrichmentColor, enrichmentLabel } from './display';
 
 describe('enrichment ladder', () => {
 	it('maps the four levels to their labels and colours', () => {
@@ -17,18 +17,5 @@ describe('enrichment ladder', () => {
 		expect(enrichmentLabel(7)).toBe('Unresolved');
 		expect(enrichmentLabel(-1)).toBe('Unresolved');
 		expect(enrichmentColor(7)).toBe('negative');
-	});
-});
-
-describe('formatPec', () => {
-	it('renders two decimal places at ordinary magnitudes', () => {
-		expect(formatPec(0.426)).toBe('0.43');
-		expect(formatPec(4)).toBe('4.00');
-	});
-
-	it('keeps four decimals for slow-decay amounts below 0.1', () => {
-		expect(formatPec(0.011)).toBe('0.0110');
-		expect(formatPec(0.0002)).toBe('0.0002');
-		expect(formatPec(0)).toBe('0.00');
 	});
 });

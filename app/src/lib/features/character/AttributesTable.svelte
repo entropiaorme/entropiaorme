@@ -1,13 +1,13 @@
 <script lang="ts">
 	import type { CharacterModel } from './characterModel.svelte';
-	import { formatGain, gainColorClass } from './prospectModel.svelte';
+	import { formatGain, gainColorClass } from './characterFormat';
 
 	let { model }: { model: CharacterModel } = $props();
 </script>
 
 <div>
 	<div class="overflow-x-auto">
-		<table data-guide-anchor="character-attributes-table" class="w-full text-sm">
+		<table class="w-full text-sm">
 			<thead>
 				<tr class="border-b border-border">
 					<th class="py-2 px-3 text-left eyebrow">Attribute</th>

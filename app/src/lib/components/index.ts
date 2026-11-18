@@ -13,6 +13,7 @@ export { default as SearchInput } from './SearchInput.svelte';
 export { default as SegmentedControl } from './SegmentedControl.svelte';
 export { default as Select } from './Select.svelte';
 export { default as Sidebar } from './Sidebar.svelte';
+export { default as Skeleton } from './Skeleton.svelte';
 export { default as StatDisplay } from './StatDisplay.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export { default as Titlebar } from './Titlebar.svelte';

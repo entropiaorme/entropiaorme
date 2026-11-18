@@ -53,3 +53,4 @@
   - [ADR-0037: Retire the golden-ratification guard](adr/0037-retire-golden-ratification-guard.md)
   - [ADR-0038: Promotion carries the public surface's polish](adr/0038-promotion-carries-public-polish.md)
   - [ADR-0039: Retire the port-equivalence evidence](adr/0039-retire-port-equivalence-evidence.md)
+  - [ADR-0040: Periodic source snapshots replace two-line development](adr/0040-periodic-source-snapshots.md)

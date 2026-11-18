@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-EntropiaOrme is in active pre-1.0 development. Security fixes target the latest released version on the [Releases page](https://github.com/entropiaorme/entropiaorme/releases). Older versions are not supported.
+EntropiaOrme is a personal project published as source. Security fixes land in the next source snapshot on `main`; the installers on the [Releases page](https://github.com/entropiaorme/entropiaorme/releases) are historical and are not maintained.
 
 ## Reporting a Vulnerability
 
@@ -11,9 +11,9 @@ Report security issues privately to **MikelWL@protonmail.com**.
 Please include:
 - A description of the vulnerability and its impact.
 - Steps to reproduce or proof-of-concept code.
-- The version of EntropiaOrme you tested against (Settings, About panel).
+- The commit of EntropiaOrme you built and tested against.
 
-I aim to acknowledge reports within 7 days and ship a fix or mitigation within 30 days for confirmed issues. Once a fix is released I will publicly credit reporters who consent.
+I aim to acknowledge reports within 7 days and publish a fix or mitigation within 30 days for confirmed issues. Once a fix is published I will publicly credit reporters who consent.
 
 Please do not file public GitHub issues for security reports.
 
@@ -25,6 +25,4 @@ The shipped application is a single native-Rust binary; it bundles no interprete
 - **Frontend dependencies** are pinned by the committed `package-lock.json` and installed with `npm ci`, which refuses to deviate from the lockfile.
 - **Bundled binary assets** are recorded in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md): the optical-character-recognition model and its character dictionary with their SHA-256 hashes, so a shipped model can be verified against the published notice, and the ONNX Runtime libraries with their upstream source and licence.
 
-Release artefacts are produced by a tag-driven release pipeline (`.github/workflows/release.yml`). It generates a [CycloneDX](https://cyclonedx.org/) software bill of materials for the shipped shell (via `cargo-cyclonedx`), computes an SHA-256 checksum for every published asset, and records a SLSA-style build-provenance attestation (via GitHub's attestation action), attaching all three to the drafted GitHub Release. Every GitHub Action across the workflows is pinned to a commit SHA and kept current by Dependabot, so the build steps themselves are fixed inputs.
-
-Installer code signing (Authenticode) and update-manifest signing are wired and ready; their activation is pending a code-signing certificate, so artefacts ship unsigned until then (the [download page](https://entropiaorme.com) documents the SmartScreen click-through that applies in the meantime).
+Every GitHub Action in the continuous-integration workflow is pinned to a commit SHA, so the build steps themselves are fixed inputs. No release artefacts are produced: the tag-driven release pipeline, its bill of materials, checksums and provenance attestations, and installer signing were retired with installer distribution ([ADR-0040](docs/src/adr/0040-periodic-source-snapshots.md)); [ADR-0014](docs/src/adr/0014-release-engineering.md) records how they worked.

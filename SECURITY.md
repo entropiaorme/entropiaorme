@@ -15,8 +15,6 @@ Please include:
 
 I aim to acknowledge reports within 7 days and publish a fix or mitigation within 30 days for confirmed issues. Once a fix is published I will publicly credit reporters who consent.
 
-Please do not file public GitHub issues for security reports.
-
 ## Supply chain security
 
 The shipped application is a single native-Rust binary; it bundles no interpreter or scripting runtime. Its dependencies and bundled build inputs are held under automated review:

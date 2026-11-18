@@ -4,13 +4,13 @@ EntropiaOrme's source is public under MIT: anyone who finds it useful is free to
 
 ## Bug reports
 
-Bug reports are welcome via [GitHub issues](https://github.com/entropiaorme/entropiaorme/issues). Helpful to include:
+The issue tracker is closed: this repository receives an occasional source snapshot and is not a support channel. If you hit a bug building or running a snapshot, I'm still glad to hear about it by email at MikelWL@protonmail.com. Helpful to include:
 
 - The commit you built from.
 - What you expected vs what happened.
 - Any relevant log output.
 
-For security-related issues see [SECURITY.md](SECURITY.md); please do not file public issues for those.
+For security-related issues see [SECURITY.md](SECURITY.md).
 
 ## Contributions
 

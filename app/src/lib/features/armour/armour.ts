@@ -12,6 +12,7 @@ import type {
 	ArmourPiecesView,
 } from '$lib/api/commands.gen';
 import { formatDate } from '$lib/utils/format';
+import { filterByQuery } from '$lib/view/search';
 
 export type Piece = ArmourPieceRow;
 export type PieceList = ArmourPieceList;
@@ -72,12 +73,11 @@ export function candidatesFor(
 	list: PieceList,
 	query: string,
 ): Candidate[] {
-	const needle = query.trim().toLowerCase();
 	const rank: Record<ArmourCandidateHint, number> =
 		list === 'plates'
 			? { awaitingPlacement: 0, attached: 1, tagged: 2, other: 3 }
 			: { awaitingPlacement: 0, tagged: 1, attached: 2, other: 3 };
-	return (view?.candidates ?? [])
-		.filter((candidate) => needle === '' || candidate.item.toLowerCase().includes(needle))
+	return filterByQuery(view?.candidates ?? [], query, (candidate) => candidate.item)
+		.slice()
 		.sort((a, b) => rank[a.hint] - rank[b.hint] || a.item.localeCompare(b.item));
 }

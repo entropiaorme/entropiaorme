@@ -1180,6 +1180,7 @@ pub fn read_run_whole(
     if steps_between(conn, from, to)? < 2 {
         return Ok(unread);
     }
+    // id-order: cursor (the readings between two recorded positions).
     let tagged: bool = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM account_readings \
                         WHERE id > ?1 AND id <= ?2 AND session_id IS NOT NULL)",
@@ -1200,6 +1201,7 @@ pub fn read_run_whole(
     // Every opening proposal inside the span must still be open for the
     // whole to take their place.
     let inside: Vec<i64> = {
+        // id-order: cursor (the proposals between two recorded positions).
         let mut stmt = tx.prepare(
             "SELECT DISTINCT reading_id FROM account_proposals \
              WHERE kind = ?1 AND reading_id > ?2 AND reading_id <= ?3 AND prev_reading_id >= ?2 \

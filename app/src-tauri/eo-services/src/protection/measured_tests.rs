@@ -92,6 +92,7 @@ async fn measure_with(
         )?;
         // Each set's cost, billed on its first confirmed piece.
         for (set_id, cost) in sets {
+            // id-order: insertion (the set's first piece, as this test seeded it).
             conn.execute(
                 "INSERT INTO account_session_cost_armour_pieces \
                  (session_id, item_name, lost_micro_ped, lost_precision, markup_hundredths, \

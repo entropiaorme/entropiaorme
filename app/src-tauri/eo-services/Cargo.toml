@@ -42,6 +42,12 @@ sha2 = { workspace = true }
 reqwest = { workspace = true }
 rustls = { workspace = true }
 rustls-platform-verifier = { workspace = true }
+# The operating system's keyring, where the shell keeps the account site's
+# sign-in between launches: the Windows Credential Manager or the Linux
+# Secret Service, so it is declared for every target. Behind the
+# `session-keyring` feature so backend member builds need no keyring
+# service.
+keyring = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
@@ -74,10 +80,6 @@ ashpd = { workspace = true, optional = true }
 gstreamer = { workspace = true, optional = true }
 gstreamer-app = { workspace = true, optional = true }
 gstreamer-video = { workspace = true, optional = true }
-# The operating system's keyring, where the shell keeps the account site's
-# sign-in between launches; behind the `session-keyring` feature so backend
-# member builds need no keyring service.
-keyring = { workspace = true, optional = true }
 
 [features]
 # Enables the Linux ScreenCast-portal capture backend and its GStreamer

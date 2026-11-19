@@ -20,6 +20,11 @@
 	import { activityMarks } from '$lib/features/account/activityMarks.svelte';
 	import { createPurchaseProposals } from '$lib/features/inventory/purchaseProposals.svelte';
 	import {
+		createSaleProposals,
+		type SaleProposal,
+		type SaleTarget,
+	} from '$lib/features/inventory/saleProposals.svelte';
+	import {
 		createInventoryModel,
 		type InventoryKind,
 		type InventoryView,
@@ -34,6 +39,7 @@
 	const purchaseProposals = createPurchaseProposals({
 		onrecorded: () => model.refresh(),
 	});
+	const saleProposals = createSaleProposals();
 	const forms = createAssetForms({
 		proposals: purchaseProposals,
 		addPurchase: model.addPurchase,
@@ -87,11 +93,13 @@
 		const detachProposals = listingProposals.connect();
 		// What looks like a purchase in the readings, waiting to be recorded.
 		const detachPurchases = purchaseProposals.connect();
+		const detachSales = saleProposals.connect();
 		return () => {
 			disposed = true;
 			stop?.();
 			detachProposals();
 			detachPurchases();
+			detachSales();
 		};
 	});
 
@@ -109,6 +117,13 @@
 		if (!model.historyLoaded && !model.historyLoading) {
 			void model.loadHistory().catch(() => undefined);
 		}
+	}
+
+	/** Open the trade form a sale proposal is recorded through, filled in. */
+	function recordSale(proposal: SaleProposal, target: SaleTarget) {
+		saleProposals.begin(proposal);
+		if (target.kind === 'loot') lootToSell = target.stock;
+		else if (target.kind === 'asset') equipmentToSell = target.asset;
 	}
 
 	async function deleteEquipment(item: InventoryItem) {
@@ -191,8 +206,11 @@
 			<InventoryHistory
 				{model}
 				purchases={purchaseProposals}
+				sales={saleProposals}
+				loot={model.loot}
 				assets={model.equipment}
 				onrecordpurchase={forms.recordProposal}
+				onrecordsale={recordSale}
 				onlistings={() => selectView('listings')}
 			/>
 		{/if}
@@ -210,8 +228,12 @@
 <SellStockModal
 	item={live(lootToSell)}
 	onlist={model.listLoot}
-	ontrade={model.sellLootByTrade}
-	oncancel={() => (lootToSell = null)}
+	ontrade={saleProposals.around(model.sellLootByTrade)}
+	oncancel={() => {
+		lootToSell = null;
+		saleProposals.end();
+	}}
+	start={saleProposals.start}
 	activityAttributionNoun="its source activities"
 />
 <ConvertItemsModal
@@ -241,7 +263,11 @@
 <EquipmentSaleModal
 	item={equipmentToSell}
 	onlist={model.listEquipment}
-	ontrade={model.sellEquipmentByTrade}
-	oncancel={() => (equipmentToSell = null)}
+	ontrade={saleProposals.around(model.sellEquipmentByTrade)}
+	oncancel={() => {
+		equipmentToSell = null;
+		saleProposals.end();
+	}}
+	start={saleProposals.start}
 />
 <AssetForms {forms} />

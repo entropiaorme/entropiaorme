@@ -54,3 +54,4 @@
   - [ADR-0038: Promotion carries the public surface's polish](adr/0038-promotion-carries-public-polish.md)
   - [ADR-0039: Retire the port-equivalence evidence](adr/0039-retire-port-equivalence-evidence.md)
   - [ADR-0040: Periodic source snapshots replace two-line development](adr/0040-periodic-source-snapshots.md)
+  - [ADR-0041: No connection to the project's site](adr/0041-no-connection-to-the-project-site.md)

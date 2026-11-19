@@ -1826,7 +1826,8 @@ async fn the_readings_left_unexamined_are_examined_at_start_one_at_a_time() {
             super::proposals::Detail::Opening(opening) => Some(opening.boxes[0].count),
             super::proposals::Detail::Listing(_)
             | super::proposals::Detail::Purchase(_)
-            | super::proposals::Detail::Arrival(_) => None,
+            | super::proposals::Detail::Arrival(_)
+            | super::proposals::Detail::Sale(_) => None,
         })
         .collect();
     assert_eq!(counts, vec![7]);

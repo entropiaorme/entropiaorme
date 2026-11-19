@@ -380,7 +380,7 @@ pub fn ignored_paths(paths: &[String], repo_root: &Path) -> Result<HashSet<Strin
         .map_err(|e| format!("failed to run git check-ignore: {e}"))?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     let batch: Vec<String> = paths.to_vec();
-    let feeder = std::thread::spawn(move || -> Result<(), String> {
+    let writer = std::thread::spawn(move || -> Result<(), String> {
         for path in batch {
             writeln!(stdin, "{path}")
                 .map_err(|e| format!("failed to feed git check-ignore: {e}"))?;
@@ -390,9 +390,9 @@ pub fn ignored_paths(paths: &[String], repo_root: &Path) -> Result<HashSet<Strin
     let output = child
         .wait_with_output()
         .map_err(|e| format!("failed to wait for git check-ignore: {e}"))?;
-    feeder
+    writer
         .join()
-        .map_err(|_| "the git check-ignore feeder thread panicked".to_string())??;
+        .map_err(|_| "the git check-ignore writer thread panicked".to_string())??;
     match output.status.code() {
         Some(0) | Some(1) => Ok(String::from_utf8_lossy(&output.stdout)
             .lines()

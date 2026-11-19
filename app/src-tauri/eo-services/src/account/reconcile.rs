@@ -79,6 +79,9 @@ pub fn pending_items(conn: &rusqlite::Connection) -> Result<BTreeSet<String>, Ac
             Detail::Arrival(arrival) => {
                 names.insert(reconciliation_key(&arrival.key.name));
             }
+            Detail::Sale(sale) => {
+                names.insert(reconciliation_key(&sale.key.name));
+            }
         }
     }
     names.remove(UNIVERSAL_AMMO);

@@ -2,22 +2,35 @@
  * What the account readings recorded of one item within the last hour, for
  * a manual form to show beside its amount: a conversion beside the
  * conversion and recycling forms, a Trade Terminal sale beside the trade
- * form. Re-read on every account frame, so a record the readings make while
- * the form is open appears without reopening it.
+ * form, a listing beside the listing forms' item. Re-read on every account
+ * frame, so a record the readings make while the form is open appears
+ * without reopening it.
  *
  * Each read carries the item it was asked for, and an answer for an item
  * other than the one now in the form is never shown. A failed read shows
  * nothing: the line is a reminder, and the form works the same without it.
  */
 import { ACCOUNT_TOPIC } from '$lib/api/account';
+import { getAuctionListings } from '$lib/api/analytics';
 import { getConversionFromAccount, getSaleFromAccount } from '$lib/api/inventory';
 import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
-import type { AccountRecordKind, AccountRecordRead } from './fromAccount';
+import {
+	type AccountRecordKind,
+	type AccountRecordRead,
+	recentListingFromAccount,
+} from './fromAccount';
 
 type Reader = (input: { itemName: string }) => Promise<AccountRecordRead | null>;
 
+/** A listing the readings created: they create it in the Inventory, and
+ * its listings say which were theirs. */
+async function listingFromAccount({ itemName }: { itemName: string }) {
+	return recentListingFromAccount(await getAuctionListings('inventory'), itemName);
+}
+
 /** The backend's answer for each kind; none while it does not answer one. */
 function readerFor(kind: AccountRecordKind): Reader | null {
+	if (kind === 'listing') return listingFromAccount;
 	return kind === 'conversion' ? getConversionFromAccount : getSaleFromAccount;
 }
 

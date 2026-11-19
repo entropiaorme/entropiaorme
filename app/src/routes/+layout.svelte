@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.png';
-	import { Sidebar, Titlebar, UpdateToast } from '$lib/components';
+	import { Sidebar, Titlebar } from '$lib/components';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
@@ -11,12 +11,13 @@
 	import { initStatsCustomisation } from '$lib/statsCustomisation.svelte';
 	import { initStatsScope, statsScope, STATS_SCOPE_CHANGED_EVENT, type StatsScope } from '$lib/statsScope.svelte';
 	import { listen } from '@tauri-apps/api/event';
-	import { initNews, newsOptIn, newsHasUnread, NEWS_PREFERENCE_KEYS } from '$lib/news.svelte';
-	import { initUpdater, maybeCheckOnLaunch, updateAvailable } from '$lib/updater.svelte';
-	import { maybeRefreshOnMount } from '$lib/newsFetch';
 	import { initLooterBasis } from '$lib/looterBasis.svelte';
 	import { followLiveMarkupSettings, initLiveMarkupSettings } from '$lib/liveMarkupSettings.svelte';
-	import { getPreference, purgeRetiredPreferences } from '$lib/preferences';
+	import { purgeRetiredPreferences } from '$lib/preferences';
+	import { routeRefusal } from '$lib/extension/gate';
+	import { startShellExtension } from '$lib/extension/shell';
+	import { accountOffered } from '$lib/features/account/offered';
+	import { shellBanners } from '$lib/extension/slots';
 	import { substrate, whenSubstrateReady } from '$lib/api/readiness.svelte';
 	import StartupFailure from '$lib/features/startup/StartupFailure.svelte';
 	import StartupIndicator from '$lib/features/startup/StartupIndicator.svelte';
@@ -29,11 +30,12 @@
 		NavEquipment,
 		NavInventory,
 		NavSettings,
-		NavNews,
-		NavUpdates,
 	} from '$lib/icons';
 
 	let { children } = $props();
+
+	// Every window runs the extension's start hook.
+	onMount(() => startShellExtension());
 
 	// Ask whether the backend has started as soon as this window exists, not
 	// when its first page happens to read something: the startup indicator
@@ -85,13 +87,10 @@
 			initTheme(),
 			initStatsCustomisation(),
 			initStatsScope(),
-			initNews(),
-			initUpdater(),
 			purgeRetiredPreferences(),
 			initLooterBasis(),
 			initLiveMarkupSettings(),
 		]);
-		void maybeRefreshOnMount();
 		if (
 			typeof sessionStorage !== 'undefined' &&
 			sessionStorage.getItem('welcome_just_finished') === '1'
@@ -113,16 +112,6 @@
 				await goto('/welcome', { replaceState: true });
 			} else if (!(await isTosAccepted())) {
 				await goto('/welcome/terms', { replaceState: true });
-			} else if (!(await getPreference<boolean>(NEWS_PREFERENCE_KEYS.optInSeen, false))) {
-				// The networking-consent reprompt: shown until every online
-				// feature's choice has been seen, so features added after a
-				// user onboarded still get an explicit yes/no.
-				await goto('/welcome/news-opt-in', { replaceState: true });
-			} else {
-				// Fully onboarded and past the networking-consent step: it is now
-				// safe to make the launch-time update check (gated on the opt-out
-				// preference). Never fires before the user has passed that step.
-				void maybeCheckOnLaunch();
 			}
 		}
 		onboardingChecked = true;
@@ -130,7 +119,7 @@
 
 	// Something new from the account marks the Inventory until the player
 	// opens what the account did (see `activityMarks`).
-	let navItems = $derived([
+	const baseNavItems = $derived([
 		{ id: '/', label: 'Dashboard', icon: NavDashboard },
 		{ id: '/analytics', label: 'Analytics', icon: NavAnalytics },
 		{
@@ -143,10 +132,20 @@
 		{ id: '/quests', label: 'Quests', icon: NavQuests },
 		{ id: '/equipment', label: 'Equipment', icon: NavEquipment },
 	]);
+	// An entry whose route the gate refuses stays in the rail, greyed, with
+	// the reason as its note.
+	let navItems = $derived(
+		baseNavItems.map((item) => {
+			const refusal = routeRefusal(item.id);
+			return refusal === null
+				? item
+				: { ...item, disabled: true, note: `${item.label}: ${refusal}` };
+		}),
+	);
 
 	// The marks are read only where the sidebar shows: the main window,
-	// once past onboarding. Every other window is refused the account's
-	// commands.
+	// once past onboarding, and only with the other account surfaces. Every
+	// other window is refused the account's commands.
 	const showsShell = $derived(
 		onboardingChecked &&
 			!page.url.pathname.startsWith('/welcome') &&
@@ -157,29 +156,9 @@
 			!page.url.pathname.startsWith('/radar-guidance'),
 	);
 	$effect(() => {
-		if (!showsShell) return;
+		if (!showsShell || !accountOffered()) return;
 		return activityMarks.connect();
 	});
-
-	let footerNavItems = $derived([
-		...(newsOptIn.current
-			? [
-					{
-						id: '/news',
-						label: 'News & Updates',
-						icon: NavNews,
-						...(newsHasUnread.current ? { indicator: 'unread' as const } : {}),
-					},
-				]
-			: []),
-		// The app-update surface surfaces in the rail only when an update is
-		// pending (a quiet call-to-action with the unread dot); otherwise it is
-		// reached from the toast or Settings. Keeps it distinct from the news
-		// feed's "News & Updates" entry.
-		...(updateAvailable.current
-			? [{ id: '/updates', label: 'Updates', icon: NavUpdates, indicator: 'unread' as const }]
-			: []),
-	]);
 
 	const settingsItem = { id: '/settings', label: 'Settings', icon: NavSettings };
 
@@ -214,12 +193,12 @@
 			items={navItems}
 			active={activePage}
 			onnavigate={handleNavigate}
-			footerItems={footerNavItems}
 			{settingsItem}
 			disabled={substrate.phase === 'failed'}
 		/>
 		<div class="relative flex flex-col flex-1 overflow-hidden">
 			<Titlebar />
+			{#each shellBanners as Banner}<Banner />{/each}
 			{#if substrate.phase === 'starting'}
 				<StartupIndicator />
 			{/if}
@@ -232,7 +211,6 @@
 			</main>
 		</div>
 	</div>
-	<UpdateToast />
 {/if}
 
 <style>

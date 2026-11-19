@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
 	entry,
+	listedListing,
+	listedRow,
+	listedStep,
 	listing,
 	listingRow,
 	opening,
@@ -15,6 +18,7 @@ import {
 	accountEventShowsUnder,
 	accountEventUndo,
 	isNewSince,
+	listedFlow,
 	newestShown,
 	openingFlow,
 	recordedAt,
@@ -199,5 +203,75 @@ describe('the way back from an event', () => {
 
 	it('says an event already taken back is undone', () => {
 		expect(accountEventUndo(only([shrapnel({ undone: true })]))).toEqual({ kind: 'undone' });
+	});
+});
+
+describe('a listing the readings created', () => {
+	it("is the account's alone while it waits on the auction", () => {
+		const split = splitHistory([listedRow()], [], [listedListing()]);
+		expect(split.yours).toEqual([]);
+		expect(split.account.map((event) => event.kind)).toEqual(['listed']);
+		const [listed] = split.account;
+		expect(listed.kind === 'listed' && listed.listing?.id).toBe('listing-made');
+	});
+
+	it('stands beside the outcome the readings settled, each its own event', () => {
+		const returned = listedRow({
+			status: 'expired',
+			recordedFromAccount: step(46, '2026-11-15T12:00:00Z'),
+		});
+		const split = splitHistory([returned], [], [listedListing({ status: 'expired' })]);
+		expect(split.account.map((event) => event.kind)).toEqual(['listingReturned', 'listed']);
+		expect(split.yours).toEqual([]);
+	});
+
+	it("leaves an outcome the player recorded with the player's entries", () => {
+		const sold = listedRow({ status: 'sold', netMarkup: 0.3 });
+		const split = splitHistory([sold], [], [listedListing({ status: 'sold' })]);
+		expect(split.account.map((event) => event.kind)).toEqual(['listed']);
+		expect(split.yours.map((row) => row.id)).toEqual(['listing-made']);
+	});
+
+	it('was recorded when it was made, whatever became of it since', () => {
+		const returned = listedRow({
+			status: 'expired',
+			recordedFromAccount: step(46, '2026-11-15T12:00:00Z'),
+		});
+		const listed = splitHistory([returned], [], []).account.find(
+			(event) => event.kind === 'listed',
+		) as AccountEvent;
+		expect(recordedAt(listed)).toBe(listedStep().recordedAt);
+	});
+
+	it('lays out the item, the fee and the starting bids the fee reads back as', () => {
+		const flow = listedFlow(listedRow(), listedListing(), listedStep());
+		expect(flow.item).toEqual({ name: 'Animal Hide', quantity: 10, tt: 5 });
+		expect(flow.fee).toBe(0.51);
+		expect(flow.bids).toEqual({ low: 5.21, high: 5.41 });
+		// With its listing not to hand, the fee is the Card's fall.
+		expect(listedFlow(listedRow(), null, listedStep()).fee).toBe(0.51);
+	});
+
+	it('offers no way back once the listing has an outcome', () => {
+		for (const status of ['sold', 'expired']) {
+			const [listed] = splitHistory([listedRow({ status })], [], []).account.filter(
+				(event) => event.kind === 'listed',
+			);
+			expect(accountEventUndo(listed), status).toEqual({ kind: 'none' });
+		}
+	});
+
+	it('is taken back by undoing the listing, and held when something depends on it', () => {
+		const [listed] = splitHistory([listedRow()], [], []).account;
+		const undo = accountEventUndo(listed);
+		expect(undo.kind === 'available' && undo.action).toBe('Undo listing');
+		const [held] = splitHistory(
+			[listedRow({ canDelete: false, undoBlockedReason: 'Sold on since.' })],
+			[],
+			[],
+		).account;
+		expect(accountEventUndo(held)).toEqual({ kind: 'held', reason: 'Sold on since.' });
+		const [undone] = splitHistory([listedRow({ undone: true })], [], []).account;
+		expect(accountEventUndo(undone)).toEqual({ kind: 'undone' });
 	});
 });

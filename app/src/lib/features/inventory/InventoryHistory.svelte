@@ -28,6 +28,7 @@
 	import AccountEventCard from './AccountEventCard.svelte';
 	import PurchaseProposals from './PurchaseProposals.svelte';
 	import ReviewedEventCard from './ReviewedEventCard.svelte';
+	import SaleProposals from './SaleProposals.svelte';
 	import WaitingProposals from './WaitingProposals.svelte';
 	import {
 		accountEventShowsUnder,
@@ -47,27 +48,40 @@
 		PurchaseProposals as PurchaseProposalsModel,
 		PurchaseTarget,
 	} from './purchaseProposals.svelte';
+	import type {
+		SaleProposal,
+		SaleProposals as SaleProposalsModel,
+		SaleTarget,
+	} from './saleProposals.svelte';
+	import type { TreeCuttingStock } from '$lib/features/analytics/treeCuttingModel.svelte';
 
 	let {
 		model,
 		purchases,
+		sales,
+		loot,
 		assets,
 		onrecordpurchase,
+		onrecordsale,
 		onlistings,
 	}: {
 		model: InventoryModel;
 		purchases: PurchaseProposalsModel;
+		sales: SaleProposalsModel;
+		loot: TreeCuttingStock[];
 		assets: InventoryItem[];
 		/** Open the asset form for a purchase proposal, filled in. */
 		onrecordpurchase: (proposal: PurchaseProposal, target: PurchaseTarget) => void;
+		/** Open the trade form for a sale proposal, filled in. */
+		onrecordsale: (proposal: SaleProposal, target: SaleTarget) => void;
 		/** Show the listings, where a listing's outcome is confirmed. */
 		onlistings: () => void;
 	} = $props();
 
 	let space = $state<HistorySpace>('account');
 
-	/** Every proposal still open, of every kind but purchases: those have
-	 * their own rows, with the asset forms behind them. */
+	/** Every proposal still open, of every kind but purchases and sales:
+	 * those have their own rows, with the asset and trade forms behind them. */
 	const proposals = createSnapshotStore<AccountProposal[]>(ACCOUNT_TOPIC, () =>
 		getProposals(null),
 	);
@@ -75,7 +89,11 @@
 
 	const split = $derived(splitHistory(model.allHistory, model.openings, model.allListings));
 	const allWaiting = $derived(
-		waitingOf((proposals.current ?? []).filter((p) => p.outcome.kind !== 'purchase')),
+		waitingOf(
+			(proposals.current ?? []).filter(
+				(p) => p.outcome.kind !== 'purchase' && p.outcome.kind !== 'sale',
+			),
+		),
 	);
 	const side = $derived(model.kind);
 	const accountEvents = $derived(split.account.filter((e) => accountEventShowsUnder(e, side)));
@@ -101,7 +119,11 @@
 	 * newest of it, whichever side the filter shows. */
 	$effect(() => {
 		if (space !== 'account' || seenAtEntry === null || !model.historyLoaded) return;
-		const newest = newestShown(split.account, [...allWaiting, ...purchases.pending]);
+		const newest = newestShown(split.account, [
+			...allWaiting,
+			...purchases.pending,
+			...sales.pending,
+		]);
 		const seen = activityMarks.current?.seenThrough ?? null;
 		if (newest && isNewSince(newest, seen)) void activityMarks.seen(newest);
 	});
@@ -115,6 +137,7 @@
 	const accountCount = $derived(
 		allWaiting.length +
 			purchases.pending.length +
+			sales.pending.length +
 			split.account.filter((event) => eventIsNew(event)).length,
 	);
 
@@ -138,6 +161,8 @@
 					if (!entry.undone && entry.canDelete) await model.undo(entry, false);
 				}
 				return;
+			case 'listed':
+				return model.undo(event.entry, false);
 			case 'listingSold':
 				return model.undo(event.entry, true);
 			case 'listingReturned':
@@ -150,7 +175,9 @@
 		return model.undoOpening(event.opening.id);
 	}
 
-	const waitingCount = $derived(allWaiting.length + purchases.pending.length);
+	const waitingCount = $derived(
+		allWaiting.length + purchases.pending.length + sales.pending.length,
+	);
 </script>
 
 <div class="flex flex-wrap items-center justify-between gap-3 py-3">
@@ -174,7 +201,7 @@
 	<p class="py-10 text-center text-sm text-text-tertiary">Reading what has been recorded...</p>
 {:else if space === 'account'}
 	<div class="flex max-h-[36rem] flex-col gap-6 overflow-y-auto pb-2" data-testid="account-space">
-		{#if waitingCount > 0 || purchases.error}
+		{#if waitingCount > 0 || purchases.error || sales.error}
 			<section aria-label="Waiting for you" class="space-y-3">
 				<h2 class="flex items-baseline gap-2 text-sm font-medium tracking-tight text-text">
 					Waiting for you
@@ -184,6 +211,13 @@
 					model={purchases}
 					{assets}
 					onrecord={onrecordpurchase}
+					isNew={proposalIsNew}
+				/>
+				<SaleProposals
+					model={sales}
+					{loot}
+					{assets}
+					onrecord={onrecordsale}
 					isNew={proposalIsNew}
 				/>
 				<WaitingProposals

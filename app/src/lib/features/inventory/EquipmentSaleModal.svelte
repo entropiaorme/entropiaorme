@@ -8,17 +8,22 @@
 	import { isStack, perUnit, shareOf } from './assetPosition';
 	import HeldAmountField from './HeldAmountField.svelte';
 	import type { AmountMode } from './heldAmount';
+	import type { TradeStart } from '$lib/features/analytics/treeCuttingModel.svelte';
 
 	let {
 		item,
 		onlist,
 		ontrade,
 		oncancel,
+		start = null,
 	}: {
 		item: InventoryItem | null;
 		onlist: (input: EquipmentListingInput) => Promise<void>;
 		ontrade: (input: EquipmentTradeInput) => Promise<void>;
 		oncancel: () => void;
+		/** A trade to open with, filled in (one the account readings saw);
+		 * every figure stays editable. */
+		start?: TradeStart | null;
 	} = $props();
 
 	let method = $state<'auction' | 'trade'>('auction');
@@ -53,17 +58,18 @@
 	);
 
 	$effect(() => {
-		if (item && initialisedFor !== item.id) {
-			method = 'auction';
+		const opening = item ? `${item.id}|${start?.key ?? ''}` : null;
+		if (item && initialisedFor !== opening) {
+			method = start ? 'trade' : 'auction';
 			startingBid = 0;
 			buyout = null;
 			listingFee = 0.5;
-			soldFor = 0;
-			quantity = null;
+			soldFor = start?.soldFor ?? 0;
+			quantity = start?.quantity ?? null;
 			entry = 'units';
-			occurredAt = todayDate();
+			occurredAt = start?.soldAt ?? todayDate();
 			error = null;
-			initialisedFor = item.id;
+			initialisedFor = opening;
 			modalOpen = true;
 		}
 		if (!item) {

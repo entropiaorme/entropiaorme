@@ -125,6 +125,8 @@ export function eventSentence(event: MeasuredEvent): string {
 			return `Converted ${formatUnits(event.shrapnelUnits)} Shrapnel (${ped(event.shrapnel)}) into ${formatUnits(event.ammoUnits)} ammo (${ped(event.ammo)})`;
 		case 'listingSold':
 			return `Sold on the auction: ${quantityOf(event.item.name, event.units)}, ${ped(event.amount)}`;
+		case 'shrapnelPresumedConverted':
+			return `${formatUnits(event.shrapnelUnits)} Shrapnel (${ped(event.shrapnel)}) left and is taken as converted into ammo`;
 		case 'ammoToppedUp':
 			return `${event.name} topped up: what was fired in that span is the tracked figure`;
 	}

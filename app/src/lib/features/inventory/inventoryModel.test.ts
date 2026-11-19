@@ -101,7 +101,7 @@ beforeEach(() => {
 	]);
 	mocked.getInventoryListings.mockResolvedValue([]);
 	mocked.getInventoryHistory.mockResolvedValue([]);
-	mocked.commitInventorySaleDraft.mockResolvedValue(undefined);
+	mocked.commitInventorySaleDraft.mockResolvedValue('recorded-1');
 	mockedMarket.getMarketItemMarkups.mockResolvedValue({
 		nanocubeMarkupPct: 100.6,
 		items: [
@@ -348,6 +348,41 @@ describe('central inventory model', () => {
 		);
 	});
 
+	it('answers a trade it recorded though the inventory could not be read again', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		mocked.commitInventorySaleDraft.mockResolvedValue('trade-7');
+		mocked.getLootInventory.mockRejectedValueOnce(new Error('the database is busy'));
+
+		await expect(
+			model.sellLootByTrade({
+				itemName: 'Animal Oil Residue',
+				quantity: 5,
+				soldFor: 1,
+				soldAt: null,
+			}),
+		).resolves.toBe('trade-7');
+		expect(mocked.commitInventorySaleDraft).toHaveBeenCalledTimes(1);
+		expect(model.error).toBe(
+			'Recorded, but the inventory could not be read again: the database is busy',
+		);
+	});
+
+	it('still says why a trade could not be recorded', async () => {
+		const model = createInventoryModel();
+		await model.load();
+		mocked.commitInventorySaleDraft.mockRejectedValue(new Error('not held'));
+		await expect(
+			model.sellLootByTrade({
+				itemName: 'Animal Oil Residue',
+				quantity: 5,
+				soldFor: 1,
+				soldAt: null,
+			}),
+		).rejects.toThrow('not held');
+		expect(model.error).toMatch(/not held/);
+	});
+
 	it('offers an asset by its units at its average cost', async () => {
 		const model = createInventoryModel();
 		await model.load();
@@ -418,6 +453,7 @@ describe('central inventory model', () => {
 			itemised: false,
 			derivedFrom: [],
 			recordedFromAccount: null,
+			listedFromAccount: null,
 			reconciliationId: null,
 		});
 

@@ -41,8 +41,12 @@
 //!
 //! - Shrapnel that leaves beside a new ammo row of exactly what the Trade
 //!   Terminal pays for it was turned into ammo, credited as converted;
-//!   Shrapnel that leaves without that row is an unexplained departure,
-//!   and its ammo type's split is unsettled;
+//!   Shrapnel that leaves without that row is presumed converted all the
+//!   same when Universal Ammo arrived in the step or the PED Card did not
+//!   rise: what was fired in that step is then not known from the rows, and
+//!   the step is left out of the split as one the ammo was topped up in.
+//!   Only Shrapnel that left beside a Card rise no sale explains, with no
+//!   ammo arriving, is an unexplained departure that unsettles the split;
 //! - the PED Card is never a cost, and never decides one. Its change in a
 //!   step is read only for the uses that name it: what left may be a sale,
 //!   what arrived a purchase, and a repair costs within what its
@@ -75,9 +79,13 @@ use serde::{Deserialize, Serialize};
 
 use super::amount::{checked, count, Amount, Pec, MICRO_PER_PEC};
 use super::composite::{recognise, Claim, Opening, Repair, RepairCost, Settlement};
-use super::diff::{added_rows, canonical_rows, diff, exact_unit, MoveKind, Span, Step, StepSet};
+use super::diff::{
+    added_rows, canonical_rows, diff, exact_unit, MoveKind, NewRows, Span, Step, StepSet,
+};
 use super::reading::{Container, Holding, HoldingKey, Reading, Row};
-use super::roles::{Role, RoleBook, RoleSource, Stacking, SHRAPNEL, STRONGBOX_KEY, UNIVERSAL_AMMO};
+use super::roles::{
+    is_strongbox, Role, RoleBook, RoleSource, Stacking, SHRAPNEL, STRONGBOX_KEY, UNIVERSAL_AMMO,
+};
 use super::AccountError;
 
 /// How far before its start a session's opening reading may be taken.
@@ -112,7 +120,13 @@ pub fn ammo_for_shrapnel(units: i64) -> Result<i64, AccountError> {
 // Bumped to 6 when the PED Card stopped deciding whether what left a step
 // was used up or what arrived was loot, and a step Universal Ammo was
 // topped up in came to be left out of the ammo's split and listed.
-pub const MEASURE_VERSION: i64 = 6;
+// Bumped to 7 when Shrapnel came to be read as converted by an ammo row
+// that grew by exactly what the Trade Terminal pays, as well as by a row
+// of its own.
+// Bumped to 8 when Shrapnel leaving with no such row came to be presumed
+// converted, its step left out of the ammo's split, where it had left the
+// whole split unsettled.
+pub const MEASURE_VERSION: i64 = 8;
 
 /// A tracked session's span, unix seconds; no end while it runs.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -340,6 +354,19 @@ pub enum NotableEvent {
         key: HoldingKey,
         units: i64,
         amount: Amount,
+    },
+    /// Shrapnel left with no ammo row of exactly what it pays, and is
+    /// presumed converted: Universal Ammo arrived in the step, or the PED
+    /// Card did not rise. Its step is one the ammo was topped up in (an
+    /// [`NotableEvent::AmmoToppedUp`] beside this).
+    ShrapnelPresumedConverted {
+        between: Span,
+        /// The units that left, net of any that arrived in the step.
+        shrapnel_units: i64,
+        shrapnel: Amount,
+        /// The Universal Ammo in the step's new rows beyond what openings
+        /// and exact conversions paid.
+        ammo_arrived_units: i64,
     },
     /// Universal Ammo arrived with no Shrapnel conversion and no strongbox
     /// opening behind it: topped up. What was fired in this step is not in
@@ -928,6 +955,42 @@ pub(crate) struct Conversion {
     pub(crate) shrapnel: Amount,
     pub(crate) ammo_units: i64,
     pub(crate) ammo: Amount,
+    /// The ammo row the payout was stacked onto, as it stood before the
+    /// step and after it, when the payout has no row of its own.
+    pub(crate) stacked: Option<(HoldingKey, Row, Row)>,
+}
+
+/// A holding's after-rows with every conversion's payout stacked onto one
+/// of them set back in a row of its own, so the rows read as they would had
+/// nothing been stacked. `None` when no payout was stacked onto this
+/// holding.
+fn unstacked(
+    key: &HoldingKey,
+    after: &[Row],
+    conversions: &[Conversion],
+) -> Result<Option<Vec<Row>>, AccountError> {
+    let mut rows: Option<Vec<Row>> = None;
+    for conversion in conversions {
+        let Some((held, was, now)) = &conversion.stacked else {
+            continue;
+        };
+        if held != key {
+            continue;
+        }
+        let rows = rows.get_or_insert_with(|| after.to_vec());
+        let Some(at) = rows.iter().position(|row| row == now) else {
+            continue;
+        };
+        rows[at] = *was;
+        rows.push(Row {
+            quantity: conversion.ammo_units,
+            value: now.value.minus(was.value)?,
+        });
+    }
+    if let Some(rows) = rows.as_mut() {
+        rows.sort_unstable();
+    }
+    Ok(rows)
 }
 
 /// How the PED Card's change in a step is read.
@@ -1126,8 +1189,18 @@ impl Tally {
                     ..
                 } if book.role(&key.name) == Role::Ammo => {
                     let consumed = matches!(step, Step::Consumed { .. });
-                    let (new, vanished) =
-                        canonical_rows(rows_of(before.holding(key)), rows_of(after.holding(key)));
+                    let was = rows_of(before.holding(key));
+                    let now = rows_of(after.holding(key));
+                    // A payout stacked onto a row is read as its own row.
+                    let apart = unstacked(key, now, &conversions)?;
+                    let (new, vanished) = canonical_rows(was, apart.as_deref().unwrap_or(now));
+                    let apart_rows = match apart {
+                        Some(_) => {
+                            Some(NewRows::of(new.clone(), exact_unit(was.iter().chain(now)))?)
+                        }
+                        None => None,
+                    };
+                    let new_rows = apart_rows.as_ref().unwrap_or(new_rows);
                     let grew = vanished
                         .iter()
                         .any(|gone| new.iter().any(|row| row.quantity > gone.quantity));
@@ -1227,7 +1300,36 @@ impl Tally {
             checked(total.checked_add(conversion.ammo_units))
         })?;
         let converted = Amount::total(conversions.iter().map(|conversion| conversion.ammo))?;
-        if (converted_units != 0 || opening.is_some()) && !ammo_steps.contains_key(UNIVERSAL_AMMO) {
+        // Shrapnel that left with no ammo row of exactly what it pays is
+        // presumed converted all the same, unless the Card rose with no
+        // ammo arriving (a sale the Card may yet explain, or a hand-over).
+        // What it paid was fired from or stacked away within the step, so
+        // the step's burn is not known from the rows: it is read as a step
+        // the ammo was topped up in.
+        let ammo_arrived = ammo_steps
+            .get(UNIVERSAL_AMMO)
+            .is_some_and(|step| step.new_units > 0);
+        let card_rose = card.is_some_and(|(from, to)| to.0 > from.0);
+        let presumed_converted = opening.is_none()
+            && (ammo_arrived || !card_rose)
+            && departures
+                .iter()
+                .any(|departure| departure.leaving == Leaving::Shrapnel);
+        let mut presumed_shrapnel = (0i64, Amount::NONE);
+        if presumed_converted {
+            for departure in &departures {
+                if departure.leaving == Leaving::Shrapnel {
+                    presumed_shrapnel.0 =
+                        checked(presumed_shrapnel.0.checked_add(departure.units))?;
+                    presumed_shrapnel.1 = presumed_shrapnel.1.plus(departure.amount)?;
+                }
+            }
+            departures.retain(|departure| departure.leaving != Leaving::Shrapnel);
+        }
+        let mut presumed_ammo_arrived = 0i64;
+        if (converted_units != 0 || opening.is_some() || presumed_converted)
+            && !ammo_steps.contains_key(UNIVERSAL_AMMO)
+        {
             ammo_steps.insert(
                 UNIVERSAL_AMMO.to_string(),
                 AmmoStep {
@@ -1253,11 +1355,7 @@ impl Tally {
             || departures
                 .iter()
                 .any(|departure| departure.leaving == Leaving::Shrapnel);
-        let topped_up = opening.is_none()
-            && !shrapnel_left
-            && ammo_steps
-                .get(UNIVERSAL_AMMO)
-                .is_some_and(|step| step.new_units > 0);
+        let topped_up = presumed_converted || (opening.is_none() && !shrapnel_left && ammo_arrived);
         if topped_up {
             for (key, by) in step_decay {
                 let entry = self
@@ -1281,6 +1379,9 @@ impl Tally {
                 credited = credited.plus(converted)?;
             }
             let beyond = checked(step.new_units.checked_sub(credited_units))?;
+            if name == UNIVERSAL_AMMO && presumed_converted {
+                presumed_ammo_arrived = beyond.max(0);
+            }
             if beyond > 0 && step.grew && !topped_up {
                 uncertain_growth.push(name.clone());
             }
@@ -1444,6 +1545,15 @@ impl Tally {
             });
         }
 
+        if presumed_converted {
+            self.events.push(NotableEvent::ShrapnelPresumedConverted {
+                between,
+                shrapnel_units: presumed_shrapnel.0,
+                shrapnel: presumed_shrapnel.1,
+                ammo_arrived_units: presumed_ammo_arrived,
+            });
+        }
+
         // What is left of the arrivals was gained; ammo topped up never is.
         for arrival in arrivals.into_iter().filter(|arrival| !arrival.topped_up) {
             if arrival.appeared {
@@ -1558,23 +1668,30 @@ impl Tally {
 pub(crate) type ClaimedRows = Vec<(HoldingKey, Row)>;
 
 /// Shrapnel conversions in one step, read from the ammo row each pays: a
-/// new Universal Ammo row of exactly what the Trade Terminal gives. With
-/// them, the ammo rows they claim, which an opening in the same step never
-/// reads as its payout.
+/// new Universal Ammo row of exactly what the Trade Terminal gives, or,
+/// failing that, a row that grew by exactly that much (the payout stacked
+/// onto ammo already held, with nothing fired from that row in the step).
+/// A grown row is read only in a step that holds no opening, whose own
+/// payout it may be. With the conversions, the ammo rows they claim, which
+/// an opening in the same step never reads as its payout.
 pub(crate) fn conversions_of(
     set: &StepSet,
     before: &Reading,
     after: &Reading,
 ) -> Result<(ClaimedRows, Vec<Conversion>), AccountError> {
-    let mut ammo_arrived: Vec<(HoldingKey, Vec<Row>)> = Vec::new();
+    // Each ammo holding's rows that are new or changed, and the rows of it
+    // that are gone or were changed.
+    let mut ammo_arrived: Vec<(HoldingKey, Vec<Row>, Vec<Row>)> = Vec::new();
+    let mut beside_an_opening = false;
     for step in &set.steps {
         if let Step::Consumed { key, .. } | Step::Gained { key, .. } = step {
             if key.name == UNIVERSAL_AMMO {
-                ammo_arrived.push((
-                    key.clone(),
-                    added_rows(rows_of(before.holding(key)), rows_of(after.holding(key))),
-                ));
+                let (was, now) = (rows_of(before.holding(key)), rows_of(after.holding(key)));
+                ammo_arrived.push((key.clone(), added_rows(was, now), added_rows(now, was)));
             }
+        }
+        if let Step::Consumed { key, .. } | Step::Left { key, .. } = step {
+            beside_an_opening |= key.name == STRONGBOX_KEY || is_strongbox(&key.name);
         }
     }
     let ammo_unit = exact_unit(
@@ -1598,7 +1715,7 @@ pub(crate) fn conversions_of(
             continue;
         }
         let ammo_units = ammo_for_shrapnel(*units)?;
-        let row = ammo_arrived.iter_mut().find_map(|(ammo_key, rows)| {
+        let row = ammo_arrived.iter_mut().find_map(|(ammo_key, rows, _)| {
             let at = rows.iter().position(|row| row.quantity == ammo_units)?;
             Some((ammo_key.clone(), rows.remove(at)))
         });
@@ -1614,6 +1731,34 @@ pub(crate) fn conversions_of(
                 shrapnel: *amount,
                 ammo_units,
                 ammo,
+                stacked: None,
+            });
+            continue;
+        }
+        if beside_an_opening {
+            continue;
+        }
+        let grown = ammo_arrived.iter_mut().find_map(|(ammo_key, rows, gone)| {
+            let (at, from) = rows.iter().enumerate().find_map(|(at, row)| {
+                let from = gone
+                    .iter()
+                    .position(|was| row.quantity.checked_sub(was.quantity) == Some(ammo_units))?;
+                Some((at, from))
+            })?;
+            Some((ammo_key.clone(), gone.remove(from), rows.remove(at)))
+        });
+        if let Some((ammo_key, was, now)) = grown {
+            let ammo = match ammo_unit {
+                Some(unit) => Amount::exact_units(ammo_units, unit)?,
+                None => Amount::whole_pec(now.value.minus(was.value)?)?,
+            };
+            conversions.push(Conversion {
+                index,
+                shrapnel_units: *units,
+                shrapnel: *amount,
+                ammo_units,
+                ammo,
+                stacked: Some((ammo_key, was, now)),
             });
         }
     }
@@ -1865,16 +2010,6 @@ mod tests {
         );
         assert!(topped_up(&converted).is_empty());
         assert_eq!(settled(&converted.ammo[0]), (5_000, 0, 10_100));
-        // Shrapnel turned into ammo stacked onto the row being fired.
-        let stacked = measure_step(
-            (0, 0),
-            &[
-                ("Shrapnel", C, 10_000, 100),
-                ("Universal Ammo", C, 100_000, 1_000),
-            ],
-            &[("Universal Ammo", C, 105_100, 1_051)],
-        );
-        assert!(topped_up(&stacked).is_empty());
         // A strongbox opening paying out ammo.
         let opened = measure_step(
             (0, 0),
@@ -2106,18 +2241,50 @@ mod tests {
     }
 
     #[test]
-    fn shrapnel_without_its_ammo_row_is_unexplained_and_unsettles_the_ammo() {
-        // The ammo was stacked onto the row being fired: no row of 10100.
+    fn shrapnel_without_its_ammo_row_is_presumed_converted_and_its_step_left_out() {
+        // The ammo was stacked onto the row being fired: no row of 10100,
+        // and no row grown by it.
+        let stacked = &[("Universal Ammo", C, 105_100, 1_051)];
+        // More was fired than the Shrapnel paid: the row only shrank.
+        let outfired = &[("Universal Ammo", C, 95_000, 950)];
+        for after in [stacked.as_slice(), outfired.as_slice()] {
+            let measure = measure_step(
+                (1_000, 1_000),
+                &[
+                    ("Shrapnel", C, 10_000, 100),
+                    ("Universal Ammo", C, 100_000, 1_000),
+                ],
+                after,
+            );
+            assert!(measure.unexplained_departures.is_empty(), "{after:?}");
+            assert!(measure.other_consumption.is_empty());
+            assert!(measure.gained.is_empty(), "the ammo is not loot");
+            assert_eq!(topped_up(&measure).len(), 1, "the step is left out");
+            assert_eq!(settled(&measure.ammo[0]), (0, 0, 0));
+            assert!(measure.events.iter().any(|event| matches!(
+                event,
+                NotableEvent::ShrapnelPresumedConverted {
+                    shrapnel_units: 10_000,
+                    ..
+                }
+            )));
+        }
+    }
+
+    #[test]
+    fn shrapnel_leaving_beside_a_card_rise_with_no_ammo_arriving_stays_unexplained() {
+        // The Card rose by something other than the Shrapnel's TT, and no
+        // ammo arrived: handed over, perhaps. Nothing is presumed.
         let measure = measure_step(
-            (1_000, 1_000),
+            (1_000, 1_037),
             &[
                 ("Shrapnel", C, 10_000, 100),
                 ("Universal Ammo", C, 100_000, 1_000),
             ],
-            &[("Universal Ammo", C, 105_100, 1_051)],
+            &[("Universal Ammo", C, 95_000, 950)],
         );
         assert_eq!(measure.unexplained_departures.len(), 1);
-        assert!(measure.other_consumption.is_empty());
+        assert!(topped_up(&measure).is_empty());
         assert!(matches!(
             measure.ammo[0].split,
             AmmoSplit::Unsettled {
@@ -2125,10 +2292,51 @@ mod tests {
                 ..
             }
         ));
-        assert!(measure
-            .events
-            .iter()
-            .all(|event| !matches!(event, NotableEvent::ShrapnelConverted { .. })));
+    }
+
+    #[test]
+    fn shrapnel_beside_an_ammo_row_grown_by_what_it_pays_was_turned_into_ammo() {
+        // The ammo was stacked onto a row nothing was fired from: it grew by
+        // exactly the 10100 the Trade Terminal pays.
+        let measure = measure_step(
+            (1_000, 1_000),
+            &[
+                ("Shrapnel", C, 10_000, 100),
+                ("Universal Ammo", C, 100_000, 1_000),
+            ],
+            &[("Universal Ammo", C, 110_100, 1_101)],
+        );
+        assert!(measure.unexplained_departures.is_empty());
+        assert!(measure.other_consumption.is_empty());
+        assert!(measure.gained.is_empty(), "the ammo is not loot");
+        assert_eq!(measure.ammo[0].net_units, 10_100);
+        assert_eq!(settled(&measure.ammo[0]), (0, 0, 10_100));
+        let [NotableEvent::ShrapnelConverted {
+            shrapnel_units,
+            ammo_units,
+            ammo,
+            ..
+        }] = measure.events.as_slice()
+        else {
+            panic!("one conversion: {:?}", measure.events);
+        };
+        assert_eq!((*shrapnel_units, *ammo_units), (10_000, 10_100));
+        assert_eq!(*ammo, Amount::exact(1_010_000));
+        // Beside it, another row is fired from as ever.
+        let fired = measure_step(
+            (1_000, 1_000),
+            &[
+                ("Shrapnel", C, 10_000, 100),
+                ("Universal Ammo", C, 40_000, 400),
+                ("Universal Ammo", C, 100_000, 1_000),
+            ],
+            &[
+                ("Universal Ammo", C, 35_000, 350),
+                ("Universal Ammo", C, 110_100, 1_101),
+            ],
+        );
+        assert!(fired.unexplained_departures.is_empty());
+        assert_eq!(settled(&fired.ammo[0]), (5_000, 0, 10_100));
     }
 
     #[test]

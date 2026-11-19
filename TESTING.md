@@ -28,19 +28,15 @@ cd app/src-tauri
 cargo nextest run -p eo-wire -p eo-services -p eo-api
 ```
 
-or, from the repository root, the `just` recipe that wraps the same command:
-
-```sh
-just test-rust
-```
-
-To exercise the whole workspace, the Tauri shell included (needs the platform toolchain, so this is the Windows path):
+To exercise the whole workspace, the Tauri shell included (needs the Tauri build chain: the MSVC build tools on Windows, the WebKitGTK and GTK development libraries on Linux):
 
 ```sh
 cd app/src-tauri
 cargo nextest run --workspace
 cargo test --workspace --doc      # nextest does not run doctests; this leg keeps them covered
 ```
+
+From the repository root, `just test-rust` runs the whole-workspace nextest command.
 
 `cargo nextest` applies a committed per-test terminating timeout (`app/src-tauri/.config/nextest.toml`: a 60-second slow period, terminating after two, so a hard 120-second ceiling per test). A subset of the heavy substrate-composition tests stand up the full native spine and install the shared OS keyboard hook, whose attach/detach lifecycle can intermittently block in some headless contexts; the timeout kills and reports such a test rather than stalling the run. The ceiling sits well above any legitimate test (the heaviest, an OCR warm-engine composition, completes well under a minute) and far below the stalls a hung hook produces. CI invokes the workspace through nextest for the same reason.
 

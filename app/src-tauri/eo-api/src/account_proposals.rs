@@ -2,8 +2,8 @@
 //! asks for.
 //!
 //! A proposal is a guess: a strongbox opening, a listing sold, a listing
-//! returned, or a purchase at auction, seen between two readings. Nothing
-//! here records one.
+//! returned, a purchase, or a sale to another player, seen between two
+//! readings. Nothing here records one.
 //! The frontend reads a proposal and hands the player's confirmed result to
 //! the existing strongbox or listing command as a normal input; or the
 //! player dismisses it. Its certainty crosses the wire typed: whether an
@@ -51,6 +51,8 @@ pub enum AccountProposalKind {
     /// Something that arrived during a tracked session that no loot line,
     /// recorded reward, conversion or opening explains.
     Arrival,
+    /// One item that left for more than its TT outside every session.
+    Sale,
 }
 
 impl From<AccountProposalKind> for ProposalKind {
@@ -61,6 +63,7 @@ impl From<AccountProposalKind> for ProposalKind {
             AccountProposalKind::ListingReturned => ProposalKind::ListingReturned,
             AccountProposalKind::Purchase => ProposalKind::Purchase,
             AccountProposalKind::Arrival => ProposalKind::Arrival,
+            AccountProposalKind::Sale => ProposalKind::Sale,
         }
     }
 }
@@ -171,6 +174,24 @@ pub enum AccountProposalOutcome {
         bought_at_tt: bool,
         /// Where it arrived.
         arrived_in: AccountPlace,
+    },
+    /// One item left as the PED Card rose by more than its TT, outside
+    /// every tracked session: sold to another player, at the Card's rise.
+    /// Recorded by the player as a trade (of loot or of an asset), and
+    /// linked to that trade, never recorded on its own.
+    #[serde(rename_all = "camelCase")]
+    Sale {
+        /// The item, as the account site names it.
+        item_name: String,
+        units: i64,
+        /// Its TT, as the readings show it.
+        tt: MeasuredAmount,
+        /// The PED Card's rise.
+        received: MeasuredAmount,
+        /// What it fetched above its TT.
+        markup: MeasuredAmount,
+        /// Where it left from.
+        left_from: AccountPlace,
     },
 }
 
@@ -342,6 +363,14 @@ fn proposal(value: &Proposal) -> Option<AccountProposal> {
             tt: amount(arrival.amount),
             bought_at_tt: arrival.bought_at_tt,
             arrived_in: place(&arrival.key.container),
+        },
+        (Detail::Sale(sold), ProposalKind::Sale) => AccountProposalOutcome::Sale {
+            item_name: sold.key.name.clone(),
+            units: sold.units,
+            tt: amount(sold.amount),
+            received: card(sold.received),
+            markup: amount(sold.markup),
+            left_from: place(&sold.key.container),
         },
         _ => return None,
     };

@@ -4,16 +4,34 @@
 //! Every pattern closes exactly, on quantities and TT and never on markup:
 //!
 //! - **Shrapnel turned into Universal Ammo**: Shrapnel down, and a new ammo
-//!   row of exactly what the Trade Terminal pays for it (the measure's own
-//!   reading, [`super::measure::conversions_of`]).
+//!   row of exactly what the Trade Terminal pays for it, or a row grown by
+//!   exactly that much (the measure's own reading,
+//!   [`super::measure::conversions_of`]). Shrapnel that left with neither,
+//!   in a step Universal Ammo arrived in and that no sale or recycling
+//!   takes, is presumed converted ([`Recognised::shrapnel_presumed`]): it
+//!   closes nothing exactly, so whether to record it is the caller's to
+//!   judge.
 //! - **Recycling into Nanocubes**: items leave and Nanocubes arrive worth
 //!   the same TT, within a PEC for every row involved.
 //! - **A sale to the Trade Terminal**: items leave and the PED Card rises
 //!   by their TT, within a PEC for every row involved.
-//! - **A purchase at auction** ([`purchase`]): one item arrives and the Card
-//!   falls by more than its TT, with nothing else in the step but moves
-//!   between the player's own places. It is only ever proposed, and only
-//!   for a step outside every tracked session (the caller's to judge).
+//! - **A purchase** ([`purchase`]), at auction or from another player: one
+//!   item arrives and the Card falls by more than its TT, with nothing else
+//!   in the step but what is already explained exactly ([`beside_a_trade`]):
+//!   wear, moves between the player's own places, and arrivals the chat log
+//!   looted. It is only ever proposed, and only for a step outside every
+//!   tracked session (the caller's to judge).
+//! - **Boxes bought and opened in one step** ([`bought_and_opened`]):
+//!   keys leave, one zero-TT strongbox changes by less than the keys used
+//!   would open, and the Card falls. The boxes the keys opened beyond those
+//!   that left were bought first: the purchase is read at the Card's fall,
+//!   and the opening over the step as it would stand had the purchase come
+//!   first. Only ever proposed, like a purchase.
+//! - **A sale to another player** ([`sale_to_player`]): one item leaves and
+//!   the Card rises by more than its TT, beside nothing but what
+//!   [`beside_a_trade`] sets aside. A rise of exactly the TT is the Trade
+//!   Terminal's, recorded above, and never this. Only ever proposed, like a
+//!   purchase.
 //!
 //! What leaves the auction is a listing's outcome, and keys and strongboxes
 //! leaving are an opening's, both read elsewhere: neither is a candidate
@@ -43,11 +61,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::amount::{checked, count, Amount, Pec, MICRO_PER_PEC};
-use super::composite::{recognise, MAX_BALANCE_EVALUATIONS};
-use super::diff::{MoveKind, Step, StepSet};
-use super::measure::conversions_of;
-use super::reading::{Container, HoldingKey, Reading};
-use super::roles::{is_strongbox, STRONGBOX_KEY, UNIVERSAL_AMMO};
+use super::composite::{recognise, Settlement, MAX_BALANCE_EVALUATIONS};
+use super::diff::{diff, MoveKind, Step, StepSet};
+use super::measure::{conversion_rows, conversions_of};
+use super::reading::{Container, Holding, HoldingKey, Reading, Row};
+use super::roles::{is_strongbox, Stacking, SHRAPNEL, STRONGBOX_KEY, UNIVERSAL_AMMO};
 use super::AccountError;
 
 /// What the game's recycling turns items into.
@@ -73,6 +91,11 @@ pub struct ShrapnelConverted {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Recognised {
     pub shrapnel: Option<ShrapnelConverted>,
+    /// Units of Shrapnel that left with no ammo row of exactly what they
+    /// pay, in a step Universal Ammo arrived in beyond what the exact
+    /// conversions paid, and that no sale or recycling takes: presumed
+    /// converted. Never part of what makes a step whole.
+    pub shrapnel_presumed: Option<i64>,
     /// Recycled into Nanocubes, one entry for each item.
     pub recycled: Vec<ItemOut>,
     /// Sold to the Trade Terminal, one entry for each item.
@@ -368,6 +391,8 @@ pub fn recognise_step(
         recognised.sold = items(&candidates, |index| sold[index])?;
         recognised.recycled = items(&candidates, |index| recycled[index])?;
     }
+    recognised.shrapnel_presumed =
+        presumed_converted(set, &conversions, &candidates, &sold, &recycled)?;
     recognised.whole = accounts_for_everything(
         set,
         &conversions,
@@ -377,6 +402,48 @@ pub fn recognise_step(
         &recognised,
     )?;
     Ok(recognised)
+}
+
+/// The Shrapnel among the candidates neither sold nor recycled, when
+/// Universal Ammo arrived in the step beyond what the exact conversions
+/// paid: presumed converted, however much of the payout was fired or
+/// stacked away before the reading.
+fn presumed_converted(
+    set: &StepSet,
+    conversions: &[super::measure::Conversion],
+    candidates: &[Candidate],
+    sold: &[bool],
+    recycled: &[bool],
+) -> Result<Option<i64>, AccountError> {
+    let mut arrived: i64 = 0;
+    for step in &set.steps {
+        match step {
+            Step::Gained { key, units, .. }
+                if key.name == UNIVERSAL_AMMO && key.container != Container::Auction =>
+            {
+                arrived = checked(arrived.checked_add(*units))?;
+            }
+            Step::Consumed { key, units, .. }
+                if key.name == UNIVERSAL_AMMO && key.container != Container::Auction =>
+            {
+                arrived = checked(arrived.checked_sub(*units))?;
+            }
+            _ => {}
+        }
+    }
+    for conversion in conversions {
+        arrived = checked(arrived.checked_sub(conversion.ammo_units))?;
+    }
+    if arrived <= 0 {
+        return Ok(None);
+    }
+    let mut units: i64 = 0;
+    for (at, candidate) in candidates.iter().enumerate() {
+        if candidate.name == SHRAPNEL && !sold[at] && !recycled[at] {
+            units = checked(units.checked_add(candidate.units))?;
+        }
+    }
+    Ok((units > 0).then_some(units))
 }
 
 /// Whether the patterns recognised account for every change in the step:
@@ -428,12 +495,13 @@ fn accounts_for_everything(
     Ok(ammo_gained == ammo_paid)
 }
 
-/// An item that arrived for more than its TT: a purchase at auction, with
-/// its markup paid.
+/// An item that arrived for more than its TT: a purchase at auction or from
+/// another player, with its markup paid.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Purchase {
-    /// The item, as the account site names it, and where it arrived.
+    /// The item, as the account site names it, and where it arrived (where
+    /// the most of it did, when it arrived in more than one place).
     pub key: HoldingKey,
     pub units: i64,
     /// Its TT, as the readings show it.
@@ -444,54 +512,486 @@ pub struct Purchase {
     pub markup: Amount,
 }
 
-/// A purchase at auction in the step, when the step holds one and nothing
-/// else: exactly one item arriving, the Card falling by more than its TT
-/// beyond a PEC for every row of it, and otherwise only moves between the
-/// player's own places. Universal Ammo is never bought so. Pure: whether
-/// the step lies outside every tracked session is the caller's to judge.
-pub fn purchase(set: &StepSet) -> Result<Option<Purchase>, AccountError> {
-    let mut arrival: Option<(&HoldingKey, i64, Amount, usize)> = None;
-    let mut paid: Option<Pec> = None;
+/// How late the account site may show play: what the chat log looted up to
+/// this long before a step began may still land in that step, since the
+/// site showed it late to the reading the step began with.
+pub const LOOT_SHOWN_LATE_SECONDS: f64 = 120.0;
+
+/// What the chat log looted around a step, by item name: from
+/// [`LOOT_SHOWN_LATE_SECONDS`] before the step began to its end. The
+/// caller reads it; the readings never guess it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Looted {
+    /// Units on the loot lines still active: what explains an arrival.
+    pub active: BTreeMap<String, i64>,
+    /// Units on every loot line, deactivated or not: an item with any is
+    /// never the one traded. The cautious side, so it counts every line.
+    pub every: BTreeMap<String, i64>,
+}
+
+impl Looted {
+    /// Nothing looted.
+    pub fn new() -> Looted {
+        Looted::default()
+    }
+
+    /// Whether the active loot lines account for `units` of `name`.
+    fn explains(&self, name: &str, units: i64) -> bool {
+        self.active.get(name).is_some_and(|looted| *looted >= units)
+    }
+
+    /// Whether any loot line, active or not, names `name`.
+    fn any_of(&self, name: &str) -> bool {
+        self.every.get(name).is_some_and(|looted| *looted > 0)
+    }
+}
+
+/// What arrived, or left, under one name in a step, across its places.
+struct Flow<'a> {
+    /// Where the most of it arrived or left, and how many there.
+    key: &'a HoldingKey,
+    most: i64,
+    units: i64,
+    amount: Amount,
+    /// The rows it was read from: a PEC each the site may have hidden.
+    rows: usize,
+}
+
+fn add_flow<'a>(
+    flows: &mut BTreeMap<&'a str, Flow<'a>>,
+    key: &'a HoldingKey,
+    units: i64,
+    amount: Amount,
+    rows: usize,
+) -> Result<(), AccountError> {
+    match flows.get_mut(key.name.as_str()) {
+        Some(flow) => {
+            flow.units = checked(flow.units.checked_add(units))?;
+            flow.amount = flow.amount.plus(amount)?;
+            flow.rows += rows;
+            if units > flow.most {
+                flow.key = key;
+                flow.most = units;
+            }
+        }
+        None => {
+            flows.insert(
+                key.name.as_str(),
+                Flow {
+                    key,
+                    most: units,
+                    units,
+                    amount,
+                    rows,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// What a step holds beside a trade, once what is already explained
+/// exactly is set aside.
+struct Beside<'a> {
+    /// What arrived that the chat log does not explain, by name.
+    arrived: BTreeMap<&'a str, Flow<'a>>,
+    /// What left, by name.
+    left: BTreeMap<&'a str, Flow<'a>>,
+    /// The PED Card's balance before and after, when it moved.
+    card: Option<(Pec, Pec)>,
+}
+
+/// What the step holds beside a trade, once what is already explained
+/// exactly is set aside: wear (it never moves the Card), moves between the
+/// player's own places, and every arrival of an item the chat log's active
+/// loot lines in `looted` hold at least as many units of. An arrival only
+/// partly explained is kept, and so is everything else. `None` when the
+/// step holds something that refuses a trade's reading: a repair, a listing
+/// or a listing's outcome (their fee or proceeds move the Card), a change
+/// in Universal Ammo. What is left is the caller's to judge.
+///
+/// A known limit: an item looted inside the window and also bought in the
+/// step, in no more units than were looted, is set aside as loot; the
+/// purchase beside it is then never read as one (the readings cannot tell
+/// the two apart).
+fn beside_a_trade<'a>(
+    set: &'a StepSet,
+    looted: &Looted,
+) -> Result<Option<Beside<'a>>, AccountError> {
+    let mut beside = Beside {
+        arrived: BTreeMap::new(),
+        left: BTreeMap::new(),
+        card: None,
+    };
     for step in &set.steps {
-        let arrived = match step {
+        match step {
+            Step::Decayed { .. } => {}
+            Step::Moved { from, to, .. } if MoveKind::of(from, to) == MoveKind::Transfer => {}
+            Step::BalanceChanged { from, to } => beside.card = Some((*from, *to)),
+            Step::Gained { key, .. }
+            | Step::Appeared { key, .. }
+            | Step::Consumed { key, .. }
+            | Step::Left { key, .. }
+                if key.name == UNIVERSAL_AMMO || key.container == Container::Auction =>
+            {
+                return Ok(None)
+            }
             Step::Gained {
                 key,
                 units,
                 amount,
                 rows_touched,
                 ..
-            } => (key, *units, *amount, (*rows_touched).max(1)),
-            Step::Appeared { key, units, value } => (key, *units, *value, 1),
-            Step::BalanceChanged { from, to } if to.0 < from.0 => {
-                paid = Some(from.minus(*to)?);
-                continue;
+            } => add_flow(
+                &mut beside.arrived,
+                key,
+                *units,
+                *amount,
+                (*rows_touched).max(1),
+            )?,
+            Step::Appeared { key, units, value } => {
+                add_flow(&mut beside.arrived, key, *units, *value, 1)?
             }
-            Step::Moved { from, to, .. } if MoveKind::of(from, to) == MoveKind::Transfer => {
-                continue
-            }
-            _ => return Ok(None),
-        };
-        if arrival.replace(arrived).is_some() {
-            return Ok(None);
+            Step::Consumed {
+                key,
+                units,
+                amount,
+                rows_touched,
+                ..
+            } => add_flow(
+                &mut beside.left,
+                key,
+                *units,
+                *amount,
+                (*rows_touched).max(1),
+            )?,
+            Step::Left { key, units, value } => add_flow(&mut beside.left, key, *units, *value, 1)?,
+            Step::Repaired { .. } | Step::Moved { .. } => return Ok(None),
         }
     }
-    let (Some((key, units, amount, rows)), Some(paid)) = (arrival, paid) else {
+    beside
+        .arrived
+        .retain(|name, flow| !looted.explains(name, flow.units));
+    Ok(Some(beside))
+}
+
+/// Whether the Card's move of `card` micro-PED is more than `flow`'s TT
+/// beyond a PEC for every row of it.
+fn beyond_its_tt(card: Amount, flow: &Flow) -> Result<bool, AccountError> {
+    let tolerance = checked(count(flow.rows)?.checked_mul(MICRO_PER_PEC))?;
+    let beyond = checked(flow.amount.micro_ped().checked_add(tolerance))?;
+    Ok(card.micro_ped() > beyond)
+}
+
+/// A purchase in the step, at auction or from another player, when the
+/// step holds one and nothing else that is not already explained
+/// ([`beside_a_trade`]): one item name arriving (in any number of rows and
+/// places: several trades of one item are one purchase), nothing leaving,
+/// and the Card falling by more than its TT beyond a PEC for every row of
+/// it. More than one name arriving has no one price, and an item any loot
+/// line in `looted` names (active or not) is never bought so.
+/// Universal Ammo is never bought so. Pure: whether the step lies outside
+/// every tracked session is the caller's to judge.
+pub fn purchase(set: &StepSet, looted: &Looted) -> Result<Option<Purchase>, AccountError> {
+    let Some(beside) = beside_a_trade(set, looted)? else {
         return Ok(None);
     };
-    if key.name == UNIVERSAL_AMMO {
+    let Some((from, to)) = beside.card.filter(|(from, to)| to.0 < from.0) else {
+        return Ok(None);
+    };
+    if !beside.left.is_empty() {
         return Ok(None);
     }
+    let mut arrived = beside.arrived.into_values();
+    let (Some(flow), None) = (arrived.next(), arrived.next()) else {
+        return Ok(None);
+    };
+    if looted.any_of(&flow.key.name) {
+        return Ok(None);
+    }
+    let paid = from.minus(to)?;
     let card = Amount::whole_pec(paid)?;
-    let tolerance = checked(count(rows)?.checked_mul(MICRO_PER_PEC))?;
-    let beyond = checked(amount.micro_ped().checked_add(tolerance))?;
-    if card.micro_ped() <= beyond {
+    if !beyond_its_tt(card, &flow)? {
         return Ok(None);
     }
     Ok(Some(Purchase {
-        key: key.clone(),
-        units,
-        amount,
+        key: flow.key.clone(),
+        units: flow.units,
+        amount: flow.amount,
         paid,
-        markup: card.minus(amount)?,
+        markup: card.minus(flow.amount)?,
+    }))
+}
+
+/// How many keys one strongbox takes to open: one, as the opening reading
+/// settles only keys and boxes leaving in the same count.
+pub const KEYS_PER_BOX: i64 = 1;
+
+/// Strongboxes bought and opened in one step.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoughtAndOpened {
+    /// The boxes bought, at the Card's fall.
+    pub purchase: Purchase,
+    /// How many boxes the keys used opened.
+    pub opened: i64,
+    /// The reading the step began with, as it would stand had the purchase
+    /// come first: the boxes bought held beside what was, as a row of their
+    /// own, and the Card already down by what they cost. The opening is
+    /// read from it.
+    pub before: Reading,
+}
+
+/// Boxes bought and opened in one step, read when the step holds only
+/// that and what the opening produced: `Strongbox Key` leaving, exactly one
+/// zero-TT strongbox changing in one place by less than the keys used open
+/// ([`KEYS_PER_BOX`]) would take away, the Card falling, and otherwise only
+/// wear, moves between the player's own places, and arrivals. Opened: the
+/// keys used over [`KEYS_PER_BOX`]. Bought: the box's change plus the boxes
+/// opened, at the Card's fall.
+///
+/// The opening is then read, by the one opening reading, over the step as
+/// it would stand had the purchase come first (`stacking` reads its items
+/// as the step's own diff does), and both stand only when that opening
+/// settled on those boxes and keys and explains the rest of the step:
+/// every arrival but the boxes bought is its ammo payout, one of its
+/// contents or possible contents, or loot the chat log's active lines in
+/// `looted` explain, and no more Universal Ammo arrived than it paid. An
+/// arrival left unexplained (another purchase, ammo bought) would put its
+/// price on the boxes, so it refuses both.
+///
+/// Anything else refuses it too: a second box changing (or the box in two
+/// places), keys arriving, a repair, a listing or what leaves the auction,
+/// Universal Ammo or any other stack used up, the Card rising or still or
+/// falling by no more than the PEC a row the site may hide, and a box any
+/// loot line in `looted` names. A step in which at least as many boxes left
+/// as the keys open is an ordinary opening, never this. Nor is a step with
+/// as many boxes bought as opened: the box's count did not change, so its
+/// name is not in the step to be read. Pure: whether the step lies outside
+/// every tracked session is the caller's to judge.
+pub fn bought_and_opened(
+    set: &StepSet,
+    before: &Reading,
+    after: &Reading,
+    stacking: &dyn Fn(&str) -> Stacking,
+    looted: &Looted,
+) -> Result<Option<BoughtAndOpened>, AccountError> {
+    let mut keys_used: i64 = 0;
+    // The one box that changed: where, by how much, and from how many rows.
+    let mut boxes: Option<(&HoldingKey, i64, usize)> = None;
+    let mut paid: Option<Pec> = None;
+    for step in &set.steps {
+        match step {
+            Step::Decayed { .. } => {}
+            Step::Moved { from, to, .. } if MoveKind::of(from, to) == MoveKind::Transfer => {}
+            Step::BalanceChanged { from, to } if to.0 < from.0 => paid = Some(from.minus(*to)?),
+            Step::Gained { key, .. }
+            | Step::Appeared { key, .. }
+            | Step::Consumed { key, .. }
+            | Step::Left { key, .. }
+                if key.container == Container::Auction =>
+            {
+                return Ok(None)
+            }
+            Step::Consumed { key, units, .. } if key.name == STRONGBOX_KEY => {
+                keys_used = checked(keys_used.checked_add(*units))?;
+            }
+            Step::Gained {
+                key,
+                units,
+                amount,
+                rows_touched,
+                ..
+            } if is_strongbox(&key.name) => {
+                if amount.micro_ped() != 0 || boxes.replace((key, *units, *rows_touched)).is_some()
+                {
+                    return Ok(None);
+                }
+            }
+            Step::Consumed {
+                key,
+                units,
+                amount,
+                rows_touched,
+                ..
+            } if is_strongbox(&key.name) => {
+                let change = checked(units.checked_neg())?;
+                if amount.micro_ped() != 0 || boxes.replace((key, change, *rows_touched)).is_some()
+                {
+                    return Ok(None);
+                }
+            }
+            Step::Gained { key, .. } | Step::Appeared { key, .. }
+                if key.name == STRONGBOX_KEY || is_strongbox(&key.name) =>
+            {
+                return Ok(None)
+            }
+            // The opening's payout or contents, or loot: weighed below.
+            Step::Gained { .. } | Step::Appeared { .. } => {}
+            _ => return Ok(None),
+        }
+    }
+    let (Some((key, change, rows)), Some(paid)) = (boxes, paid) else {
+        return Ok(None);
+    };
+    // Keys that open no whole number of boxes are no opening of these.
+    let opened = checked(keys_used.checked_div(KEYS_PER_BOX))?;
+    if keys_used <= 0 || opened.checked_mul(KEYS_PER_BOX) != Some(keys_used) {
+        return Ok(None);
+    }
+    let bought = checked(change.checked_add(opened))?;
+    if bought <= 0 || looted.any_of(&key.name) {
+        return Ok(None);
+    }
+    let card = Amount::whole_pec(paid)?;
+    let flow = Flow {
+        key,
+        most: bought,
+        units: bought,
+        amount: Amount::NONE,
+        rows: rows.max(1),
+    };
+    if !beyond_its_tt(card, &flow)? {
+        return Ok(None);
+    }
+    let mut holdings = before.holdings().clone();
+    let mut box_rows: Vec<Row> = holdings
+        .get(key)
+        .map(|holding| holding.rows().to_vec())
+        .unwrap_or_default();
+    box_rows.push(Row {
+        quantity: bought,
+        value: Pec::ZERO,
+    });
+    holdings.insert(key.clone(), Holding::new(box_rows)?);
+    let rebuilt = Reading::new(before.taken_at(), before.balance().minus(paid)?, holdings)?;
+    if !opening_explains_the_rest(
+        &rebuilt, after, stacking, &key.name, opened, keys_used, looted,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some(BoughtAndOpened {
+        purchase: Purchase {
+            key: key.clone(),
+            units: bought,
+            amount: Amount::NONE,
+            paid,
+            markup: card,
+        },
+        opened,
+        before: rebuilt,
+    }))
+}
+
+/// Whether the step from `rebuilt` to `after` holds an opening of `opened`
+/// of `box_name` with `keys_used` keys that settled, and explains every
+/// arrival in it: its ammo payout and no more Universal Ammo, its contents
+/// and possible contents, and loot the active lines in `looted` account
+/// for.
+fn opening_explains_the_rest(
+    rebuilt: &Reading,
+    after: &Reading,
+    stacking: &dyn Fn(&str) -> Stacking,
+    box_name: &str,
+    opened: i64,
+    keys_used: i64,
+    looted: &Looted,
+) -> Result<bool, AccountError> {
+    let set = diff(rebuilt, after, stacking)?;
+    let reserved = conversion_rows(&set, rebuilt, after)?;
+    let composites = recognise(&set, rebuilt, after, &reserved)?;
+    let Some(opening) = composites.opening else {
+        return Ok(false);
+    };
+    let one_box =
+        matches!(opening.boxes.as_slice(), [only] if only.name == box_name && only.count == opened);
+    if opening.settlement != Settlement::Settled || !one_box || opening.keys_used != keys_used {
+        return Ok(false);
+    }
+    let mut ammo_arrived: i64 = 0;
+    let mut unclaimed: BTreeMap<&str, i64> = BTreeMap::new();
+    for (index, step) in set.steps.iter().enumerate() {
+        let (key, units) = match step {
+            Step::Gained { key, units, .. } | Step::Appeared { key, units, .. } => (key, *units),
+            _ => continue,
+        };
+        if key.name == UNIVERSAL_AMMO {
+            ammo_arrived = checked(ammo_arrived.checked_add(units))?;
+        } else if !composites.claims.contains_key(&index) {
+            let entry = unclaimed.entry(key.name.as_str()).or_insert(0);
+            *entry = checked(entry.checked_add(units))?;
+        }
+    }
+    Ok(ammo_arrived == opening.ammo_units
+        && unclaimed
+            .iter()
+            .all(|(name, units)| looted.explains(name, *units)))
+}
+
+/// An item that left for more than its TT: a sale to another player, with
+/// the markup it fetched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaleToPlayer {
+    /// The item, as the account site names it, and where it left from
+    /// (where the most of it did, when it left more than one place).
+    pub key: HoldingKey,
+    pub units: i64,
+    /// Its TT, as the readings show it.
+    pub amount: Amount,
+    /// The PED Card's rise.
+    pub received: Pec,
+    /// What it fetched above its TT: the Card's rise less its TT.
+    pub markup: Amount,
+}
+
+/// A sale to another player in the step, when the step holds one and
+/// nothing else that is not already explained ([`beside_a_trade`]): one
+/// item name leaving (in any number of rows and places), nothing arriving,
+/// and the Card rising by more than its TT beyond a PEC for every row of
+/// it. A rise within that is the Trade Terminal's sale, read by
+/// [`recognise_step`] and never this. More than one name leaving has no
+/// one price. Never an item any loot line in `looted` names, active or not
+/// (loot landing on the stack it left from hides how much left), nor beside a
+/// strongbox opening (keys leaving alone are no opening, and may be sold
+/// so). Universal Ammo and what leaves the auction never leave so. Pure:
+/// whether the step lies outside every tracked session is the caller's to
+/// judge.
+pub fn sale_to_player(
+    set: &StepSet,
+    before: &Reading,
+    after: &Reading,
+    looted: &Looted,
+) -> Result<Option<SaleToPlayer>, AccountError> {
+    let Some(beside) = beside_a_trade(set, looted)? else {
+        return Ok(None);
+    };
+    let Some((from, to)) = beside.card.filter(|(from, to)| to.0 > from.0) else {
+        return Ok(None);
+    };
+    if !beside.arrived.is_empty() {
+        return Ok(None);
+    }
+    let mut left = beside.left.into_values();
+    let (Some(flow), None) = (left.next(), left.next()) else {
+        return Ok(None);
+    };
+    if looted.any_of(&flow.key.name) {
+        return Ok(None);
+    }
+    let reserved = conversion_rows(set, before, after)?;
+    if recognise(set, before, after, &reserved)?.opening.is_some() {
+        return Ok(None);
+    }
+    let received = to.minus(from)?;
+    let card = Amount::whole_pec(received)?;
+    if !beyond_its_tt(card, &flow)? {
+        return Ok(None);
+    }
+    Ok(Some(SaleToPlayer {
+        key: flow.key.clone(),
+        units: flow.units,
+        amount: flow.amount,
+        received,
+        markup: card.minus(flow.amount)?,
     }))
 }

@@ -14,7 +14,7 @@ It is referenced from `../bundle.wxs` as
 Run `build.ps1` (from anywhere): it restores the NuGet inputs below into
 `./.build` (gitignored), compiles with the MSVC x86 cross toolset, writes
 `../bafunctions.dll`, and verifies the output is x86. `scripts/build-installer.ps1`
-and the release pipeline call it before the Burn bundle build. The rest of this
+calls it before the Burn bundle build. The rest of this
 section documents what the script does.
 
 The output **must be x86**: the Burn BA host is x86 (the universal engine), even
@@ -78,6 +78,6 @@ When bumping `WixVersion` (the NuGets and the vendored sources move together):
 
 The DLL is gitignored and built from source by `build.ps1` (verifies and restores
 the two NuGets, compiles the vendored `wixstdfn` sources alongside
-`bafunctions.cpp`), which the release pipeline runs before the Burn bundle build.
+`bafunctions.cpp`), which `scripts/build-installer.ps1` runs before the Burn bundle build.
 The window caption is hard-coded (`EntropiaOrme Setup`); if the bundle name ever
 changes, update the `FindWindowW` call in `bafunctions.cpp`.

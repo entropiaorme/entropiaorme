@@ -493,7 +493,7 @@ fn proposed(conn: &rusqlite::Connection) -> Vec<String> {
         .into_iter()
         .filter_map(|proposal| match proposal.detail {
             Detail::Listing(listing) => Some(listing.listing_id),
-            Detail::Opening(_) | Detail::Purchase(_) | Detail::Arrival(_) => None,
+            Detail::Opening(_) | Detail::Purchase(_) | Detail::Arrival(_) | Detail::Sale(_) => None,
         })
         .collect()
 }
@@ -638,7 +638,7 @@ fn open_counts(conn: &rusqlite::Connection) -> Vec<i64> {
         .iter()
         .map(|proposal| match &proposal.detail {
             Detail::Opening(opening) => opening.boxes[0].count,
-            Detail::Listing(_) | Detail::Purchase(_) | Detail::Arrival(_) => 0,
+            Detail::Listing(_) | Detail::Purchase(_) | Detail::Arrival(_) | Detail::Sale(_) => 0,
         })
         .collect()
 }
@@ -1127,7 +1127,7 @@ fn purchases(conn: &rusqlite::Connection) -> Vec<super::recognition::Purchase> {
         .into_iter()
         .filter_map(|proposal| match proposal.detail {
             Detail::Purchase(purchase) => Some(purchase),
-            Detail::Opening(_) | Detail::Listing(_) | Detail::Arrival(_) => None,
+            Detail::Opening(_) | Detail::Listing(_) | Detail::Arrival(_) | Detail::Sale(_) => None,
         })
         .collect()
 }
@@ -1202,6 +1202,555 @@ fn an_item_a_session_looted_inside_the_step_is_never_a_purchase() {
     stored(&mut conn, &bought());
     examine_all(&mut conn).unwrap();
     assert!(purchases(&conn).is_empty());
+}
+
+#[test]
+fn an_item_a_session_looted_some_of_just_before_the_step_is_never_a_purchase() {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('earlier', -500.0, -10.0, 0)",
+        [],
+    )
+    .unwrap();
+    hunted(&conn, "earlier", -30.0, &[("Garcen Grease", 4)]);
+    stored(&mut conn, &bought());
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+}
+
+// ── A sale to another player ────────────────────────────────────────
+
+/// Ten Garcen Grease (2 PED of TT) leaving as the Card rises by `rise` PEC.
+fn sold_for(rise: i64) -> Vec<Reading> {
+    vec![
+        reading(0.0, 5_000, &[("Garcen Grease", C, 10, 200)]),
+        reading(60.0, 5_000 + rise, &[]),
+    ]
+}
+
+fn sales(conn: &rusqlite::Connection) -> Vec<super::recognition::SaleToPlayer> {
+    pending(conn, Some(ProposalKind::Sale))
+        .unwrap()
+        .into_iter()
+        .filter_map(|proposal| match proposal.detail {
+            Detail::Sale(sale) => Some(sale),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_sale_to_a_player_outside_every_session_is_proposed_at_the_card_s_rise() {
+    let mut conn = migrated_in_memory().unwrap();
+    stored(&mut conn, &sold_for(1_200));
+    examine_all(&mut conn).unwrap();
+    let found = sales(&conn);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].key.name, "Garcen Grease");
+    assert_eq!(found[0].units, 10);
+    assert_eq!(found[0].received, Pec(1_200));
+    assert_eq!(found[0].markup.micro_ped(), 10 * PED);
+    assert!(purchases(&conn).is_empty());
+}
+
+#[test]
+fn a_sale_at_its_tt_is_the_trade_terminal_s_and_never_proposed() {
+    let mut conn = migrated_in_memory().unwrap();
+    stored(&mut conn, &sold_for(200));
+    examine_all(&mut conn).unwrap();
+    assert!(sales(&conn).is_empty());
+}
+
+#[test]
+fn a_sale_is_never_proposed_in_a_step_a_tracked_session_overlaps_or_owns() {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('live', 30.0, NULL, 1)",
+        [],
+    )
+    .unwrap();
+    stored(&mut conn, &sold_for(1_200));
+    examine_all(&mut conn).unwrap();
+    assert!(sales(&conn).is_empty());
+
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('live', 1000.0, NULL, 1)",
+        [],
+    )
+    .unwrap();
+    let readings = sold_for(1_200);
+    record_reading(&mut conn, &readings[0], Purpose::Session, Some("live")).unwrap();
+    record_reading(&mut conn, &readings[1], Purpose::Session, Some("live")).unwrap();
+    examine_all(&mut conn).unwrap();
+    assert!(sales(&conn).is_empty());
+}
+
+#[test]
+fn an_item_a_session_looted_around_the_step_is_never_sold_so() {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('earlier', -500.0, -10.0, 0)",
+        [],
+    )
+    .unwrap();
+    hunted(&conn, "earlier", -30.0, &[("Garcen Grease", 1)]);
+    stored(&mut conn, &sold_for(1_200));
+    examine_all(&mut conn).unwrap();
+    assert!(sales(&conn).is_empty());
+}
+
+/// A trade of loot recorded as `id`, standing or taken back.
+fn private_sale(conn: &rusqlite::Connection, id: &str, undone: bool) {
+    private_sale_of(conn, id, "Garcen Grease", undone);
+}
+
+fn private_sale_of(conn: &rusqlite::Connection, id: &str, item: &str, undone: bool) {
+    conn.execute(
+        "INSERT INTO private_sales (id, item_name, profession, quantity, attributed_qty, \
+             unattributed_qty, tt_value, attributed_tt, final_price, sold_at, created_at, \
+             undone_at) \
+         VALUES (?1, ?2, 'inventory', 10, 0, 10, 2.0, 0, 12.0, '1970-01-01', 1.0, ?3)",
+        rusqlite::params![id, item, undone.then_some("1970-01-02")],
+    )
+    .unwrap();
+}
+
+/// A sold listing of an asset recorded as `id`, through `channel`.
+fn asset_sold(conn: &rusqlite::Connection, id: &str, channel: &str) {
+    asset_sold_of(conn, id, "Garcen Grease", channel);
+}
+
+fn asset_sold_of(conn: &rusqlite::Connection, id: &str, item: &str, channel: &str) {
+    conn.execute(
+        "INSERT INTO auction_listings (id, item_name, quantity, tt_value, starting_bid, \
+             listed_at, status, final_price, created_at, updated_at, channel) \
+         VALUES (?1, ?2, 10, 2.0, 12.0, '1970-01-01', 'sold', 12.0, 1, 1, ?3)",
+        rusqlite::params![id, item, channel],
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_sale_is_settled_by_the_trade_it_became_and_opens_again_if_that_is_taken_back() {
+    let mut conn = migrated_in_memory().unwrap();
+    stored(&mut conn, &sold_for(1_200));
+    examine_all(&mut conn).unwrap();
+    let id = pending(&conn, Some(ProposalKind::Sale)).unwrap()[0].id;
+    let refused = Decided::Refused("that record does not stand as the outcome the proposal is of");
+    private_sale(&conn, "undone", true);
+    asset_sold(&conn, "at-auction", "auction");
+    private_sale_of(&conn, "other-loot", "Iron Stone", false);
+    asset_sold_of(&conn, "other-asset", "Iron Stone", "trade");
+    // Neither a trade taken back, an auction sale, nor a trade of another
+    // item is what it became.
+    assert_eq!(link(&mut conn, &[id], "undone", 2.0).unwrap(), refused);
+    assert_eq!(link(&mut conn, &[id], "at-auction", 2.0).unwrap(), refused);
+    assert_eq!(link(&mut conn, &[id], "other-loot", 2.0).unwrap(), refused);
+    assert_eq!(link(&mut conn, &[id], "other-asset", 2.0).unwrap(), refused);
+    // A claim left unlinked speaks of sales.
+    assert_eq!(claim(&mut conn, &[id], &[], 2.0).unwrap(), Decided::Done);
+    assert_eq!(
+        claim(&mut conn, &[id], &[], 2.0).unwrap(),
+        Decided::Refused("that sale may already be recorded; check your history first")
+    );
+    private_sale(&conn, "trade", false);
+    assert_eq!(link(&mut conn, &[id], "trade", 2.0).unwrap(), Decided::Done);
+    assert!(sales(&conn).is_empty());
+    assert_eq!(
+        dismiss(&mut conn, id, 3.0).unwrap(),
+        Decided::Refused("that proposal is recorded")
+    );
+    // Taken back, it is offered again.
+    conn.execute(
+        "UPDATE private_sales SET undone_at = '1970-01-02' WHERE id = 'trade'",
+        [],
+    )
+    .unwrap();
+    assert_eq!(sales(&conn).len(), 1);
+    // An asset's trade settles it as well, its name read trimmed and in any
+    // case.
+    asset_sold_of(&conn, "asset-trade", "  garcen GREASE ", "trade");
+    assert_eq!(
+        link(&mut conn, &[id], "asset-trade", 4.0).unwrap(),
+        Decided::Done
+    );
+    assert!(sales(&conn).is_empty());
+}
+
+// ── Boxes bought and opened in one step ─────────────────────────────
+
+/// The readings of 2026-11-18 either side of 39 Unreal Strongboxes bought
+/// at 8.00 PED and 6 of them opened: the Card fell by 312.00 PED, the boxes
+/// rose by 33 (no TT), 6 keys left, and six new ammo rows of a key's TT
+/// each arrived beside the row already held. The second reading was a
+/// strongbox run's, outside every session.
+fn boxes_bought_and_opened() -> (Reading, Reading) {
+    let ammo = ("Universal Ammo", C, 6_167_301, 61_673);
+    let before = reading(
+        1_795_022_334.169_797,
+        217_872,
+        &[
+            ("Unreal Strongbox", C, 572, 0),
+            ("Strongbox Key", C, 68, 68_000),
+            ammo.clone(),
+        ],
+    );
+    let mut rows = vec![
+        ("Unreal Strongbox", C, 605, 0),
+        ("Strongbox Key", C, 62, 62_000),
+        ammo,
+    ];
+    rows.extend(std::iter::repeat_n(
+        ("Universal Ammo", C, 100_000, 1_000),
+        6,
+    ));
+    (before, reading(1_795_022_534.879_235, 186_672, &rows))
+}
+
+fn openings(conn: &rusqlite::Connection) -> Vec<super::proposals::OpeningProposal> {
+    pending(conn, Some(ProposalKind::Opening))
+        .unwrap()
+        .into_iter()
+        .filter_map(|proposal| match proposal.detail {
+            Detail::Opening(opening) => Some(opening),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn boxes_bought_and_opened_in_one_step_are_proposed_as_the_purchase_and_the_opening() {
+    let mut conn = migrated_in_memory().unwrap();
+    let (before, after) = boxes_bought_and_opened();
+    record_reading(&mut conn, &before, Purpose::Ambient, None).unwrap();
+    record_reading(&mut conn, &after, Purpose::Run, None).unwrap();
+    examine_all(&mut conn).unwrap();
+
+    let bought = purchases(&conn);
+    assert_eq!(bought.len(), 1);
+    assert_eq!(bought[0].key.name, "Unreal Strongbox");
+    assert_eq!(bought[0].units, 39);
+    assert_eq!(bought[0].amount.micro_ped(), 0);
+    assert_eq!(bought[0].paid, Pec(31_200));
+    assert_eq!(bought[0].markup.micro_ped(), 312 * PED);
+
+    let opened = openings(&conn);
+    assert_eq!(opened.len(), 1);
+    assert_eq!(opened[0].boxes.len(), 1);
+    assert_eq!(opened[0].boxes[0].name, "Unreal Strongbox");
+    assert_eq!(opened[0].boxes[0].count, 6);
+    assert_eq!(opened[0].keys_used, 6);
+    assert_eq!(opened[0].settlement, Settlement::Settled);
+    assert_eq!(opened[0].doubt, None);
+    assert_eq!(
+        opened[0]
+            .ammo
+            .map(|ammo| (ammo.units, ammo.amount.micro_ped())),
+        Some((600_000, 60 * PED))
+    );
+    assert_eq!(opened[0].paid_ammo_alone, Some(6));
+    assert!(opened[0].contents.is_empty());
+}
+
+#[test]
+fn boxes_bought_and_opened_inside_a_session_are_neither_read() {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('live', 1795022400.0, NULL, 1)",
+        [],
+    )
+    .unwrap();
+    let (before, after) = boxes_bought_and_opened();
+    record_reading(&mut conn, &before, Purpose::Ambient, None).unwrap();
+    record_reading(&mut conn, &after, Purpose::Run, None).unwrap();
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+    assert!(openings(&conn).is_empty());
+}
+
+/// The real step with `extra` arriving beside it.
+fn boxes_bought_and_opened_beside(extra: (&str, Container, i64, i64)) -> (Reading, Reading) {
+    let (before, after) = boxes_bought_and_opened();
+    let mut rows: Vec<(&str, Container, i64, i64)> = vec![
+        ("Unreal Strongbox", C, 605, 0),
+        ("Strongbox Key", C, 62, 62_000),
+        ("Universal Ammo", C, 6_167_301, 61_673),
+        extra,
+    ];
+    rows.extend(std::iter::repeat_n(
+        ("Universal Ammo", C, 100_000, 1_000),
+        6,
+    ));
+    (before, reading(after.taken_at(), 186_672, &rows))
+}
+
+#[test]
+fn boxes_bought_and_opened_beside_what_the_opening_does_not_explain_are_neither_read() {
+    for extra in [
+        ("Animal Oil Residue", C, 100, 100),
+        ("Universal Ammo", C, 500_000, 5_000),
+    ] {
+        let mut conn = migrated_in_memory().unwrap();
+        let (before, after) = boxes_bought_and_opened_beside(extra.clone());
+        record_reading(&mut conn, &before, Purpose::Ambient, None).unwrap();
+        record_reading(&mut conn, &after, Purpose::Run, None).unwrap();
+        examine_all(&mut conn).unwrap();
+        assert_eq!(pending(&conn, None).unwrap(), vec![], "{}", extra.0);
+    }
+}
+
+#[test]
+fn an_ordinary_opening_is_read_exactly_as_before() {
+    // Six keys and six boxes leave (and seven, for six keys), the Card
+    // falling beside them or not: no box was bought, and the opening is the
+    // one an opening's step has always read.
+    let ordinary = |boxes_left: i64, card_after: i64| {
+        let mut conn = migrated_in_memory().unwrap();
+        let (before, after) = boxes_bought_and_opened();
+        let mut rows: Vec<(&str, Container, i64, i64)> = vec![
+            ("Unreal Strongbox", C, 572 - boxes_left, 0),
+            ("Strongbox Key", C, 62, 62_000),
+            ("Universal Ammo", C, 6_167_301, 61_673),
+        ];
+        rows.extend(std::iter::repeat_n(
+            ("Universal Ammo", C, 100_000, 1_000),
+            6,
+        ));
+        let after = reading(after.taken_at(), card_after, &rows);
+        record_reading(&mut conn, &before, Purpose::Ambient, None).unwrap();
+        record_reading(&mut conn, &after, Purpose::Run, None).unwrap();
+        examine_all(&mut conn).unwrap();
+        assert!(purchases(&conn).is_empty(), "{boxes_left} boxes left");
+        openings(&conn)
+    };
+    let expected = super::proposals::OpeningProposal {
+        boxes: vec![super::composite::OpenedBoxes {
+            name: "Unreal Strongbox".to_string(),
+            count: 6,
+        }],
+        keys_used: 6,
+        keys: Amount::WholePec {
+            micro_ped: 60 * PED,
+        },
+        ammo: Some(ProposedAmmo {
+            units: 600_000,
+            amount: Amount::Exact {
+                micro_ped: 60 * PED,
+            },
+        }),
+        contents: vec![],
+        possible_contents: vec![],
+        settlement: Settlement::Settled,
+        doubt: None,
+        paid_ammo_alone: Some(6),
+    };
+    for card_after in [210_000, 217_872] {
+        assert_eq!(ordinary(6, card_after), vec![expected.clone()]);
+    }
+    // More boxes than keys: unsettled, and read as such, all seven of them.
+    let found = ordinary(7, 210_000);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].boxes[0].count, 7);
+    assert_eq!(found[0].keys_used, 6);
+    assert_eq!(found[0].settlement, Settlement::Unsettled);
+}
+
+// ── A purchase beside wear and loot the site showed late ───────────
+
+/// A kill of the session `session` at `at`, looting `lines` of
+/// `(item, units)`.
+fn hunted(conn: &rusqlite::Connection, session: &str, at: f64, lines: &[(&str, i64)]) {
+    let kill = format!("kill-{at}");
+    conn.execute(
+        "INSERT INTO kills (id, session_id, mob_name, mob_species, mob_maturity, timestamp, \
+         shots_fired, damage_dealt, cost_ped, loot_total_ped, is_global, is_hof) \
+         VALUES (?1, ?2, 'Atrox', 'Atrox', '', ?3, 1, 1.0, 0.1, 0.0, 0, 0)",
+        rusqlite::params![kill, session, at],
+    )
+    .unwrap();
+    for (item, units) in lines {
+        conn.execute(
+            "INSERT INTO kill_loot_items (kill_id, item_name, quantity, value_ped) \
+             VALUES (?1, ?2, ?3, 0.0)",
+            rusqlite::params![kill, item, units],
+        )
+        .unwrap();
+    }
+}
+
+/// When the two readings of the step were taken, in play on 2026-11-18.
+const STEP_FROM: f64 = 1_795_020_713.925_366;
+const STEP_TO: f64 = 1_795_021_014.208_251;
+
+/// The hunt that ended 22 seconds before the step began, with its last
+/// kill's 1,700 Shrapnel looted `before` seconds before it began.
+fn hunt_ending_before_the_step(conn: &rusqlite::Connection, before: f64) {
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('hunt', ?1, ?2, 0)",
+        rusqlite::params![STEP_FROM - 355.522_458, STEP_FROM - 22.683_188],
+    )
+    .unwrap();
+    hunted(
+        conn,
+        "hunt",
+        STEP_FROM - before,
+        &[
+            ("Shrapnel", 1_118),
+            ("Shrapnel", 279),
+            ("Shrapnel", 95),
+            ("Shrapnel", 208),
+        ],
+    );
+}
+
+/// The step as the account site showed it: 76 Unreal Strongboxes arrived
+/// in two new rows (496 to 572, no TT) as the Card fell by 608.00 PED,
+/// beside armour and its plates wearing and the hunt's last 1,700 Shrapnel.
+/// The first reading was taken for the hunt, the second while idle.
+fn store_strongboxes_bought(conn: &mut rusqlite::Connection) {
+    let shin = "Hyperion Shin Guards, Adjusted (M)";
+    let thigh = "Hyperion Thigh Guards, Adjusted (M)";
+    let plate = "Armor Plating Mk. 6A";
+    let on = |parent: &str| Container::Attached {
+        parent: parent.to_string(),
+    };
+    let held = |plates: (i64, i64), armour: [i64; 5], shrapnel: (i64, i64)| {
+        vec![
+            (plate, on(shin), 1, plates.0),
+            (plate, on(thigh), 1, plates.1),
+            ("Hyperion Arm Guards, Adjusted (M)", C, 1, armour[0]),
+            ("Hyperion Harness, Adjusted (M)", C, 1, armour[1]),
+            ("Hyperion Helmet, Adjusted (M)", C, 1, armour[2]),
+            (shin, C, 1, armour[3]),
+            (thigh, C, 1, armour[4]),
+            ("Shrapnel", C, shrapnel.0, shrapnel.1),
+        ]
+    };
+    let mut before = held(
+        (2_452, 2_451),
+        [8_520, 13_690, 7_334, 7_922, 7_914],
+        (30_321_299, 303_212),
+    );
+    before.push(("Unreal Strongbox", C, 496, 0));
+    let mut after = held(
+        (2_451, 2_449),
+        [8_516, 13_687, 7_333, 7_918, 7_910],
+        (30_322_999, 303_229),
+    );
+    after.extend([
+        ("Unreal Strongbox", C, 5, 0),
+        ("Unreal Strongbox", C, 71, 0),
+        ("Unreal Strongbox", C, 496, 0),
+    ]);
+    record_reading(
+        conn,
+        &reading(STEP_FROM, 278_672, &before),
+        Purpose::Session,
+        Some("hunt"),
+    )
+    .unwrap();
+    record_reading(
+        conn,
+        &reading(STEP_TO, 217_872, &after),
+        Purpose::Ambient,
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn strongboxes_bought_beside_wear_and_shrapnel_the_site_showed_late_are_proposed() {
+    let mut conn = migrated_in_memory().unwrap();
+    hunt_ending_before_the_step(&conn, 26.925_366);
+    store_strongboxes_bought(&mut conn);
+    examine_all(&mut conn).unwrap();
+    let found = purchases(&conn);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].key.name, "Unreal Strongbox");
+    assert_eq!(found[0].key.container, C);
+    assert_eq!(found[0].units, 76);
+    assert_eq!(found[0].amount.micro_ped(), 0);
+    assert_eq!(found[0].paid, Pec(60_800));
+    assert_eq!(found[0].markup.micro_ped(), 608 * PED);
+}
+
+#[test]
+fn loot_from_before_the_site_s_lateness_explains_no_arrival() {
+    let late = super::recognition::LOOT_SHOWN_LATE_SECONDS;
+    // Looted exactly as far back as the site may show play late: set aside.
+    let mut conn = migrated_in_memory().unwrap();
+    hunt_ending_before_the_step(&conn, late);
+    store_strongboxes_bought(&mut conn);
+    examine_all(&mut conn).unwrap();
+    assert_eq!(purchases(&conn).len(), 1);
+    // Any further back, the Shrapnel is unexplained: two items arrived, and
+    // there is no one price.
+    let mut conn = migrated_in_memory().unwrap();
+    hunt_ending_before_the_step(&conn, late + 1.0);
+    store_strongboxes_bought(&mut conn);
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+}
+
+#[test]
+fn loot_timed_after_the_step_ended_explains_nothing() {
+    let mut conn = migrated_in_memory().unwrap();
+    hunt_ending_before_the_step(&conn, -(STEP_TO - STEP_FROM) - 1.0);
+    store_strongboxes_bought(&mut conn);
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+}
+
+#[test]
+fn loot_the_player_deactivated_explains_no_arrival() {
+    let mut conn = migrated_in_memory().unwrap();
+    hunt_ending_before_the_step(&conn, 26.925_366);
+    conn.execute("UPDATE kill_loot_items SET deactivated_at = 1.0", [])
+        .unwrap();
+    store_strongboxes_bought(&mut conn);
+    examine_all(&mut conn).unwrap();
+    assert!(purchases(&conn).is_empty());
+}
+
+/// Whether the step of [`bought`] or [`sold_for`] is proposed beside a
+/// session from `started_at` to `ended_at`.
+fn proposed_beside_a_session(
+    readings: &[Reading],
+    started_at: f64,
+    ended_at: Option<f64>,
+) -> usize {
+    let mut conn = migrated_in_memory().unwrap();
+    conn.execute(
+        "INSERT INTO tracking_sessions (id, started_at, ended_at, is_active) \
+         VALUES ('beside', ?1, ?2, 0)",
+        rusqlite::params![started_at, ended_at],
+    )
+    .unwrap();
+    stored(&mut conn, readings);
+    examine_all(&mut conn).unwrap();
+    pending(&conn, None)
+        .unwrap()
+        .iter()
+        .filter(|proposal| matches!(proposal.kind, ProposalKind::Purchase | ProposalKind::Sale))
+        .count()
+}
+
+#[test]
+fn a_session_a_second_into_the_step_at_either_end_refuses_a_trade() {
+    // The step runs from 0 to 60.
+    for readings in [bought(), sold_for(1_200)] {
+        assert_eq!(proposed_beside_a_session(&readings, -100.0, Some(0.0)), 1);
+        assert_eq!(proposed_beside_a_session(&readings, 60.0, None), 1);
+        assert_eq!(proposed_beside_a_session(&readings, -100.0, Some(1.0)), 0);
+        assert_eq!(proposed_beside_a_session(&readings, 59.0, None), 0);
+    }
 }
 
 /// An asset held under `id`, with one purchase of `markup` PED above its
@@ -1282,6 +1831,7 @@ mod settling_a_listing {
             tt_value: 5.0,
             starting_bid: 7.0,
             buyout,
+            inferred_bid: false,
         }
     }
 
@@ -1336,6 +1886,24 @@ mod settling_a_listing {
         assert_eq!(
             settled(&listed, &departure(Some(800 - fee), None)),
             sold(800, fee)
+        );
+    }
+
+    #[test]
+    fn a_listing_whose_bid_was_inferred_comes_back_settled_but_never_sells_so() {
+        let inferred = ListedTerms {
+            inferred_bid: true,
+            ..terms(None)
+        };
+        // The Card rose by exactly the bid it stores: still not a price.
+        assert_eq!(
+            settled(&terms(None), &departure(Some(700), None)),
+            sold(700, 0)
+        );
+        assert_eq!(settled(&inferred, &departure(Some(700), None)), None);
+        assert_eq!(
+            settled(&inferred, &departure(None, Some(Container::Carried))),
+            Some(ListingSettled::Returned)
         );
     }
 

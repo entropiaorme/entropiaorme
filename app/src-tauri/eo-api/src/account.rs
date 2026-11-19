@@ -576,6 +576,14 @@ pub enum MeasuredEvent {
         units: i64,
         amount: MeasuredAmount,
     },
+    /// Shrapnel left with no ammo row of exactly what it pays, and is
+    /// presumed converted. Its minute is one the ammo was topped up in.
+    #[serde(rename_all = "camelCase")]
+    ShrapnelPresumedConverted {
+        between: MeasuredSpan,
+        shrapnel_units: i64,
+        shrapnel: MeasuredAmount,
+    },
     /// Universal Ammo arrived with no Shrapnel conversion and no strongbox
     /// opening behind it: topped up. What was fired in this minute is not
     /// in the ammo's split; the tracked figure stands in for it.
@@ -761,6 +769,16 @@ fn event(value: &NotableEvent) -> MeasuredEvent {
             item: holding(key),
             units: *units,
             amount: amount(*sold),
+        },
+        NotableEvent::ShrapnelPresumedConverted {
+            between,
+            shrapnel_units,
+            shrapnel,
+            ..
+        } => MeasuredEvent::ShrapnelPresumedConverted {
+            between: span(between),
+            shrapnel_units: *shrapnel_units,
+            shrapnel: amount(*shrapnel),
         },
         NotableEvent::AmmoToppedUp { between, name } => MeasuredEvent::AmmoToppedUp {
             between: span(between),

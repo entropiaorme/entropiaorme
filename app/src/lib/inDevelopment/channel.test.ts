@@ -8,7 +8,7 @@ describe('in-development channel', () => {
 		expect(isInDevelopmentVisible(true)).toBe(false);
 	});
 
-	it('shows them in any build the release pipeline did not stamp', () => {
+	it('shows them in any build not stamped as published', () => {
 		// A locally built installer, a source build, and the dev server all land
 		// here. These are the builds used while such a surface is still being
 		// built, so they must show it rather than hide it.

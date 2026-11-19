@@ -212,17 +212,21 @@
 							</p>
 							<p class="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-xs text-text-tertiary">
 								<span class="truncate">{summary(entry)}</span>
-								{#if entry.recordedFromAccount}
-									{@const step = entry.recordedFromAccount}
+								{#if entry.recordedFromAccount || entry.listedFromAccount}
+									<!-- An outcome the account recorded, or a listing it
+										created: either way, from the account. -->
+									{@const step = entry.recordedFromAccount ?? entry.listedFromAccount}
 									<span class="shrink-0" data-testid="from-account">
 										<InfoTip label="Recorded from your account" align="left" width="w-64">
 											{#snippet trigger()}<span
 													class="underline decoration-dotted underline-offset-2 hover:text-text-secondary"
 													>from your account</span
 												>{/snippet}
-											<span class="block text-xs leading-relaxed text-text-secondary"
-												>{fromAccountSentence(step)}</span
-											>
+											{#if step}
+												<span class="block text-xs leading-relaxed text-text-secondary"
+													>{fromAccountSentence(step)}</span
+												>
+											{/if}
 										</InfoTip>
 									</span>
 								{/if}
@@ -320,7 +324,7 @@
 							column: the only place with room, and what is about to be
 							undone stays in front of the reader. -->
 						<div class="mt-2 flex items-center justify-end gap-2">
-							{#if entry.recordedFromAccount}
+							{#if entry.recordedFromAccount || entry.listedFromAccount}
 								<p class="mr-auto text-xs text-text-tertiary">{FROM_ACCOUNT_UNDO}</p>
 							{/if}
 							{#if entry.canRevertSale}

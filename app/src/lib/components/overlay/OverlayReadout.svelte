@@ -14,6 +14,7 @@
 	import SubWindowToggle from './SubWindowToggle.svelte';
 	import type { ReadoutPanel } from '$lib/windows/overlayMenu';
 	import ScreenUnreadNote from '$lib/features/tracking/ScreenUnreadNote.svelte';
+	import { overlayReadoutMarks } from '$lib/extension/slots';
 	import type { DosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import {
 		describeEffects,
@@ -390,6 +391,7 @@
 				data-mark={accountDot.mark}
 			></span>
 		{/if}
+		{#each overlayReadoutMarks as Mark}<Mark />{/each}
 	</div>
 	<div class="rail">
 		{#if isActive}

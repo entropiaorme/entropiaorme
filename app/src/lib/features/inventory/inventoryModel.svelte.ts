@@ -299,15 +299,24 @@ export function createInventoryModel() {
 		};
 	}
 
-	async function withRefresh(work: () => Promise<unknown>, message: string) {
+	/** Do `work`, then re-read. A write that fails rejects with why; once
+	 * it is done, a re-read that fails is said on its own and never makes
+	 * the write look undone, so nothing is saved twice. */
+	async function withRefresh<T>(work: () => Promise<T>, message: string): Promise<T> {
 		error = null;
+		let done: T;
 		try {
-			await work();
-			await refresh();
+			done = await work();
 		} catch (cause) {
 			error = describeError(cause, message);
 			throw cause;
 		}
+		try {
+			await refresh();
+		} catch (cause) {
+			error = `Recorded, but the inventory could not be read again: ${describeError(cause)}`;
+		}
+		return done;
 	}
 
 	async function listLoot(input: ActivityListingDraft) {
@@ -323,11 +332,12 @@ export function createInventoryModel() {
 		);
 	}
 
-	async function sellLootByTrade(input: ActivityTradeDraft) {
+	/** Record a trade of loot; answers the trade's id. */
+	async function sellLootByTrade(input: ActivityTradeDraft): Promise<string> {
 		const draft = manualDraft('trade', input.itemName, input.quantity, {
 			finalPrice: input.soldFor,
 		});
-		await withRefresh(
+		return withRefresh(
 			() =>
 				commitInventorySaleDraft({
 					draft,
@@ -353,13 +363,14 @@ export function createInventoryModel() {
 		);
 	}
 
-	async function sellEquipmentByTrade(input: EquipmentTradeInput) {
+	/** Record a trade of an asset; answers the trade's id. */
+	async function sellEquipmentByTrade(input: EquipmentTradeInput): Promise<string> {
 		const item = equipment.find((row) => row.id === input.itemId);
 		if (!item) throw new Error('That asset is no longer available');
 		const draft = manualDraft('trade', item.name, input.quantity ?? item.quantity, {
 			finalPrice: input.soldFor,
 		});
-		await withRefresh(
+		return withRefresh(
 			() =>
 				commitInventorySaleDraft({
 					draft,

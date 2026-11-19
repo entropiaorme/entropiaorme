@@ -28,14 +28,12 @@ const DEFAULT_CEILING: usize = 300;
 /// adoption time, with headroom for ordinary edits. Entries are removed (or
 /// lowered) as decomposition shrinks a file; nothing adds one or raises one.
 const CEILINGS: &[(&str, usize)] = &[
-    ("app/src/routes/updates/+page.svelte", 425),
     ("app/src/routes/analytics/OverviewTab.svelte", 575),
-    ("app/src/routes/news/+page.svelte", 575),
+    ("app/src/routes/settings/+page.svelte", 583),
     ("app/src/routes/character/CodexTab.svelte", 600),
-    ("app/src/routes/settings/+page.svelte", 625),
     ("app/src/routes/analytics/LedgerTab.svelte", 700),
     ("app/src/routes/overlay/+page.svelte", 850),
-    ("app/src/routes/welcome/+page.svelte", 875),
+    ("app/src/routes/welcome/+page.svelte", 859),
 ];
 
 const SCAN_ROOT: &str = "app/src/routes";
@@ -189,6 +187,6 @@ mod tests {
     #[test]
     fn ceiling_map_has_the_expected_entry_count() {
         // Guards against an accidental drop when editing the map.
-        assert_eq!(CEILINGS.len(), 8);
+        assert_eq!(CEILINGS.len(), 6);
     }
 }

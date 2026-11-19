@@ -39,8 +39,8 @@ use crate::analytics::{
     EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
     InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
     InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
-    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
-    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
+    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, PrivateSaleRecorded,
+    Profession, RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
     StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
     StockSaleFromAccount, StockSaleFromAccountInput,
 };
@@ -1154,7 +1154,7 @@ pub fn manifest() -> Vec<CommandSpec> {
                 name: "input",
                 schema: schema(schema_for!(PrivateSaleInput)),
             }],
-            returns: None,
+            returns: Some(schema(schema_for!(PrivateSaleRecorded))),
         },
         CommandSpec {
             name: "stock_remove",

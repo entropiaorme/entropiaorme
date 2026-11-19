@@ -1,18 +1,19 @@
 //! What the readings propose: a strongbox opening, a listing sold at a
-//! price the player says, a listing outcome read from a long step, or a
-//! purchase at auction, seen in the step between two consecutive readings.
+//! price the player says, a listing outcome read from a long step, a
+//! purchase, or a sale to another player, seen in the step between two
+//! consecutive readings.
 //!
 //! A proposal is a guess. The app never records one on its own: it fills
-//! in the existing strongbox review, listing confirmation or asset purchase,
-//! and the player records it through the existing commands or dismisses
-//! it. Nothing here writes or sums an accounting figure. The strongbox
-//! openings, the auction listings and the asset purchases are read, never
-//! written:
+//! in the existing strongbox review, listing confirmation, asset purchase
+//! or trade form (of loot or of an asset), and the player records it
+//! through the existing commands or dismisses it. Nothing here writes or
+//! sums an accounting figure. The strongbox openings, the auction listings,
+//! the asset purchases and the trades are read, never written:
 //! to match a listing, and to tell whether the record a proposal became
 //! still stands. What the readings settle leaves nothing to guess and is no
 //! proposal: a Shrapnel conversion, a recycling, a sale to the Trade
 //! Terminal, a listing that came back, and a listing sold at the one price
-//! that fits it ([`settled`]) are recorded on its own (see
+//! that fits it ([`settled_in_step`]) are recorded on its own (see
 //! [`super::follow`]).
 //!
 //! Each stored reading is examined once, against the reading stored before
@@ -46,17 +47,35 @@
 //!   read whole when it is stored. An opening recorded another way that is
 //!   only part of one read whole turns it back into its steps (see
 //!   [`pending`]).
-//! - **A purchase at auction** is proposed when a step outside every
-//!   tracked session holds one item arriving for more than its TT and
-//!   nothing else ([`super::recognition::purchase`]), and the chat log of no
-//!   session looted that item inside the step. Its markup is what the
-//!   player paid above TT, so it is never recorded on its own.
+//! - **A purchase**, at auction or from another player, is proposed when a
+//!   step outside every tracked session holds one item arriving for more
+//!   than its TT and nothing else but wear, moves between the player's own
+//!   places, and arrivals the chat log of any session looted from
+//!   [`LOOT_SHOWN_LATE_SECONDS`] before the step began to its end, its
+//!   active loot lines holding at least as many units of each
+//!   ([`super::recognition::purchase`]). An item any loot line names in
+//!   that time, active or not, is never the purchase. Its markup is
+//!   what the player paid above TT, so it is never recorded on its own.
+//! - **Boxes bought and opened in one step** outside every tracked session
+//!   ([`super::recognition::bought_and_opened`]) are proposed as both: the
+//!   purchase of the boxes the keys opened beyond those that left, at the
+//!   Card's fall, and the opening, read by the one opening reading over the
+//!   step as it would stand had the purchase come first. Both only when
+//!   that opening settled and explains every other arrival (its payout and
+//!   contents, or loot the chat log explains); otherwise neither. Any other
+//!   opening is read as it always is.
+//! - **A sale to another player** is proposed on the same conditions, the
+//!   other way: one item leaving for more than its TT, the Card's rise its
+//!   price ([`super::recognition::sale_to_player`]). The player records it
+//!   through the trade they enter by hand (a loot trade or an asset's), and
+//!   the proposal is linked to that trade. A rise of exactly the TT is the
+//!   Trade Terminal's sale, recorded on its own, and never proposed.
 //! - **A listing outcome** is proposed only when exactly one of the
 //!   player's listings on auction from before the step matches it by item
 //!   name and quantity (and TT, where the listing has one), the departure
 //!   is the only change of that item's quantity in the step, and the step
-//!   is not one whose settled outcomes are recorded on their own
-//!   ([`super::follow::settles_listings`]) or its outcome is not settled.
+//!   does not settle it on its own ([`settled_in_step`], the one predicate
+//!   the pass that records settled outcomes reads too).
 //!   Sold: the item left the auction with no return to another place. The
 //!   PED Card's rise is offered only when the Card rose in that same step,
 //!   nothing else in the step could move the Card, and the two readings
@@ -87,8 +106,11 @@ use super::composite::{
 use super::diff::{diff, MoveKind, Span, Step, StepSet};
 use super::measure::conversion_rows;
 use super::reading::{Container, HoldingKey, Reading};
-use super::recognition::{purchase, Purchase};
-use super::roles::{RoleBook, RoleSource};
+use super::recognition::{
+    bought_and_opened, purchase, sale_to_player, Looted, Purchase, SaleToPlayer,
+    LOOT_SHOWN_LATE_SECONDS,
+};
+use super::roles::{RoleBook, RoleSource, UNIVERSAL_AMMO};
 use super::store::{self, Purpose, ReadingId, StoredReading};
 use super::AccountError;
 
@@ -113,6 +135,8 @@ pub enum ProposalKind {
     /// Something that arrived during a tracked session that no loot line,
     /// recorded reward, conversion or opening explains.
     Arrival,
+    /// One item that left for more than its TT outside every session.
+    Sale,
 }
 
 impl ProposalKind {
@@ -123,6 +147,7 @@ impl ProposalKind {
             ProposalKind::ListingReturned => "listing_returned",
             ProposalKind::Purchase => "purchase",
             ProposalKind::Arrival => "arrival",
+            ProposalKind::Sale => "sale",
         }
     }
 
@@ -133,6 +158,7 @@ impl ProposalKind {
             "listing_returned" => Some(ProposalKind::ListingReturned),
             "purchase" => Some(ProposalKind::Purchase),
             "arrival" => Some(ProposalKind::Arrival),
+            "sale" => Some(ProposalKind::Sale),
             _ => None,
         }
     }
@@ -256,6 +282,7 @@ pub enum Detail {
     Listing(ListingProposal),
     Purchase(Purchase),
     Arrival(ArrivalProposal),
+    Sale(SaleToPlayer),
 }
 
 impl Detail {
@@ -270,6 +297,7 @@ impl Detail {
                 )
                 | (ProposalKind::Purchase, Detail::Purchase(_))
                 | (ProposalKind::Arrival, Detail::Arrival(_))
+                | (ProposalKind::Sale, Detail::Sale(_))
         )
     }
 }
@@ -315,14 +343,12 @@ pub struct AuctionDeparture {
     pub card_rise: Option<Pec>,
 }
 
-/// What one step between two readings shows.
+/// What one step between two readings shows. A purchase is read apart, with
+/// what the chat log looted around the step.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StepOutcomes {
     pub opening: Option<OpeningProposal>,
     pub departures: Vec<AuctionDeparture>,
-    /// A purchase at auction, if the step holds one and nothing else;
-    /// proposed only outside every tracked session.
-    pub purchase: Option<Purchase>,
 }
 
 /// Read the step from `before` to `after`: an opening, and what left the
@@ -345,7 +371,6 @@ pub fn step_outcomes(
     Ok(StepOutcomes {
         opening,
         departures: departures(&set, before),
-        purchase: purchase(&set)?,
     })
 }
 
@@ -513,19 +538,31 @@ fn proceeds(set: &StepSet, sold: usize) -> Option<Pec> {
 /// it but the sale at `sold` could have moved the Card, however long the
 /// step.
 fn card_rise(set: &StepSet, sold: usize) -> Option<Pec> {
-    let mut rise = None;
+    card_move(set, sold).filter(|moved| *moved > 0).map(Pec)
+}
+
+/// How far the PED Card moved in the step, in PEC, when it moved and
+/// nothing else in it but the step at `own` could have moved it, however
+/// long the step: wear and moves between the player's own places never
+/// do; anything consumed, gained, arriving, leaving, repaired, listed or
+/// returned might. The one reading of the Card both a sale's proceeds and
+/// a listing's fee rest on.
+pub(super) fn card_move(set: &StepSet, own: usize) -> Option<i64> {
+    let mut moved = None;
     for (index, step) in set.steps.iter().enumerate() {
-        if index == sold {
+        if index == own {
             continue;
         }
         match step {
-            Step::BalanceChanged { from, to } if to.0 > from.0 => rise = Some(Pec(to.0 - from.0)),
+            Step::BalanceChanged { from, to } if to.0 != from.0 => {
+                moved = Some(to.0.checked_sub(from.0)?);
+            }
             Step::Decayed { .. } => {}
             Step::Moved { from, to, .. } if MoveKind::of(from, to) == MoveKind::Transfer => {}
             _ => return None,
         }
     }
-    rise
+    moved
 }
 
 // ── Matching a listing ──────────────────────────────────────────────
@@ -559,6 +596,10 @@ pub(super) struct ListedTerms {
     pub tt_value: f64,
     pub starting_bid: f64,
     pub buyout: Option<f64>,
+    /// Its starting bid was read back from the fee the readings saw paid
+    /// (see [`super::listing_made`]): a figure inside a range, never a
+    /// price a sale can be settled at.
+    pub inferred_bid: bool,
 }
 
 /// What the readings settle about a listing on their own.
@@ -589,10 +630,14 @@ fn point_of_sale_fee(terms: &ListedTerms, final_price: f64) -> Pec {
 /// other sells at its starting bid or its buyout only when the Card's rise
 /// in the step is exactly one of them, as paid or less its point-of-sale
 /// fee (it may be taken from the proceeds). A sale between the two, or a
-/// rise that fits both or neither, is the player's to price.
+/// rise that fits both or neither, is the player's to price, and so is
+/// every sale of a listing whose starting bid was inferred.
 pub(super) fn settled(terms: &ListedTerms, departure: &AuctionDeparture) -> Option<ListingSettled> {
     if departure.returned_to.is_some() {
         return Some(ListingSettled::Returned);
+    }
+    if terms.inferred_bid {
+        return None;
     }
     let start = pec_of(terms.starting_bid);
     let mut prices = vec![(start, Pec::ZERO)];
@@ -620,6 +665,157 @@ pub(super) fn settled(terms: &ListedTerms, departure: &AuctionDeparture) -> Opti
     })
 }
 
+/// A listing whose outcome a step settles on its own, and that outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SettledListing {
+    pub listing_id: String,
+    pub outcome: ListingSettled,
+}
+
+/// The listing outcomes the step `set` settles on its own, as far as its
+/// reach allows ([`super::follow::listing_reach`]). The one predicate: the
+/// pass that follows the stock records exactly these, and the examination
+/// proposes every other matched departure, so nothing is both.
+///
+/// - From a short step, each departure that matches exactly one listing
+///   and whose outcome [`settled`] reads.
+/// - From a longer one, nothing when a tracked session overlaps it: play
+///   may have moved what the readings saw. Otherwise each listing that came
+///   back (exactly what left the auction arrived in another place) when no
+///   session's chat log looted that item inside the step and it is the
+///   only listing of that item on the auction, whatever its quantity (two
+///   returns of one item read as one); and the sales of a step that holds
+///   nothing else ([`sold_alone`]). Any other sale is the player's to
+///   price.
+/// - From a step whose reach is nothing, none.
+pub(super) fn settled_in_step(
+    conn: &rusqlite::Connection,
+    set: &StepSet,
+    before: &Reading,
+    between: &Span,
+    reach: super::follow::ListingReach,
+) -> Result<Vec<SettledListing>, AccountError> {
+    use super::follow::ListingReach;
+    if reach == ListingReach::Nothing {
+        return Ok(Vec::new());
+    }
+    let long = reach == ListingReach::Long;
+    if long && !outside_every_session(conn, between)? {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for departure in departures(set, before) {
+        if long
+            && (departure.returned_to.is_none()
+                || looted_inside(conn, &departure.name, between)?
+                || pending_listings_of(conn, &departure.name)? != 1)
+        {
+            continue;
+        }
+        let Some(terms) = matching_listing(conn, &departure, between)? else {
+            continue;
+        };
+        if let Some(outcome) = settled(&terms, &departure) {
+            out.push(SettledListing {
+                listing_id: terms.id,
+                outcome,
+            });
+        }
+    }
+    if reach == ListingReach::Long {
+        out.extend(sold_alone(conn, set, before, between)?);
+    }
+    Ok(out)
+}
+
+/// How many of the player's listings of `name` wait on the auction, whatever
+/// their quantity: the name matched as [`matching_listing`] matches it.
+fn pending_listings_of(conn: &rusqlite::Connection, name: &str) -> Result<usize, AccountError> {
+    let mut stmt = conn.prepare(
+        "SELECT item_name FROM auction_listings \
+         WHERE status = 'pending' AND undone_at IS NULL AND channel = 'auction'",
+    )?;
+    let wanted = name.trim().to_lowercase();
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(names
+        .iter()
+        .filter(|listed| listed.trim().to_lowercase() == wanted)
+        .count())
+}
+
+/// The sales of a step that holds nothing else, each at the one price its
+/// listing can fetch, however long the step. Every change in the step is a
+/// departure from the auction matching exactly one listing whose buyout is
+/// its starting bid, each a different listing, and the PED Card rose by
+/// exactly what those listings fetch together. One total is enough: sold at
+/// its starting bid, a listing owes no point-of-sale fee, which is charged
+/// only on what a sale fetches above the starting bid, so each sale is
+/// recorded with none. Nothing else may have changed: no other holding
+/// moved, wore, arrived or left. Otherwise none of them is settled, so a
+/// step that may hide play the readings did not see never prices a sale.
+fn sold_alone(
+    conn: &rusqlite::Connection,
+    set: &StepSet,
+    before: &Reading,
+    between: &Span,
+) -> Result<Vec<SettledListing>, AccountError> {
+    let mut rise = None;
+    let mut leaving = 0usize;
+    for step in &set.steps {
+        match step {
+            Step::BalanceChanged { from, to } if to.0 > from.0 && rise.is_none() => {
+                rise = Some(to.0 - from.0);
+            }
+            Step::Consumed { key, .. } | Step::Left { key, .. }
+                if key.container == Container::Auction =>
+            {
+                leaving += 1;
+            }
+            _ => return Ok(Vec::new()),
+        }
+    }
+    let Some(rise) = rise else {
+        return Ok(Vec::new());
+    };
+    let found = departures(set, before);
+    // Each departure is the only change of its item: none was read away.
+    if found.is_empty() || found.len() != leaving {
+        return Ok(Vec::new());
+    }
+    let mut sales: Vec<(String, Pec)> = Vec::new();
+    let mut paid = 0i64;
+    for departure in &found {
+        let Some(terms) = matching_listing(conn, departure, between)? else {
+            return Ok(Vec::new());
+        };
+        let start = pec_of(terms.starting_bid);
+        let one_price = !terms.inferred_bid
+            && terms
+                .buyout
+                .is_some_and(|buyout| buyout.is_finite() && pec_of(buyout) == start);
+        if !one_price || sales.iter().any(|(id, _)| *id == terms.id) {
+            return Ok(Vec::new());
+        }
+        paid = paid.checked_add(start.0).ok_or(AccountError::Overflow)?;
+        sales.push((terms.id, start));
+    }
+    if rise != paid {
+        return Ok(Vec::new());
+    }
+    Ok(sales
+        .into_iter()
+        .map(|(listing_id, final_price)| SettledListing {
+            listing_id,
+            outcome: ListingSettled::Sold {
+                final_price,
+                sale_fee: Pec::ZERO,
+            },
+        })
+        .collect())
+}
+
 /// The one listing still on auction a departure matches, by item name and
 /// quantity, and by TT where the listing has one, among the listings made
 /// before the step; `None` for no match or more than one.
@@ -629,7 +825,9 @@ pub(super) fn matching_listing(
     between: &Span,
 ) -> Result<Option<ListedTerms>, AccountError> {
     let mut stmt = conn.prepare(
-        "SELECT id, item_name, tt_value, listed_at, listed_instant, starting_bid, buyout \
+        "SELECT id, item_name, tt_value, listed_at, listed_instant, starting_bid, buyout, \
+                EXISTS (SELECT 1 FROM listings_from_account f \
+                        WHERE f.listing_id = auction_listings.id) \
          FROM auction_listings \
          WHERE status = 'pending' AND undone_at IS NULL AND channel = 'auction' \
            AND quantity = ?1",
@@ -642,6 +840,7 @@ pub(super) fn matching_listing(
                     tt_value: row.get(2)?,
                     starting_bid: row.get(5)?,
                     buyout: row.get(6)?,
+                    inferred_bid: row.get(7)?,
                 },
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(3)?,
@@ -688,7 +887,7 @@ fn payload<T: Serialize>(value: &T) -> Result<String, AccountError> {
 }
 
 /// Whether no tracked session's play overlaps `between`.
-fn outside_every_session(
+pub(super) fn outside_every_session(
     conn: &rusqlite::Connection,
     between: &Span,
 ) -> Result<bool, AccountError> {
@@ -719,6 +918,51 @@ fn looted_inside(
     )?)
 }
 
+/// What the chat log of any session looted around `between` of each item
+/// that arrived or left in `set`: from [`LOOT_SHOWN_LATE_SECONDS`] before
+/// it began to its end. Universal Ammo is never read.
+fn looted_around(
+    conn: &rusqlite::Connection,
+    set: &StepSet,
+    between: &Span,
+) -> Result<Looted, AccountError> {
+    let mut looted = Looted::new();
+    for step in &set.steps {
+        let key = match step {
+            Step::Gained { key, .. }
+            | Step::Appeared { key, .. }
+            | Step::Consumed { key, .. }
+            | Step::Left { key, .. } => key,
+            _ => continue,
+        };
+        if key.name == UNIVERSAL_AMMO || looted.every.contains_key(&key.name) {
+            continue;
+        }
+        let (active, every): (i64, i64) = conn.query_row(
+            // every-kill: spend (any row's loot, a claimed reward's arrival
+            // included: an item that came in either way was never bought).
+            // What explains an arrival counts the active lines alone; what
+            // makes an item never the one traded counts every line, the
+            // cautious side.
+            "SELECT COALESCE(SUM(CASE WHEN active THEN units ELSE 0 END), 0), \
+                    COALESCE(SUM(units), 0) \
+             FROM (SELECT COALESCE(l.quantity, 1) AS units, \
+                          l.deactivated_at IS NULL AS active \
+                   FROM kill_loot_items l JOIN kills k ON k.id = l.kill_id \
+                   WHERE l.item_name = ?1 AND k.timestamp >= ?2 AND k.timestamp <= ?3 \
+                   UNION ALL \
+                   SELECT COALESCE(l.quantity, 1), l.deactivated_at IS NULL \
+                   FROM harvest_loot_items l JOIN harvest_events e ON e.id = l.harvest_id \
+                   WHERE l.item_name = ?1 AND e.timestamp >= ?2 AND e.timestamp <= ?3)",
+            rusqlite::params![key.name, between.from - LOOT_SHOWN_LATE_SECONDS, between.to],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        looted.active.insert(key.name.clone(), active);
+        looted.every.insert(key.name.clone(), every);
+    }
+    Ok(looted)
+}
+
 /// The proposals the step from `before` to `after` holds. `session` is the
 /// tracked session the step fell in, if any.
 fn found_in_step(
@@ -726,14 +970,37 @@ fn found_in_step(
     before: &Reading,
     after: &Reading,
     session: Option<&str>,
-    settles_listings: bool,
+    reach: super::follow::ListingReach,
     roles: &dyn RoleSource,
 ) -> Result<Vec<Found>, AccountError> {
-    let outcomes = step_outcomes(before, after, roles)?;
     let between = Span {
         from: before.taken_at(),
         to: after.taken_at(),
     };
+    // A purchase or a sale only outside every tracked session, with what
+    // the chat log looted around the step set aside, and never of an item
+    // it looted meanwhile: loot arriving beside a repair or a fee looks the
+    // same.
+    let outside = if session.is_none() && outside_every_session(conn, &between)? {
+        let set = step_between(before, after, roles)?;
+        let looted = looted_around(conn, &set, &between)?;
+        Some((set, looted))
+    } else {
+        None
+    };
+    // Boxes bought and opened in one step: the opening is read over the
+    // step as it would stand had the purchase come first, its items read as
+    // the step's own are.
+    let both = match &outside {
+        Some((set, looted)) => {
+            let pair = [before.clone(), after.clone()];
+            let book = RoleBook::resolve(roles, &pair);
+            bought_and_opened(set, before, after, &|name| book.stacking(name), looted)?
+        }
+        None => None,
+    };
+    let before = both.as_ref().map_or(before, |both| &both.before);
+    let outcomes = step_outcomes(before, after, roles)?;
     let mut found = Vec::new();
     if let Some(opening) = &outcomes.opening {
         // Outside a session, a step that holds nothing but an opening the
@@ -754,29 +1021,45 @@ fn found_in_step(
         };
         found.push(opening_found(whole.as_ref().unwrap_or(opening))?);
     }
-    // A purchase only outside every tracked session, and never of an item
-    // a session looted meanwhile: loot arriving beside a repair or a fee
-    // looks the same.
-    if let Some(bought) = &outcomes.purchase {
-        if session.is_none()
-            && outside_every_session(conn, &between)?
-            && !looted_inside(conn, &bought.key.name, &between)?
-        {
+    if let Some(both) = &both {
+        found.push(Found {
+            kind: ProposalKind::Purchase,
+            subject: both.purchase.key.name.clone(),
+            payload: payload(&both.purchase)?,
+        });
+    } else if let Some((set, looted)) = &outside {
+        if let Some(bought) = purchase(set, looted)? {
             found.push(Found {
                 kind: ProposalKind::Purchase,
                 subject: bought.key.name.clone(),
-                payload: payload(bought)?,
+                payload: payload(&bought)?,
+            });
+        }
+        if let Some(sold) = sale_to_player(set, before, after, looted)? {
+            found.push(Found {
+                kind: ProposalKind::Sale,
+                subject: sold.key.name.clone(),
+                payload: payload(&sold)?,
             });
         }
     }
+    // What the readings settle is recorded on its own by the pass that
+    // follows the stock (see [`super::follow`]); only what is left to the
+    // player is proposed.
+    let settled_here: Vec<String> = if outcomes.departures.is_empty() {
+        Vec::new()
+    } else {
+        let set = step_between(before, after, roles)?;
+        settled_in_step(conn, &set, before, &between, reach)?
+            .into_iter()
+            .map(|settled| settled.listing_id)
+            .collect()
+    };
     for departure in &outcomes.departures {
         let Some(terms) = matching_listing(conn, departure, &between)? else {
             continue;
         };
-        // What the readings settle is recorded on its own by the pass that
-        // follows the stock (see [`super::follow`]); only a sale whose price
-        // is the player's to say is proposed.
-        if settles_listings && settled(&terms, departure).is_some() {
+        if settled_here.contains(&terms.id) {
             continue;
         }
         let listing_id = terms.id;
@@ -1042,7 +1325,7 @@ fn prepare_again(
         &before.reading,
         &after.reading,
         session.as_deref(),
-        super::follow::settles_listings(conn, &before, &after)?,
+        super::follow::listing_reach(conn, &before, &after)?,
         roles,
     )?;
     let whole = whole_across(conn, &before, &after, roles)?;
@@ -1478,6 +1761,23 @@ fn standing_unknown_origin_of(
         .optional()?)
 }
 
+/// Whether the trade a sale proposal of `item` was recorded as (by its own
+/// id) still stands: a trade of loot, or of an asset, of that item (its
+/// name trimmed, in any case), not taken back.
+fn sale_stands(conn: &rusqlite::Connection, id: &str, item: &str) -> Result<bool, AccountError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM private_sales \
+                        WHERE id = ?1 AND undone_at IS NULL \
+                          AND lower(trim(item_name)) = lower(trim(?2))) \
+             OR EXISTS (SELECT 1 FROM auction_listings \
+                        WHERE id = ?1 AND channel = 'trade' AND status = 'sold' \
+                          AND undone_at IS NULL \
+                          AND lower(trim(item_name)) = lower(trim(?2)))",
+        rusqlite::params![id.trim(), item],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
 /// The name of the asset an asset purchase (by its id) bought into.
 fn purchased_asset_name(
     conn: &rusqlite::Connection,
@@ -1646,6 +1946,7 @@ fn decode(row: &Row, kind: ProposalKind) -> Option<Detail> {
             .ok()
             .map(Detail::Purchase),
         ProposalKind::Arrival => serde_json::from_str(&row.payload).ok().map(Detail::Arrival),
+        ProposalKind::Sale => serde_json::from_str(&row.payload).ok().map(Detail::Sale),
     }
 }
 
@@ -1718,7 +2019,7 @@ fn candidates_of<'a>(
             }),
             _ => None,
         },
-        Detail::Listing(_) | Detail::Purchase(_) | Detail::Arrival(_) => None,
+        Detail::Listing(_) | Detail::Purchase(_) | Detail::Arrival(_) | Detail::Sale(_) => None,
     })
     .collect()
 }
@@ -1761,7 +2062,10 @@ fn open_proposals(conn: &rusqlite::Connection) -> Result<Vec<(Proposal, bool)>, 
             _ if !detail.is_of(kind) => false,
             (_, Decision::Dismissed) => false,
             (
-                ProposalKind::Opening | ProposalKind::Purchase | ProposalKind::Arrival,
+                ProposalKind::Opening
+                | ProposalKind::Purchase
+                | ProposalKind::Arrival
+                | ProposalKind::Sale,
                 Decision::Pending,
             ) => true,
             (ProposalKind::Opening, Decision::Recorded) => match &row.record {
@@ -1774,6 +2078,10 @@ fn open_proposals(conn: &rusqlite::Connection) -> Result<Vec<(Proposal, bool)>, 
             },
             (ProposalKind::Arrival, Decision::Recorded) => match &row.record {
                 Some(record) => !arrival_record_stands(conn, record)?,
+                None => true,
+            },
+            (ProposalKind::Sale, Decision::Recorded) => match &row.record {
+                Some(record) => !sale_stands(conn, record, &row.subject)?,
                 None => true,
             },
             (ProposalKind::ListingSold | ProposalKind::ListingReturned, _) => {
@@ -1949,6 +2257,9 @@ pub fn claim(
                     ProposalKind::Arrival => {
                         "that arrival may already be recorded; check your assets and stock first"
                     }
+                    ProposalKind::Sale => {
+                        "that sale may already be recorded; check your history first"
+                    }
                     _ => "that proposal may already be recorded; check your openings first",
                 }))
             }
@@ -2002,6 +2313,7 @@ fn record_fits(
         }
         ProposalKind::Purchase => purchase_stands(conn, record)?,
         ProposalKind::Arrival => arrival_record_stands(conn, record)?,
+        ProposalKind::Sale => sale_stands(conn, record, &row.subject)?,
     })
 }
 
@@ -2048,6 +2360,7 @@ pub fn link(
                     ProposalKind::Opening => opening_stands(&tx, earlier)?,
                     ProposalKind::Purchase => purchase_stands(&tx, earlier)?,
                     ProposalKind::Arrival => arrival_record_stands(&tx, earlier)?,
+                    ProposalKind::Sale => sale_stands(&tx, earlier, &row.subject)?,
                     ProposalKind::ListingSold | ProposalKind::ListingReturned => false,
                 };
                 if stands {
@@ -2086,6 +2399,7 @@ pub fn dismiss(
                 (Some(ProposalKind::Opening), Some(record)) => opening_stands(&tx, record)?,
                 (Some(ProposalKind::Purchase), Some(record)) => purchase_stands(&tx, record)?,
                 (Some(ProposalKind::Arrival), Some(record)) => arrival_record_stands(&tx, record)?,
+                (Some(ProposalKind::Sale), Some(record)) => sale_stands(&tx, record, &row.subject)?,
                 (Some(ProposalKind::ListingSold | ProposalKind::ListingReturned), _) => {
                     listing_status(&tx, &row.subject)?.as_deref() != Some("pending")
                 }

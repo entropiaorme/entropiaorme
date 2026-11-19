@@ -2,7 +2,16 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
-import { listing, listingRow, recycling, sale, shrapnel, step } from './__fixtures__/activity';
+import {
+	listedListing,
+	listedRow,
+	listing,
+	listingRow,
+	recycling,
+	sale,
+	shrapnel,
+	step,
+} from './__fixtures__/activity';
 import AccountEventCard from './AccountEventCard.svelte';
 import { type AccountEvent, splitHistory } from './accountActivity';
 
@@ -32,6 +41,18 @@ describe('an event the account recorded on its own', () => {
 		expect(screen.getByRole('heading', { name: 'Shrapnel to ammo' })).toBeTruthy();
 		expect(screen.getByTestId('event-balance').textContent).toMatch(
 			/\+0\.10 PED, the Trade Terminal's 1% on 100000 Shrapnel\./,
+		);
+	});
+
+	it('marks a conversion the readings inferred, and says from what', () => {
+		show(eventOf(shrapnel()));
+		expect(screen.queryByTestId('event-inferred')).toBeNull();
+		const inferred = (basis: 'presumed' | 'session') =>
+			eventOf(shrapnel({ recordedFromAccount: step(41, '2026-11-15T10:01:00Z', { basis }) }));
+		show(inferred('session'));
+		expect(screen.getByTestId('event-inferred').textContent).toBe('Inferred');
+		expect(screen.getAllByTestId('event-balance').at(-1)?.textContent).toContain(
+			'Inferred from the session',
 		);
 	});
 
@@ -116,5 +137,39 @@ describe('taking an event back', () => {
 		show(eventOf(shrapnel({ undone: true })));
 		expect(screen.getByText('Undone')).toBeTruthy();
 		expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+	});
+});
+
+describe('a listing the readings created', () => {
+	it('shows the item, the fee, and the starting bid as an inferred range', () => {
+		show(splitHistory([listedRow()], [], [listedListing()]).account[0]);
+		expect(screen.getByRole('heading', { name: 'Listed on the auction' })).toBeTruthy();
+		expect(screen.getByTestId('event-inferred').textContent).toBe('Inferred');
+		expect(screen.getByTitle('Animal Hide').textContent).toBe('10 Animal Hide');
+		expect(screen.getByTitle('Listing fee')).toBeTruthy();
+		expect(document.body.textContent).toContain('0.51');
+		expect(screen.getByTestId('event-balance').textContent).toMatch(
+			/Starting bid inferred from the fee: between 5\.21 and 5\.41 PED\. Buyout and duration not known\./,
+		);
+	});
+
+	it('shows no undo once the listing has an outcome', () => {
+		const sold = listedRow({
+			status: 'sold',
+			recordedFromAccount: step(46, '2026-11-15T12:00:00Z'),
+		});
+		const [listed] = splitHistory([sold], [], [listedListing({ status: 'sold' })]).account.filter(
+			(event) => event.kind === 'listed',
+		);
+		show(listed);
+		expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+		expect(screen.queryByText('Held')).toBeNull();
+	});
+
+	it('is undone as a listing', async () => {
+		const onundo = show(splitHistory([listedRow()], [], [listedListing()]).account[0]);
+		await fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Undo listing' }));
+		await waitFor(() => expect(onundo).toHaveBeenCalledTimes(1));
 	});
 });

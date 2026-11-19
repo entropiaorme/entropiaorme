@@ -621,8 +621,8 @@ pub enum Composition {
 pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     init_ort_runtime(resource_dir.as_ref());
     // The single shared OS keyboard hook, built at this production site and
-    // injected down the compose chain. The allowlist filters at the hook
-    // boundary to the hotbar digit keys, the space key, Enter (the
+    // injected down the compose chain. The source delivers only the keys
+    // its allowlist admits: the hotbar digit keys, the space key, Enter (the
     // coordinate-calibration confirm key), and F (the game's interact key, on
     // which a route can record its trees visited), so out-of-scope keystrokes
     // never enter the event stream.
@@ -636,13 +636,10 @@ pub async fn compose_native(resource_dir: Option<PathBuf>) -> Composition {
     // an oversight: a single letter's edges carry no recoverable text, just as
     // the hotbar digits already admitted carry none, and the route listener
     // additionally drops a press made while another window holds focus.
-    // Dynamic admission (membership only while a flow is live) would scope
-    // tighter but adds mutable shared state to a hook callback deliberately
-    // kept to filter-and-enqueue; it remains the documented upgrade path if a
-    // future key is genuinely sensitive. Tests inject a hook-free
-    // `MockKeystrokeSource` through the same parameter instead, so a generic
-    // test run never installs the OS hook (whose attach/detach lifecycle can
-    // intermittently wedge a headless run). The game-focus probe is the other
+    // Tests inject a hook-free `MockKeystrokeSource` through the same
+    // parameter instead, so a generic test run never installs the OS hook
+    // (whose attach/detach lifecycle can intermittently wedge a headless
+    // run). The game-focus probe is the other
     // half of that input boundary (the hotbar listener asks it whether a slot
     // press reached the game), so it is injected alongside, and tests pass
     // none rather than reading the live desktop's focus.
@@ -837,8 +834,9 @@ async fn compose_with(
     // interface profile (bundled beside the snapshot). A profile that will
     // not load is logged and leaves those readers unavailable; composition
     // goes on without them.
+    let game_window = game_window_seams();
     let game_ui = GameUi {
-        frame: Arc::new(eu_window::capture_game_window),
+        frame: game_window.frame.clone(),
         profile: load_ui_profile(&resources.join(UI_PROFILE_FILE)),
     };
 
@@ -872,9 +870,9 @@ async fn compose_with(
             // Never the shared seam, which may start capture: the watcher
             // captures only from a capture already running, and starts one
             // only for the player's turning detection on.
-            frame: Arc::new(eu_window::capture_game_window_running),
-            capture_running: Arc::new(eo_services::screen_capture::capture_running),
-            start_capture: Arc::new(eo_services::screen_capture::start_capture),
+            frame: game_window.frame_running.clone(),
+            capture_running: game_window.capture_running.clone(),
+            start_capture: game_window.start_capture.clone(),
             enabled: {
                 let reader = producers
                     .config_service_handle()
@@ -1117,7 +1115,9 @@ async fn compose_with(
     let account = match eo_services::account::HttpAccountSite::new() {
         Ok(site) => Some(eo_services::account::AccountRecorder::start(
             &producers.bus_handle(),
-            eo_services::account::RecorderParts {
+            // What the connection is built from passes through the
+            // extension's hook, whose default leaves it unchanged.
+            crate::extension::account_parts(eo_services::account::RecorderParts {
                 db: db.clone(),
                 clock: clock.clone(),
                 site: Arc::new(site),
@@ -1146,7 +1146,7 @@ async fn compose_with(
                     })
                 }),
                 mode: account_reading_mode(),
-            },
+            }),
             &tokio::runtime::Handle::current(),
         )),
         Err(error) => {
@@ -1309,10 +1309,11 @@ fn tool_watch_providers(
     reader: ConfigReader,
     inputs: ToolWatchInputs,
 ) -> eo_services::tool_watch::ToolWatchProviders {
+    let game_window = game_window_seams();
     eo_services::tool_watch::ToolWatchProviders {
-        frame: Arc::new(eu_window::capture_game_window_running),
-        capture_running: Arc::new(eo_services::screen_capture::capture_running),
-        start_capture: Arc::new(eo_services::screen_capture::start_capture),
+        frame: game_window.frame_running,
+        capture_running: game_window.capture_running,
+        start_capture: game_window.start_capture,
         enabled: Arc::new(move || reader.current().tool_reading_on()),
         focus: inputs.focus,
         profile: inputs.profile,
@@ -1412,6 +1413,28 @@ struct ScanInputs<'a> {
     clock: Arc<dyn Clock>,
     /// The shared OS keyboard hook the spacebar listener rides.
     keystroke_source: Arc<dyn KeystrokeSource>,
+}
+
+/// The game window's capture seams, the one place they are built: a frame
+/// that may start the capturer, a frame only from a capture already running
+/// (which never puts the desktop's consent question), and the capturer's
+/// running and start probes. Readers composed after the root
+/// (`extension::install`) take the same seams.
+#[derive(Clone)]
+pub struct GameWindowSeams {
+    pub frame: GameWindowFrame,
+    pub frame_running: GameWindowFrame,
+    pub capture_running: eo_services::screen_watch::Probe,
+    pub start_capture: eo_services::screen_watch::Probe,
+}
+
+pub fn game_window_seams() -> GameWindowSeams {
+    GameWindowSeams {
+        frame: Arc::new(eu_window::capture_game_window),
+        frame_running: Arc::new(eu_window::capture_game_window_running),
+        capture_running: Arc::new(eo_services::screen_capture::capture_running),
+        start_capture: Arc::new(eo_services::screen_capture::start_capture),
+    }
 }
 
 /// What the readers of the game's interface are composed over: the

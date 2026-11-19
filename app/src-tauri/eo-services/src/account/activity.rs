@@ -8,8 +8,8 @@
 //!
 //! What counts is an event, the way the player reads it, never a row: a
 //! step's recycling, its Shrapnel conversion, its sales to the Trade
-//! Terminal together, each listing outcome it settled, and each proposal
-//! still open. An arrival offered in a session's minutes is no news: it is
+//! Terminal together, each listing outcome it settled, each listing it
+//! created, and each proposal still open. An arrival offered in a session's minutes is no news: it is
 //! stored as a proposal only once the player reads those minutes, so it is
 //! never counted here.
 
@@ -65,6 +65,14 @@ pub fn marks(conn: &rusqlite::Connection) -> Result<ActivityMarks, AccountError>
         [seen],
         |row| row.get(0),
     )?;
+    // A listing the readings created counts while it stands.
+    let listed: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM listings_from_account f \
+         JOIN auction_listings l ON l.id = f.listing_id \
+         WHERE f.created_at > ?1 AND l.undone_at IS NULL",
+        [seen],
+        |row| row.get(0),
+    )?;
     let found = proposals::pending(conn, None)?
         .iter()
         .filter(|proposal| proposal.kind != ProposalKind::Arrival && proposal.detected_at > seen)
@@ -72,7 +80,7 @@ pub fn marks(conn: &rusqlite::Connection) -> Result<ActivityMarks, AccountError>
     let found = i64::try_from(found).map_err(|_| AccountError::Overflow)?;
     Ok(ActivityMarks {
         seen_through: seen,
-        unseen: records + listings + found,
+        unseen: records + listings + listed + found,
     })
 }
 

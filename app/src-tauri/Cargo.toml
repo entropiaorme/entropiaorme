@@ -16,7 +16,13 @@
 
 [workspace]
 resolver = "2"
-members = ["entropia-orme", "eo-api", "eo-services", "eo-wire", "xtask"]
+members = [
+    "entropia-orme",
+    "eo-api",
+    "eo-services",
+    "eo-wire",
+    "xtask",
+]
 
 [workspace.package]
 version = "0.3.0"
@@ -47,25 +53,17 @@ tauri = { version = "~2.11", features = ["tray-icon"] }
 tauri-build = { version = "~2.6", features = [] }
 tauri-plugin-shell = "2"
 tauri-plugin-store = "2"
-# Default features off to drop `zip`: the update payload is a raw signed MSI
-# (`createUpdaterArtifacts: true`, the non-archived updater format), so the
-# plugin's archive extraction is never needed. deny.toml bans `zip` to keep
-# it that way.
-tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls"] }
-tauri-plugin-process = "2"
 # The account connection's reader (`eo-services` `account::site`): two
 # fixed read requests to the Entropia Universe account site over HTTPS.
-# reqwest 0.13 is already in the graph through the updater plugin. This
-# crate asks for default features off and only `rustls-no-provider`: no
+# This crate asks for default features off and only `rustls-no-provider`: no
 # native TLS, no cookie store (its one cookie is set on each request), no
 # HTTP/2, and no system proxy lookup; it reads bodies as capped bytes and
 # hands them to the strict reading parser. The crypto provider is passed in
 # explicitly below rather than installed process-wide.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
-# The TLS stack under that reader, at the versions the updater already
-# resolves: rustls over the ring provider (no aws-lc-rs), its floor at the
-# first release clear of its open advisories, and the platform's own
-# certificate verifier.
+# The TLS stack under that reader: rustls over the ring provider (no
+# aws-lc-rs), its floor at the first release clear of its open advisories,
+# and the platform's own certificate verifier.
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "0.6"
 serde = { version = "1", features = ["derive"] }

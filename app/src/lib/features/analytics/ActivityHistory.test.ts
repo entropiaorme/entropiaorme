@@ -28,6 +28,7 @@ const manual: ActivityHistoryEntry = {
 	itemised: false,
 	derivedFrom: [],
 	recordedFromAccount: null,
+	listedFromAccount: null,
 	reconciliationId: null,
 };
 
@@ -41,6 +42,8 @@ const fromAccount: ActivityHistoryEntry = {
 		to: '2026-03-04T14:03:00Z',
 		recordedAt: '2026-03-04T14:03:05Z',
 		cardChange: null,
+		basis: 'exact',
+		inferredBid: null,
 	},
 };
 
@@ -60,6 +63,30 @@ describe('a history entry recorded from the account', () => {
 		expect(tip.classList.contains('invisible')).toBe(true);
 		await fireEvent.focus(screen.getByRole('button', { name: 'Recorded from your account' }));
 		expect(tip.classList.contains('invisible')).toBe(false);
+	});
+
+	it('is said of a listing the account created, with when it was seen made', () => {
+		const listed: ActivityHistoryEntry = {
+			...manual,
+			id: 'listing-made',
+			kind: 'listing',
+			channel: 'auction',
+			status: 'pending',
+			listedFromAccount: {
+				readingId: 7,
+				from: '2026-03-04T14:02:00Z',
+				to: '2026-03-04T14:03:00Z',
+				recordedAt: '2026-03-04T14:03:05Z',
+				cardChange: -0.51,
+				basis: 'inferred',
+				inferredBid: { low: 5.2, high: 5.41 },
+			},
+		};
+		show([listed]);
+		expect(screen.getByText('from your account')).toBeTruthy();
+		expect(screen.getByRole('tooltip').textContent).toContain(
+			'Recorded from your account readings: it happened between Mar 4, 2:02 PM and 2:03 PM.',
+		);
 	});
 
 	it('is not said of an entry the player made', () => {

@@ -130,7 +130,8 @@ export function archivedUnits(minutes: AccountSessionMinutes, itemName: string):
 const UNMEASURED: Record<MinuteUnmeasured, string> = {
 	gap: 'The readings either side of this minute are too far apart to measure it alone',
 	ammoUnsettled: 'How much of the ammo was fired in this minute could not be settled',
-	ammoToppedUp: 'Universal Ammo was topped up in this minute, so what was fired is not known',
+	ammoToppedUp:
+		'Universal Ammo arrived in this minute (topped up, or converted from Shrapnel), so what was fired is not known',
 	limitedSetUnconfirmed: 'A limited piece lost TT; pricing it needs its set confirmed',
 	noReadings: 'No reading covers this minute',
 	partialCoverage: 'The readings do not cover this minute whole',

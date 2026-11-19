@@ -33,6 +33,11 @@ export default defineConfig({
 			// backend crates; Vite only needs the frontend sources.
 			ignored: ['**/src-tauri/**'],
 		},
+		// The Terms of Service and Privacy Policy live at the repository root
+		// (`legal/`), outside the app, and are bundled from there.
+		fs: {
+			allow: ['../legal'],
+		},
 		// The shell pre-spawns its hidden satellite windows (overlay,
 		// scan-overlay) at boot, so their routes are requested while the dev
 		// server is still cold. Under that parallel first load, a component's
@@ -48,10 +53,11 @@ export default defineConfig({
 	},
 	define: {
 		// Marks a build as a published stable artefact, which hides surfaces
-		// registered as in-development. Set to '1' only by the release pipeline,
-		// the one build path whose output reaches people who did not build it;
-		// unset (so '') for a locally built installer, a source build, and the
-		// dev server, all of which show those surfaces marked. Baking this at
+		// registered as in-development. Set to '1' only for a build published
+		// to people who did not build it, and nothing in this repository sets
+		// it now that no artefacts are published; unset (so '') for a locally
+		// built installer, a source build, and the dev server, all of which
+		// show those surfaces marked. Baking this at
 		// build time rather than reading the build mode is deliberate: an
 		// installer built from the latest source is a production Vite build, so
 		// build mode cannot tell it apart from a published release.

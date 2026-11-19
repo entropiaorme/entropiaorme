@@ -1,13 +1,10 @@
 # Market data pipeline
 
 The market layer tracks what loot items actually trade for, without ever
-letting an estimate masquerade as measured profit. It has two halves: a
-local feed every installation owns, and an optional shared service that
-pools observations between installations. Both land in the same
-quarantined informational layer; the accounting boundary they sit behind
-is [ADR-0024](../adr/0024-market-informational-layer.md), and the shared
-service's architecture is
-[ADR-0025](../adr/0025-central-market-data-service.md).
+letting an estimate masquerade as measured profit. Every observation is
+entered on the player's own machine, by a paste or by hand, and lands in a
+quarantined informational layer; the accounting boundary it sits behind is
+[ADR-0024](../adr/0024-market-informational-layer.md).
 
 ## The local feed
 
@@ -24,58 +21,39 @@ parse, and commits it.
   paste, and one `market_observations` row per item and horizon (migration
   `0005_market_observations.sql`; column detail in the
   [schema reference](database-schema.md)).
-- `eo-services/src/market_service.rs` serves the reads: the tracked-item
-  overview with staleness, per-item history, the modelled break-even
-  readout, a fee-efficient packet TT for each resolved item markup, and a
-  per-species ranking that TT-weights each species' recorded loot composition
-  by the latest markup observations. The packet model uses the measured
-  listing-fee curve in `eo-services/src/auction_fee.rs` and finds the smallest
-  parcel that keeps that fee to at most ten per cent of expected gross markup.
-  It deliberately does not constrain the parcel by traded volume. The ranking
-  reads the accounting tables directly; the reverse direction is forbidden
-  (see the boundary below).
-- The break-even readout evaluates each configured weapon loadout through the
-  shared `expected_hunting` model. Weapon and amplifier Efficiency remain
-  separate component streams, limited-item premium affects economic cost but
-  not loot-bearing TT, and the current fallback uses the labelled mean of
-  exactly Animal, Mutant, and Robot Looter. Its result is the 100%-anchored
-  loot markup that the modelled offensive slice would need to recover its
-  eligible cost, not a whole-activity promise.
-- The Import tab also accepts a manual absolute PED-per-unit observation for
-  zero-TT and unit-priced items. These append to
-  `market_unit_price_observations`; reward projection multiplies the observed
-  reward quantity by the latest unit quote. The quote is informational only,
-  just like percentage markup.
+- `eo-services/src/market_service.rs` serves the reads: each observed
+  item's latest readings with when they were observed, per-item history,
+  and the market signals a surface valuing loot asks for (an activity's
+  loot items, or exactly the items it names). `eo-api/src/market.rs` adds a
+  fee-efficient packet threshold: through the measured listing-fee curve in
+  `eo-services/src/auction_fee.rs`, the smallest gross markup whose listing
+  fee stays within a chosen share of it (ten per cent by default), from
+  which an item's packet TT follows by its premium. It deliberately does
+  not constrain the parcel by traded volume. Scoping the loot items reads
+  the accounting tables; the reverse direction is forbidden (see the
+  boundary below).
+- Beside the pasted observations, the player can enter an item's markup by
+  hand (a percentage, or PED above TT per unit), and whichever of the two
+  was recorded more recently is the one the item is valued at; an item can
+  also be marked to be valued at the Nanocube markup in the live session
+  figures (migration `0070_market_manual_markups.sql`).
+- The paste surface also accepts, behind a disclosure, a manual absolute
+  PED-per-unit observation for zero-TT and unit-priced items. These append
+  to `market_unit_price_observations`, and the latest quote is served with
+  the item's other signals. The quote is informational only, just like
+  percentage markup.
 - `eo-api/src/market.rs` is the typed command family over those reads,
   consumed by the Market page (`app/src/lib/features/market/`).
 
-## The shared service
+## Where observations come from
 
-The optional backend,
-[market-data-service](https://github.com/entropiaorme/market-data-service),
-pools observations between installations: authenticated submissions land
-in an ingest API, a scheduled aggregation folds them per item and
-horizon, and every client fetches the same versioned snapshot JSON from
-a CDN-fronted bucket. Contracts are versioned JSON Schemas served at the
-URLs their `$id` fields declare. The full pipeline and its rationale
-live in [ADR-0025](../adr/0025-central-market-data-service.md).
-
-Client-side, the flow is deliberately consent-shaped
-(`app/src/lib/marketData.svelte.ts`):
-
-- **Consuming** the shared snapshot is a first-run consent choice; when
-  enabled, `app/src/lib/marketDataFetch.ts` fetches the published
-  `latest.json` with ETag revalidation and caches it in preferences.
-- **Contributing** is a second, independent, default-off opt-in in
-  Settings that also requires a contributor token, and each send is an
-  explicit button press sharing exactly the latest accepted paste;
-  nothing uploads automatically.
-- All of it routes through the app's one hardened outbound HTTP gateway
-  (`app/src/lib/outboundHttp.ts`), and the service domain is pinned in
-  the CSP `connect-src` beside the news feed. The app never scrapes or
-  fetches anything from the game itself at runtime; market observations
-  always enter by a user's paste, locally or via another contributor's,
-  and the shared snapshot is the only market feed it downloads.
+Market observations enter only by the player's paste or hand entry. The
+app downloads no market feed and uploads none: the shared service
+recorded in [ADR-0025](../adr/0025-central-market-data-service.md) is no
+longer read or written by the app, the webview may reach no external
+origin (`connect-src 'self'` in
+`app/src-tauri/entropia-orme/tauri.conf.json`), and nothing is fetched
+from the game itself for the market layer.
 
 ## The accounting boundary
 

@@ -42,7 +42,7 @@ $loc = Get-ChildItem (Join-Path $wixDir "*.wxl") | Select-Object -First 1
 
 # 4. Link with the per-user ICE validations suppressed (ICE38: profile component
 #    file keypaths; ICE64/90/91: profile-directory warnings). Output to Tauri's
-#    canonical bundle path so the Burn step and release pipeline find it.
+#    canonical bundle path so the Burn step finds it.
 $version = (Get-Content $conf -Raw | ConvertFrom-Json).version
 $msi = Join-Path $bundleDir "EntropiaOrme_${version}_x64_en-US.msi"
 New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null

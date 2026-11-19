@@ -4,10 +4,12 @@
  * The channel is stamped at build time by whoever built the app, not inferred
  * from the build mode: an installer built from the latest source is a
  * production Vite build, so build mode cannot distinguish it from a published
- * release. Only the release pipeline sets `STABLE_CHANNEL`, so:
+ * release. Only a build published to people who did not build it would set
+ * `STABLE_CHANNEL`, and nothing in this repository sets it now that no
+ * artefacts are published, so:
  *
- *   - a published release hides these surfaces, which is what keeps an
- *     unfinished control away from someone who did not build the app;
+ *   - a build stamped as published hides these surfaces, which is what keeps
+ *     an unfinished control away from someone who did not build the app;
  *   - a locally built installer, a source build, and the dev server all show
  *     them marked, so the app can be used against what is actually
  *     implemented even where a control is still inert.

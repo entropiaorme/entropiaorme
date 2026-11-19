@@ -5,10 +5,30 @@
 //!
 //! - A listing that came back from the auction is recorded expired, and
 //!   one that sold is recorded sold when only one price fits it (see
-//!   [`super::proposals::settled`]), dated by the local day its step ended
-//!   and kept with the step (see
+//!   [`super::proposals::settled_in_step`]), dated by the local day its step
+//!   ended and kept with the step (see
 //!   [`crate::analytics::AnalyticsService::record_listing_from_account_blocking`]).
-//!   Only from a short step: what a longer one holds is proposed instead.
+//!   From a step longer than [`LONGEST_STEP`] only a listing that came back,
+//!   and the sales of a step that holds nothing else, each at the one price
+//!   its listing can fetch: what else a longer step holds is proposed
+//!   instead.
+//! - A listing the player made (one item or stack into the auction, the
+//!   PED Card falling by its fee and by nothing else) is created as the
+//!   player's own entry would be, from a short step: its fee exact, its
+//!   starting bid inferred from the fee and kept as a range (see
+//!   [`super::listing_made`] and
+//!   [`crate::analytics::AnalyticsService::record_listed_from_account_blocking`]).
+//!   Only when the app holds all of what was listed as the step is looked
+//!   at: it never waits on stock still landing, and one held in part is
+//!   left for the player. Its buyout is not known, so its sale is never
+//!   settled on its own.
+//! - Shrapnel that left as Universal Ammo arrived, short of or past what it
+//!   pays (converted in several goes, or part of the payout fired), is
+//!   recorded as a conversion of what left, from a short step outside
+//!   every tracked session.
+//! - What a tracked session turned from Shrapnel into ammo is recorded
+//!   once, as its last reading's step is looked at, from the session whole
+//!   (see [`super::session_shrapnel`]).
 //! - A Shrapnel conversion is recorded as a Shrapnel conversion, a recycling
 //!   as one conversion into Nanocubes, and a sale to the Trade Terminal as a
 //!   sale at TT, item by item. Each takes only what the app holds, keeps out
@@ -55,7 +75,7 @@ use std::sync::Arc;
 
 use super::diff::Span;
 use super::proposals::{
-    departures, is_the_step_s_own, local_day, matching_listing, settled, step_between,
+    is_the_step_s_own, local_day, outside_every_session, settled_in_step, step_between,
     ListingSettled,
 };
 use super::recognition::{recognise_step, Recognised};
@@ -64,7 +84,8 @@ use super::roles::{KnownRoles, RoleSource};
 use super::store::{self, Purpose, ReadingId, StoredReading};
 use super::AccountError;
 use crate::analytics::{
-    AccountRecord, AccountStep, AnalyticsError, AnalyticsService, FromAccount, ListingFromAccount,
+    AccountRecord, AccountStep, AnalyticsError, AnalyticsService, FromAccount, ListedFromAccount,
+    ListingFromAccount,
 };
 use crate::db::Db;
 use crate::game_data_store::GameDataStore;
@@ -97,11 +118,16 @@ pub struct Following {
     pub records: Vec<AccountRecord>,
     /// The listings whose outcome the step settles.
     pub listings: Vec<ListingFromAccount>,
+    /// The listing the step shows the player made, to create.
+    pub listed: Option<ListedFromAccount>,
     /// The local day the step ended: what a listing's outcome is dated.
     pub resolved_on: String,
     /// The step measured, when it lies between sessions and wore or used
     /// something up (see [`super::between`]).
     pub between: Option<super::between::BetweenStep>,
+    /// The Shrapnel the session this reading closed turned into ammo, with
+    /// the step that spans the session (see [`super::session_shrapnel`]).
+    pub session_shrapnel: Option<super::session_shrapnel::SessionShrapnel>,
 }
 
 impl Following {
@@ -112,8 +138,10 @@ impl Following {
             step: None,
             records: Vec::new(),
             listings: Vec::new(),
+            listed: None,
             resolved_on: String::new(),
             between: None,
+            session_shrapnel: None,
         }
     }
 }
@@ -190,11 +218,17 @@ pub fn mark_recognised(
 }
 
 /// The records what a step did to the stock asks for.
-fn records_of(recognised: &Recognised) -> Vec<AccountRecord> {
+/// `presume` is whether Shrapnel presumed converted is recorded too.
+fn records_of(recognised: &Recognised, presume: bool) -> Vec<AccountRecord> {
     let mut records = Vec::new();
     if let Some(converted) = recognised.shrapnel {
         records.push(AccountRecord::ShrapnelConversion {
             quantity: converted.shrapnel_units as f64,
+        });
+    }
+    if let Some(units) = recognised.shrapnel_presumed.filter(|_| presume) {
+        records.push(AccountRecord::ShrapnelPresumedConversion {
+            quantity: units as f64,
         });
     }
     if !recognised.recycled.is_empty() {
@@ -215,57 +249,69 @@ fn records_of(recognised: &Recognised) -> Vec<AccountRecord> {
     records
 }
 
-/// Whether the pass records the listing outcomes the step from `before` to
-/// `after` settles: a step after the readings stored before the app
-/// recorded from the account, outside a strongbox run's own readings, and
-/// no longer than [`LONGEST_STEP`]. What it settles is then never proposed.
-pub(super) fn settles_listings(
+/// How far the readings settle, on their own, the listing outcomes a step
+/// holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ListingReach {
+    /// None of them: a step reaching back into the readings stored before
+    /// the app recorded from the account, one between a strongbox run's own
+    /// readings, or one whose readings are out of order.
+    Nothing,
+    /// A step no longer than [`LONGEST_STEP`]: every outcome one price fits.
+    Short,
+    /// A longer step: a listing that came back, and the sales of a step that
+    /// holds nothing else.
+    Long,
+}
+
+/// How far the step from `before` to `after` settles its listing outcomes
+/// on their own. What it settles is recorded by the pass and never
+/// proposed: both read it through [`settled_in_step`].
+pub(super) fn listing_reach(
     conn: &rusqlite::Connection,
     before: &StoredReading,
     after: &StoredReading,
-) -> Result<bool, AccountError> {
+) -> Result<ListingReach, AccountError> {
     if before.header.id.0 <= history_ends_at(conn)? {
-        return Ok(false);
+        return Ok(ListingReach::Nothing);
     }
     if after.header.purpose == Purpose::Run && before.header.purpose == Purpose::Run {
-        return Ok(false);
+        return Ok(ListingReach::Nothing);
     }
     let length = after.reading.taken_at() - before.reading.taken_at();
-    Ok((0.0..=LONGEST_STEP).contains(&length))
+    Ok(if (0.0..=LONGEST_STEP).contains(&length) {
+        ListingReach::Short
+    } else if length > LONGEST_STEP {
+        ListingReach::Long
+    } else {
+        ListingReach::Nothing
+    })
 }
 
-/// The listings whose outcome a step settles: each departure from the
-/// auction that matches exactly one listing still on it, when the readings
-/// leave nothing about its outcome to guess.
+/// The listings whose outcome a step settles, as records to make.
 fn settled_listings(
     conn: &rusqlite::Connection,
     set: &super::diff::StepSet,
     before: &super::reading::Reading,
     between: &Span,
+    reach: ListingReach,
 ) -> Result<Vec<ListingFromAccount>, AccountError> {
-    let mut out = Vec::new();
-    for departure in departures(set, before) {
-        let Some(terms) = matching_listing(conn, &departure, between)? else {
-            continue;
-        };
-        match settled(&terms, &departure) {
-            Some(ListingSettled::Returned) => {
-                out.push(ListingFromAccount::Returned {
-                    listing_id: terms.id,
-                });
-            }
-            Some(ListingSettled::Sold {
+    Ok(settled_in_step(conn, set, before, between, reach)?
+        .into_iter()
+        .map(|settled| match settled.outcome {
+            ListingSettled::Returned => ListingFromAccount::Returned {
+                listing_id: settled.listing_id,
+            },
+            ListingSettled::Sold {
                 final_price,
                 sale_fee,
-            }) => out.push(ListingFromAccount::Sold {
-                listing_id: terms.id,
+            } => ListingFromAccount::Sold {
+                listing_id: settled.listing_id,
                 final_price: final_price.0 as f64 / 100.0,
                 sale_fee: sale_fee.0 as f64 / 100.0,
-            }),
-            None => {}
-        }
-    }
-    Ok(out)
+            },
+        })
+        .collect())
 }
 
 /// Read one stored reading's step for what to record: a read, so run it
@@ -308,29 +354,46 @@ pub fn prepare(
     let records = if length > LONGEST_STEP && !recognised.whole {
         Vec::new()
     } else {
-        records_of(&recognised)
+        // Shrapnel is presumed converted only outside every tracked
+        // session: inside one it is looted as it is converted, so what a
+        // step shows leaving is not what was converted.
+        records_of(&recognised, outside_every_session(conn, &between)?)
     };
-    let listings = if settles_listings(conn, &before, &after)? {
-        settled_listings(conn, &set, &before.reading, &between)?
+    let reach = listing_reach(conn, &before, &after)?;
+    let listings = settled_listings(conn, &set, &before.reading, &between, reach)?;
+    // A listing is created only from a short step: a longer one may hold
+    // play no reading saw that moved the Card.
+    let listed = if reach == ListingReach::Short {
+        super::listing_made::listing_made(&set, &before.reading).map(|made| ListedFromAccount {
+            item_name: made.name,
+            quantity: made.units,
+            fee_pec: made.fee.0,
+            bid_low_pec: made.bids.0 .0,
+            bid_high_pec: made.bids.1 .0,
+        })
     } else {
-        Vec::new()
+        None
     };
     let between_sessions = super::between::measure(&before, &after, roles)?;
     Ok(Following {
         reading,
         between: between_sessions,
         resolved_on: local_day(between.to),
-        step: (!records.is_empty() || !listings.is_empty()).then_some(AccountStep {
-            reading_id: reading.0,
-            prev_reading_id: prev.0,
-            seen_from: between.from,
-            seen_to: between.to,
-            hand_entries_since: between.from - HAND_ENTRY_LOOK_BACK,
-            stock_settles_by: between.to + STOCK_SETTLES,
-            card_change_pec: Some(after.header.balance.0 - before.header.balance.0),
-        }),
+        step: (!records.is_empty() || !listings.is_empty() || listed.is_some()).then_some(
+            AccountStep {
+                reading_id: reading.0,
+                prev_reading_id: prev.0,
+                seen_from: between.from,
+                seen_to: between.to,
+                hand_entries_since: between.from - HAND_ENTRY_LOOK_BACK,
+                stock_settles_by: between.to + STOCK_SETTLES,
+                card_change_pec: Some(after.header.balance.0 - before.header.balance.0),
+            },
+        ),
         records,
         listings,
+        listed,
+        session_shrapnel: None,
     })
 }
 
@@ -373,8 +436,21 @@ pub fn follow(
             }
             let prepared = KnownRoles::read(conn, game_data.as_deref())
                 .and_then(|roles| prepare(conn, reading, &roles));
+            // What a session converted is read as its last reading's step
+            // is: a reading of its own, never the step's to fail on.
+            let session_shrapnel =
+                match super::session_shrapnel::at_close(conn, reading, game_data.as_deref(), now) {
+                    Ok(found) => found,
+                    Err(error) => {
+                        tracing::warn!(target: "eo::account", %error, reading = reading.0, "the Shrapnel a session converted could not be read; it is left to the stock check");
+                        None
+                    }
+                };
             Ok(Some(match prepared {
-                Ok(following) => Ok(following),
+                Ok(mut following) => {
+                    following.session_shrapnel = session_shrapnel;
+                    Ok(following)
+                }
                 Err(error) if is_the_step_s_own(&error) => {
                     tracing::warn!(target: "eo::account", %error, reading = reading.0, "a stored reading's step could not be read for the stock; it is passed");
                     Ok(Following::nothing(reading))
@@ -413,6 +489,24 @@ pub fn follow(
                     }
                 }
             }
+            // The listing the player made: created only of stock held in
+            // full as it is looked at, so it never waits; the rest of the
+            // step goes on either way.
+            if let Some(listed) = following.listed {
+                match analytics.record_listed_from_account_blocking(step, listed) {
+                    Ok(FromAccount::Recorded { .. }) => pass.recorded += 1,
+                    Ok(_) => {}
+                    Err(AnalyticsError::Storage(error)) => {
+                        return Err(FollowFailure {
+                            reading: Some(reading),
+                            error: AccountError::Db(error),
+                        })
+                    }
+                    Err(error) => {
+                        tracing::warn!(target: "eo::account", %error, reading = reading.0, "a listing the readings saw made was refused; it is left");
+                    }
+                }
+            }
             for record in following.records {
                 match analytics.record_from_account_blocking(step, record) {
                     Ok(FromAccount::Recorded { .. }) => pass.recorded += 1,
@@ -430,6 +524,28 @@ pub fn follow(
                     Err(error) => {
                         tracing::warn!(target: "eo::account", %error, reading = reading.0, "a stock record the readings showed was refused; it is left");
                     }
+                }
+            }
+        }
+        if let Some(session) = following.session_shrapnel {
+            let record = AccountRecord::ShrapnelSessionConversion {
+                quantity: session.units as f64,
+            };
+            match analytics.record_from_account_blocking(session.step, record) {
+                Ok(FromAccount::Recorded { .. }) => pass.recorded += 1,
+                Ok(FromAccount::Waiting) => {
+                    pass.waiting = true;
+                    return Ok(pass);
+                }
+                Ok(_) => {}
+                Err(AnalyticsError::Storage(error)) => {
+                    return Err(FollowFailure {
+                        reading: Some(reading),
+                        error: AccountError::Db(error),
+                    })
+                }
+                Err(error) => {
+                    tracing::warn!(target: "eo::account", %error, reading = reading.0, "the Shrapnel a session converted was refused as a record; it is left");
                 }
             }
         }

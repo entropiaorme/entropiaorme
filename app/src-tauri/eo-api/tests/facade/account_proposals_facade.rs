@@ -984,3 +984,76 @@ async fn a_trade_terminal_sale_the_readings_saw_is_offered_to_the_trade_form() {
         eo_services::time::to_iso_utc(harness.clock.epoch_at(-60.0))
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_sale_to_a_player_outside_a_session_is_proposed_and_settled_by_the_trade_it_became() {
+    let seed: Seed = Box::new(|conn, clock: &PacedClock| {
+        let before = carried(clock.epoch_at(-120.0), 5_000, &[("Garcen Grease", 10, 200)]);
+        let after = carried(clock.epoch_at(-60.0), 6_200, &[]);
+        record_reading(conn, &before, Purpose::Ambient, None).expect("stored");
+        record_reading(conn, &after, Purpose::Ambient, None).expect("stored");
+    });
+    let harness = harness_with(Vec::new(), &[], seed).await;
+    settled(&harness).await;
+    let found = proposals(&harness, Some(AccountProposalKind::Sale)).await;
+    assert_eq!(found.len(), 1, "{found:?}");
+    let AccountProposalOutcome::Sale {
+        item_name,
+        units,
+        tt,
+        received,
+        markup,
+        left_from,
+    } = &found[0].outcome
+    else {
+        panic!("a sale: {:?}", found[0]);
+    };
+    assert_eq!(item_name, "Garcen Grease");
+    assert_eq!(*units, 10);
+    assert!(close(tt.ped, 2.0));
+    assert!(close(received.ped, 12.0));
+    assert!(close(markup.ped, 10.0));
+    assert_eq!(*left_from, AccountPlace::Carried);
+    assert!(proposals(&harness, Some(AccountProposalKind::Purchase))
+        .await
+        .is_empty());
+
+    // Recorded as the player's own trade, which answers its id, and linked
+    // to it.
+    use eo_api::analytics::{PrivateSaleInput, Profession};
+    let trade = harness
+        .api
+        .stock_private_sale(PrivateSaleInput {
+            profession: Profession::Inventory,
+            item_name: "Garcen Grease".to_string(),
+            quantity: 10.0,
+            sold_for: 12.0,
+            sold_at: None,
+        })
+        .await
+        .unwrap();
+    harness
+        .api
+        .account_proposals_link(AccountProposalsLinkInput {
+            ids: vec![found[0].id],
+            record_id: trade.id.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(proposals(&harness, Some(AccountProposalKind::Sale))
+        .await
+        .is_empty());
+
+    // The trade taken back offers it again.
+    harness
+        .api
+        .private_sale_undo(ActivityUndoInput { id: trade.id })
+        .await
+        .unwrap();
+    assert_eq!(
+        proposals(&harness, Some(AccountProposalKind::Sale))
+            .await
+            .len(),
+        1
+    );
+}

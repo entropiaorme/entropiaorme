@@ -972,9 +972,9 @@ fn an_unsettled_ammo_split_leaves_only_the_weapon_unmeasured() {
     )
     .unwrap();
     session_row(&conn, "s", 0.0, Some(120.0));
-    // Shrapnel left with no ammo row for its conversion: the ammo it
-    // became stacked onto the row being fired, so what was burned is not
-    // known.
+    // Shrapnel left beside a Card rise no sale explains, with no ammo
+    // arriving: whether any of it became ammo is not known, so neither is
+    // what was burned.
     let readings = [
         reading(
             0.0,
@@ -987,16 +987,13 @@ fn an_unsettled_ammo_split_leaves_only_the_weapon_unmeasured() {
         ),
         reading(
             60.0,
-            1_000,
-            &[
-                ("Universal Ammo", C, 105_100, 1_051),
-                ("Odd FAP", C, 1, 498),
-            ],
+            1_037,
+            &[("Universal Ammo", C, 95_000, 950), ("Odd FAP", C, 1, 498)],
         ),
         reading(
             120.0,
-            1_000,
-            &[("Universal Ammo", C, 95_100, 951), ("Odd FAP", C, 1, 497)],
+            1_037,
+            &[("Universal Ammo", C, 85_000, 850), ("Odd FAP", C, 1, 497)],
         ),
     ];
     for reading in &readings {
@@ -1726,7 +1723,7 @@ fn a_consumable_used_up_follows_the_player_s_choice_for_it() {
 fn the_rules_versions_are_pinned_and_the_resolver_reads_the_same_ones() {
     // A change of the measure's or the costs' rules bumps its version:
     // the bump is what rebuilds everything the earlier rules stored.
-    assert_eq!(super::measure::MEASURE_VERSION, 6);
+    assert_eq!(super::measure::MEASURE_VERSION, 8);
     assert_eq!(COSTS_VERSION, 6);
     // The resolver names its own copies; one left behind would read every
     // stored projection as stale.

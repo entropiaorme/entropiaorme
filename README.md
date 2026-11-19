@@ -11,6 +11,7 @@ A Tauri 2 shell hosting a Svelte 5 frontend over a pure-Rust in-process backend.
 
 - `app/`: the application (SvelteKit frontend + the `src-tauri` Rust workspace)
 - `docs/`: the mdBook architecture handbook and ADRs
+- `legal/`: the Terms of Service and the Privacy Policy, which the app renders from these files
 - `scripts/`: build and launch scripts driven by the `justfile`
 - `assets/`: repository art
 

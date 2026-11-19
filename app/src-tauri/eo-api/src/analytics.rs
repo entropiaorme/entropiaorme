@@ -699,6 +699,10 @@ pub struct AuctionListing {
     /// step they saw it in; `null` for one the player resolved, and while
     /// it waits on the auction.
     pub recorded_from_account: Nullable<RecordedFromAccount>,
+    /// When the account readings created the listing itself, the step they
+    /// saw it made in, with the starting bids its fee reads back as
+    /// (`inferredBid`); `null` for a listing the player entered.
+    pub listed_from_account: Nullable<RecordedFromAccount>,
 }
 
 /// One thing an activity did to its stock: a listing across its whole
@@ -751,8 +755,13 @@ pub struct ActivityHistoryEntry {
     /// What the sold stock descends from, when a conversion produced it.
     pub derived_from: Vec<DerivedSource>,
     /// Recorded on its own from the account readings, and the step it was
-    /// seen in; `null` for an entry the player made.
+    /// seen in; `null` for an entry the player made. For a listing, its
+    /// outcome.
     pub recorded_from_account: Nullable<RecordedFromAccount>,
+    /// A listing the account readings created, and the step it was seen
+    /// made in, with the starting bids its fee reads back as; `null`
+    /// otherwise.
+    pub listed_from_account: Nullable<RecordedFromAccount>,
     /// The standing stock reconciliation that recorded it: undone only
     /// with it (`account_reconciliation_undo`), never on its own. `null`
     /// otherwise.
@@ -773,6 +782,34 @@ pub struct RecordedFromAccount {
     /// How far the PED Card moved across the step, in PED; `null` once the
     /// readings are gone.
     pub card_change: Nullable<f64>,
+    /// What the record rests on.
+    pub basis: RecordedBasis,
+    /// For a listing the readings created: every starting bid whose fee is
+    /// the one paid. The listing stores the midpoint; the bid itself was
+    /// never seen. `null` for every other record.
+    pub inferred_bid: Nullable<InferredBid>,
+}
+
+/// What a record from the account rests on: a step that closed exactly,
+/// Shrapnel presumed converted as ammo arrived, the Shrapnel a tracked
+/// session converted, read from the session whole, or a listing whose
+/// starting bid was inferred from the fee paid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordedBasis {
+    Exact,
+    Presumed,
+    Session,
+    Inferred,
+}
+
+/// The range of starting bids, in PED, whose listing fee is the one the
+/// readings saw paid.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct InferredBid {
+    pub low: f64,
+    pub high: f64,
 }
 
 /// The step a record from the account was seen in, for the wire.
@@ -785,6 +822,19 @@ fn recorded_from_account_dto(
         to: eo_services::time::to_iso_utc(step.seen_to),
         recorded_at: eo_services::time::to_iso_utc(step.recorded_at),
         card_change: step.card_change.into(),
+        basis: match step.basis {
+            eo_services::analytics::RecordBasis::Exact => RecordedBasis::Exact,
+            eo_services::analytics::RecordBasis::Presumed => RecordedBasis::Presumed,
+            eo_services::analytics::RecordBasis::Session => RecordedBasis::Session,
+            eo_services::analytics::RecordBasis::Inferred => RecordedBasis::Inferred,
+        },
+        inferred_bid: step
+            .inferred_bid
+            .map(|bid| InferredBid {
+                low: bid.low,
+                high: bid.high,
+            })
+            .into(),
     }
 }
 
@@ -1131,6 +1181,15 @@ pub struct PrivateSaleInput {
     pub quantity: f64,
     pub sold_for: f64,
     pub sold_at: Option<String>,
+}
+
+/// The trade just recorded.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivateSaleRecorded {
+    /// Its own id: what taking it back names, and what a proposal of the
+    /// sale is linked to.
+    pub id: String,
 }
 
 /// Stock whose later fate is unknown. This changes holdings only and never
@@ -1514,7 +1573,10 @@ impl Api {
             .map_err(analytics_error("item conversion"))
     }
 
-    pub async fn stock_private_sale(&self, input: PrivateSaleInput) -> Result<(), ApiError> {
+    pub async fn stock_private_sale(
+        &self,
+        input: PrivateSaleInput,
+    ) -> Result<PrivateSaleRecorded, ApiError> {
         self.analytics
             .create_private_sale(
                 input.profession.into(),
@@ -1524,6 +1586,7 @@ impl Api {
                 input.sold_at.as_deref(),
             )
             .await
+            .map(|id| PrivateSaleRecorded { id })
             .map_err(analytics_error("private sale"))
     }
 
@@ -1596,6 +1659,10 @@ impl Api {
                     .map(derived_source_dto)
                     .collect(),
                 recorded_from_account: row.from_account.map(recorded_from_account_dto).into(),
+                listed_from_account: row
+                    .listed_from_account
+                    .map(recorded_from_account_dto)
+                    .into(),
                 reconciliation_id: row.reconciliation_id.into(),
             })
             .collect())
@@ -2276,6 +2343,10 @@ pub(crate) fn auction_listing_dto(
         activity_net_markup: row.activity_net_markup.into(),
         gross_markup: row.gross_markup.into(),
         recorded_from_account: row.from_account.map(recorded_from_account_dto).into(),
+        listed_from_account: row
+            .listed_from_account
+            .map(recorded_from_account_dto)
+            .into(),
     }
 }
 

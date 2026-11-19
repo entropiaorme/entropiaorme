@@ -6,21 +6,13 @@
 	import { setOnboardingComplete } from '$lib/onboarding';
 	import { CURRENT_TOS_VERSION, setAcceptedTosVersion } from '$lib/tos';
 	import { theme, setTheme, type Theme } from '$lib/theme.svelte';
-	import { markNewsOptInSeen, setNewsOptIn } from '$lib/news.svelte';
-	import { setAutoUpdateEnabled } from '$lib/updater.svelte';
-	import { refreshNews } from '$lib/newsFetch';
-	import NetworkingStep from './NetworkingStep.svelte';
 	import TermsStep from './TermsStep.svelte';
 	import { externalLinks } from '$lib/utils/openExternal';
 
 	let step = $state(1);
 	let tosAccepted = $state(false);
-	// Networking features default ON (opt-out posture): the user unchecks to
-	// opt out on the networking step, not in.
-	let newsOptedIn = $state(true);
-	let autoUpdateOptedIn = $state(true);
 	let exiting = $state(false);
-	const totalSteps = 6;
+	const totalSteps = 5;
 
 	async function handleThemeChange(id: Theme) {
 		await setTheme(id);
@@ -38,14 +30,8 @@
 	}
 	async function complete() {
 		if (exiting) return;
-		await markNewsOptInSeen();
-		await setNewsOptIn(newsOptedIn);
-		await setAutoUpdateEnabled(autoUpdateOptedIn);
 		await setAcceptedTosVersion(CURRENT_TOS_VERSION);
 		await setOnboardingComplete(true);
-		if (newsOptedIn) {
-			void refreshNews();
-		}
 		if (typeof sessionStorage !== 'undefined') {
 			sessionStorage.setItem('welcome_just_finished', '1');
 		}
@@ -56,6 +42,8 @@
 	function handleKey(e: KeyboardEvent) {
 		const t = e.target;
 		if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return;
+		// Keys pressed while reading a document belong to its dialog.
+		if (t instanceof Element && t.closest('[role="dialog"]')) return;
 		if (e.key === 'Enter' || e.key === 'ArrowRight') {
 			e.preventDefault();
 			next();
@@ -269,8 +257,6 @@
 						</a>
 					</div>
 				{:else if step === 5}
-					<NetworkingStep bind:news={newsOptedIn} bind:autoUpdate={autoUpdateOptedIn} />
-				{:else if step === 6}
 					<TermsStep bind:accepted={tosAccepted} />
 				{/if}
 			</section>

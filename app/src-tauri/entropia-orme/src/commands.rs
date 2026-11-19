@@ -37,8 +37,8 @@ use eo_api::analytics::{
     EquipmentTradeInput, HuntingRealisedMarkup, InventoryDraftResolution, InventoryItem,
     InventoryItemInput, InventoryPatch, InventorySaleDraft, InventorySellInput,
     InventorySellResult, ItemConversionInput, LedgerEntryInput, LedgerItem, LedgerPage,
-    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, Profession,
-    RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
+    LedgerPreset, LedgerPresetInput, LedgerSummary, PrivateSaleInput, PrivateSaleRecorded,
+    Profession, RealisedTierMarkup, ShrapnelConversionInput, StockConversionFromAccount,
     StockConversionFromAccountInput, StockConversionInput, StockPosition, StockRemovalInput,
     StockSaleFromAccount, StockSaleFromAccountInput,
 };
@@ -1300,7 +1300,7 @@ pub async fn account_run_cancel(app: tauri::AppHandle) -> Result<(), ApiError> {
 pub async fn stock_private_sale(
     app: tauri::AppHandle,
     input: PrivateSaleInput,
-) -> Result<(), ApiError> {
+) -> Result<PrivateSaleRecorded, ApiError> {
     facade(&app)?.stock_private_sale(input).await
 }
 

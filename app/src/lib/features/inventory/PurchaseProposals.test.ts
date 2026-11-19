@@ -297,6 +297,32 @@ describe('recording a purchase through the asset form', () => {
 		expect(account.claimProposals).toHaveBeenCalledTimes(1);
 	});
 
+	it('keeps a saved purchase linked when the inventory cannot be read again, never saving it twice', async () => {
+		const { proposals } = model(vi.fn().mockRejectedValue(new Error('the database is busy')));
+		account.getProposals.mockRejectedValue(new Error('the database is busy'));
+		const save = vi.fn().mockResolvedValue(saved);
+
+		await expect(proposals.record(bought(), save)).resolves.toBe(saved);
+		expect(account.linkProposals).toHaveBeenCalledWith({ ids: [41], recordId: '12' });
+		expect(account.releaseProposals).not.toHaveBeenCalled();
+		await expect(proposals.record(bought(), save)).rejects.toThrow('already being recorded');
+		expect(save).toHaveBeenCalledTimes(1);
+	});
+
+	it('offers a purchase an undo opened again for recording in the same sitting', async () => {
+		const { proposals } = model();
+		account.getProposals.mockResolvedValue([]);
+		await proposals.record(bought(), async () => saved);
+		await waitFor(() => expect(proposals.isSettled(41)).toBe(false));
+
+		// The purchase taken back: the proposal is listed again.
+		account.getProposals.mockResolvedValue([bought()]);
+		await proposals.refresh();
+		expect(proposals.pending.map((proposal) => proposal.id)).toEqual([41]);
+		await expect(proposals.record(bought(), async () => saved)).resolves.toBe(saved);
+		expect(account.claimProposals).toHaveBeenCalledTimes(2);
+	});
+
 	it('keeps where it was recorded when the link fails', async () => {
 		account.linkProposals.mockRejectedValue(new Error('down'));
 		const { proposals } = model();

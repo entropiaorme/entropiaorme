@@ -4,7 +4,6 @@
 	import { quintOut } from 'svelte/easing';
 	import Button from '$lib/components/Button.svelte';
 	import { CURRENT_TOS_VERSION, setAcceptedTosVersion } from '$lib/tos';
-	import { getPreference } from '$lib/preferences';
 	import TermsStep from '../TermsStep.svelte';
 
 	let accepted = $state(false);
@@ -13,17 +12,18 @@
 	async function complete() {
 		if (!accepted || exiting) return;
 		await setAcceptedTosVersion(CURRENT_TOS_VERSION);
-		const newsSeen = await getPreference<boolean>('news_opt_in_seen', false);
 		if (typeof sessionStorage !== 'undefined') {
 			sessionStorage.setItem('welcome_just_finished', '1');
 		}
 		exiting = true;
-		setTimeout(() => goto(newsSeen ? '/' : '/welcome/news-opt-in'), 380);
+		setTimeout(() => goto('/'), 380);
 	}
 
 	function handleKey(e: KeyboardEvent) {
 		const t = e.target;
 		if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return;
+		// Keys pressed while reading a document belong to its dialog.
+		if (t instanceof Element && t.closest('[role="dialog"]')) return;
 		if (e.key === 'Enter') {
 			e.preventDefault();
 			complete();

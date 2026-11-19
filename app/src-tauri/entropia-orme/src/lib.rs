@@ -7,11 +7,11 @@ mod account_window;
 mod commands;
 mod composition;
 mod crash;
+mod extension;
 mod hit_region;
 mod resources;
 mod substrate;
 mod telemetry;
-mod updater;
 
 use std::sync::Mutex;
 
@@ -446,8 +446,16 @@ struct RuntimeWindowIcons(Mutex<Vec<isize>>);
 /// Shapes the command surface (`command_acl::app_command_surface`) into the
 /// invoke handler.
 macro_rules! invoke_handler {
-    (typed: [$($typed:ident),* $(,)?], shell: [$($($shell:ident)::+),* $(,)?] $(,)?) => {
-        tauri::generate_handler![$(commands::$typed,)* $($($shell)::+),*]
+    (
+        typed: [$($typed:ident),* $(,)?],
+        shell: [$($($shell:ident)::+),* $(,)?],
+        extension: [$($($extension:ident)::+),* $(,)?] $(,)?
+    ) => {
+        tauri::generate_handler![
+            $(commands::$typed,)*
+            $($($shell)::+,)*
+            $($($extension)::+,)*
+        ]
     };
 }
 
@@ -502,17 +510,15 @@ pub fn run() {
         // usage was removed when the Python backend was decommissioned.
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .invoke_handler(app_command_surface!(invoke_handler))
+        // Wrapped by the extension's command guard: the one place every
+        // surface's command goes through.
+        .invoke_handler(extension::command_guard(app_command_surface!(
+            invoke_handler
+        )))
         .setup(|app| {
             // `app` is unused on a non-Windows debug build (the runtime icon
             // install is Windows-only); keep the binding alive there.
             let _ = &app;
-            // Hold the downloaded-but-not-yet-installed update between the
-            // updater's download and install commands (the deferred-install
-            // split). Registered before any command can run.
-            app.manage(updater::PendingUpdate::default());
             #[cfg(windows)]
             install_runtime_window_icons(app.handle());
             // Register a system-tray presence on Linux (a StatusNotifierItem
@@ -533,6 +539,9 @@ pub fn run() {
             // Dev and release compose identically; the resource dir (the
             // bundled snapshot / model assets) resolves only in the
             // installed build, dev falling back to the repository copies.
+            // The extension's step before composition runs first, ahead of
+            // everything composition opens.
+            extension::before_compose();
             compose_substrate(app.handle().clone(), app.path().resource_dir().ok());
             Ok(())
         })
@@ -586,14 +595,15 @@ pub fn run() {
 }
 
 /// Wind the app's live faculties down deterministically before the process
-/// ends. Driven from two paths: the Tauri `RunEvent::Exit` seam (a normal
-/// quit), and the updater's `on_before_exit` hook (an updater install calls
-/// `std::process::exit`, which bypasses the event loop, so that path must run
-/// this itself). Idempotent: the producer handle is taken out under its lock,
-/// so a second call is a no-op.
-pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
+/// ends, from the Tauri `RunEvent::Exit` seam. Idempotent: the producer handle
+/// is taken out under its lock, so a second call is a no-op.
+fn run_exit_teardown(app: &tauri::AppHandle) {
     #[cfg(windows)]
     destroy_runtime_window_icons(app);
+
+    // Wind the extension down first: anything it composed sits on top of
+    // the producer spine, so it leaves before the spine does.
+    extension::exit_teardown(app);
 
     // Stop the producer spine: end any open session so its stop events
     // publish, then stop the chat-log tail thread. The substrate's compose
@@ -623,9 +633,8 @@ pub(crate) fn run_exit_teardown(app: &tauri::AppHandle) {
     }
 
     // The account connection ends, abandoning any request in flight
-    // (waited for a second or two at most). Through the composition's
-    // pool bridge, since this also runs on a runtime worker (the updater's
-    // exit hook), where starting a runtime would panic.
+    // (waited for a second or two at most), through the composition's
+    // pool bridge, which works from any calling thread.
     if let (Ok(facade), Some(runtime)) = (commands::facade(app), runtime.as_ref()) {
         composition::block_on_pool(runtime, facade.account_shutdown());
     }
@@ -833,6 +842,10 @@ fn install_native_services(app: &tauri::AppHandle, composed: composition::Compos
     // the producer spine's typed domain channel while the spine is still in
     // hand (it moves into managed state just below).
     spawn_domain_event_bridge(app, &composed.producers.domain_bus_handle());
+    // Compose the extension over the spine while its handles are still in
+    // hand (bus, tracker, the shared keystroke source), with the same game
+    // window seams the root's own readers take.
+    extension::install(app, &composed, composition::game_window_seams());
     // Hand the producer spine to the exit seam so it stops the tail thread,
     // the hotbar listener, and ends any session on close.
     app.manage(Producers(Mutex::new(Some(composed.producers))));
@@ -1079,8 +1092,8 @@ mod tests {
     /// The frontend reaches the backend only through the in-process IPC command,
     /// so the substrate binds no inbound listener (see `compose_substrate`) and
     /// the security policy grants no loopback origin: the CSP carries no
-    /// `127.0.0.1`/`8421` in connect-src or img-src. The external news origin,
-    /// the IPC scheme, and the base64 image `data:` source survive.
+    /// `127.0.0.1`/`8421` in connect-src or img-src, and no external origin
+    /// either. The IPC scheme and the base64 image `data:` source survive.
     #[test]
     fn the_security_policy_grants_no_loopback_origin() {
         let conf = include_str!("../tauri.conf.json");
@@ -1096,18 +1109,14 @@ mod tests {
             !csp.contains("127.0.0.1") && !csp.contains("8421"),
             "the CSP must grant no loopback origin once the frontend is IPC-only: {csp}"
         );
-        assert!(
-            csp.contains("https://entropiaorme.com"),
-            "the external news origin must survive the loopback strip: {csp}"
-        );
         let connect_src = csp
             .split(';')
             .find(|directive| directive.trim_start().starts_with("connect-src "))
             .expect("connect-src is configured");
         assert_eq!(
             connect_src.split_whitespace().collect::<Vec<_>>(),
-            ["connect-src", "'self'", "https://entropiaorme.com"],
-            "the news feed is the only external origin the webview may reach: {csp}"
+            ["connect-src", "'self'"],
+            "the webview may reach no external origin: {csp}"
         );
         assert!(csp.contains("ipc:"), "the IPC scheme must remain: {csp}");
         assert!(

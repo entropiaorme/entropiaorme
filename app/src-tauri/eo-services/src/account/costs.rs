@@ -643,6 +643,61 @@ impl ArmourPart {
     }
 }
 
+/// The role the measure gave each item, to place what sits attached to
+/// one.
+fn held_roles(measure: &SessionMeasure) -> HashMap<&str, Role> {
+    let mut held: HashMap<&str, Role> = HashMap::new();
+    for item in &measure.decay {
+        held.insert(item.key.name.as_str(), item.role);
+    }
+    for item in measure
+        .other_consumption
+        .iter()
+        .chain(&measure.unexplained_departures)
+    {
+        held.insert(item.key.name.as_str(), item.role);
+    }
+    held
+}
+
+/// The role of what `key` sits attached to, when it sits attached.
+fn parent_role_of(
+    roles: &KnownRoles,
+    held: &HashMap<&str, Role>,
+    key: &HoldingKey,
+) -> Option<Role> {
+    match &key.container {
+        Container::Attached { parent } => known_category(roles, parent)
+            .map(CostCategory::role)
+            .or_else(|| held.get(parent.as_str()).copied()),
+        _ => None,
+    }
+}
+
+/// What the weapon bucket's items wore in the steps the ammo was topped
+/// up in: the wear a weapon measured but for those steps leaves to the
+/// tracked figure.
+pub(super) fn withheld_weapon_wear(
+    measure: &SessionMeasure,
+    roles: &KnownRoles,
+) -> Result<Amount, AccountError> {
+    let held = held_roles(measure);
+    let mut wear = Amount::NONE;
+    for item in &measure.topped_up_decay {
+        let category = cost_category(
+            roles,
+            &item.key,
+            item.role,
+            Use::Wear,
+            parent_role_of(roles, &held, &item.key),
+        );
+        if CostBucket::of(category) == Some(CostBucket::Weapon) {
+            wear = wear.plus(item.decay)?;
+        }
+    }
+    Ok(wear)
+}
+
 /// A session's costs as its readings measure them: every bucket, in the
 /// order of [`CostBucket::ALL`], and the lines, ordered by bucket, kind,
 /// item and category; the armour in parts, for a session measured whole
@@ -766,25 +821,8 @@ impl SessionCosts {
         status: Status,
         started_at: f64,
     ) -> Result<SessionCosts, AccountError> {
-        // The role the measure gave each item, to place what sits attached
-        // to one.
-        let mut held: HashMap<&str, Role> = HashMap::new();
-        for item in &measure.decay {
-            held.insert(item.key.name.as_str(), item.role);
-        }
-        for item in measure
-            .other_consumption
-            .iter()
-            .chain(&measure.unexplained_departures)
-        {
-            held.insert(item.key.name.as_str(), item.role);
-        }
-        let parent_role = |key: &HoldingKey| match &key.container {
-            Container::Attached { parent } => known_category(roles, parent)
-                .map(CostCategory::role)
-                .or_else(|| held.get(parent.as_str()).copied()),
-            _ => None,
-        };
+        let held = held_roles(measure);
+        let parent_role = |key: &HoldingKey| parent_role_of(roles, &held, key);
 
         let mut lines: BTreeMap<(CostBucket, LineKind, String, CostCategory), (i64, Amount)> =
             BTreeMap::new();

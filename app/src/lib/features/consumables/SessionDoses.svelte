@@ -4,7 +4,17 @@
 	import { describeDoseCost, describeEffects, describeRun, describeSource } from './doses';
 	import type { SessionDosesModel } from './sessionDosesModel.svelte';
 
-	let { model }: { model: SessionDosesModel } = $props();
+	let {
+		model,
+		readOnlyNote = null,
+	}: {
+		model: SessionDosesModel;
+		/** Set when the doses are not open to correction: the list is
+		 * shown without its corrections, and the note says why. */
+		readOnlyNote?: string | null;
+	} = $props();
+
+	const readOnly = $derived(readOnlyNote !== null);
 
 	function clock(epochSeconds: number): string {
 		return new Date(epochSeconds * 1000).toLocaleTimeString([], {
@@ -18,7 +28,9 @@
 	<section class="mt-4" data-testid="session-doses">
 		<div class="flex items-baseline justify-between gap-4 mb-2">
 			<h3 class="eyebrow">Doses</h3>
-			{#if model.bookedPed > 0}
+			{#if readOnlyNote !== null}
+				<span class="text-xs text-text-tertiary">{readOnlyNote}</span>
+			{:else if model.bookedPed > 0}
 				<span class="text-xs text-text-secondary tabular-nums">{formatPed(model.bookedPed)} booked</span>
 			{/if}
 		</div>
@@ -39,7 +51,7 @@
 					<span class="tabular-nums shrink-0 {removed ? 'text-text-tertiary' : 'text-text-secondary'}">
 						{removed ? 'Removed' : describeDoseCost(dose)}
 					</span>
-					{#if dose.source === 'on_use'}
+					{#if dose.source === 'on_use' || readOnly}
 						<!-- A heal's buff goes with its heal: its correction is in Healing. -->
 						<span class="w-14 shrink-0"></span>
 					{:else if removed}

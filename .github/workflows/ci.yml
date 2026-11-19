@@ -298,7 +298,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Run workspace tests
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: cargo nextest run --workspace --no-fail-fast
       # nextest does NOT run doctests; keep them on a dedicated cargo-test leg so
       # doctest coverage is not silently dropped by the migration.

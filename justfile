@@ -1,6 +1,6 @@
 # entropiaorme dev recipes. `just dev` launches the dev stack; `just
 # check` runs the frontend type-check + build; `just test-rust` runs the
-# native backend test suite. Run `just --list` to see every recipe.
+# Rust workspace's test suite. Run `just --list` to see every recipe.
 #
 # Env vars from .env.local (if present) are loaded automatically before
 # each recipe via `set dotenv-load` below. Recognised keys:
@@ -34,18 +34,20 @@ dev:
 dev:
     npm --prefix app run tauri:dev
 
-# Run the native backend (Rust) test suite. Invoked from the workspace so
+# Run the Rust workspace's test suite: every member, the Tauri
+# shell included (it needs the Tauri build chain's system libraries, as
+# `just dev` does). Invoked from the workspace so
 # app/src-tauri/.cargo/config.toml is discovered: it redirects test temp
 # into target/, keeping an interrupted run from accumulating scratch dirs in
 # the OS temp directory. Reclaim any leftovers from a prior interrupted run
 # with `cargo clean`.
 [windows]
 test-rust:
-    cd app/src-tauri; cargo nextest run -p eo-wire -p eo-services -p eo-api
+    cd app/src-tauri; cargo nextest run --workspace
 
 [unix]
 test-rust:
-    cd app/src-tauri && cargo nextest run -p eo-wire -p eo-services -p eo-api
+    cd app/src-tauri && cargo nextest run --workspace
 
 # Each step is its own recipe line (just stops on the first non-zero exit)
 # rather than an `&&` chain, so the body runs under any shell, including
@@ -58,7 +60,7 @@ check:
 
 # Build the bespoke WiX Burn installer end to end (per-user MSI -> native x86
 # bafunctions helper -> themed Burn bundle). Windows-only: needs WiX 6, the MSVC
-# x86 toolset, and the Tauri build chain. Mirrors the release pipeline's build.
+# x86 toolset, and the Tauri build chain.
 [windows]
 installer:
     powershell -NoProfile -ExecutionPolicy RemoteSigned -File "{{justfile_directory()}}\scripts\build-installer.ps1"
@@ -71,7 +73,7 @@ installer:
 # Build the Linux packages (.deb + AppImage) end to end via the Tauri
 # bundler, applying the Linux config overlay (deb/appimage targets, the
 # Linux ONNX Runtime resource). Needs the Tauri build chain plus the
-# WebKitGTK / GTK dev libraries. Mirrors the Linux release job.
+# WebKitGTK / GTK dev libraries.
 [linux]
 bundle:
     npm --prefix app run tauri -- build --config src-tauri/entropia-orme/tauri.linux.conf.json --bundles deb,appimage

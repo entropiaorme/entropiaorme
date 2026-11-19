@@ -107,30 +107,20 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self' https://entropiaorme.com; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self'"
     }
   },
   "plugins": {
     "shell": {
       "open": "(https?://.+|mailto:.+)"
-    },
-    "updater": {
-      "endpoints": [
-        "https://entropiaorme.com/updates/stable/latest.json"
-      ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk3QTkyRDE1NzVEQTM4ODMKUldTRE9OcDFGUzJwbDlUekhUZlVZRVNiQmdZVkltMFgxbXJHc2ZCYjJBcTFiaUd2QmVESVBkeHgK",
-      "windows": {
-        "installMode": "passive"
-      }
     }
   },
   "bundle": {
     "targets": [
       "msi"
     ],
-    "createUpdaterArtifacts": true,
     "publisher": "EntropiaOrme",
-    "homepage": "https://entropiaorme.com",
+    "homepage": "https://github.com/entropiaorme/entropiaorme",
     "resources": {
       "resources/snapshot/": "snapshot/",
       "resources/maps/": "maps/",

@@ -112,7 +112,10 @@ pub const MEASURED_COSTS_VERSION: i64 = 6;
 /// The version of the measure those costs must have been derived from.
 // Bumped to 6 with the measure, when the PED Card stopped deciding what a
 // step used up and top-up steps came to be left out of the ammo's split.
-pub const MEASURED_MEASURE_VERSION: i64 = 6;
+// Bumped to 7 with the measure, when an ammo row grown by exactly what the
+// Trade Terminal pays came to read Shrapnel as converted. Bumped to 8 with
+// it, when Shrapnel leaving with no such row came to be presumed converted.
+pub const MEASURED_MEASURE_VERSION: i64 = 8;
 
 const RESOLUTIONS: &str = "session_cost_resolutions";
 const RESOLUTION_BUCKETS: &str = "session_cost_resolution_buckets";

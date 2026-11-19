@@ -106,33 +106,6 @@ export async function signInToAccount(): Promise<void> {
 	await invokeCommand<void>('account_sign_in', {});
 }
 
-/** Metadata about an available update (mirrors the Rust `UpdateInfo`). */
-export type UpdateInfo = {
-	version: string;
-	currentVersion: string;
-	notes: string | null;
-};
-
-/** Ask the updater to check the release manifest; null when current. */
-export async function checkForUpdate(): Promise<UpdateInfo | null> {
-	return invoke('check_for_update');
-}
-
-/** Download the available update; resolves once staged. */
-export async function downloadUpdate(): Promise<UpdateInfo> {
-	return invoke('download_update');
-}
-
-/** The configured update channel. */
-export async function getUpdateChannel(): Promise<string> {
-	return invoke('get_update_channel');
-}
-
-/** Hand off to the updater: install the staged update and restart. */
-export async function installUpdate(): Promise<void> {
-	await invoke('install_update');
-}
-
 /** A bundled planet map's raster as a base64 `data:` URL for an `<img>`
  * `src`. `mime` comes from the planet's `planet_maps_list` record. */
 export async function planetMapImage(planet: string, mime: string): Promise<string> {

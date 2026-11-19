@@ -23,6 +23,7 @@
 		stockHasNoTt,
 		type ActivityListingDraft,
 		type ActivityTradeDraft,
+		type TradeStart,
 	} from './treeCuttingModel.svelte';
 	import type { TreeCuttingStock } from './treeCuttingModel.svelte';
 
@@ -34,12 +35,16 @@
 		// The activity the excess warning names, so the Hunting tab hosts the
 		// identical modal over its own vocabulary.
 		activityAttributionNoun = 'a tree cutting activity',
+		start = null,
 	}: {
 		item: TreeCuttingStock | null;
 		onlist: (input: ActivityListingDraft) => Promise<void>;
 		ontrade: (input: ActivityTradeDraft) => Promise<void>;
 		oncancel: () => void;
 		activityAttributionNoun?: string;
+		/** A trade to open with, filled in (one the account readings saw);
+		 * every figure stays editable. */
+		start?: TradeStart | null;
 	} = $props();
 
 	/** The units going, entered as a count or as PED of TT. */
@@ -85,19 +90,20 @@
 	);
 
 	$effect(() => {
-		if (item && initialisedFor !== item.itemName) {
-			quantity = item.heldQty;
-			entry = 'ped';
+		const opening = item ? `${item.itemName}|${start?.key ?? ''}` : null;
+		if (item && initialisedFor !== opening) {
+			quantity = start?.quantity ?? item.heldQty;
+			entry = start ? 'units' : 'ped';
 			startingBid = 0;
 			buyout = null;
 			listingFee = 0.5;
-			soldFor = 0;
-			saleMethod = 'auction';
+			soldFor = start?.soldFor ?? 0;
+			saleMethod = start ? 'trade' : 'auction';
 			// Prefilled rather than left blank: listing today is the case, and
 			// an empty field reads as unset when the effect is today's date.
-			listedAt = todayDate();
+			listedAt = start?.soldAt ?? todayDate();
 			error = null;
-			initialisedFor = item.itemName;
+			initialisedFor = opening;
 			modalOpen = true;
 		}
 		if (!item) {
@@ -187,12 +193,15 @@
 				held={item.heldQty}
 				label="Amount"
 				subject="to sell"
-				describedby={saleMethod === 'trade' ? 'trade-account-record' : undefined}
+				describedby={saleMethod === 'trade' ? 'trade-account-record' : 'listing-account-record'}
 			/>
 			{#if saleMethod === 'trade'}
 				<!-- A sale to the Trade Terminal is recorded as a trade; the
 					readings may have recorded this one already. -->
 				<AccountRecordHint kind="sale" itemName={item.itemName} id="trade-account-record" />
+			{:else}
+				<!-- The readings may have recorded this listing already. -->
+				<AccountRecordHint kind="listing" itemName={item.itemName} id="listing-account-record" />
 			{/if}
 
 			{#if excess > 0}

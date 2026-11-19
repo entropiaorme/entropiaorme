@@ -14,6 +14,7 @@
 		toggled,
 		withNote
 	} from './exclusion';
+	import { commandRefusal } from '$lib/extension/gate';
 	import { PAGE_SIZE } from './instancesModel.svelte';
 	import ReviewDefinitionPicker from './ReviewDefinitionPicker.svelte';
 	import { describeNoFit, describeUnpriced } from '$lib/features/weapons/weaponReview';
@@ -28,6 +29,7 @@
 
 	const instances = $derived(model.instances);
 	const table = $derived(model.instances.table);
+	const moveRefusal = commandRefusal('tracking_reassign_session');
 
 	/** The surface's entrance, matching the authoring environment's own:
 	 * it arrives after the page content has animated away, and leaves
@@ -311,8 +313,8 @@
 															aria-haspopup="menu"
 															aria-expanded={open}
 															aria-label="Move to another session"
-															title="Move to another session"
-															disabled={instances.reassigning}
+															title={moveRefusal?.hint ?? 'Move to another session'}
+															disabled={instances.reassigning || moveRefusal !== null}
 															onclick={toggle}
 														>
 															<svg
@@ -517,7 +519,10 @@
 												{#if instances.loadingDetail}
 													<p class="animate-pulse text-xs text-text-tertiary">Loading detail...</p>
 												{:else if instances.expandedDetail}
-													<SessionDetailView bind:detail={instances.expandedDetail} />
+													<SessionDetailView
+														bind:detail={instances.expandedDetail}
+														finished={session.endTime !== null}
+													/>
 												{:else}
 													<p class="text-xs text-text-tertiary">No detail available.</p>
 												{/if}

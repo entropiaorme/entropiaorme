@@ -28,11 +28,12 @@ use serde_json::{Map, Value};
 
 use crate::passive_effects::{PassiveEffect, PassiveEffectKind, PassiveEffectSource};
 
-/// Whether this build is a published release. The release pipeline stamps
-/// it into every build it publishes; the same stamp hides the frontend's
-/// in-development surfaces, and a backend feature still in development is
-/// held off a published build through this read alone, so it stays off
-/// exactly where its controls are hidden. The `in-development` guard holds
+/// Whether this build is a published release. A build published to people
+/// who did not build it is stamped (nothing in this repository sets the
+/// stamp now that no artefacts are published); the same stamp hides the
+/// frontend's in-development surfaces, and a backend feature still in
+/// development is held off a published build through this read alone, so it
+/// stays off exactly where its controls are hidden. The `in-development` guard holds
 /// this read to the stamp's name.
 pub fn published_build() -> bool {
     option_env!("ENTROPIAORME_STABLE_CHANNEL") == Some("1")

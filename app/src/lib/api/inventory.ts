@@ -130,9 +130,9 @@ export async function commitInventorySaleDraft({
 	holding,
 	occurredAt,
 	fieldSources = null,
-}: ResolvedInventorySaleDraft): Promise<unknown> {
+}: ResolvedInventorySaleDraft): Promise<string> {
 	if (holding.kind === 'equipment') {
-		return draft.channel === 'auction'
+		const recorded = await (draft.channel === 'auction'
 			? createEquipmentListing({
 					itemId: holding.holdingId,
 					quantity: draft.quantity,
@@ -148,13 +148,14 @@ export async function commitInventorySaleDraft({
 					quantity: draft.quantity,
 					soldFor: draft.finalPrice ?? 0,
 					soldAt: occurredAt,
-				});
+				}));
+		return recorded.id;
 	}
 
 	if (draft.quantity === null || draft.quantity <= 0) {
 		throw new Error('A loot sale needs a positive quantity');
 	}
-	return draft.channel === 'auction'
+	const recorded = await (draft.channel === 'auction'
 		? createLootListing({
 				itemName: holding.name,
 				quantity: draft.quantity,
@@ -170,5 +171,6 @@ export async function commitInventorySaleDraft({
 				quantity: draft.quantity,
 				soldFor: draft.finalPrice ?? 0,
 				soldAt: occurredAt,
-			});
+			}));
+	return recorded.id;
 }

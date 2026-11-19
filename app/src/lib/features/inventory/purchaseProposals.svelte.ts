@@ -136,10 +136,10 @@ export async function linkProposal(id: number, recordId: string): Promise<boolea
 	return false;
 }
 
-/** What recording a proposal through an asset form did. */
-export interface ProposalRecorded {
-	saved: InventoryItem;
-	/** The purchase it was linked to, or is to be. */
+/** What recording a proposal through a form did. */
+export interface ProposalRecorded<Saved = InventoryItem> {
+	saved: Saved;
+	/** The record it was linked to, or is to be. */
 	recordId: string;
 	/** False when the record stands but the proposal could not be marked
 	 * done: the caller offers to mark it without saving again. */
@@ -147,27 +147,32 @@ export interface ProposalRecorded {
 }
 
 /**
- * Record a proposal through `save`, an asset form's own save: claim it,
- * save, then link it to the purchase saved. A claim that fails rejects
- * with why; a save that fails releases the claim this attempt made (one
- * shown as possibly recorded keeps the claim it had, which it took over)
- * and rejects with the save's own error, so the form shows it and stays
- * open. Any proposal that arrives as an asset with a purchase is recorded
- * this way: a purchase seen outside a session, or an arrival inside one.
+ * Record a proposal through `save`, a form's own save: claim it, save,
+ * then link it to the record saved, named by `idOf`. A claim that fails
+ * rejects with why; a save that fails releases the claim this attempt
+ * made (one shown as possibly recorded keeps the claim it had, which it
+ * took over) and rejects with the save's own error, so the form shows it
+ * and stays open. Once the save returns, it is never released: whatever
+ * follows, it is never recorded again from here. Every proposal recorded
+ * through a form goes this way: a purchase seen outside a session or an
+ * arrival inside one (an asset with a purchase, `idOf` its newest
+ * purchase), and a sale to another player (the trade's own id).
  */
-export async function recordThroughProposal(
+export async function recordThroughProposal<Saved>(
 	proposal: { id: number; possiblyRecorded: boolean },
-	save: () => Promise<InventoryItem>,
-): Promise<ProposalRecorded> {
+	save: () => Promise<Saved>,
+	idOf: (saved: Saved) => string,
+	noun = 'purchase',
+): Promise<ProposalRecorded<Saved>> {
 	// One shown as possibly recorded takes over its old claim: the player
 	// was asked first.
 	const retake = proposal.possiblyRecorded ? [proposal.id] : [];
 	try {
 		await claimProposals({ ids: [proposal.id], retake });
 	} catch (cause) {
-		throw new Error(describeError(cause, 'Could not set the purchase aside to record'));
+		throw new Error(describeError(cause, `Could not set the ${noun} aside to record`));
 	}
-	let saved: InventoryItem;
+	let saved: Saved;
 	try {
 		saved = await save();
 	} catch (cause) {
@@ -177,7 +182,7 @@ export async function recordThroughProposal(
 		throw cause;
 	}
 	// Recorded: whatever follows, it is never recorded again from here.
-	const recordId = recordIdOf(saved);
+	const recordId = idOf(saved);
 	return { saved, recordId, linked: await linkProposal(proposal.id, recordId) };
 }
 
@@ -193,16 +198,22 @@ export function createPurchaseProposals({
 	/** Re-read whatever shows the assets, once a purchase is recorded. */
 	onrecorded: () => Promise<void>;
 }) {
-	const store = createSnapshotStore<AccountProposal[]>(ACCOUNT_TOPIC, () =>
-		getProposals('purchase'),
-	);
+	/** Every read forgets what a row was once its proposal is gone from
+	 * the list, so one an undo opens again is recordable afresh. */
+	const store = createSnapshotStore<AccountProposal[]>(ACCOUNT_TOPIC, async () => {
+		const listed = await getProposals('purchase');
+		const open = new Set(listed.map((proposal) => proposal.id));
+		settled = settled.filter((id) => open.has(id));
+		unlinked = Object.fromEntries(Object.entries(unlinked).filter(([id]) => open.has(Number(id))));
+		return listed;
+	});
 	const pending = $derived((store.current ?? []).filter(isPurchaseProposal));
 	let recording = $state<number | null>(null);
 	let dismissing = $state<number | null>(null);
 	let linking = $state<number | null>(null);
 	/** Recorded or dismissed: kept still until a re-read shows it gone. */
 	let settled = $state<number[]>([]);
-	/** Recorded, but not marked done; kept for this sitting. */
+	/** Recorded, but not marked done; kept while it is listed. */
 	let unlinked = $state<Record<number, Unlinked>>({});
 	let error = $state<string | null>(null);
 
@@ -266,7 +277,7 @@ export function createPurchaseProposals({
 			try {
 				let recorded: ProposalRecorded;
 				try {
-					recorded = await recordThroughProposal(proposal, save);
+					recorded = await recordThroughProposal(proposal, save, recordIdOf);
 				} catch (cause) {
 					void store.hydrate();
 					throw cause;

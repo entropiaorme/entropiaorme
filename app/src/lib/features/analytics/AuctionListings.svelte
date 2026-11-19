@@ -43,6 +43,7 @@
 	import { hasRunOut } from './listingLifecycle';
 	import {
 		fromAccountSentence,
+		listedFromAccountSentence,
 		type ListingProposal,
 		type ListingProposals,
 		proposalSentence,
@@ -192,12 +193,18 @@
 	function startConfirm() {
 		if (!selected) return;
 		// Pre-filled with the buyout when there was one, since an auction that
-		// clears instantly is the common case. Still editable.
-		finalPrice = selected.buyout ?? selected.startingBid;
+		// clears instantly is the common case. Still editable. A starting bid
+		// the account inferred from the fee is a guess, never a price: the
+		// field opens empty and focused for the player to say.
+		const inferred = selected.listedFromAccount?.inferredBid != null;
+		finalPrice = selected.buyout ?? (inferred ? null : selected.startingBid);
 		saleFee = 0;
 		resolvedAt = '';
 		error = null;
 		confirming = true;
+		if (finalPrice === null) {
+			void tick().then(() => document.getElementById(PRICE_INPUT)?.focus());
+		}
 	}
 
 	async function resolve(
@@ -369,6 +376,11 @@
 									? `, ${selected.status === 'sold' ? 'sold' : 'returned'} ${formatLedgerDate(selected.resolvedAt)}`
 									: ''}
 							</p>
+							{#if selected.listedFromAccount}
+								<p class="mt-0.5 text-xs text-text-tertiary" data-testid="listed-from-account">
+									{listedFromAccountSentence(selected.listedFromAccount, nowDate)}
+								</p>
+							{/if}
 							{#if selected.recordedFromAccount}
 								<p class="mt-0.5 text-xs text-text-tertiary">
 									{fromAccountSentence(selected.status, selected.recordedFromAccount, nowDate)}
@@ -500,8 +512,12 @@
 							</StatDisplay>
 
 							<StatDisplay
-								label="Starting bid"
-								value={formatPed(selected.startingBid)}
+								label={selected.listedFromAccount?.inferredBid
+									? 'Starting bid (inferred)'
+									: 'Starting bid'}
+								value={selected.listedFromAccount?.inferredBid
+									? `${formatPed(selected.listedFromAccount.inferredBid.low)} to ${formatPed(selected.listedFromAccount.inferredBid.high)}`
+									: formatPed(selected.startingBid)}
 								unit="PED"
 							/>
 							<StatDisplay

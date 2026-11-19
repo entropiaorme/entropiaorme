@@ -1,10 +1,18 @@
 <script lang="ts">
-	import { externalLinks } from '$lib/utils/openExternal';
+	import MarkdownBody from '$lib/components/MarkdownBody.svelte';
+	import Modal from '$lib/components/Modal.svelte';
+	import { PRIVACY_POLICY, TERMS_OF_SERVICE, type LegalDocument } from '$lib/legal';
 
 	let { accepted = $bindable(false) } = $props<{ accepted?: boolean }>();
 
-	const TERMS_URL = 'https://entropiaorme.com/terms';
-	const PRIVACY_URL = 'https://entropiaorme.com/privacy';
+	// The documents ship with the app and open in place.
+	let reading = $state<LegalDocument | null>(null);
+	let readerOpen = $state(false);
+
+	function read(doc: LegalDocument) {
+		reading = doc;
+		readerOpen = true;
+	}
 </script>
 
 <div class="block">
@@ -13,29 +21,15 @@
 		<h2 class="step-title">Terms and privacy.</h2>
 	</header>
 	<p class="body">
-		Please review the linked Terms of Service and Privacy Policy.
+		Please review the Terms of Service and Privacy Policy.
 	</p>
 	<div class="links">
-		<a class="external" href={TERMS_URL} target="_blank" rel="noopener noreferrer" use:externalLinks>
-			<span>Terms of Service</span>
-			<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-				<path
-					fill-rule="evenodd"
-					d="M5.22 14.78a.75.75 0 001.06 0l7.22-7.22v5.69a.75.75 0 001.5 0v-7.5a.75.75 0 00-.75-.75h-7.5a.75.75 0 000 1.5h5.69l-7.22 7.22a.75.75 0 000 1.06z"
-					clip-rule="evenodd"
-				/>
-			</svg>
-		</a>
-		<a class="external" href={PRIVACY_URL} target="_blank" rel="noopener noreferrer" use:externalLinks>
-			<span>Privacy Policy</span>
-			<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-				<path
-					fill-rule="evenodd"
-					d="M5.22 14.78a.75.75 0 001.06 0l7.22-7.22v5.69a.75.75 0 001.5 0v-7.5a.75.75 0 00-.75-.75h-7.5a.75.75 0 000 1.5h5.69l-7.22 7.22a.75.75 0 000 1.06z"
-					clip-rule="evenodd"
-				/>
-			</svg>
-		</a>
+		<button type="button" class="document" onclick={() => read(TERMS_OF_SERVICE)}>
+			{TERMS_OF_SERVICE.title}
+		</button>
+		<button type="button" class="document" onclick={() => read(PRIVACY_POLICY)}>
+			{PRIVACY_POLICY.title}
+		</button>
 	</div>
 	<label class="accept">
 		<input type="checkbox" bind:checked={accepted} />
@@ -44,6 +38,12 @@
 		</span>
 	</label>
 </div>
+
+{#if reading}
+	<Modal bind:open={readerOpen} title={reading.title} class="max-w-2xl">
+		<MarkdownBody markdown={reading.body} />
+	</Modal>
+{/if}
 
 <style>
 	.block {
@@ -83,7 +83,7 @@
 		align-items: flex-start;
 		gap: 0.5rem;
 	}
-	.external {
+	.document {
 		display: inline-flex;
 		align-items: center;
 		gap: 0.5rem;
@@ -97,19 +97,11 @@
 		background: color-mix(in oklab, var(--color-accent) 6%, transparent);
 		transition: all var(--duration-base) var(--ease-out);
 	}
-	.external:hover {
+	.document:hover {
 		color: var(--color-accent-hover);
 		border-color: var(--color-accent);
 		background: color-mix(in oklab, var(--color-accent) 14%, transparent);
 		box-shadow: var(--shadow-glow);
-	}
-	.external svg {
-		width: 0.85rem;
-		height: 0.85rem;
-		transition: transform var(--duration-base) var(--ease-out);
-	}
-	.external:hover svg {
-		transform: translate(2px, -2px);
 	}
 	.accept {
 		display: flex;

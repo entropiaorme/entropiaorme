@@ -3,6 +3,7 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import type { RecentEvent } from '$lib/api';
+import { dashboardTabs } from '$lib/extension/slots';
 import type { QuestBoardModel } from '$lib/features/quests/board/questBoardModel.svelte';
 import DashboardWidgets from './DashboardWidgets.svelte';
 
@@ -62,6 +63,7 @@ describe('dashboard widgets', () => {
 			'Loot Composition',
 			'Quests',
 			'Map',
+			...dashboardTabs.map((tab) => tab.label),
 			'Customise Stats',
 		]);
 	});

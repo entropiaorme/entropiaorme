@@ -52,6 +52,7 @@
 	import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 	import { formatPed, formatQuantity, isZeroTt } from '$lib/utils/format';
 	import { createTypeahead } from '$lib/view/typeahead.svelte';
+	import AccountRecordHint from './AccountRecordHint.svelte';
 	import CheckMark from './CheckMark.svelte';
 	import {
 		draftIssues,
@@ -615,6 +616,14 @@
 					Nothing tracked matches that name. The sale will still be recorded, but no activity can
 					claim its markup.
 				</p>
+			{/if}
+			{#if channel === 'auction'}
+				<!-- The readings may have recorded this listing already. -->
+				<AccountRecordHint
+					kind="listing"
+					itemName={fields.itemName}
+					id="create-listing-account-record"
+				/>
 			{/if}
 		</div>
 

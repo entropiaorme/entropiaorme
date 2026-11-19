@@ -6,9 +6,12 @@
 	 * Each kind reads its own way: a recycling lists what went in and the
 	 * Nanocubes that came out, with the balance; Shrapnel to ammo shows the
 	 * Trade Terminal's 1%; a sale to the Trade Terminal gathers everything
-	 * the step sold beside the Card's rise; a listing that sold shows its
-	 * price and markup, and one that came back the item back and the fee
-	 * lost. A new event carries a mark until the player leaves the view.
+	 * the step sold beside the Card's rise; a listing the readings created
+	 * shows what went on the auction and the fee, with the starting bid as
+	 * the range the fee reads back as, never one figure; a listing that sold
+	 * shows its price and markup, and one that came back the item back and
+	 * the fee lost. A new event carries a mark until the player leaves the
+	 * view.
 	 *
 	 * Undo confirms in place, saying what it does, as the rest of the
 	 * history does.
@@ -18,6 +21,7 @@
 	import FlowList from './FlowList.svelte';
 	import {
 		accountEventUndo,
+		listedFlow,
 		recyclingFlow,
 		saleFlow,
 		shrapnelFlow,
@@ -47,6 +51,7 @@
 		recycling: 'Recycled',
 		shrapnel: 'Shrapnel to ammo',
 		sale: 'Sold to the Trade Terminal',
+		listed: 'Listed on the auction',
 		listingSold: 'Listing sold',
 		listingReturned: 'Listing came back',
 	};
@@ -91,6 +96,12 @@
 				>New</span
 			>
 		{/if}
+		{#if event.step.basis !== 'exact'}
+			<span
+				class="text-[0.625rem] font-semibold uppercase tracking-wider text-text-tertiary"
+				data-testid="event-inferred">Inferred</span
+			>
+		{/if}
 		<span class="min-w-0 flex-1 truncate text-xs text-text-tertiary">
 			Seen {fromAccountWindow(event.step)}
 		</span>
@@ -104,7 +115,7 @@
 						<p class="text-xs leading-relaxed text-text-secondary">{undo.reason}</p>
 					</InfoTip>
 				</span>
-			{:else}
+			{:else if undo.kind === 'available'}
 				<Button
 					variant="ghost"
 					size="sm"
@@ -143,6 +154,15 @@
 			<FlowList
 				label="PED Card"
 				lines={[{ name: 'Rose by', quantity: null, tt: event.step.cardChange ?? flow.tt }]}
+				struck={undone}
+			/>
+		{:else if event.kind === 'listed'}
+			{@const flow = listedFlow(event.entry, event.listing, event.step)}
+			<FlowList label="Listed" lines={[flow.item]} struck={undone} />
+			<span aria-hidden="true" class="pt-4 text-text-tertiary">&rarr;</span>
+			<FlowList
+				label="PED Card"
+				lines={[{ name: 'Listing fee', quantity: null, tt: flow.fee }]}
 				struck={undone}
 			/>
 		{:else}
@@ -186,6 +206,11 @@
 		{:else if event.kind === 'shrapnel'}
 			{@const flow = shrapnelFlow(event.entry)}
 			{signed(flow.bonus)} PED, the Trade Terminal's 1% on {formatQuantity(flow.shrapnel)} Shrapnel.
+			{#if event.step.basis === 'session'}
+				Inferred from the session: the Shrapnel looted, less what you still held.
+			{:else if event.step.basis === 'presumed'}
+				Inferred: this much Shrapnel left as ammo arrived.
+			{/if}
 		{:else if event.kind === 'sale'}
 			{@const flow = saleFlow(event.entries)}
 			{#if event.step.cardChange !== null && Math.abs(event.step.cardChange - flow.tt) >= 0.005}
@@ -195,6 +220,15 @@
 				At TT: {formatPed(flow.tt)} PED for {event.entries.length === 1
 					? 'one item'
 					: `${event.entries.length} items`}.
+			{/if}
+		{:else if event.kind === 'listed'}
+			{@const flow = listedFlow(event.entry, event.listing, event.step)}
+			{#if flow.bids}
+				Starting bid inferred from the fee: between {formatPed(flow.bids.low)} and {formatPed(
+					flow.bids.high,
+				)} PED. Buyout and duration not known.
+			{:else}
+				Starting bid and buyout not known.
 			{/if}
 		{:else if event.kind === 'listingSold'}
 			{#if event.entry.netMarkup !== null}

@@ -812,7 +812,7 @@ mod linux_xinput {
             );
         }
 
-        /// Observes keys injected through XTest on a live X server, the
+        /// Observes keys `xdotool` sends to a live X server, the
         /// delivery an Xorg session gives a client with no access to the
         /// kernel input devices. Needs `xdotool` and a display:
         /// `xvfb-run -a cargo test -p eo-services linux_xinput -- --ignored`.

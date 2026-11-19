@@ -1,9 +1,13 @@
 /**
  * What the account readings recorded on their own, in words: the window a
- * record was seen in, and the conversion or sale a manual form may be about
- * to enter a second time. Pure.
+ * record was seen in, and the conversion, sale or listing a manual form may
+ * be about to enter a second time. Pure.
  */
-import type { RecordedFromAccount, StockConversionFromAccount } from '$lib/api/commands.gen';
+import type {
+	AuctionListing,
+	RecordedFromAccount,
+	StockConversionFromAccount,
+} from '$lib/api/commands.gen';
 import { formatQuantity, formatSeenAt, formatTime, formatTt, isZeroTt } from '$lib/utils/format';
 
 /** One record the account readings made of an item within the last hour:
@@ -56,13 +60,41 @@ export function isRecentFromAccount(recordedAt: string, now: Date = new Date()):
 }
 
 /** What a manual form may be about to enter a second time: a conversion,
- * or a sale to the Trade Terminal. */
-export type AccountRecordKind = 'conversion' | 'sale';
+ * a sale to the Trade Terminal, or an auction listing. */
+export type AccountRecordKind = 'conversion' | 'sale' | 'listing';
 
 const RECORD_NOUN: Record<AccountRecordKind, string> = {
 	conversion: 'a conversion',
 	sale: 'a Trade Terminal sale',
+	listing: 'an auction listing',
 };
+
+/** The latest listing of `itemName` the readings created whose step ended
+ * within the last hour, among `listings` (those still standing), as a
+ * record a manual listing form shows beside the item; `null` when there is
+ * none. The name is matched as the backend matches it, trimmed and in any
+ * case. */
+export function recentListingFromAccount(
+	listings: readonly AuctionListing[],
+	itemName: string,
+	now: Date = new Date(),
+): AccountRecordRead | null {
+	const wanted = itemName.trim().toLowerCase();
+	let latest: AccountRecordRead | null = null;
+	for (const listing of listings) {
+		const step = listing.listedFromAccount;
+		if (!step || listing.itemName.trim().toLowerCase() !== wanted) continue;
+		if (!isRecentFromAccount(step.to, now)) continue;
+		if (latest && Date.parse(latest.recordedAt) >= Date.parse(step.to)) continue;
+		latest = {
+			id: listing.id,
+			quantity: listing.quantity,
+			ttValue: listing.ttValue,
+			recordedAt: step.to,
+		};
+	}
+	return latest;
+}
 
 /** The line beside a manual form's amount when the readings recorded the
  * same kind of thing for the same item within the last hour. It does not

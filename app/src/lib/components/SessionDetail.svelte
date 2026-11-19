@@ -53,12 +53,15 @@
 		trackedEstimate,
 	} from '$lib/features/account/costBasis';
 	import { inDevelopment } from '$lib/inDevelopment';
+	import { commandRefusal } from '$lib/extension/gate';
+	import { accountOffered } from '$lib/features/account/offered';
 	import { describeUnpriced, hasWeaponEvidence } from '$lib/features/weapons/weaponReview';
 	import { createWeaponReviewModel } from '$lib/features/weapons/weaponReviewModel.svelte';
 
 	let {
 		detail = $bindable(),
-	}: { detail: SessionDetail } = $props();
+		finished = false,
+	}: { detail: SessionDetail; finished?: boolean } = $props();
 
 	// ── Armour standing ───────────────────────────────────────────────
 	// Armour cost is recorded when the player repairs, possibly sessions
@@ -669,7 +672,7 @@
 
 	<!-- 1b1. Where the measured costs came from, item by item (shown only
 		 when the session has a measure) -->
-	{#if inDevelopment.visible}
+	{#if inDevelopment.visible && accountOffered()}
 		<SessionMeasure
 			sessionId={detail.sessionId}
 			costBasis={detail.summary.costBasis}
@@ -691,7 +694,12 @@
 		<HealingEvidence {detail} model={healingReview} />
 	{/if}
 
-	<SessionDoses model={sessionDoses} />
+	<!-- Once the session has finished, its doses are corrected with its
+		 healing, so they are read only while that correction is refused. -->
+	<SessionDoses
+		model={sessionDoses}
+		readOnlyNote={finished ? (commandRefusal('healing_correct')?.hint ?? null) : null}
+	/>
 
 	<MobDetections model={mobDetections} />
 	<ToolSightings model={toolSightings} />

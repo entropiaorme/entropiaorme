@@ -372,6 +372,42 @@ fn a_dose_removed_in_a_session_comes_back_ended_after_the_stop() {
     assert!((session_cost(&rig, &session.id) - 4.5).abs() < 1e-12);
 }
 
+/// A finished session stays correctable whatever is running now: the misclick
+/// spotted afterwards touches that session's books and nothing of the session
+/// in play.
+#[test]
+fn a_dose_of_a_finished_session_is_removed_while_another_session_runs() {
+    let rig = rig();
+    let board = board(&rig);
+    let tracker = tracker_with(&rig, &board);
+
+    let finished = rig.wait(tracker.start_session()).unwrap();
+    let misclick = rig.wait(tracker.start_dose(adrenaline(true))).unwrap();
+    rig.clock.advance(60.0).unwrap();
+    rig.wait(tracker.stop_session()).unwrap();
+    assert!((session_cost(&rig, &finished.id) - 4.5).abs() < 1e-12);
+
+    rig.clock.advance(60.0).unwrap();
+    let running = rig.wait(tracker.start_session()).unwrap();
+    rig.wait(tracker.start_dose(rush())).unwrap();
+    let running_cost = session_cost(&rig, &running.id);
+    let running_reload = live_reload(&rig, &tracker);
+    assert_eq!(board.consumed_reload_at(now(&rig)), vec![20.0]);
+
+    let removed = rig.wait(tracker.remove_dose(&misclick.id)).unwrap();
+    assert!(removed.removed_at.is_some());
+    assert_eq!(session_cost(&rig, &finished.id), 0.0);
+    assert_eq!(session_cost(&rig, &running.id), running_cost);
+    assert_eq!(live_reload(&rig, &tracker), running_reload);
+    assert_eq!(board.consumed_reload_at(now(&rig)), vec![20.0]);
+
+    rig.wait(tracker.restore_dose(&misclick.id)).unwrap();
+    assert!((session_cost(&rig, &finished.id) - 4.5).abs() < 1e-12);
+    assert_eq!(session_cost(&rig, &running.id), running_cost);
+    assert_eq!(live_reload(&rig, &tracker), running_reload);
+    assert_eq!(board.consumed_reload_at(now(&rig)), vec![20.0]);
+}
+
 fn rush_untracked() -> DoseStart {
     let mut start = rush();
     start.profile.track_cost = false;

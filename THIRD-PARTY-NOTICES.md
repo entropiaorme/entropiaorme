@@ -40,4 +40,4 @@ The application is a single Rust binary (the Tauri shell and the `app/src-tauri/
 
 ## Game references
 
-References to "Entropia Universe" and related names, logos, and assets are descriptive only. Those names are trademarks or registered trademarks of MindArk PE AB. EntropiaOrme is independent and unofficial; it is not affiliated with, endorsed by, or sponsored by MindArk PE AB. See <https://entropiaorme.com/terms> for the full notice.
+References to "Entropia Universe" and related names, logos, and assets are descriptive only. Those names are trademarks or registered trademarks of MindArk PE AB. EntropiaOrme is independent and unofficial; it is not affiliated with, endorsed by, or sponsored by MindArk PE AB. See the Terms of Service ([legal/terms.md](legal/terms.md)) for the full notice.

@@ -4,6 +4,7 @@
 	import { createAccountStatus } from '$lib/features/account/accountStatus.svelte';
 	import { offersReview } from '$lib/features/account/connection';
 	import { inDevelopment } from '$lib/inDevelopment';
+	import { accountOffered } from '$lib/features/account/offered';
 	import OverviewTab from './OverviewTab.svelte';
 	import LedgerTab from './LedgerTab.svelte';
 	import MarketTab from './MarketTab.svelte';
@@ -22,10 +23,11 @@
 	];
 
 	// The Measured tab appears once there is anything to review: readings
-	// stored, or a connection made. A disconnect does not hide it.
-	const account = inDevelopment.visible ? createAccountStatus() : null;
+	// stored, or a connection made. A disconnect does not hide it, and it
+	// is offered only with the other account surfaces.
+	const account = inDevelopment.visible && accountOffered() ? createAccountStatus() : null;
 	onMount(() => account?.connect());
-	const measured = $derived(offersReview(account?.current ?? null));
+	const measured = $derived(accountOffered() && offersReview(account?.current ?? null));
 	const tabs = $derived(measured ? [...baseTabs, { id: 'measured', label: 'Measured' }] : baseTabs);
 
 	let chosenTab = $state('overview');

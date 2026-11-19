@@ -164,7 +164,7 @@ pub fn clear_label(
 
 /// Rewrite every stored name of the mob to `label`, and the summaries of
 /// the ended sessions whose kills were renamed.
-fn rename(
+pub fn rename(
     tx: &rusqlite::Transaction<'_>,
     species: &str,
     maturity: &str,

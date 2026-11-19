@@ -8,10 +8,13 @@
 # workflows read to decide whether to run those jobs.
 #
 # The flag is deliberately conservative. `code=false` (documentation-only: skip
-# the expensive jobs) is emitted only when EVERY changed path is a Markdown file.
-# Any other path, an empty change set, an event that supplies no comparable range
-# (such as a push that creates a branch), and any classification doubt all
-# resolve to `code=true`, so the safe failure direction is to run the suite.
+# the expensive jobs) is emitted only when EVERY changed path is a Markdown file
+# outside `legal/`. The Markdown there is a build input, not documentation: the
+# app renders the Terms of Service and the Privacy Policy from those files, and a
+# test reads their version line. Any other path, an empty change set, an event
+# that supplies no comparable range (such as a push that creates a branch), and
+# any classification doubt all resolve to `code=true`, so the safe failure
+# direction is to run the suite.
 #
 # The flag gates required checks, so the workflows pair it with a fail-closed
 # aggregator: a documentation-only skip passes the gate, but a detection that did
@@ -76,12 +79,14 @@ fi
 mapfile -t paths < <(git -C "$repo_root" diff --name-only "$commit_range" | sed '/^$/d')
 
 # Documentation-only iff the change touches at least one path and every path is
-# a Markdown file (case-insensitive). An empty set is treated as code.
+# a Markdown file (case-insensitive) outside `legal/`. An empty set is treated as
+# code.
 code="true"
 if [ "${#paths[@]}" -gt 0 ]; then
   docs_only="true"
   for p in "${paths[@]}"; do
     case "$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')" in
+      legal/*) docs_only="false"; break ;;
       *.md) ;;
       *) docs_only="false"; break ;;
     esac

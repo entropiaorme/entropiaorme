@@ -2,7 +2,7 @@
 
 This section collects the significant architectural decisions behind EntropiaOrme, recorded as short [Markdown Architecture Decision Records](https://adr.github.io/madr/). Each record captures the context that forced a decision, the decision itself, and the consequences that followed.
 
-Every record here describes a decision that has landed in the codebase, so each carries the status **Accepted**. New decisions are added as new numbered records rather than by rewriting old ones; a decision that is later reversed is superseded by a new record that references it.
+Every record here describes a decision that has landed in the codebase, so each carries the status **Accepted**. New decisions are added as new numbered records rather than by rewriting old ones; a decision that is later reversed is superseded by a new record that references it, and one that a later record changes in part is marked as amended by it.
 
 Several of the earlier records predate two later structural decisions: the collapse to a single in-process Rust binary (ADR-0013) and the retirement of the cross-language equivalence oracle (ADR-0016). They cite the Python implementation in which their decision was first realised. Unless a later record supersedes it, each decision remains in force in the native Rust workspace; the architecture handbook chapters describe the current implementation, while these records preserve the reasoning as it was set down.
 
@@ -13,7 +13,7 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0003](0003-injected-clock-seam.md) | An injected clock as the determinism seam for replay |
 | [ADR-0004](0004-test-mode-composition-root.md) | A separate test-mode composition root |
 | [ADR-0005](0005-cross-language-equivalence-oracle.md) | A hybrid cross-language equivalence oracle for the port (superseded by ADR-0016) |
-| [ADR-0006](0006-tauri-svelte-frontend.md) | Tauri 2 and Svelte 5 runes for the desktop frontend |
+| [ADR-0006](0006-tauri-svelte-frontend.md) | Tauri 2 and Svelte 5 runes for the desktop frontend (amended by ADR-0041) |
 | [ADR-0007](0007-sqlite-wal.md) | SQLite with write-ahead logging for local storage |
 | [ADR-0008](0008-ocr-equivalence-frozen.md) | OCR behaviour frozen to the recorded corpus |
 | [ADR-0009](0009-push-to-pull-invalidation.md) | Push-to-pull invalidation for window synchronisation |
@@ -21,7 +21,7 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0011](0011-etag-conditional-requests.md) | Strong-ETag conditional requests on hydration reads |
 | [ADR-0012](0012-supervised-worker-threads.md) | Named, owned, supervised worker threads |
 | [ADR-0013](0013-in-process-collapse.md) | Collapse to a single in-process Rust binary |
-| [ADR-0014](0014-release-engineering.md) | Bespoke installer, signed auto-update, and a provenance-bearing release pipeline |
+| [ADR-0014](0014-release-engineering.md) | Bespoke installer, signed auto-update, and a provenance-bearing release pipeline (amended by ADR-0040 and ADR-0041) |
 | [ADR-0015](0015-candle-ocr-backend-not-adopted.md) | Native candle OCR backend evaluated and not adopted; ONNX Runtime kept as the sole recogniser |
 | [ADR-0016](0016-retire-equivalence-oracle.md) | Retire the cross-language equivalence oracle; preserve the evidence as frozen Rust-side goldens |
 | [ADR-0017](0017-behavioural-contract-ownership.md) | Own the behavioural contract in this codebase; the goldens pin its ratified contract, not reference fidelity |
@@ -29,22 +29,23 @@ Several of the earlier records predate two later structural decisions: the colla
 | [ADR-0019](0019-typed-command-facade.md) | Typed IPC commands over a service facade; TypeScript generated from the Rust types; the HTTP transport retires family by family |
 | [ADR-0020](0020-tracker-actor-refounding.md) | The tracker as a single-owner actor with a typestate session, named seams, and an instant time basis |
 | [ADR-0021](0021-synchronous-database-core.md) | A synchronous database core on dedicated threads, adopted against a measured null result |
-| [ADR-0022](0022-runes-native-shared-state.md) | Runes-native shared state: the svelte/store surface is frozen behind a whole-tree guard and only shrinks |
+| [ADR-0022](0022-runes-native-shared-state.md) | Runes-native shared state: the svelte/store surface is frozen behind a whole-tree guard and only shrinks (amended by ADR-0041) |
 | [ADR-0023](0023-linux-platform-layer.md) | The Linux platform layer: XWayland windowing, evdev key observation, ScreenCast-portal capture, and deb/AppImage packaging |
 | [ADR-0024](0024-market-informational-layer.md) | Estimated market data as a quarantined informational layer; the accounting surfaces can never read it, CI-enforced |
-| [ADR-0025](0025-central-market-data-service.md) | A central market-data service on AWS serverless: token-authenticated ingest, scheduled aggregation, versioned snapshot distribution |
+| [ADR-0025](0025-central-market-data-service.md) | A central market-data service on AWS serverless: token-authenticated ingest, scheduled aggregation, versioned snapshot distribution (amended by ADR-0041) |
 | [ADR-0026](0026-canonical-quest-reward-accounting.md) | Canonical quest reward accounting and session-owned quest rosters |
 | [ADR-0027](0027-intent-led-healing-attribution.md) | Intent-led healing attribution with durable output evidence |
 | [ADR-0028](0028-versioned-expected-hunting-economics.md) | Versioned expected-hunting economics over immutable offensive evidence |
-| [ADR-0029](0029-two-line-development.md) | Two-line development: `next` integrates, `main` is promoted to after soak; the merge queue retired |
+| [ADR-0029](0029-two-line-development.md) | Two-line development: `next` integrates, `main` is promoted to after soak; the merge queue retired (superseded by ADR-0040) |
 | [ADR-0030](0030-startup-readiness-boundary.md) | An explicit startup readiness boundary: a level-triggered shell answer, commands held in the typed transport, the frame painted first |
 | [ADR-0031](0031-session-grain-protection-costs.md) | Protection costs recorded at session grain, when the player repairs: nothing declared during play, hit-weighted over the sessions the player ticks |
 | [ADR-0032](0032-unified-weapon-attribution.md) | Unified weapon attribution: hotbar intent validated by each carried weapon's damage band, with bounded, player-decided correction and no mode to choose |
 | [ADR-0033](0033-damage-over-time-effect-windows.md) | Damage-over-time effects as persisted windows of one paid activation: ticks cost nothing, concurrent explanations stay unresolved, and windows outlive their session |
 | [ADR-0034](0034-attack-rate-limit.md) | The server's attack-rate limit as a per-attack cost and damage factor, applied at read time through one pricing preparation; reload speed held at the game's per-source stacking limits |
-| [ADR-0035](0035-user-led-promotion.md) | Promotion is user-led: no cadence; `next` is promoted up to the point the maintainer has used, as a prefix, never a selection |
+| [ADR-0035](0035-user-led-promotion.md) | Promotion is user-led: no cadence; `next` is promoted up to the point the maintainer has used, as a prefix, never a selection (superseded by ADR-0040) |
 | [ADR-0036](0036-consumable-dose-lifecycle.md) | Consumable doses as one persisted lifecycle: an absolute expiry the tracker owns, the consumed input to the one reload evaluator, booked once by the player's per-item choice, never stacked, corrected by supersession |
 | [ADR-0037](0037-retire-golden-ratification-guard.md) | Retire the golden-ratification guard: goldens still assert, and a deliberate change is reviewed in the commit that moves them |
-| [ADR-0038](0038-promotion-carries-public-polish.md) | Promotion carries the public surface's polish: in-development marking and documentation are settled once per promotion, not per landing on `next` |
+| [ADR-0038](0038-promotion-carries-public-polish.md) | Promotion carries the public surface's polish: in-development marking and documentation are settled once per promotion, not per landing on `next` (amended by ADR-0040) |
 | [ADR-0039](0039-retire-port-equivalence-evidence.md) | Retire the port-equivalence evidence and scale testing to a personal project: the replay corpus stays; the WebDriver suite, mutation floors, and per-push coverage go |
 | [ADR-0040](0040-periodic-source-snapshots.md) | Periodic source snapshots replace two-line development: one line, one commit per snapshot, source-only, no releases |
+| [ADR-0041](0041-no-connection-to-the-project-site.md) | No connection to the project's site: the updater and the news feed are removed, the webview reaches no external origin, and the legal text ships in `legal/` |

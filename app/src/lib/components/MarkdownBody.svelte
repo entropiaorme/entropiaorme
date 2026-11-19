@@ -56,7 +56,7 @@
 			},
 			// Drop images entirely. CSP `img-src 'self' data:` would already block
 			// remote loads, but rendering nothing is unambiguous and avoids any
-			// surprise from data-URL payloads. News content is text-first.
+			// surprise from data-URL payloads. The content is text-first.
 			image() {
 				return '';
 			},

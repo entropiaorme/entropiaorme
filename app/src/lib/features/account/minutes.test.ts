@@ -104,7 +104,8 @@ describe('the figures a minute shows', () => {
 		});
 		expect(measuredCell({ kind: 'unmeasured', reason: 'ammoToppedUp' })).toEqual({
 			text: NO_DATA,
-			title: 'Universal Ammo was topped up in this minute, so what was fired is not known',
+			title:
+				'Universal Ammo arrived in this minute (topped up, or converted from Shrapnel), so what was fired is not known',
 			measured: false,
 		});
 		expect(measuredCell({ kind: 'unmeasured', reason: 'limitedSetUnconfirmed' }).title).toBe(

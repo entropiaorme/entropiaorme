@@ -60,19 +60,6 @@ describe('window commands', () => {
 	});
 });
 
-describe('updater commands', () => {
-	it.each([
-		['checkForUpdate', 'check_for_update'],
-		['downloadUpdate', 'download_update'],
-		['getUpdateChannel', 'get_update_channel'],
-		['installUpdate', 'install_update'],
-	] as const)('%s invokes %s', async (fn, command) => {
-		const shell = await loadModule();
-		await shell[fn]();
-		expect(invokeMock).toHaveBeenCalledWith(command);
-	});
-});
-
 describe('planetMapImage', () => {
 	it('fetches the raster over the planet_map_image command as a base64 data URL', async () => {
 		const { planetMapImage } = await loadModule();

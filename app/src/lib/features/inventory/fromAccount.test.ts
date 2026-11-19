@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { StockConversionFromAccount } from '$lib/api/commands.gen';
+import { listedListing, listedStep } from './__fixtures__/activity';
 import {
 	accountRecordSentence,
 	fromAccountSentence,
 	fromAccountWindow,
 	isRecentFromAccount,
+	recentListingFromAccount,
 } from './fromAccount';
 
 const now = new Date('2026-03-10T12:00:00Z');
@@ -62,5 +64,43 @@ describe('the reminder beside a manual conversion', () => {
 		expect(isRecentFromAccount(at, new Date('2026-03-10T12:00:00Z'))).toBe(true);
 		expect(isRecentFromAccount(at, new Date('2026-03-10T12:00:01Z'))).toBe(false);
 		expect(isRecentFromAccount('not a time', new Date('2026-03-10T11:00:00Z'))).toBe(false);
+	});
+});
+
+describe('the reminder beside a manual listing', () => {
+	// The listing's step ended at 10:05 on the 15th.
+	const at = new Date('2026-11-15T10:30:00Z');
+
+	it('is the latest listing of the item the readings created within the hour', () => {
+		const older = listedListing({
+			id: 'older',
+			listedFromAccount: listedStep({ to: '2026-11-15T10:00:00Z' }),
+		});
+		const latest = listedListing({ quantity: 4, ttValue: 2 });
+		expect(recentListingFromAccount([older, latest], ' animal hide ', at)).toEqual({
+			id: 'listing-made',
+			quantity: 4,
+			ttValue: 2,
+			recordedAt: '2026-11-15T10:05:00Z',
+		});
+		expect(recentListingFromAccount([latest, older], 'Animal Hide', at)?.id).toBe('listing-made');
+	});
+
+	it('is nothing for another item, one the player listed, or once the hour has passed', () => {
+		const made = listedListing();
+		expect(recentListingFromAccount([made], 'Iron Stone', at)).toBeNull();
+		expect(
+			recentListingFromAccount([listedListing({ listedFromAccount: null })], 'Animal Hide', at),
+		).toBeNull();
+		expect(
+			recentListingFromAccount([made], 'Animal Hide', new Date('2026-11-15T11:05:01Z')),
+		).toBeNull();
+	});
+
+	it('names an auction listing as one', () => {
+		const record = { id: 'l', quantity: 10, ttValue: 5, recordedAt: '2026-03-10T11:41:00Z' };
+		expect(accountRecordSentence('listing', 'Animal Hide', record)).toMatch(
+			/^Your account recorded an auction listing of 10 Animal Hide \(5\.00 PED TT\) at .+; record this only if it is another one\.$/,
+		);
 	});
 });

@@ -36,11 +36,11 @@ function dose(overrides: Partial<ConsumableDose> = {}): ConsumableDose {
 	};
 }
 
-async function renderWith(doses: ConsumableDose[]) {
+async function renderWith(doses: ConsumableDose[], readOnlyNote: string | null = null) {
 	mocked.getSessionDoses.mockResolvedValue(doses);
 	const model = createSessionDosesModel(() => 's1');
 	await model.refresh();
-	render(SessionDoses, { props: { model } });
+	render(SessionDoses, { props: { model, readOnlyNote } });
 	return model;
 }
 
@@ -50,6 +50,17 @@ describe("a session's doses", () => {
 	it('is absent for a session that took none', async () => {
 		await renderWith([]);
 		expect(screen.queryByTestId('session-doses')).toBeNull();
+	});
+
+	it('offers no correction when read-only, and says why', async () => {
+		await renderWith(
+			[dose(), dose({ id: 'd2', removedAt: 2000, removedBy: 'player' })],
+			'Read only',
+		);
+		expect(screen.getAllByTestId('session-dose')).toHaveLength(2);
+		expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+		expect(screen.queryByRole('button', { name: 'Restore' })).toBeNull();
+		expect(screen.getByText('Read only')).toBeTruthy();
 	});
 
 	it('lists what each dose booked and removes one', async () => {

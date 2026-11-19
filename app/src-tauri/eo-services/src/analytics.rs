@@ -44,9 +44,9 @@ pub use conversion::{
     ConversionLineSide, ConversionOutput, ItemConversion,
 };
 pub use from_account::{
-    AccountRecord, AccountStep, FromAccount, ListingFromAccount, RecentFromAccount,
-    RecordedFromAccount, TakenBack, UnknownOriginRecorded, UnknownOriginUndo,
-    RECENT_FROM_ACCOUNT_SECONDS,
+    AccountRecord, AccountStep, FromAccount, InferredBid, ListedFromAccount, ListingFromAccount,
+    RecentFromAccount, RecordBasis, RecordedFromAccount, TakenBack, UnknownOriginRecorded,
+    UnknownOriginUndo, RECENT_FROM_ACCOUNT_SECONDS,
 };
 pub(crate) use realised::realised_markup_by_quest;
 pub use reconciliation::{
@@ -230,6 +230,10 @@ pub struct AuctionListingRow {
     /// step they saw it in. `None` for one the player resolved, and while
     /// it waits on the auction.
     pub from_account: Option<RecordedFromAccount>,
+    /// When the account readings created the listing itself: the step they
+    /// saw it made in, with the starting bids its fee reads back as. `None`
+    /// for a listing the player entered.
+    pub listed_from_account: Option<RecordedFromAccount>,
 }
 
 /// One thing this activity did to its stock: an auction listing across its
@@ -285,8 +289,12 @@ pub struct ActivityHistoryRow {
     /// What the sold stock descends from, when a conversion produced it.
     pub derived_from: Vec<DerivedSourceRow>,
     /// Recorded on its own from the account readings, between these two
-    /// instants; `None` for an entry the player made.
+    /// instants; `None` for an entry the player made. For a listing, its
+    /// outcome.
     pub from_account: Option<RecordedFromAccount>,
+    /// A listing the account readings created: the step it was seen made
+    /// in, with the starting bids its fee reads back as. `None` otherwise.
+    pub listed_from_account: Option<RecordedFromAccount>,
     /// The standing stock reconciliation that recorded it, which undoes it
     /// as a whole; `None` otherwise.
     pub reconciliation_id: Option<String>,
@@ -4516,6 +4524,165 @@ fn listing_moment(supplied: Option<&str>, now: chrono::NaiveDateTime) -> (String
     (text.to_string(), None)
 }
 
+/// Refuse a listing of stock as the player's own entry is refused, before
+/// anything is written: sources untrue of its figures, Universal Ammo, no
+/// quantity, a negative price or fee, or a duration of no days.
+pub(super) fn check_stock_listing(
+    item_name: &str,
+    quantity: f64,
+    terms: &ListingTerms<'_>,
+) -> Result<(), AnalyticsError> {
+    check_sources(
+        terms.sources,
+        &RecordedFigures {
+            quantity,
+            starting_bid: terms.starting_bid,
+            buyout: terms.buyout,
+            listing_fee: terms.listing_fee,
+            auction_days: terms.auction_days,
+        },
+    )?;
+    check_name_sources(terms.sources, item_name).map_err(AnalyticsError::InvalidInput)?;
+    if is_universal_ammo(item_name) {
+        return Err(AnalyticsError::InvalidInput(
+            "Universal Ammo is liquid PED and cannot be listed",
+        ));
+    }
+    if quantity <= 0.0 {
+        return Err(AnalyticsError::InvalidInput(
+            "a listing needs a positive quantity",
+        ));
+    }
+    if terms.starting_bid < 0.0 || terms.listing_fee < 0.0 {
+        return Err(AnalyticsError::InvalidInput(
+            "auction prices and fees cannot be negative",
+        ));
+    }
+    if terms.auction_days.is_some_and(|days| days <= 0) {
+        return Err(AnalyticsError::InvalidInput(
+            "a listing duration must be a positive number of days",
+        ));
+    }
+    Ok(())
+}
+
+/// A listing of stock to write, under its id, dated: the day the ledger
+/// keys it by, and the instant its clock runs from when that is known.
+pub(super) struct StockListing<'a> {
+    pub id: &'a str,
+    pub profession: Profession,
+    pub item_name: &'a str,
+    pub quantity: f64,
+    pub starting_bid: f64,
+    pub buyout: Option<f64>,
+    pub listing_fee: f64,
+    pub listed_at: &'a str,
+    pub listed_instant: Option<f64>,
+    pub auction_days: Option<i64>,
+    pub sources: &'a [ListingFieldSource],
+}
+
+/// Write a listing of stock inside the caller's transaction, checked
+/// already ([`check_stock_listing`]): the listed quantity leaves holdings,
+/// allocated across the open positions (stock beyond them held as an
+/// opening balance first), and the fee is spent, in the ledger on the day
+/// it was listed. The one write behind the player's own listing and a
+/// listing the account readings make.
+pub(super) fn write_stock_listing(
+    tx: &rusqlite::Transaction<'_>,
+    listing: &StockListing<'_>,
+    now: f64,
+) -> Result<AuctionListingRow, DbError> {
+    let StockListing {
+        id,
+        profession,
+        item_name,
+        quantity,
+        starting_bid,
+        buyout,
+        listing_fee,
+        listed_at,
+        listed_instant,
+        auction_days,
+        sources,
+    } = *listing;
+    let (positions, unit_tt) = item_positions(tx, item_name)?;
+    let plan = stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
+    // Stock a conversion produced may still have paid markup to recover,
+    // which is what a basis on a listing has always meant.
+    let cost_basis =
+        (plan.paid_markup > STOCK_EPSILON).then_some(quantity * unit_tt + plan.paid_markup);
+
+    tx.execute(
+        "INSERT INTO auction_listings ( \
+             id, item_name, profession, quantity, attributed_qty, unattributed_qty, \
+             tt_value, attributed_tt, starting_bid, buyout, listing_fee, listed_at, \
+             auction_days, listed_instant, status, created_at, updated_at, cost_basis) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+        rusqlite::params![
+            id,
+            item_name,
+            profession.as_str(),
+            quantity,
+            plan.attributed_qty,
+            plan.unattributed_qty,
+            quantity * unit_tt,
+            plan.attributed_tt,
+            starting_bid,
+            buyout,
+            listing_fee,
+            listed_at,
+            auction_days,
+            listed_instant,
+            now,
+            now,
+            cost_basis,
+        ],
+    )?;
+
+    insert_field_sources(tx, id, sources)?;
+    record_opening_balance(tx, item_name, id, &plan, listed_at, now)?;
+
+    for allocation in &plan.allocations {
+        insert_movement(
+            tx,
+            item_name,
+            "listing",
+            Some(id),
+            allocation.provenance,
+            allocation.session_definition_id,
+            allocation.activity_context_id,
+            allocation.tool_name,
+            -allocation.quantity,
+            -allocation.tt_value,
+            listed_at,
+            now,
+            allocation.derived.outflow(),
+        )?;
+    }
+
+    if listing_fee > 0.0 {
+        let entry_id = Uuid::new_v4().to_string();
+        tx.execute(
+            "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
+             VALUES (?, ?, 'expense', ?, ?, 'market')",
+            rusqlite::params![
+                entry_id,
+                listed_at,
+                format!("Auction Fee: {item_name}"),
+                listing_fee,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE auction_listings SET fee_entry_id = ? WHERE id = ?",
+            rusqlite::params![entry_id, id],
+        )?;
+        daily_rollup::refresh_days(tx, [listed_at])?;
+    }
+
+    Ok(read_listing(tx, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?)
+}
+
 /// One auction listing from a row over [`LISTING_COLUMNS`], with its
 /// realised figures derived rather than read: a stored copy could drift from
 /// the price and fees it was resolved with.
@@ -4579,6 +4746,7 @@ fn listing_from_row(row: &rusqlite::Row) -> AuctionListingRow {
             None
         },
         from_account: None,
+        listed_from_account: None,
     }
 }
 
@@ -6730,8 +6898,10 @@ impl AnalyticsService {
                     })?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 let sources = from_account::listing_sources(conn)?;
+                let listed = from_account::listed_sources(conn)?;
                 for row in &mut rows {
                     row.from_account = sources.get(&row.id).copied();
+                    row.listed_from_account = listed.get(&row.id).copied();
                 }
                 Ok(rows)
             })
@@ -6783,132 +6953,39 @@ impl AnalyticsService {
         quantity: f64,
         terms: ListingTerms<'_>,
     ) -> Result<AuctionListingRow, AnalyticsError> {
-        let ListingTerms {
-            starting_bid,
-            buyout,
-            listing_fee,
-            listed_at,
-            auction_days,
-            sources,
-        } = terms;
-        check_sources(
-            sources,
-            &RecordedFigures {
-                quantity,
-                starting_bid,
-                buyout,
-                listing_fee,
-                auction_days,
-            },
-        )?;
-        check_name_sources(sources, item_name).map_err(AnalyticsError::InvalidInput)?;
-        if is_universal_ammo(item_name) {
-            return Err(AnalyticsError::InvalidInput(
-                "Universal Ammo is liquid PED and cannot be listed",
-            ));
-        }
-        if quantity <= 0.0 {
-            return Err(AnalyticsError::InvalidInput(
-                "a listing needs a positive quantity",
-            ));
-        }
-        if starting_bid < 0.0 || listing_fee < 0.0 {
-            return Err(AnalyticsError::InvalidInput(
-                "auction prices and fees cannot be negative",
-            ));
-        }
-        if auction_days.is_some_and(|days| days <= 0) {
-            return Err(AnalyticsError::InvalidInput(
-                "a listing duration must be a positive number of days",
-            ));
-        }
-
+        check_stock_listing(item_name, quantity, &terms)?;
         let id = Uuid::new_v4().to_string();
-        let (listed_at, listed_instant) = listing_moment(listed_at, self.clock.now());
+        let (listed_at, listed_instant) = listing_moment(terms.listed_at, self.clock.now());
         let now = naive_to_epoch(self.clock.now());
-        let (id_c, item_c, listed_c) = (id.clone(), item_name.to_string(), listed_at.clone());
-        let instant_c = listed_instant;
-        let sources = sources.to_vec();
+        let item = item_name.to_string();
+        let sources = terms.sources.to_vec();
+        let (starting_bid, buyout, listing_fee, auction_days) = (
+            terms.starting_bid,
+            terms.buyout,
+            terms.listing_fee,
+            terms.auction_days,
+        );
 
         self.db
             .with_writer(move |conn| {
                 let tx = conn.transaction()?;
-                let (positions, unit_tt) = item_positions(&tx, &item_c)?;
-                let plan =
-                    stock_allocation::allocate(&as_source_positions(&positions), quantity, unit_tt);
-                // Stock a conversion produced may still have paid markup to
-                // recover, which is what a basis on a listing has always meant.
-                let cost_basis = (plan.paid_markup > STOCK_EPSILON)
-                    .then_some(quantity * unit_tt + plan.paid_markup);
-
-                tx.execute(
-                    "INSERT INTO auction_listings ( \
-                         id, item_name, profession, quantity, attributed_qty, unattributed_qty, \
-                         tt_value, attributed_tt, starting_bid, buyout, listing_fee, listed_at, \
-                         auction_days, listed_instant, status, created_at, updated_at, cost_basis) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
-                    rusqlite::params![
-                        id_c,
-                        item_c,
-                        profession.as_str(),
+                let row = write_stock_listing(
+                    &tx,
+                    &StockListing {
+                        id: &id,
+                        profession,
+                        item_name: &item,
                         quantity,
-                        plan.attributed_qty,
-                        plan.unattributed_qty,
-                        quantity * unit_tt,
-                        plan.attributed_tt,
                         starting_bid,
                         buyout,
                         listing_fee,
-                        listed_c,
+                        listed_at: &listed_at,
+                        listed_instant,
                         auction_days,
-                        instant_c,
-                        now,
-                        now,
-                        cost_basis,
-                    ],
+                        sources: &sources,
+                    },
+                    now,
                 )?;
-
-                insert_field_sources(&tx, &id_c, &sources)?;
-                record_opening_balance(&tx, &item_c, &id_c, &plan, &listed_c, now)?;
-
-                for allocation in &plan.allocations {
-                    insert_movement(
-                        &tx,
-                        &item_c,
-                        "listing",
-                        Some(&id_c),
-                        allocation.provenance,
-                        allocation.session_definition_id,
-                        allocation.activity_context_id,
-                        allocation.tool_name,
-                        -allocation.quantity,
-                        -allocation.tt_value,
-                        &listed_c,
-                        now,
-                        allocation.derived.outflow(),
-                    )?;
-                }
-
-                if listing_fee > 0.0 {
-                    let entry_id = Uuid::new_v4().to_string();
-                    tx.execute(
-                        "INSERT INTO ledger_entries (id, date, type, description, amount, tag) \
-                         VALUES (?, ?, 'expense', ?, ?, 'market')",
-                        rusqlite::params![
-                            entry_id,
-                            listed_c,
-                            format!("Auction Fee: {item_c}"),
-                            listing_fee,
-                        ],
-                    )?;
-                    tx.execute(
-                        "UPDATE auction_listings SET fee_entry_id = ? WHERE id = ?",
-                        rusqlite::params![entry_id, id_c],
-                    )?;
-                    daily_rollup::refresh_days(&tx, [listed_c.as_str()])?;
-                }
-
-                let row = read_listing(&tx, &id_c)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
                 tx.commit()?;
                 Ok(row)
             })
@@ -7357,7 +7434,7 @@ impl AnalyticsService {
 
     /// Record a private player-to-player sale. There is no listing lifecycle
     /// and no auction fee: the entered price is final, so recognition and the
-    /// stock outflow happen atomically.
+    /// stock outflow happen atomically. Answers the sale's id.
     pub async fn create_private_sale(
         &self,
         profession: Profession,
@@ -7365,7 +7442,7 @@ impl AnalyticsService {
         quantity: f64,
         final_price: f64,
         sold_at: Option<&str>,
-    ) -> Result<(), AnalyticsError> {
+    ) -> Result<String, AnalyticsError> {
         if is_universal_ammo(item_name) {
             return Err(AnalyticsError::InvalidInput(
                 "Universal Ammo is liquid PED and cannot be traded",
@@ -7399,7 +7476,7 @@ impl AnalyticsService {
                     now,
                 )?;
                 tx.commit()?;
-                Ok(())
+                Ok(id)
             })
             .await
             .map_err(AnalyticsError::from)
@@ -7512,6 +7589,7 @@ impl AnalyticsService {
                             itemised: false,
                             derived_from,
                             from_account: None,
+                            listed_from_account: None,
                             reconciliation_id: None,
                             occurred_at: listing
                                 .resolved_at
@@ -7585,6 +7663,7 @@ impl AnalyticsService {
                             itemised: false,
                             derived_from,
                             from_account: None,
+                            listed_from_account: None,
                             reconciliation_id: None,
                             id,
                             kind: "trade".to_string(),
@@ -7630,6 +7709,7 @@ impl AnalyticsService {
                             itemised: false,
                             derived_from: Vec::new(),
                             from_account: None,
+                            listed_from_account: None,
                             reconciliation_id: None,
                             id,
                             kind: "removal".to_string(),

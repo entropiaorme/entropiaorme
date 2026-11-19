@@ -1255,6 +1255,7 @@ pub(super) fn push_history_rows(
             itemised: header.itemised,
             derived_from: Vec::new(),
             from_account: None,
+            listed_from_account: None,
             reconciliation_id: None,
             kind: "conversion".to_string(),
             subject_kind: "loot".to_string(),

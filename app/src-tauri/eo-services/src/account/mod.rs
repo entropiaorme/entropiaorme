@@ -20,8 +20,9 @@
 //! itself: once a session's costs are stored, the resolver brings the
 //! figures derived from them up to date in the same write, and what a step
 //! did to the stock ([`recognition`]: a Shrapnel conversion, a recycling, a
-//! sale to the Trade Terminal) is recorded through the analytics service's
-//! own commands ([`follow`]), as the player's entry would be. Role
+//! sale to the Trade Terminal), and a listing the player made
+//! ([`listing_made`]), is recorded through the analytics service's own
+//! commands ([`follow`]), as the player's entry would be. Role
 //! resolution reads the equipment library, the protection sets and the
 //! player's own placements of items the app cannot place ([`placement`],
 //! which this module keeps);
@@ -55,6 +56,7 @@ pub mod follow;
 pub mod gap;
 #[cfg(feature = "session-keyring")]
 pub mod keyring_store;
+pub mod listing_made;
 pub mod live;
 pub mod measure;
 pub mod minutes;
@@ -68,6 +70,7 @@ pub mod recorder;
 pub mod roles;
 #[cfg(any(test, feature = "test-support"))]
 pub mod scripted;
+pub mod session_shrapnel;
 pub mod sessions;
 pub mod settlement;
 pub mod site;
@@ -95,6 +98,8 @@ mod reconcile_tests;
 mod recorder_tests;
 #[cfg(test)]
 mod replay_tests;
+#[cfg(test)]
+mod session_shrapnel_tests;
 #[cfg(test)]
 mod sessions_tests;
 #[cfg(test)]

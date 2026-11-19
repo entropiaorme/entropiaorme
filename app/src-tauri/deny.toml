@@ -77,12 +77,11 @@ wildcards = "deny"
 # from the wildcard ban so it still bites a real registry crate pinned to "*"
 # while the normal workspace shape is allowed.
 allow-wildcard-paths = true
-# zip: the updater plugin's archive extraction (Windows `.msi.zip` payloads)
-# carries unpatched extraction advisories, and the update payload here is a
-# raw signed MSI, so the plugin's `zip` feature is off. The ban keeps it off:
-# re-enabling the feature, or any other crate pulling zip in, fails this check.
+# zip: archive extraction carries unpatched extraction advisories, and
+# nothing in the application extracts an archive. The ban keeps it out: any
+# crate pulling zip in fails this check.
 deny = [
-    { crate = "zip", reason = "update payloads are raw signed MSIs; archive extraction is not needed" },
+    { crate = "zip", reason = "the application extracts no archives; zip carries unpatched extraction advisories" },
 ]
 
 [sources]

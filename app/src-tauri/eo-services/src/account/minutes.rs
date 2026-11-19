@@ -770,7 +770,8 @@ fn fell_in(measure: &SessionMeasure) -> BTreeSet<String> {
             NotableEvent::Sale { items, .. } => {
                 fell.extend(items.iter().map(|item| item.key.name.clone()));
             }
-            NotableEvent::ShrapnelConverted { .. } => {
+            NotableEvent::ShrapnelConverted { .. }
+            | NotableEvent::ShrapnelPresumedConverted { .. } => {
                 fell.insert(SHRAPNEL.to_string());
             }
             NotableEvent::StrongboxOpening { opening, .. } => {
@@ -787,18 +788,30 @@ fn fell_in(measure: &SessionMeasure) -> BTreeSet<String> {
 /// conversion the measure read alone), and units of Universal Ammo that
 /// arrived in it beyond what the measure credits.
 fn shrapnel_and_ammo(measure: &SessionMeasure) -> (i64, i64) {
-    let left = measure
+    let mut left: i64 = measure
         .unexplained_departures
         .iter()
         .filter(|item| item.key.name == SHRAPNEL)
         .map(|item| item.units)
         .sum();
-    let ammo = measure
+    let mut ammo: i64 = measure
         .gained
         .iter()
         .filter(|gain| gain.key.name == UNIVERSAL_AMMO && gain.mark == GainMark::Arrived)
         .map(|gain| gain.units)
         .sum();
+    // Shrapnel presumed converted is in neither list: its event carries it.
+    for event in &measure.events {
+        if let NotableEvent::ShrapnelPresumedConverted {
+            shrapnel_units,
+            ammo_arrived_units,
+            ..
+        } = event
+        {
+            left += shrapnel_units;
+            ammo += ammo_arrived_units;
+        }
+    }
     (left, ammo)
 }
 

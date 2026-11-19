@@ -63,6 +63,20 @@ export function fromAccountSentence(
 		: `Recorded from your account: it came back ${between}.`;
 }
 
+/** How the account created a listing on its own: the window it was seen
+ * made in, and the starting bids its fee reads back as, since the bid the
+ * listing stores is only their midpoint. */
+export function listedFromAccountSentence(
+	seen: { from: string; to: string; inferredBid: { low: number; high: number } | null },
+	now: Date = new Date(),
+): string {
+	const between = `between ${formatSeenAt(seen.from, now)} and ${formatSeenAt(seen.to, now)}`;
+	const made = `Recorded from your account: listed ${between}.`;
+	return seen.inferredBid
+		? `${made} Starting bid inferred from the fee: between ${formatPed(seen.inferredBid.low)} and ${formatPed(seen.inferredBid.high)} PED.`
+		: made;
+}
+
 export function createListingProposals() {
 	const store = createSnapshotStore<AccountProposal[]>(ACCOUNT_TOPIC, () => getProposals(null));
 	const byListing = $derived(proposalsByListing(store.current ?? []));

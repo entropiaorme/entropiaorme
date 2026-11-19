@@ -27,6 +27,7 @@ import { entry, opening, recycling, shrapnel, step, waitingOpening } from './__f
 import InventoryHistory from './InventoryHistory.svelte';
 import type { InventoryModel } from './inventoryModel.svelte';
 import { createPurchaseProposals } from './purchaseProposals.svelte';
+import { createSaleProposals } from './saleProposals.svelte';
 
 /** The recycling was seen after the player last looked; the Shrapnel
  * before. One opening waits for review. */
@@ -62,12 +63,16 @@ async function show(inventory = model(), waiting: AccountProposal[] = [waitingOp
 	detach = activityMarks.connect();
 	await waitFor(() => expect(activityMarks.current).not.toBeNull());
 	const purchases = createPurchaseProposals({ onrecorded: vi.fn() });
+	const sales = createSaleProposals();
 	render(InventoryHistory, {
 		props: {
 			model: inventory,
 			purchases,
+			sales,
+			loot: [],
 			assets: [],
 			onrecordpurchase: vi.fn(),
+			onrecordsale: vi.fn(),
 			onlistings: vi.fn(),
 		},
 	});

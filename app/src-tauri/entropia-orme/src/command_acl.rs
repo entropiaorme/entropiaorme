@@ -1,13 +1,19 @@
+// The commands an extension adds, in a file of their own that
+// the build script reads through this one.
+include!("extension_commands.rs");
+
 // The application command surface, written once. A callback macro: each
 // consumer passes the macro that shapes the list for its purpose, so the
 // build script's ACL permissions, the invoke handler in `lib.rs`, and the
 // manifest parity test all read the same list. `typed` are the typed IPC
 // commands in `commands` (in the eo-api manifest's order); `shell` are the
-// shell's own window, capture, updater, and lifecycle commands, by path from
-// the crate root.
+// shell's own window, capture, and lifecycle commands, and `extension` the
+// commands an extension adds (`extension_command_surface!`),
+// both by path from the crate root.
 macro_rules! app_command_surface {
     ($shape:ident) => {
-        $shape! {
+        extension_command_surface! {
+            $shape,
             typed: [
             equipment_catalogue,
             equipment_library,
@@ -311,11 +317,6 @@ macro_rules! app_command_surface {
             begin_navigation_area_selection,
             hit_region::set_window_hit_region,
             account_window::account_sign_in,
-            updater::check_for_update,
-            updater::download_update,
-            updater::install_update,
-            updater::get_update_channel,
-            updater::set_update_channel,
             substrate::substrate_ready,
             substrate::restart_app,
             ],
@@ -324,12 +325,20 @@ macro_rules! app_command_surface {
 }
 
 macro_rules! command_names {
-    (typed: [$($typed:ident),* $(,)?], shell: [$($($shell:ident)::+),* $(,)?] $(,)?) => {
+    (
+        typed: [$($typed:ident),* $(,)?],
+        shell: [$($($shell:ident)::+),* $(,)?],
+        extension: [$($($extension:ident)::+),* $(,)?] $(,)?
+    ) => {
         /// The typed IPC command names, in manifest order.
         #[allow(dead_code)]
         pub const TYPED_COMMANDS: &[&str] = &[$(stringify!($typed)),*];
-        /// The shell command paths, as written (`module :: name`).
-        const SHELL_COMMAND_PATHS: &[&str] = &[$(stringify!($($shell)::+)),*];
+        /// The shell and extension command paths, as written
+        /// (`module :: name`).
+        const SHELL_COMMAND_PATHS: &[&str] = &[
+            $(stringify!($($shell)::+),)*
+            $(stringify!($($extension)::+),)*
+        ];
     };
 }
 app_command_surface!(command_names);

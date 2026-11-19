@@ -45,6 +45,8 @@
 				return `${formatQuantity(outcome.units)} ${outcome.itemName} arrived in a tracked session`;
 			case 'purchase':
 				return `${formatQuantity(outcome.units)} ${outcome.itemName} bought`;
+			case 'sale':
+				return `${formatQuantity(outcome.units)} ${outcome.itemName} sold to a player`;
 		}
 	}
 
@@ -64,6 +66,7 @@
 			case 'arrival':
 				return `${formatTt(outcome.tt.ped)} PED TT; decide it in that session's minutes`;
 			case 'purchase':
+			case 'sale':
 				return '';
 		}
 	}

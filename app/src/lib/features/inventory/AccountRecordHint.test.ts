@@ -12,6 +12,7 @@ import { formatTime } from '$lib/utils/format';
 const api = vi.hoisted(() => ({
 	getConversionFromAccount: vi.fn(),
 	getSaleFromAccount: vi.fn(),
+	getAuctionListings: vi.fn(),
 }));
 const frames = vi.hoisted(() => ({ handlers: [] as Array<() => void> }));
 
@@ -19,6 +20,10 @@ vi.mock('$lib/api/inventory', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/api/inventory')>()),
 	getConversionFromAccount: api.getConversionFromAccount,
 	getSaleFromAccount: api.getSaleFromAccount,
+}));
+vi.mock('$lib/api/analytics', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/api/analytics')>()),
+	getAuctionListings: api.getAuctionListings,
 }));
 vi.mock('@tauri-apps/api/event', async (importOriginal) => ({
 	...(await importOriginal<typeof import('@tauri-apps/api/event')>()),
@@ -31,8 +36,10 @@ vi.mock('@tauri-apps/api/event', async (importOriginal) => ({
 import AdjustStockModal from '$lib/features/analytics/AdjustStockModal.svelte';
 import ConvertStockModal from '$lib/features/analytics/ConvertStockModal.svelte';
 import SellStockModal from '$lib/features/analytics/SellStockModal.svelte';
+import { listedListing, listedStep } from './__fixtures__/activity';
 import AccountRecordHint from './AccountRecordHint.svelte';
 import ConvertItemsModal from './ConvertItemsModal.svelte';
+import CreateListingModal from './CreateListingModal.svelte';
 
 function stock(itemName: string, heldQty: number, heldTt: number): TreeCuttingStock {
 	return {
@@ -111,6 +118,7 @@ beforeEach(() => {
 	frames.handlers.length = 0;
 	api.getConversionFromAccount.mockResolvedValue(null);
 	api.getSaleFromAccount.mockResolvedValue(null);
+	api.getAuctionListings.mockResolvedValue([]);
 });
 
 describe('a manual form beside what the account recorded', () => {
@@ -260,7 +268,7 @@ describe('a manual form beside what the account recorded', () => {
 		expect(api.getConversionFromAccount).toHaveBeenCalledWith({ itemName: 'Ash Wood' });
 	});
 
-	it('shows a Trade Terminal sale beside the trade form, and nothing beside a listing', async () => {
+	it('shows a Trade Terminal sale beside the trade form, and no sale beside a listing', async () => {
 		const record = recentRecord({ id: 'trade-3', quantity: 400, ttValue: 20 });
 		api.getSaleFromAccount.mockResolvedValue(record);
 		render(SellStockModal, {
@@ -277,5 +285,57 @@ describe('a manual form beside what the account recorded', () => {
 		).toBeTruthy();
 		expect(api.getSaleFromAccount).toHaveBeenCalledWith({ itemName: 'Ash Wood' });
 		expect(api.getConversionFromAccount).not.toHaveBeenCalled();
+	});
+
+	/** Ash Wood the readings saw listed five minutes ago. */
+	function listedWood() {
+		const to = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+		return listedListing({
+			itemName: 'Ash Wood',
+			quantity: 400,
+			ttValue: 20,
+			listedFromAccount: listedStep({ to }),
+		});
+	}
+
+	function listingHint(to: string): string {
+		return `Your account recorded an auction listing of 400 Ash Wood (20.00 PED TT) at ${formatTime(to)}; record this only if it is another one.`;
+	}
+
+	it('shows a listing the account created beside the activity listing form', async () => {
+		const made = listedWood();
+		api.getAuctionListings.mockResolvedValue([made]);
+		render(SellStockModal, {
+			props: { item: wood, onlist: vi.fn(), ontrade: vi.fn(), oncancel: vi.fn() },
+		});
+		expect(await screen.findByText(listingHint(made.listedFromAccount?.to ?? ''))).toBeTruthy();
+		expect(api.getAuctionListings).toHaveBeenCalledWith('inventory');
+		expect(api.getSaleFromAccount).not.toHaveBeenCalled();
+	});
+
+	it('shows it beside the item of the inventory listing form, and nothing for one listed by hand', async () => {
+		const made = listedWood();
+		api.getAuctionListings.mockResolvedValue([made]);
+		render(CreateListingModal, {
+			props: {
+				open: true,
+				holdings: [
+					{
+						kind: 'loot',
+						holdingId: 'Ash Wood',
+						name: 'Ash Wood',
+						score: 1,
+						heldQty: 400,
+					},
+				],
+				onresolve: vi.fn().mockResolvedValue({ candidates: [], resolved: null }),
+				oncapture: vi.fn(),
+				oncollect: vi.fn().mockResolvedValue(null),
+				onsubmit: vi.fn(),
+			},
+		});
+		const item = screen.getByRole('combobox');
+		await fireEvent.input(item, { target: { value: 'Ash Wood' } });
+		expect(await screen.findByText(listingHint(made.listedFromAccount?.to ?? ''))).toBeTruthy();
 	});
 });

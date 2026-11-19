@@ -4,8 +4,8 @@
   bafunctions helper -> themed Burn bundle), producing setup.exe.
 
 .DESCRIPTION
-  The single entry point for the Windows installer, used both locally
-  (`just installer`) and by the release pipeline. Stages:
+  The single entry point for the Windows installer, run by
+  `just installer`. Stages:
 
     1. Per-user MSI payload  -> scripts/build-msi.ps1
        (Tauri renders + compiles installer/main.wxs; we own the per-user relink.)
@@ -18,7 +18,7 @@
     app/src-tauri/target/release/bundle/burn/EntropiaOrme-<version>-x64-setup.exe
 
   The release binary and its bundled resources are produced as a side effect of
-  stage 1 (under target/release), which is what the portable ZIP is staged from.
+  stage 1 (under target/release).
 
   Requirements: Node + the frontend deps (npm ci), the Rust toolchain, the WiX 6
   dotnet tool (.config/dotnet-tools.json), and the MSVC x86 toolset.
@@ -42,31 +42,6 @@ $wixExt = "WixToolset.BootstrapperApplications.wixext"
 Write-Host "==> [1/3] per-user MSI payload"
 & (Join-Path $PSScriptRoot "build-msi.ps1")
 if (-not (Test-Path $msi)) { throw "MSI payload not produced at $msi" }
-
-# Sign the relinked per-user MSI for the auto-updater. We own the MSI relink
-# (build-msi.ps1 discards Tauri's own link to suppress the per-user ICEs), so
-# the bundler's in-line createUpdaterArtifacts signature would be over Tauri's
-# discarded MSI, never this final one; we therefore sign the final MSI here. The
-# signed MSI (not the Burn setup.exe) is the updater artefact: the updater runs
-# it via msiexec for an in-place per-user upgrade. Inert without the key: an
-# unsigned build produces no .sig, and the release pipeline then ships only the
-# installer + portable ZIP (no updater manifest).
-if ($env:TAURI_SIGNING_PRIVATE_KEY) {
-    Write-Host "==> signing the updater MSI"
-    # tauri signer reads the key and its password from TAURI_SIGNING_PRIVATE_KEY
-    # / TAURI_SIGNING_PRIVATE_KEY_PASSWORD in the environment (the release
-    # pipeline maps both as secrets scoped to this step), so the private key
-    # never reaches the command line or the filesystem here.
-    Push-Location (Join-Path $repoRoot "app")
-    try {
-        & npx tauri signer sign $msi | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "tauri signer sign failed (exit $LASTEXITCODE)" }
-    } finally { Pop-Location }
-    if (-not (Test-Path "$msi.sig")) { throw "updater signature not produced at $msi.sig" }
-    Write-Host "Signed updater MSI -> $msi.sig"
-} else {
-    Write-Host "==> updater signing key absent; skipping MSI signature (unsigned build, no updater artefacts)"
-}
 
 Write-Host "==> [2/3] native x86 bafunctions.dll"
 & (Join-Path $bafDir "build.ps1")

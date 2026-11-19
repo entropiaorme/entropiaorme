@@ -43,6 +43,7 @@ const boxes: AuctionListing = {
 	activityNetMarkup: 28.75,
 	grossMarkup: 36,
 	recordedFromAccount: null,
+	listedFromAccount: null,
 };
 
 describe('a listing of an item with no TT', () => {
@@ -165,5 +166,58 @@ describe('a listing the account shows the outcome of', () => {
 		});
 		expect(screen.queryByText(/Your account shows/)).toBeNull();
 		expect(screen.queryByLabelText('Sold for (PED)')).toBeNull();
+	});
+});
+
+/** Shrapnel the account saw listed, its starting bid inferred from the fee. */
+function made(): AuctionListing {
+	return {
+		...shrapnel,
+		id: 'made',
+		startingBid: 5.31,
+		buyout: null,
+		listingFee: 0.51,
+		listedFromAccount: {
+			readingId: 45,
+			from: '2026-11-15T10:04:00Z',
+			to: '2026-11-15T10:05:00Z',
+			recordedAt: '2026-11-15T10:05:05Z',
+			cardChange: -0.51,
+			basis: 'inferred',
+			inferredBid: { low: 5.21, high: 5.41 },
+		},
+	};
+}
+
+describe('a listing the account created', () => {
+	it('shows its starting bid as the range its fee reads back as, never one figure', async () => {
+		account.getProposals.mockResolvedValue([]);
+		render(AuctionListings, { props: { open: [made()], resolved: [], onresolve: vi.fn() } });
+		expect(screen.getByText('Starting bid (inferred)')).toBeTruthy();
+		expect(screen.getByText('5.21 to 5.41')).toBeTruthy();
+		expect(screen.queryByText('5.31')).toBeNull();
+		expect(screen.getByTestId('listed-from-account').textContent).toContain(
+			'Starting bid inferred from the fee: between 5.21 and 5.41 PED.',
+		);
+	});
+
+	it('opens its sale with the price empty and focused, never the inferred bid', async () => {
+		account.getProposals.mockResolvedValue([]);
+		render(AuctionListings, { props: { open: [made()], resolved: [], onresolve: vi.fn() } });
+		await fireEvent.click(screen.getByRole('button', { name: 'It sold' }));
+		const price = screen.getByLabelText('Sold for (PED)') as HTMLInputElement;
+		expect(price.value).toBe('');
+		await waitFor(() => expect(document.activeElement).toBe(price));
+		expect(
+			(screen.getByRole('button', { name: 'Confirm sale' }) as HTMLButtonElement).disabled,
+		).toBe(true);
+	});
+
+	it('still opens a listing the player entered at its starting bid', async () => {
+		account.getProposals.mockResolvedValue([]);
+		const typed: AuctionListing = { ...made(), buyout: null, listedFromAccount: null };
+		render(AuctionListings, { props: { open: [typed], resolved: [], onresolve: vi.fn() } });
+		await fireEvent.click(screen.getByRole('button', { name: 'It sold' }));
+		expect((screen.getByLabelText('Sold for (PED)') as HTMLInputElement).value).toBe('5.31');
 	});
 });

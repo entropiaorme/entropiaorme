@@ -14,6 +14,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import { commandRefusal } from '$lib/extension/gate';
 import { ApiError } from './client';
 import { API_ERROR_KINDS, type ApiErrorKind } from './commands.gen';
 import { whenSubstrateReady } from './readiness.svelte';
@@ -29,6 +30,12 @@ function isContractKind(kind: string): kind is ApiErrorKind {
 }
 
 export async function invokeCommand<T>(command: string, args: Record<string, unknown>): Promise<T> {
+	// A command the gate refuses fails here, before the round trip, with
+	// the gate's own message.
+	const refusal = commandRefusal(command);
+	if (refusal !== null) {
+		throw new ApiError('conflict', refusal.message);
+	}
 	await whenSubstrateReady();
 	try {
 		return await invoke<T>(command, args);

@@ -27,6 +27,17 @@
 //! A record is dated by the day its step ended, never by when it was
 //! recognised. Nothing here knows what a reading is: a step arrives as plain
 //! numbers.
+//!
+//! A listing the readings saw the player make is created here too, through
+//! the same write as the player's own listing, never twice and never over a
+//! listing the player recorded by hand of the same item and quantity, with
+//! its fee exact and its starting bid the midpoint of the range the fee
+//! reads back as. It is created only when the app's stock holds the whole
+//! quantity listed, as it stands when the step is looked at: nothing is
+//! waited for, and no opening balance is ever booked for it, so a listing
+//! held in part, or not at all, is left for the player. The range is kept beside it (`listings_from_account`) and
+//! carried wherever the listing is shown as recorded from the account, so
+//! the starting bid is never taken for more than an inference.
 
 use std::collections::HashMap;
 
@@ -34,9 +45,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use super::{
-    confirm_listing_within, epoch_to_iso, expire_listing_within, is_universal_ammo, item_positions,
-    naive_to_epoch, write_private_sale, write_ratio_conversion, ActivityHistoryRow, AnalyticsError,
-    AnalyticsService, PrivateSale, Profession, RatioConversion, STOCK_EPSILON,
+    check_stock_listing, confirm_listing_within, epoch_to_iso, expire_listing_within,
+    is_universal_ammo, item_positions, naive_to_epoch, write_private_sale, write_ratio_conversion,
+    write_stock_listing, ActivityHistoryRow, AnalyticsError, AnalyticsService, ListingTerms,
+    PrivateSale, Profession, RatioConversion, StockListing, STOCK_EPSILON,
 };
 use crate::db::DbError;
 
@@ -74,6 +86,14 @@ pub struct AccountStep {
 pub enum AccountRecord {
     /// Shrapnel turned into Universal Ammo at the Trade Terminal.
     ShrapnelConversion { quantity: f64 },
+    /// Shrapnel that left as Universal Ammo arrived, short of or past what
+    /// the Trade Terminal pays for it: presumed converted, and recorded as
+    /// a conversion of what left.
+    ShrapnelPresumedConversion { quantity: f64 },
+    /// Shrapnel a tracked session turned into Universal Ammo, read from
+    /// the session whole: what was looted less what is still held. Its
+    /// step spans the session.
+    ShrapnelSessionConversion { quantity: f64 },
     /// Items recycled into Nanocubes, recorded as one conversion.
     Recycling { inputs: Vec<(String, f64)> },
     /// An item sold to the Trade Terminal, at its TT.
@@ -85,6 +105,12 @@ impl AccountRecord {
     fn part(&self) -> String {
         match self {
             AccountRecord::ShrapnelConversion { .. } => "shrapnel_conversion".to_string(),
+            AccountRecord::ShrapnelPresumedConversion { .. } => {
+                "shrapnel_conversion_presumed".to_string()
+            }
+            AccountRecord::ShrapnelSessionConversion { .. } => {
+                "shrapnel_conversion_session".to_string()
+            }
             AccountRecord::Recycling { .. } => "recycling".to_string(),
             AccountRecord::TerminalSale { item_name, .. } => {
                 format!("terminal_sale:{}", item_name.trim())
@@ -95,7 +121,9 @@ impl AccountRecord {
     /// What it takes out of stock, item by item.
     fn inputs(&self) -> Vec<(String, f64)> {
         match self {
-            AccountRecord::ShrapnelConversion { quantity } => {
+            AccountRecord::ShrapnelConversion { quantity }
+            | AccountRecord::ShrapnelPresumedConversion { quantity }
+            | AccountRecord::ShrapnelSessionConversion { quantity } => {
                 vec![(SHRAPNEL.to_string(), *quantity)]
             }
             AccountRecord::Recycling { inputs } => inputs
@@ -111,9 +139,10 @@ impl AccountRecord {
 
     fn record_kind(&self) -> &'static str {
         match self {
-            AccountRecord::ShrapnelConversion { .. } | AccountRecord::Recycling { .. } => {
-                "conversion"
-            }
+            AccountRecord::ShrapnelConversion { .. }
+            | AccountRecord::ShrapnelPresumedConversion { .. }
+            | AccountRecord::ShrapnelSessionConversion { .. }
+            | AccountRecord::Recycling { .. } => "conversion",
             AccountRecord::TerminalSale { .. } => "trade",
         }
     }
@@ -150,6 +179,27 @@ impl ListingFromAccount {
     }
 }
 
+/// A listing the readings saw the player make: the item and how many, the
+/// fee the PED Card fell by, and the range of starting bids that fee reads
+/// back as under the fee model, all in PEC (see
+/// [`AnalyticsService::record_listed_from_account_blocking`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedFromAccount {
+    pub item_name: String,
+    pub quantity: i64,
+    pub fee_pec: i64,
+    pub bid_low_pec: i64,
+    pub bid_high_pec: i64,
+}
+
+impl ListedFromAccount {
+    /// The starting bid the listing stores: the range's midpoint, to the
+    /// PEC (half a PEC rounds down).
+    pub fn starting_bid_pec(&self) -> i64 {
+        self.bid_low_pec + (self.bid_high_pec - self.bid_low_pec) / 2
+    }
+}
+
 /// What recording a part of a step came to.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FromAccount {
@@ -171,6 +221,43 @@ pub enum FromAccount {
     Waiting,
 }
 
+/// What a record from the account rests on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordBasis {
+    /// Its step closed exactly: what left and what arrived account for
+    /// each other to the unit, or to the PEC.
+    #[default]
+    Exact,
+    /// Shrapnel that left as ammo arrived, short of or past what it pays:
+    /// presumed converted.
+    Presumed,
+    /// Shrapnel a tracked session converted, read from the session whole.
+    Session,
+    /// A listing whose starting bid was read back from the fee paid: the
+    /// listing and its fee are exact, the bid lies somewhere in a range.
+    Inferred,
+}
+
+/// The range of starting bids a listing's fee reads back as, in PED.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InferredBid {
+    pub low: f64,
+    pub high: f64,
+}
+
+impl RecordBasis {
+    /// The basis the part of a step named `part` was recorded on.
+    fn of_part(part: &str) -> RecordBasis {
+        match part {
+            "shrapnel_conversion_presumed" => RecordBasis::Presumed,
+            "shrapnel_conversion_session" => RecordBasis::Session,
+            _ => RecordBasis::Exact,
+        }
+    }
+}
+
 /// That a record came from the account, and the step it was seen in.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,6 +273,11 @@ pub struct RecordedFromAccount {
     /// How far the PED Card moved across the step, in PED; `None` when it
     /// was not known as the record was made.
     pub card_change: Option<f64>,
+    /// What the record rests on.
+    pub basis: RecordBasis,
+    /// For a listing the readings created: the starting bids its fee reads
+    /// back as. `None` for every other record.
+    pub inferred_bid: Option<InferredBid>,
 }
 
 /// The columns a [`RecordedFromAccount`] is read from, off a provenance
@@ -203,6 +295,8 @@ fn step_from(row: &rusqlite::Row, first: usize) -> rusqlite::Result<RecordedFrom
         card_change: row
             .get::<_, Option<i64>>(first + 4)?
             .map(|pec| pec as f64 / 100.0),
+        basis: RecordBasis::Exact,
+        inferred_bid: None,
     })
 }
 
@@ -271,7 +365,8 @@ fn check_inputs(inputs: &[(String, f64)]) -> Result<(), AnalyticsError> {
 }
 
 /// Whether the player recorded an outflow of `item` by hand since `since`:
-/// a movement out of stock that no record from the account made.
+/// a movement out of stock that no record from the account made, and no
+/// listing the account created.
 fn recorded_by_hand_since(
     conn: &rusqlite::Connection,
     item: &str,
@@ -281,7 +376,9 @@ fn recorded_by_hand_since(
         "SELECT EXISTS (SELECT 1 FROM stock_movements m \
                         WHERE m.item_name = ?1 AND m.quantity < 0 AND m.created_at >= ?2 \
                           AND NOT EXISTS (SELECT 1 FROM stock_records_from_account s \
-                                          WHERE s.record_id = m.ref_id))",
+                                          WHERE s.record_id = m.ref_id) \
+                          AND NOT EXISTS (SELECT 1 FROM listings_from_account f \
+                                          WHERE f.listing_id = m.ref_id))",
         rusqlite::params![item, since],
         |row| row.get::<_, bool>(0),
     )?)
@@ -300,10 +397,14 @@ pub(super) fn held(conn: &rusqlite::Connection, item: &str) -> Result<f64, DbErr
 /// Every record from the account, by its record's id.
 fn sources(conn: &rusqlite::Connection) -> Result<HashMap<String, RecordedFromAccount>, DbError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT s.record_id, {STEP_COLUMNS} FROM stock_records_from_account s"
+        "SELECT s.record_id, {STEP_COLUMNS}, s.part FROM stock_records_from_account s"
     ))?;
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, step_from(row, 1)?)))?
+        .query_map([], |row| {
+            let mut step = step_from(row, 1)?;
+            step.basis = RecordBasis::of_part(&row.get::<_, String>(6)?);
+            Ok((row.get::<_, String>(0)?, step))
+        })?
         .collect::<rusqlite::Result<HashMap<_, _>>>()?;
     Ok(rows)
 }
@@ -316,7 +417,8 @@ pub(super) fn attach_sources(
 ) -> Result<(), DbError> {
     let sources = sources(conn)?;
     let listings = listing_sources(conn)?;
-    if sources.is_empty() && listings.is_empty() {
+    let listed = listed_sources(conn)?;
+    if sources.is_empty() && listings.is_empty() && listed.is_empty() {
         return Ok(());
     }
     for row in rows.iter_mut() {
@@ -324,6 +426,7 @@ pub(super) fn attach_sources(
             row.from_account = sources.get(&row.id).copied();
         } else if row.kind == "listing" {
             row.from_account = listings.get(&row.id).copied();
+            row.listed_from_account = listed.get(&row.id).copied();
         }
     }
     Ok(())
@@ -377,7 +480,9 @@ fn record_in(
     let id = Uuid::new_v4().to_string();
     let day = epoch_to_iso(step.seen_to);
     let written = match record {
-        AccountRecord::ShrapnelConversion { .. } => write_ratio_conversion(
+        AccountRecord::ShrapnelConversion { .. }
+        | AccountRecord::ShrapnelPresumedConversion { .. }
+        | AccountRecord::ShrapnelSessionConversion { .. } => write_ratio_conversion(
             &tx,
             &id,
             Profession::Inventory,
@@ -504,6 +609,126 @@ fn record_listing_in(
     })
 }
 
+/// Whether the player recorded a listing of `quantity` `item` by hand since
+/// `since`, one that still stands: any listing the account did not create.
+fn listed_by_hand_since(
+    conn: &rusqlite::Connection,
+    item: &str,
+    quantity: i64,
+    since: f64,
+) -> Result<bool, DbError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM auction_listings l \
+                        WHERE lower(trim(l.item_name)) = lower(trim(?1)) \
+                          AND abs(l.quantity - ?2) < 1e-9 AND l.created_at >= ?3 \
+                          AND l.undone_at IS NULL \
+                          AND NOT EXISTS (SELECT 1 FROM listings_from_account f \
+                                          WHERE f.listing_id = l.id))",
+        rusqlite::params![item, quantity, since],
+        |row| row.get::<_, bool>(0),
+    )?)
+}
+
+/// A listing the readings saw made, in one transaction: refused once
+/// created from the step already (even if since taken back), kept out of a
+/// listing of the same item and quantity the player recorded by hand since
+/// the step's look-back, and made only when the open positions hold the
+/// whole quantity listed now. Written through the player's own listing
+/// write, which then books no opening balance, dated by when its step
+/// ended, with its provenance beside it.
+fn record_listed_in(
+    conn: &mut rusqlite::Connection,
+    step: AccountStep,
+    listed: &ListedFromAccount,
+    now: f64,
+) -> Result<FromAccount, DbError> {
+    let tx = conn.transaction()?;
+    let item = listed.item_name.trim();
+    let recorded: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM listings_from_account \
+                        WHERE reading_id = ?1 AND item_name = ?2)",
+        rusqlite::params![step.reading_id, item],
+        |row| row.get(0),
+    )?;
+    if recorded {
+        return Ok(FromAccount::AlreadyRecorded);
+    }
+    if listed_by_hand_since(&tx, item, listed.quantity, step.hand_entries_since)? {
+        return Ok(FromAccount::RecordedByHand);
+    }
+    let quantity = listed.quantity as f64;
+    if held(&tx, item)? + STOCK_EPSILON < quantity {
+        return Ok(FromAccount::NotHeld);
+    }
+    let id = Uuid::new_v4().to_string();
+    let listed_at = epoch_to_iso(step.seen_to);
+    let row = write_stock_listing(
+        &tx,
+        &StockListing {
+            id: &id,
+            profession: Profession::Inventory,
+            item_name: item,
+            quantity,
+            starting_bid: listed.starting_bid_pec() as f64 / 100.0,
+            buyout: None,
+            listing_fee: listed.fee_pec as f64 / 100.0,
+            listed_at: &listed_at,
+            listed_instant: Some(step.seen_to),
+            auction_days: None,
+            sources: &[],
+        },
+        now,
+    )?;
+    tx.execute(
+        "INSERT INTO listings_from_account \
+             (listing_id, reading_id, prev_reading_id, seen_from, seen_to, item_name, \
+              fee_pec, bid_low_pec, bid_high_pec, card_change_pec, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        rusqlite::params![
+            row.id,
+            step.reading_id,
+            step.prev_reading_id,
+            step.seen_from,
+            step.seen_to,
+            item,
+            listed.fee_pec,
+            listed.bid_low_pec,
+            listed.bid_high_pec,
+            step.card_change_pec,
+            now,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(FromAccount::Recorded {
+        record_id: row.id,
+        taken: vec![(item.to_string(), quantity)],
+    })
+}
+
+/// Every listing the readings created, by the listing's id, taken back or
+/// not: the step it was seen in and the starting bids its fee reads back
+/// as.
+pub(super) fn listed_sources(
+    conn: &rusqlite::Connection,
+) -> Result<HashMap<String, RecordedFromAccount>, DbError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT s.listing_id, {STEP_COLUMNS}, s.bid_low_pec, s.bid_high_pec \
+         FROM listings_from_account s"
+    ))?;
+    let rows = stmt
+        .query_map([], |row| {
+            let mut step = step_from(row, 1)?;
+            step.basis = RecordBasis::Inferred;
+            step.inferred_bid = Some(InferredBid {
+                low: row.get::<_, i64>(6)? as f64 / 100.0,
+                high: row.get::<_, i64>(7)? as f64 / 100.0,
+            });
+            Ok((row.get::<_, String>(0)?, step))
+        })?
+        .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+    Ok(rows)
+}
+
 /// When the readings settled each listing whose outcome stands, by the
 /// listing's id: the step of the latest outcome recorded from them.
 pub(super) fn listing_sources(
@@ -565,6 +790,51 @@ impl AnalyticsService {
         Ok(self.db.with_writer_blocking(move |conn| {
             record_listing_in(conn, step, &outcome, &resolved_on, now)
         })?)
+    }
+
+    /// Create a listing the account readings saw the player make, through
+    /// the same write as the player's own listing, refused as the player's
+    /// own would be, with where it came from, all in one transaction: its
+    /// fee exact, its starting bid the midpoint of the range the fee reads
+    /// back as, its buyout and duration unknown. Created only when the open
+    /// positions hold the whole quantity listed as it is looked at
+    /// ([`FromAccount::NotHeld`] otherwise, never waiting), so no opening
+    /// balance is booked for it. Creating it again from the same step
+    /// creates nothing, even once the listing is taken back.
+    ///
+    /// Blocking, like [`Self::record_from_account_blocking`]: for the
+    /// account connection's pass over the steps it read.
+    pub fn record_listed_from_account_blocking(
+        &self,
+        step: AccountStep,
+        listed: ListedFromAccount,
+    ) -> Result<FromAccount, AnalyticsError> {
+        check_step(&step)?;
+        if listed.item_name.trim().is_empty()
+            || listed.fee_pec <= 0
+            || listed.bid_low_pec < 0
+            || listed.bid_high_pec < listed.bid_low_pec
+        {
+            return Err(AnalyticsError::InvalidInput(
+                "a listing from the account names its item, the fee paid and the bids it reads back as",
+            ));
+        }
+        check_stock_listing(
+            &listed.item_name,
+            listed.quantity as f64,
+            &ListingTerms {
+                starting_bid: listed.starting_bid_pec() as f64 / 100.0,
+                buyout: None,
+                listing_fee: listed.fee_pec as f64 / 100.0,
+                listed_at: None,
+                auction_days: None,
+                sources: &[],
+            },
+        )?;
+        let now = naive_to_epoch(self.clock.now());
+        Ok(self
+            .db
+            .with_writer_blocking(move |conn| record_listed_in(conn, step, &listed, now))?)
     }
 
     /// Record one part of a step the account readings recognised, through
@@ -882,6 +1152,7 @@ pub(super) fn push_unknown_origin_rows(
             itemised: false,
             derived_from: Vec::new(),
             from_account: None,
+            listed_from_account: None,
             reconciliation_id: None,
             id,
             kind: "unknownOrigin".to_string(),

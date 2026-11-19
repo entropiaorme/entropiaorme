@@ -5,7 +5,10 @@
  * - **From your account**: what the readings recorded on their own, one
  *   event for each thing a step did (its recycling, its Shrapnel
  *   conversion, its sales to the Trade Terminal together, each listing it
- *   settled), and what they found that waits for the player's decision.
+ *   created, each listing it settled), and what they found that waits for
+ *   the player's decision. A listing the readings created is the account's
+ *   from its making; once the player resolves it, that outcome is theirs
+ *   too.
  * - **Reviewed**: what the player applied after a review, each a stock
  *   check or a strongbox opening as one event.
  * - **Your entries**: what the player entered by hand, row by row as
@@ -19,6 +22,7 @@ import type {
 	ActivityHistoryEntry,
 	AuctionListing,
 	ConversionLine,
+	InferredBid,
 	RecordedFromAccount,
 	StrongboxOpeningEntry,
 } from '$lib/api/commands.gen';
@@ -32,7 +36,7 @@ export type AccountEvent =
 	| { kind: 'shrapnel'; key: string; step: RecordedFromAccount; entry: ActivityHistoryEntry }
 	| { kind: 'sale'; key: string; step: RecordedFromAccount; entries: ActivityHistoryEntry[] }
 	| {
-			kind: 'listingSold' | 'listingReturned';
+			kind: 'listed' | 'listingSold' | 'listingReturned';
 			key: string;
 			step: RecordedFromAccount;
 			entry: ActivityHistoryEntry;
@@ -64,8 +68,9 @@ function isShrapnelConversion(entry: ActivityHistoryEntry): boolean {
 	return entry.pedAmount !== null || UNIVERSAL_AMMO.test(entry.targetItem ?? '');
 }
 
-/** Which event of its step an entry belongs to. */
-function familyOf(entry: ActivityHistoryEntry): AccountEvent['kind'] {
+/** Which event of its step an entry's outcome belongs to (a listing the
+ * readings created is an event of its own beside it). */
+function familyOf(entry: ActivityHistoryEntry): Exclude<AccountEvent['kind'], 'listed'> {
 	if (entry.kind === 'conversion') return isShrapnelConversion(entry) ? 'shrapnel' : 'recycling';
 	if (entry.kind === 'trade') return 'sale';
 	return entry.status === 'sold' ? 'listingSold' : 'listingReturned';
@@ -105,9 +110,19 @@ export function splitHistory(
 			}
 			continue;
 		}
+		const listed = entry.listedFromAccount;
+		if (listed) {
+			const key = `listed:${entry.id}`;
+			const listing = listings.find((row) => row.id === entry.id) ?? null;
+			account.set(key, { kind: 'listed', key, step: listed, entry, listing });
+		}
 		const step = entry.recordedFromAccount;
 		if (!step) {
-			yours.push(entry);
+			// A listing the readings created waits on the auction, or was
+			// taken back, as theirs alone; an outcome the player recorded
+			// is theirs.
+			const theirsAlone = listed && (entry.status === 'pending' || entry.undone);
+			if (!theirsAlone) yours.push(entry);
 			continue;
 		}
 		const kind = familyOf(entry);
@@ -168,8 +183,10 @@ export function reviewedEventShowsUnder(event: ReviewedEvent, side: HoldingSide)
 	return event.entries.some((entry) => entryShowsUnder(entry, side));
 }
 
-/** When the account recorded an event: its latest record. */
+/** When the account recorded an event: its latest record. A listing it
+ * created was recorded when it was made, whatever became of it since. */
 export function recordedAt(event: AccountEvent): string {
+	if (event.kind === 'listed') return event.step.recordedAt;
 	return accountEventEntries(event)
 		.map((entry) => entry.recordedFromAccount?.recordedAt ?? event.step.to)
 		.reduce((latest, at) => (instant(at) > instant(latest) ? at : latest), event.step.to);
@@ -258,6 +275,21 @@ export function saleFlow(entries: readonly ActivityHistoryEntry[]): {
 	return { items, tt: items.reduce((total, row) => total + row.tt, 0) };
 }
 
+/** What a listing the readings created put on the auction, the fee it
+ * cost, and the starting bids that fee reads back as. The fee is the
+ * listing's own, or the Card's fall in its step. */
+export function listedFlow(
+	entry: ActivityHistoryEntry,
+	listing: AuctionListing | null,
+	step: RecordedFromAccount,
+): { item: FlowLine; fee: number; bids: InferredBid | null } {
+	return {
+		item: { name: entry.itemName, quantity: entry.quantity, tt: entry.ttValue },
+		fee: listing?.listingFee ?? Math.abs(step.cardChange ?? 0),
+		bids: step.inferredBid,
+	};
+}
+
 /** What an opening put in and took out. */
 export function openingFlow(opening: StrongboxOpeningEntry): {
 	kept: FlowLine[];
@@ -275,11 +307,14 @@ export function openingFlow(opening: StrongboxOpeningEntry): {
 	};
 }
 
-/** What taking an event back would do, or why it cannot be. */
+/** What taking an event back would do, or why it cannot be; `none` when
+ * the event is not the place to take it back (a listing the readings
+ * created, once it has an outcome: that outcome's own surfaces do). */
 export type EventUndo =
 	| { kind: 'available'; action: string; sentence: string }
 	| { kind: 'held'; reason: string }
-	| { kind: 'undone' };
+	| { kind: 'undone' }
+	| { kind: 'none' };
 
 /** What the readings do once a record of theirs is taken back. */
 const NOT_AGAIN = 'Your account readings will not record this again.';
@@ -321,6 +356,15 @@ export function accountEventUndo(event: AccountEvent): EventUndo {
 				sentence: `What was sold comes back to your stock.${some} ${NOT_AGAIN}`,
 			};
 		}
+		case 'listed':
+			if (event.entry.status !== 'pending') return { kind: 'none' };
+			return event.entry.canDelete
+				? {
+						kind: 'available',
+						action: 'Undo listing',
+						sentence: `The items come back to your stock and the fee is unmade. ${NOT_AGAIN}`,
+					}
+				: blocked(event.entry);
 		case 'listingSold':
 			return event.entry.canRevertSale
 				? {

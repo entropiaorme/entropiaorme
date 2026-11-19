@@ -49,6 +49,15 @@ export type ActivityTradeDraft = {
 	soldAt: string | null;
 };
 
+/** A trade a sale form opens with, filled in from what was seen elsewhere. */
+export type TradeStart = {
+	/** Tells one fill from another, so the form fills again for a new one. */
+	key: string;
+	quantity: number;
+	soldFor: number;
+	soldAt: string;
+};
+
 export type OpportunityKind = 'broad' | 'niche' | 'thin' | 'recycle';
 export type ConfidenceTier = 'liquid' | 'middling' | 'illiquid';
 export type ConfidenceMode = 'liquid' | 'liquidMiddling' | 'all';

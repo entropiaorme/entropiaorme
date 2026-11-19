@@ -298,7 +298,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: Run workspace tests
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: cargo nextest run --workspace --no-fail-fast
       # nextest does NOT run doctests; keep them on a dedicated cargo-test leg so
       # doctest coverage is not silently dropped by the migration.
@@ -374,7 +374,7 @@ jobs:
     # installable package, the platform counterpart of the Windows workspace
     # job: a Linux-only regression (a platform seam that stops compiling, a
     # bundler/resource misconfiguration) fails here
-    # rather than surfacing only at release. Skipped on a
+    # rather than surfacing only when the package is next built. Skipped on a
     # documentation-only pull request; the ci-gate sentinel covers the
     # required-check report in that case.
     needs: [changes]
@@ -410,7 +410,7 @@ jobs:
         run: npm ci
       # Build the shell and bundle the .deb through the Linux config
       # overlay (deb target, the Linux ONNX Runtime resource). AppImage is
-      # built locally and in the release job; the per-push gate stays on
+      # built locally (`just bundle`); the per-push gate stays on
       # the deb, which needs no FUSE and proves the same build + resource
       # wiring.
       - name: Build and bundle the Linux package

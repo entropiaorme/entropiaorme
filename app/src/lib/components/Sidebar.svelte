@@ -6,16 +6,18 @@
 		id: string;
 		label: string;
 		icon: Component; // icon component rendering the glyph's SVG
-		/** `unread`: news or an update waiting. `attention`: something new
+		/** `unread`: something waiting to be read. `attention`: something new
 		 * the app did on the player's behalf, to look at. */
 		indicator?: 'unread' | 'attention';
+		/** Shown greyed and inert, with `note` as the reason. */
+		disabled?: boolean;
+		note?: string;
 	};
 
 	let {
 		items,
 		active,
 		onnavigate,
-		footerItems = [],
 		settingsItem,
 		disabled = false,
 		class: className = ''
@@ -23,7 +25,6 @@
 		items: NavItem[];
 		active: string;
 		onnavigate: (id: string) => void;
-		footerItems?: NavItem[];
 		settingsItem?: NavItem;
 		/** Inert and dimmed: nothing behind the nav can load (a failed start). */
 		disabled?: boolean;
@@ -86,12 +87,17 @@
 				transition-[color,background-color] duration-[var(--duration-base)] ease-[var(--ease-out)]
 				cursor-pointer overflow-hidden whitespace-nowrap
 				focus-visible:outline-none focus-visible:bg-surface-hover/60
-				{active === item.id
-				? 'text-accent bg-accent-muted/25'
-				: 'text-text-secondary hover:text-text hover:bg-surface-hover/70'}"
-			onclick={() => onnavigate(item.id)}
+				{item.disabled
+				? 'text-text-tertiary/60 cursor-not-allowed'
+				: active === item.id
+					? 'text-accent bg-accent-muted/25'
+					: 'text-text-secondary hover:text-text hover:bg-surface-hover/70'}"
+			onclick={() => {
+				if (!item.disabled) onnavigate(item.id);
+			}}
 			aria-current={active === item.id ? 'page' : undefined}
-			title={!expanded ? item.label : undefined}
+			aria-disabled={item.disabled ? 'true' : undefined}
+			title={item.disabled ? (item.note ?? item.label) : !expanded ? item.label : undefined}
 		>
 			{#if active === item.id}
 				<span
@@ -133,7 +139,7 @@
 		{/each}
 	</div>
 
-	<!-- Footer: mascot + footer items (e.g. News & Updates) + settings + session indicator -->
+	<!-- Footer: mascot + settings + session indicator -->
 	<div class="relative flex flex-col gap-0.5 p-1.5">
 		<div
 			class="flex items-center justify-center overflow-hidden pb-2 transition-opacity duration-[var(--duration-slow)] ease-[var(--ease-out)]
@@ -146,9 +152,6 @@
 				class="pointer-events-none w-32 h-auto select-none scale-x-[-1]"
 			/>
 		</div>
-		{#each footerItems as item}
-			{@render navButton(item)}
-		{/each}
 		{#if settingsItem}
 			{@render navButton(settingsItem)}
 		{/if}

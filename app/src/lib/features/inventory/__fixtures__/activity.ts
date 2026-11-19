@@ -24,6 +24,8 @@ export function step(
 		to,
 		recordedAt: new Date(end + 5_000).toISOString(),
 		cardChange: null,
+		basis: 'exact',
+		inferredBid: null,
 		...overrides,
 	};
 }
@@ -52,6 +54,7 @@ export function entry(overrides: Partial<ActivityHistoryEntry> = {}): ActivityHi
 		itemised: false,
 		derivedFrom: [],
 		recordedFromAccount: null,
+		listedFromAccount: null,
 		reconciliationId: null,
 		...overrides,
 	};
@@ -163,6 +166,7 @@ export function listing(overrides: Partial<AuctionListing> = {}): AuctionListing
 		activityNetMarkup: 2.25,
 		grossMarkup: 3,
 		recordedFromAccount: step(44, '2026-11-15T10:04:00Z'),
+		listedFromAccount: null,
 		...overrides,
 	};
 }
@@ -208,4 +212,50 @@ export function opening(overrides: Partial<StrongboxOpeningEntry> = {}): Strongb
  * at `detectedAt`. */
 export function waitingOpening(detectedAt = '2026-11-15T11:01:05Z'): AccountProposal {
 	return { ...seven(), detectedAt };
+}
+
+/** The step ten Animal Hide were seen listed in: the Card fell by the
+ * 0.51 fee, which reads back as any starting bid from 5.21 to 5.41. */
+export function listedStep(overrides: Partial<RecordedFromAccount> = {}): RecordedFromAccount {
+	return step(45, '2026-11-15T10:05:00Z', {
+		cardChange: -0.51,
+		basis: 'inferred',
+		inferredBid: { low: 5.21, high: 5.41 },
+		...overrides,
+	});
+}
+
+/** A listing the readings created, still on the auction. */
+export function listedListing(overrides: Partial<AuctionListing> = {}): AuctionListing {
+	return listing({
+		id: 'listing-made',
+		startingBid: 5.31,
+		buyout: null,
+		listingFee: 0.51,
+		listedAt: '2026-11-15',
+		status: 'pending',
+		finalPrice: null,
+		saleFee: null,
+		resolvedAt: null,
+		auctionDays: null,
+		activityNetMarkup: null,
+		grossMarkup: null,
+		recordedFromAccount: null,
+		listedFromAccount: listedStep(),
+		...overrides,
+	});
+}
+
+/** Its history row. */
+export function listedRow(overrides: Partial<ActivityHistoryEntry> = {}): ActivityHistoryEntry {
+	return listingRow({
+		id: 'listing-made',
+		status: 'pending',
+		netMarkup: null,
+		canRevertSale: false,
+		occurredAt: '2026-11-15',
+		recordedFromAccount: null,
+		listedFromAccount: listedStep(),
+		...overrides,
+	});
 }

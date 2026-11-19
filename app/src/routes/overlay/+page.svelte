@@ -54,6 +54,7 @@
 	import OverlayReadout from '$lib/components/overlay/OverlayReadout.svelte';
 	import { createAccountSignal } from '$lib/features/account/accountSignal.svelte';
 	import { inDevelopment } from '$lib/inDevelopment';
+	import { accountOffered } from '$lib/features/account/offered';
 	import { createDosesModel } from '$lib/features/consumables/dosesModel.svelte';
 	import { createEquipmentDeclare } from '$lib/features/tracking/equipmentDeclare.svelte';
 	import {
@@ -781,7 +782,7 @@
 			? overlayMenuKind
 			: null}
 		onPanelTrigger={togglePanel}
-		accountSignal={account?.current ?? null}
+		accountSignal={accountOffered() ? (account?.current ?? null) : null}
 	/>
 	<OverlayNotices notices={notices.current} onHold={notices.hold} onRelease={notices.release} />
 </div>

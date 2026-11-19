@@ -7,6 +7,11 @@ import type { QueuedListingDraft, SaleQueueCapture } from '$lib/api/commands.gen
 vi.mock('@tauri-apps/api/event', () => ({
 	listen: vi.fn().mockResolvedValue(() => undefined),
 }));
+// The reminder beside the item reads the listings; the account has made none.
+vi.mock('$lib/api/analytics', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/api/analytics')>()),
+	getAuctionListings: vi.fn(async () => []),
+}));
 
 import CreateListingModal from './CreateListingModal.svelte';
 

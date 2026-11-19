@@ -6,6 +6,7 @@
 	import LootPulseWidget from './LootPulseWidget.svelte';
 	import RecentEventsWidget from './RecentEventsWidget.svelte';
 	import MapsSurface from '$lib/features/maps/MapsSurface.svelte';
+	import { createDashboardEvents, dashboardTabs } from '$lib/extension/slots';
 	import QuestBoard from '$lib/features/quests/board/QuestBoard.svelte';
 	import type { BoardRow } from '$lib/features/quests/board/questBoard';
 	import type { QuestBoardModel } from '$lib/features/quests/board/questBoardModel.svelte';
@@ -66,14 +67,23 @@
 		hasUnseenEvents(seenEventsHead, eventsHead, activeTab === 'events'),
 	);
 
+	// Rows an extension adds to the events tab. They are kept up here, not
+	// in the tab body, so an unread one can light the tab while another
+	// widget is open.
+	const extraEvents = createDashboardEvents();
+	$effect(() => extraEvents?.start());
+	const extraUnread = $derived((extraEvents?.unread ?? false) && activeTab !== 'events');
+
 	const tabs = $derived([
 		{ id: 'pulse', label: 'Loot Pulse' },
-		{ id: 'events', label: 'Recent Events', attention: eventsUnseen },
+		{ id: 'events', label: 'Recent Events', attention: eventsUnseen || extraUnread },
 		{ id: 'loot', label: 'Loot Composition' },
 		{ id: 'quests', label: 'Quests' },
 		{ id: 'map', label: 'Map' },
+		...dashboardTabs.map(({ id, label }) => ({ id, label })),
 		{ id: 'customise', label: 'Customise Stats' },
 	]);
+	const extensionTab = $derived(dashboardTabs.find((tab) => tab.id === activeTab));
 
 	// Whether the open tab's data is still unread, so its empty state ("No
 	// active session", an empty board) would be a claim, not a fact.
@@ -98,14 +108,24 @@
 	class="panel p-4 flex-1 min-h-[480px] flex flex-col"
 	data-testid="dashboard-widgets-area"
 >
-	<Tabs {tabs} active={activeTab} onchange={(id) => (activeTab = id)} class="mb-3" />
+	<Tabs
+		{tabs}
+		active={activeTab}
+		onchange={(id) => (activeTab = id)}
+		class="mb-3 {extraUnread ? extraEvents?.unreadClass : ''}"
+	/>
 
 	{#if tabPending}
 		<div class="flex-1 flex flex-col" aria-busy="true" data-testid="dashboard-widget-pending">
 			<Skeleton class="flex-1 w-full rounded-md" />
 		</div>
 	{:else if activeTab === 'events'}
-		<RecentEventsWidget events={recentEvents ?? []} />
+		{#if extraEvents}<extraEvents.component model={extraEvents.model} />{/if}
+		<!-- Extra rows above an empty feed: "No recent events" would read
+			 as a claim about the row sitting right over it. -->
+		{#if (recentEvents?.length ?? 0) > 0 || !extraEvents?.hasRows}
+			<RecentEventsWidget events={recentEvents ?? []} />
+		{/if}
 	{:else if activeTab === 'pulse'}
 		<LootPulseWidget history={multiplierHistory} netHistory={cumulativeNetHistory} />
 	{:else if activeTab === 'loot'}
@@ -123,5 +143,8 @@
 		<MapsSurface class="flex-1" />
 	{:else if activeTab === 'customise'}
 		<CustomiseStatsWidget />
+	{:else if extensionTab}
+		<extensionTab.component />
 	{/if}
 </section>
+

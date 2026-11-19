@@ -188,7 +188,7 @@ export interface AccountProposalDismissInput {
 /**
  * What a proposal is of.
  */
-export type AccountProposalKind = 'opening' | 'listingSold' | 'listingReturned' | 'purchase' | 'arrival';
+export type AccountProposalKind = 'opening' | 'listingSold' | 'listingReturned' | 'purchase' | 'arrival' | 'sale';
 
 /**
  * What a proposal says happened.
@@ -252,6 +252,19 @@ export type AccountProposalOutcome = {
 		/** Where it arrived. */
 		arrivedIn: AccountPlace;
 		kind: 'arrival';
+	} | {
+		/** The item, as the account site names it. */
+		itemName: string;
+		units: number;
+		/** Its TT, as the readings show it. */
+		tt: MeasuredAmount;
+		/** The PED Card's rise. */
+		received: MeasuredAmount;
+		/** What it fetched above its TT. */
+		markup: MeasuredAmount;
+		/** Where it left from. */
+		leftFrom: AccountPlace;
+		kind: 'sale';
 	};
 
 /**
@@ -458,8 +471,10 @@ export interface ActivityHistoryEntry {
 	itemised: boolean;
 	/** What the sold stock descends from, when a conversion produced it. */
 	derivedFrom: DerivedSource[];
-	/** Recorded on its own from the account readings, and the step it was seen in; `null` for an entry the player made. */
+	/** Recorded on its own from the account readings, and the step it was seen in; `null` for an entry the player made. For a listing, its outcome. */
 	recordedFromAccount: RecordedFromAccount | null;
+	/** A listing the account readings created, and the step it was seen made in, with the starting bids its fee reads back as; `null` otherwise. */
+	listedFromAccount: RecordedFromAccount | null;
 	/** The standing stock reconciliation that recorded it: undone only with it (`account_reconciliation_undo`), never on its own. `null` otherwise. */
 	reconciliationId: string | null;
 }
@@ -875,6 +890,8 @@ export interface AuctionListing {
 	grossMarkup: number | null;
 	/** When the account readings settled its outcome on their own, the step they saw it in; `null` for one the player resolved, and while it waits on the auction. */
 	recordedFromAccount: RecordedFromAccount | null;
+	/** When the account readings created the listing itself, the step they saw it made in, with the starting bids its fee reads back as (`inferredBid`); `null` for a listing the player entered. */
+	listedFromAccount: RecordedFromAccount | null;
 }
 
 /**
@@ -2344,6 +2361,15 @@ export interface HuntingSpeciesComparison {
 	lootItems: HarvestLootItem[];
 }
 
+/**
+ * The range of starting bids, in PED, whose listing fee is the one the
+ * readings saw paid.
+ */
+export interface InferredBid {
+	low: number;
+	high: number;
+}
+
 export interface InventoryDraftResolution {
 	draft: InventorySaleDraft;
 	candidates: InventoryHoldingCandidate[];
@@ -3300,6 +3326,11 @@ export type MeasuredEvent = {
 		kind: 'listingSold';
 	} | {
 		between: MeasuredSpan;
+		shrapnelUnits: number;
+		shrapnel: MeasuredAmount;
+		kind: 'shrapnelPresumedConverted';
+	} | {
+		between: MeasuredSpan;
 		name: string;
 		kind: 'ammoToppedUp';
 	};
@@ -4109,6 +4140,14 @@ export interface PrivateSaleInput {
 }
 
 /**
+ * The trade just recorded.
+ */
+export interface PrivateSaleRecorded {
+	/** Its own id: what taking it back names, and what a proposal of the sale is linked to. */
+	id: string;
+}
+
+/**
  * The activity family a stock action belongs to. Closed vocabulary: the
  * auction and conversion lifecycle is shared, and the profession stamp is
  * what scopes each activity's Market and History to its own records.
@@ -4851,6 +4890,14 @@ export interface RecommenderContribution {
 export type RecommenderTargetKind = 'hp' | 'profession';
 
 /**
+ * What a record from the account rests on: a step that closed exactly,
+ * Shrapnel presumed converted as ammo arrived, the Shrapnel a tracked
+ * session converted, read from the session whole, or a listing whose
+ * starting bid was inferred from the fee paid.
+ */
+export type RecordedBasis = 'exact' | 'presumed' | 'session' | 'inferred';
+
+/**
  * The step between two account readings a record was seen in: it happened
  * between `from` and `to`.
  */
@@ -4863,6 +4910,10 @@ export interface RecordedFromAccount {
 	recordedAt: string;
 	/** How far the PED Card moved across the step, in PED; `null` once the readings are gone. */
 	cardChange: number | null;
+	/** What the record rests on. */
+	basis: RecordedBasis;
+	/** For a listing the readings created: every starting bid whose fee is the one paid. The listing stores the midpoint; the bid itself was never seen. `null` for every other record. */
+	inferredBid: InferredBid | null;
 }
 
 /**
@@ -7592,7 +7643,7 @@ export async function stockConvertItems(input: ItemConversionInput): Promise<voi
 	return invokeCommand('stock_convert_items', { input });
 }
 
-export async function stockPrivateSale(input: PrivateSaleInput): Promise<void> {
+export async function stockPrivateSale(input: PrivateSaleInput): Promise<PrivateSaleRecorded> {
 	return invokeCommand('stock_private_sale', { input });
 }
 

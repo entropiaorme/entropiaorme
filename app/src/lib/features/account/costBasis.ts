@@ -50,7 +50,7 @@ export const COST_REASONS: Record<CostReason, string> = {
 	ammoUnsettled:
 		'How much of the ammo was fired, rather than paid out by strongboxes, could not be settled.',
 	ammoToppedUp:
-		'Universal Ammo was topped up during this session, so the ammo fired in the span it arrived in is the tracked figure, and when that span runs past your last kill, the whole weapon is.',
+		'Universal Ammo arrived during this session (topped up, or converted from Shrapnel), so the ammo fired in the span it arrived in is the tracked figure, and when that span runs past your last kill, the whole weapon is.',
 	limitedSetUnconfirmed:
 		"A limited piece lost TT, and pricing it needs its set's pieces confirmed; any other armour the readings measured is in the figure.",
 	trackedOnly: 'The readings never measure this cost.',

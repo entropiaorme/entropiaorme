@@ -3,11 +3,15 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-// The account reminder beside a conversion's amount reads the backend; here
-// the account has recorded nothing.
+// The account reminders beside a conversion's amount and a listing read the
+// backend; here the account has recorded nothing.
 vi.mock('$lib/api/inventory', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/api/inventory')>()),
 	getConversionFromAccount: vi.fn(async () => null),
+}));
+vi.mock('$lib/api/analytics', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/api/analytics')>()),
+	getAuctionListings: vi.fn(async () => []),
 }));
 vi.mock('@tauri-apps/api/event', async (importOriginal) => ({
 	...(await importOriginal<typeof import('@tauri-apps/api/event')>()),

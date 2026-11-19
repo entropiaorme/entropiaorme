@@ -29,6 +29,7 @@ import {
 	assetTargetFor,
 	linkProposal,
 	type PurchaseTarget,
+	recordIdOf,
 	recordThroughProposal,
 } from '$lib/features/inventory/purchaseProposals.svelte';
 import { createSnapshotStore } from '$lib/realtime/snapshotStore.svelte';
@@ -241,6 +242,7 @@ export function createSessionMinutesModel({
 				const recorded = await recordThroughProposal(
 					{ id: item.proposalId, possiblyRecorded: item.possiblyRecorded },
 					save,
+					recordIdOf,
 				);
 				if (recorded.linked) {
 					decided = {
